@@ -61,10 +61,7 @@ class ForgeConfig:
     │ rope_scaling_type   │ RoPE scaling for extended context              │
     │ rope_scaling_factor │ Scaling multiplier for context extension       │
     │ use_moe            │ Enable Mixture of Experts architecture          │
-    │ num_experts        │ Number of expert networks (MoE)                 │
-    │ num_experts_per_tok│ Experts activated per token (MoE)               │
     │ sliding_window     │ Sliding window attention length                 │
-    │ use_paged_attn     │ Enable paged attention for better memory        │
     └────────────────────────────────────────────────────────────────────────┘
     """
 
@@ -98,17 +95,12 @@ class ForgeConfig:
     # ─────────────────────────────────────────────────────────────────────────
     # MIXTURE OF EXPERTS (MoE)
     # ─────────────────────────────────────────────────────────────────────────
-    use_moe: bool = False  # Enable MoE architecture
-    num_experts: int = 8  # Number of expert networks
-    num_experts_per_token: int = 2  # Top-k experts to activate per token
-    moe_load_balancing: float = 0.01  # Load balancing loss weight
+    use_moe: bool = False  # Enable MoE architecture (gates the model_components branch)
 
     # ─────────────────────────────────────────────────────────────────────────
     # ENHANCED KV-CACHE
     # ─────────────────────────────────────────────────────────────────────────
     sliding_window: Optional[int] = None  # Sliding window attention length
-    use_paged_attn: bool = False  # Enable paged attention (better memory)
-    kv_cache_dtype: Optional[str] = None  # "int8", "fp16", None (same as model)
 
     # ─────────────────────────────────────────────────────────────────────────
     # MEMORY OPTIMIZATION
@@ -199,7 +191,6 @@ class ForgeConfig:
         # ─────────────────────────────────────────────────────────────────────
         # Standard: hidden_dim = 4 * dim (4x expansion)
         # SwiGLU: Needs 2/3 of that because it has 3 matrices instead of 2
-        # MoE: May need adjustment based on num_experts
         # We also round up to nearest 64 for GPU efficiency
         if self.hidden_dim is None:
             if self.use_swiglu:
@@ -261,15 +252,6 @@ class ForgeConfig:
             if self.rope_scaling_factor <= 0:
                 raise ValueError(f"rope_scaling_factor must be positive, got {self.rope_scaling_factor}")
 
-        # MoE validation
-        if self.use_moe:
-            if self.num_experts <= 0:
-                raise ValueError(f"num_experts must be positive, got {self.num_experts}")
-            if self.num_experts_per_token <= 0 or self.num_experts_per_token > self.num_experts:
-                raise ValueError(
-                    f"num_experts_per_token must be in (0, {self.num_experts}], got {self.num_experts_per_token}"
-                )
-
     def validate(self) -> bool:
         """
         Run read-only validation on the config.
@@ -306,13 +288,6 @@ class ForgeConfig:
                 raise ValueError(f"rope_scaling_type must be one of {valid}, got {self.rope_scaling_type}")
             if self.rope_scaling_factor <= 0:
                 raise ValueError(f"rope_scaling_factor must be positive, got {self.rope_scaling_factor}")
-        if self.use_moe:
-            if self.num_experts <= 0:
-                raise ValueError(f"num_experts must be positive, got {self.num_experts}")
-            if self.num_experts_per_token <= 0 or self.num_experts_per_token > self.num_experts:
-                raise ValueError(
-                    f"num_experts_per_token must be in (0, {self.num_experts}], got {self.num_experts_per_token}"
-                )
         return True
 
     def freeze(self) -> ForgeConfig:
@@ -355,12 +330,7 @@ class ForgeConfig:
             "rope_scaling_type": self.rope_scaling_type,
             "rope_scaling_factor": self.rope_scaling_factor,
             "use_moe": self.use_moe,
-            "num_experts": self.num_experts,
-            "num_experts_per_token": self.num_experts_per_token,
-            "moe_load_balancing": self.moe_load_balancing,
             "sliding_window": self.sliding_window,
-            "use_paged_attn": self.use_paged_attn,
-            "kv_cache_dtype": self.kv_cache_dtype,
             "use_gradient_checkpointing": self.use_gradient_checkpointing,
             "vision_hidden_size": self.vision_hidden_size,
             "audio_hidden_size": self.audio_hidden_size,
@@ -405,12 +375,7 @@ class ForgeConfig:
             "rope_scaling_type",
             "rope_scaling_factor",
             "use_moe",
-            "num_experts",
-            "num_experts_per_token",
-            "moe_load_balancing",
             "sliding_window",
-            "use_paged_attn",
-            "kv_cache_dtype",
             "use_gradient_checkpointing",
             "vision_hidden_size",
             "audio_hidden_size",

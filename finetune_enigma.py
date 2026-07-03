@@ -4,8 +4,8 @@
 
 Bespoke per the 2026-06-11 ruling (CLEANUP_TRACKER): the dormant FORGE stack
 stays dormant; this follows the proven ``pretrain_enigma.py`` pattern and
-imports its arsenal directly (``build_optimizer``/``get_lr`` — so
-``--optimizer muon`` and ``--schedule wsd`` work here too).
+shares its arsenal from ``enigma_engine.core.optim`` (``build_optimizer``/
+``get_lr`` — so ``--optimizer muon`` and ``--schedule wsd`` work here too).
 
   python finetune_enigma.py --data data/sft/mix.jsonl \
       --init models/enigma_pretrain_large/latest.pth --out models/enigma_sft
@@ -42,7 +42,7 @@ try:  # Windows consoles default to cp1252 and crash on unicode sample text.
 except Exception:
     pass
 
-from pretrain_enigma import build_optimizer, get_lr  # the shared arsenal
+from enigma_engine.core.optim import build_optimizer, get_lr  # the shared arsenal
 
 ROOT = Path(__file__).resolve().parent
 IGNORE = -100  # ignore_index for the masked positions

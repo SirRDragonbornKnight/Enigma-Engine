@@ -13,7 +13,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-import pretrain_enigma as pe
+from enigma_engine.core import optim as pe
 
 
 def _old_cosine(step, warmup, total, peak, min_ratio=0.1):
