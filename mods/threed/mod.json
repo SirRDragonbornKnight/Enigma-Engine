@@ -1,0 +1,63 @@
+{
+    "name": "3D Generation Mod",
+    "id": "threed",
+    "version": "1.0.0",
+    "description": "AI 3D model generation from text prompts using Shap-E or built-in primitives",
+    "author": "Enigma AI Engine",
+    "port": 9905,
+    "commands": [
+        {
+            "name": "generate",
+            "description": "Generate a 3D model from a text prompt",
+            "args": {
+                "prompt": {"type": "string", "required": true, "description": "Text description of the 3D model to generate"},
+                "format": {"type": "string", "required": false, "default": "obj", "description": "Output format (obj, ply, pkl)"},
+                "provider": {"type": "string", "required": false, "description": "Provider to use (builtin, shap_e)"}
+            }
+        },
+        {
+            "name": "load_provider",
+            "description": "Load a 3D generation provider",
+            "args": {
+                "provider": {"type": "string", "required": false, "description": "Provider name to load"}
+            }
+        },
+        {
+            "name": "unload_provider",
+            "description": "Unload a 3D generation provider",
+            "args": {
+                "provider": {"type": "string", "required": false, "description": "Provider name to unload"}
+            }
+        },
+        {
+            "name": "list_providers",
+            "description": "List available 3D generation providers and their status"
+        },
+        {
+            "name": "set_default",
+            "description": "Set the default 3D generation provider",
+            "args": {
+                "provider": {"type": "string", "required": true, "description": "Provider name to set as default"}
+            }
+        },
+        {
+            "name": "status",
+            "description": "Get service status and loaded providers"
+        }
+    ],
+    "ui": {
+        "layout": "vertical",
+        "widgets": [
+            {"type": "text_area", "id": "prompt", "label": "3D Prompt", "placeholder": "Describe the 3D model you want to generate..."},
+            {"type": "dropdown", "id": "format", "label": "Format", "options": ["obj", "ply", "pkl"]},
+            {"type": "dropdown", "id": "provider", "label": "Provider", "options": ["builtin", "shap_e"]},
+            {"type": "button", "id": "generate", "label": "Generate", "command": "generate"}
+        ]
+    },
+    "prompt": "For 3D model generation, use: mod.send threed generate <prompt> --format obj",
+    "dependencies": [],
+    "settings": {
+        "default_provider": "builtin",
+        "output_dir": "outputs/3d"
+    }
+}

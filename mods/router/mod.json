@@ -1,0 +1,19 @@
+{
+    "name": "Router",
+    "id": "router",
+    "version": "1.0.0",
+    "description": "Central hub that manages mod connections and routes commands between services",
+    "author": "Enigma AI Engine",
+    "port": 9900,
+    "commands": [],
+    "ui": {
+        "layout": "vertical",
+        "widgets": []
+    },
+    "prompt": "The router manages connections between mods. It does not accept direct commands — use mod.send <mod_name> <command> instead.",
+    "dependencies": [],
+    "settings": {
+        "host": "localhost",
+        "port": 9900
+    }
+}

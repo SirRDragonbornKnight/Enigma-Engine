@@ -1,0 +1,246 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modkit"
+version = "2.0.0"
+description = "Modkit — the AI's capability backend: forge your own local models (Enigma) + mods an AI front-end (Odysseus) controls via MCP"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "SirRDragonbornKnight", email = "sirknighth3@gmail.com"}
+]
+keywords = ["ai", "machine-learning", "transformer", "language-model", "local-ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# --- Dependencies ---
+dependencies = [
+    "numpy>=1.21.0",
+    "python-dotenv>=0.19.0",
+]
+
+[project.optional-dependencies]
+full = [
+    "torch>=1.12",
+    "transformers>=4.20.0",
+    "huggingface-hub>=0.20.0",
+    "pyttsx3>=2.90",
+    "SpeechRecognition>=3.8.0",
+    "sounddevice>=0.4.0",
+    "Pillow>=9.0.0",
+    "psutil>=5.9.0",
+    "safetensors>=0.4.0",
+    "peft>=0.10.0",
+]
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "python-multipart>=0.0.5",
+]
+voice = [
+    "pyttsx3>=2.90",
+    "SpeechRecognition>=3.8.0",
+    "sounddevice>=0.4.0",
+]
+vision = [
+    "Pillow>=9.0.0",
+    "opencv-python>=4.5.0",
+]
+huggingface = [
+    "transformers>=4.20.0",
+    "huggingface-hub>=0.20.0",
+    "tokenizers>=0.13.0",
+]
+training = [
+    "peft>=0.10.0",
+    "bitsandbytes>=0.43.0",
+    "accelerate>=0.28.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "mypy>=0.990",
+    "ruff>=0.4.0",
+    "bandit>=1.7.0",
+]
+
+# --- Entry Points ---
+[project.scripts]
+enigma = "run:main"
+enigma-ai = "run:main"
+
+# --- Packaging ---
+[tool.setuptools.packages.find]
+include = ["enigma_engine*"]
+
+[tool.setuptools.package-data]
+enigma_engine = ["vocab_model/*", "py.typed"]
+
+# --- Ruff (linting + formatting) ---
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+exclude = [
+    "build", "dist", "venv", ".venv", "*.egg-info",
+    "enigma_engine/bin",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors (syntax, indentation)
+    "F",      # pyflakes (unused imports, undefined names, shadowed vars)
+    "W",      # pycodestyle warnings
+    "B",      # flake8-bugbear (common bugs, mutable defaults, bare except)
+    "S",      # flake8-bandit (security: pickle, exec, subprocess)
+    "UP",     # pyupgrade (outdated syntax)
+    "SIM",    # flake8-simplify (unnecessary code)
+    "RET",    # flake8-return (unnecessary return statements)
+    "PIE",    # flake8-pie (misc cleanups)
+    "PLE",    # pylint errors
+    "PLW",    # pylint warnings
+    "RUF",    # ruff-native rules (mutable class defaults, implicit Optional, etc.)
+]
+ignore = [
+    "E402",   # module-import-not-at-top — deferred imports pattern
+    "E501",   # line length — handled by formatter
+    "E702",   # multiple-statements-on-one-line — compact dict unpacking
+    "E741",   # ambiguous variable names (l, O, I) — common in ML
+    "S101",   # assert usage — fine in non-production code
+    "S105",   # hardcoded password strings — false positives on var names
+    "S110",   # try-except-pass — many intentional for optional imports
+    "S112",   # try-except-continue — intentional for error resilience
+    "S310",   # suspicious-url-open — we validate URLs manually
+    "S311",   # suspicious-non-cryptographic-random — not used for security
+    "S324",   # hashlib-insecure-hash — MD5 used for caching, not security
+    "S603",   # subprocess without shell=True — we validate this manually
+    "S606",   # start-process-with-no-shell — intentional
+    "S607",   # partial executable path — fine for system commands
+    "B004",   # unreliable-callable-check — isinstance with callable
+    "B007",   # unused-loop-control-variable — common in counting loops
+    "B008",   # function call in default arg — FastAPI Depends() pattern
+    "B905",   # zip without strict= — Python 3.9 compat
+    "RET504", # unnecessary assignment before return — readability choice
+    "SIM108", # ternary instead of if/else — readability choice
+    "UP006",  # non-pep585-annotation — Python 3.9 compat (List vs list)
+    "UP007",  # X | Y union syntax — Python 3.9 compat
+    "UP045",  # Optional[X] vs X | None — Python 3.9 compat
+    "PLW0603", # global-statement — established pattern in codebase
+    "PLW2901", # redefined-loop-name — intentional re-bind in loops
+    "PLW1510", # subprocess-run-without-check — handled manually
+    "W291",   # trailing-whitespace — cosmetic
+    "W293",   # blank-line-with-whitespace — cosmetic
+    # Style suggestions — not bugs, just different ways to write code
+    "SIM105", # suppressible-exception — contextlib.suppress vs try/except
+    "SIM102", # collapsible-if — readability choice
+    "SIM114", # if-with-same-arms — readability choice
+    "SIM118", # in-dict-keys — x in d vs x in d.keys()
+    "SIM110", # reimplemented-builtin — any() vs for loop
+    "SIM300", # yoda-conditions — 0 == x vs x == 0
+    "SIM910", # dict-get-with-none-default — d.get(k, None) vs d.get(k)
+    "RET505", # superfluous-else-return — readability choice
+    "RET502", # implicit-return-value — return vs return None
+    "RET507", # superfluous-else-continue — readability choice
+    "RET508", # superfluous-else-break — readability choice
+    "UP015",  # redundant-open-modes — open("r") vs open()
+    "UP028",  # yield-in-for-loop — yield from vs for/yield
+    "UP035",  # deprecated-import — typing.Dict vs dict
+    "UP037",  # quoted-annotation — 'Type' vs Type
+    "PIE810", # multiple-starts-ends-with — cosmetic
+    "E401",   # multiple-imports-on-one-line — import a, b
+    # RUF unicode noise — box-drawing chars (─│└) and emoji in docstrings
+    # / comments are intentional in this codebase. Ruff flags them as
+    # "ambiguous unicode" but they are not Cyrillic homoglyphs.
+    "RUF001", # ambiguous-unicode-character-string
+    "RUF002", # ambiguous-unicode-character-docstring
+    "RUF003", # ambiguous-unicode-character-comment
+    # Style choices that don't catch bugs:
+    "RUF005", # collection-literal-concatenation — readability choice
+    "RUF043", # pytest-raises-ambiguous-pattern — overly strict on regex
+    "RUF059", # unused-unpacked-variable — many intentional (a, _ = ...)
+    # Manual-only RUF rules tracked for a future tightening pass:
+    "RUF012", # mutable-class-default — 15 sites, all class-level constants
+              # used as constants (lookup dicts, suggested models). Need
+              # `ClassVar[dict[...]]` annotations; safe but tedious.
+    "RUF013", # implicit-optional — 23 sites with `def f(x: T = None)`.
+              # Real type-hint improvement; needs `Optional[T]` / `T | None`
+              # but project still targets py39 so unsafe-fix can't use `|`.
+    "RUF015", # unnecessary-iterable-allocation-for-first-element — 1 site
+    "RUF022", # unsorted-dunder-all — 2 sites with grouped/commented __all__
+              # blocks; auto-sort destroys the grouping.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B", "PLW"]  # relax security + bugbear in tests
+"plugins/*" = ["F401"]          # unused imports OK in plugin examples
+"mods/*" = ["S"]               # relax security in mod templates
+# (Enigma Avatar moved to its own repo 2026-06-28 — its ruff config lives there now.)
+
+# --- Bandit (security scanner) ---
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv", "build", "dist"]
+skips = ["B101", "B603", "B607"]  # assert, subprocess no-shell, partial path
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    "build",
+    "dist",
+    "venv",
+    ".venv",
+    "tests",
+    "examples",
+    "scripts"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests",
+    "gpu: marks tests that require GPU",
+    "structural: source-inspection tests (deselect with '-m \"not structural\"')",
+]
+
+[tool.coverage.run]
+source = ["enigma_engine"]
+omit = [
+    "*/tests/*",
+    "*/examples/*",
+    "*/scripts/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]

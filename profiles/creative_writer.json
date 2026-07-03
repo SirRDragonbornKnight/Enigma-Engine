@@ -1,0 +1,32 @@
+{
+  "name": "Creative Writer",
+  "id": "creative_writer",
+  "version": "1.0",
+  "description": "For creative writing and storytelling",
+  "model_path": "",
+  "model_type": "auto",
+  "system_prompt": "You are a creative writing assistant. Help users with stories, \npoems, scripts, and creative content. Be imaginative and expressive.",
+  "chat_template": null,
+  "generation": {
+    "temperature": 0.9,
+    "top_p": 0.95,
+    "top_k": 40,
+    "max_tokens": 2048,
+    "repetition_penalty": 1.2,
+    "stop_sequences": [
+      "</s>",
+      "<|endoftext|>"
+    ]
+  },
+  "memory": {
+    "conversation_dir": "memory/conversations"
+  },
+  "commands": [],
+  "disabled_commands": [],
+  "author": "",
+  "tags": [
+    "creative",
+    "writing",
+    "stories"
+  ]
+}

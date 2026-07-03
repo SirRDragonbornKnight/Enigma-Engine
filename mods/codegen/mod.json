@@ -1,0 +1,73 @@
+{
+    "name": "Code Generation Mod",
+    "id": "codegen",
+    "version": "1.0.0",
+    "description": "Generate code using the local Enigma model (default) or offline keyword templates (opt-in)",
+    "author": "Enigma AI Engine",
+    "port": 9902,
+    "commands": [
+        {
+            "name": "generate",
+            "description": "Generate code from a text prompt",
+            "args": {
+                "prompt": {"type": "string", "required": true, "description": "Description of the code to generate"},
+                "language": {"type": "string", "required": false, "default": "python", "description": "Target language (python, javascript, etc.)"},
+                "provider": {"type": "string", "required": false, "description": "Provider to use (template, local)"}
+            }
+        },
+        {
+            "name": "load_provider",
+            "description": "Load a code generation provider",
+            "args": {
+                "provider": {"type": "string", "required": false, "description": "Provider name (template, local)"}
+            }
+        },
+        {
+            "name": "unload_provider",
+            "description": "Unload a code generation provider",
+            "args": {
+                "provider": {"type": "string", "required": false, "description": "Provider name to unload"}
+            }
+        },
+        {
+            "name": "list_providers",
+            "description": "List available code generation providers and their status"
+        },
+        {
+            "name": "set_default",
+            "description": "Set the default code generation provider",
+            "args": {
+                "provider": {"type": "string", "required": true, "description": "Provider name to set as default"}
+            }
+        },
+        {
+            "name": "status",
+            "description": "Get service status and loaded providers"
+        },
+        {
+            "name": "save_code",
+            "description": "Save generated code to a file",
+            "args": {
+                "code": {"type": "string", "required": true, "description": "Code content to save"},
+                "filename": {"type": "string", "required": false, "description": "Output filename (auto-generated if omitted)"},
+                "language": {"type": "string", "required": false, "default": "python", "description": "Language for file extension"}
+            }
+        }
+    ],
+    "ui": {
+        "layout": "vertical",
+        "widgets": [
+            {"type": "text_area", "id": "prompt", "label": "Code Prompt", "placeholder": "Describe the code you want to generate..."},
+            {"type": "dropdown", "id": "language", "label": "Language", "options": ["python", "javascript", "typescript", "java", "cpp", "c"]},
+            {"type": "dropdown", "id": "provider", "label": "Provider", "options": ["template", "local"]},
+            {"type": "button", "id": "generate", "label": "Generate", "command": "generate"},
+            {"type": "button", "id": "save", "label": "Save Code", "command": "save_code"}
+        ]
+    },
+    "prompt": "For code generation, use: mod.send codegen generate <prompt> --language python or mod.send codegen save_code <code> --filename output.py",
+    "dependencies": [],
+    "settings": {
+        "default_provider": "template",
+        "output_dir": "outputs/code"
+    }
+}

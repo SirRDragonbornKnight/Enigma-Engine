@@ -1,0 +1,54 @@
+{
+    "name": "Transcriber",
+    "id": "transcriber",
+    "version": "1.0.0",
+    "description": "Local audio/video transcription via faster-whisper. Transcribes audio/video files and live mic input. Fully offline.",
+    "author": "Enigma Engine",
+    "port": 9920,
+    "commands": [
+        {
+            "name": "transcribe",
+            "description": "Transcribe an audio or video file to text",
+            "args": {
+                "file_path": {"type": "string", "required": true, "description": "Path to audio/video file"}
+            }
+        },
+        {
+            "name": "listen",
+            "description": "Start live transcription from microphone",
+            "args": {
+                "duration": {"type": "number", "required": false, "description": "Duration in seconds (0 = until stopped)"}
+            }
+        },
+        {
+            "name": "stop_listen",
+            "description": "Stop live transcription"
+        },
+        {
+            "name": "status",
+            "description": "Get transcriber status"
+        },
+        {
+            "name": "stop",
+            "description": "Stop the mod"
+        }
+    ],
+    "ui": {
+        "layout": "vertical",
+        "widgets": [
+            {"type": "text_input", "id": "file_path", "label": "Audio/Video File Path"},
+            {"type": "button", "id": "transcribe", "label": "Transcribe File", "command": "transcribe"},
+            {"type": "button", "id": "listen", "label": "Live Transcribe", "command": "listen"},
+            {"type": "button", "id": "stop_listen", "label": "Stop Listening", "command": "stop_listen"}
+        ]
+    },
+    "prompt": "For transcription tasks, use: mod.send transcriber transcribe <file_path> or mod.send transcriber listen to start live mic transcription.",
+    "dependencies": ["faster_whisper"],
+    "settings": {
+        "whisper_model": "base",
+        "whisper_device": "auto",
+        "language": "",
+        "mic_sample_rate": 16000,
+        "mic_chunk_sec": 5.0
+    }
+}

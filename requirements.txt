@@ -1,0 +1,70 @@
+# Enigma AI Engine Requirements
+# Last Updated: February 2026
+# Minimum Python version: 3.9+
+
+# === CORE (Required) ===
+numpy>=1.21.0
+python-dotenv>=0.19.0
+
+# === MODEL & TRAINING ===
+# PyTorch - install manually for your platform:
+# CPU only:         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# NVIDIA (RTX 20-40): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# NVIDIA (RTX 50):    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# Apple Silicon:    pip install torch torchvision torchaudio
+torch>=1.12; platform_system!="Darwin" or platform_machine=="arm64"
+
+# Safetensors - secure model loading
+safetensors>=0.4.0
+
+# LoRA/QLoRA Training (for efficient fine-tuning)
+peft>=0.10.0              # Parameter-Efficient Fine-Tuning (LoRA)
+bitsandbytes>=0.43.0      # 4-bit/8-bit quantization for QLoRA
+accelerate>=0.28.0        # Distributed training + CPU offloading
+
+# HuggingFace Integration (for loading pre-trained models)
+tokenizers>=0.13.0
+transformers>=4.20.0
+huggingface-hub>=0.20.0
+
+# === SYSTEM MONITORING ===
+psutil>=5.9.0             # Hardware detection, resource monitoring
+
+# === GUI ===
+customtkinter>=5.2.0      # Modern themed Tk widgets used by enigma_engine.gui
+
+# === HTTP CLIENT ===
+requests>=2.31.0          # Used by core.web_utils, data collectors, mods
+
+# === API SERVER (for --serve) ===
+fastapi>=0.100.0
+uvicorn>=0.20.0
+python-multipart>=0.0.5
+
+# === OPTIONAL ===
+
+# Pre-training data collection (for collect_pretraining_data.py --wiki-dump)
+# mwparserfromhell>=0.6.0   # Wikipedia wikitext markup parser
+
+# Document parsing (for PDF and Word files in DOCS/training)
+# pymupdf>=1.24.0          # PDF text extraction
+# python-docx>=1.1.0       # Word .docx text extraction
+
+# Voice input (speech-to-text for GUI mic button)
+# SpeechRecognition>=3.10.0
+# PyAudio>=0.2.14
+
+# HTTP test client (uncomment for API tests)
+# httpx>=0.24.0
+
+# GGUF Models (uncomment for llama.cpp support)
+# llama-cpp-python>=0.2.0
+
+# Fast tokenizer (uncomment for GPT-style tokenization)
+# tiktoken>=0.5.0
+
+# === DEVELOPMENT (Optional) ===
+# pytest>=7.0.0
+# pytest-cov>=3.0.0
+# mypy>=0.990
+

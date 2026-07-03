@@ -1,0 +1,67 @@
+{
+    "name": "Vision Mod",
+    "id": "vision",
+    "version": "1.0.0",
+    "description": "Screen capture and image analysis service with OCR, AI vision analysis, and periodic monitoring",
+    "author": "Enigma AI Engine",
+    "port": 9906,
+    "commands": [
+        {
+            "name": "capture",
+            "description": "Take a screenshot of the full screen or a region",
+            "args": {
+                "region": {"type": "array", "required": false, "description": "Capture region [left, top, width, height]"},
+                "filename": {"type": "string", "required": false, "description": "Output filename"}
+            }
+        },
+        {
+            "name": "analyze",
+            "description": "Analyze an image or capture and analyze the screen",
+            "args": {
+                "path": {"type": "string", "required": false, "description": "Path to image file (captures screen if omitted)"},
+                "prompt": {"type": "string", "required": false, "description": "Analysis prompt or question about the image"}
+            }
+        },
+        {
+            "name": "ocr",
+            "description": "Extract text from an image via OCR",
+            "args": {
+                "path": {"type": "string", "required": false, "description": "Path to image file (captures screen if omitted)"}
+            }
+        },
+        {
+            "name": "start_watch",
+            "description": "Start periodic screen capture at an interval",
+            "args": {
+                "interval": {"type": "integer", "required": false, "default": 5, "description": "Capture interval in seconds"}
+            }
+        },
+        {
+            "name": "stop_watch",
+            "description": "Stop periodic screen capture"
+        },
+        {
+            "name": "load",
+            "description": "Load capture, OCR, and analyzer components"
+        },
+        {
+            "name": "status",
+            "description": "Get service and component status"
+        }
+    ],
+    "ui": {
+        "layout": "vertical",
+        "widgets": [
+            {"type": "text_input", "id": "prompt", "label": "Analysis Prompt", "placeholder": "What do you want to know about the screen?"},
+            {"type": "button", "id": "capture", "label": "Capture", "command": "capture"},
+            {"type": "button", "id": "analyze", "label": "Analyze", "command": "analyze"},
+            {"type": "button", "id": "ocr", "label": "OCR", "command": "ocr"}
+        ]
+    },
+    "prompt": "For vision tasks, use: mod.send vision capture (screenshot), mod.send vision analyze <prompt>, or mod.send vision ocr",
+    "dependencies": [],
+    "settings": {
+        "capture_method": "auto",
+        "output_dir": "outputs/images"
+    }
+}
