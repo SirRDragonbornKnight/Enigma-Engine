@@ -12,9 +12,12 @@ pretraining never targets. Chat tokens live there:
     4722 <|tool_result|>  4723 <|/tool_result|>
     4724..4735 reserved for future passes.
 
-Thinking spans reuse the tokenizer's NATIVE ``<think>``=4 / ``</think>``=5 —
-``encode()`` already parses them and the SFT corpus preserves the tags
-verbatim, so reasoning traces cost zero new rows.
+Thinking spans reuse the tokenizer's NATIVE ``<think>``=10 / ``</think>``=11
+(the IDs the trained ``bpe_vocab.json`` actually assigns) — ``encode()`` already
+parses them and the SFT corpus preserves the tags verbatim, so reasoning traces
+cost zero new rows. ``attach_chat_tokens`` asserts these constants match the
+tokenizer so they can never silently drift (they were 4/5 here once, which
+collided with the vocab's ``<sep>``/``<mask>``).
 
 Template (ChatML-shaped; role names are plain text, so no per-role tokens):
 
@@ -45,8 +48,8 @@ TOOL_CALL = 4720
 TOOL_CALL_END = 4721
 TOOL_RESULT = 4722
 TOOL_RESULT_END = 4723
-THINK = 4  # native tokenizer IDs, already trained-format
-THINK_END = 5
+THINK = 10  # native tokenizer IDs (bpe_vocab.json: <think>=10, </think>=11)
+THINK_END = 11
 
 CHAT_TOKENS = {
     "<|im_start|>": IM_START,
@@ -101,6 +104,16 @@ def attach_chat_tokens(tokenizer):
     tokenizer.special_tokens.update(CHAT_TOKENS)
     for s, i in CHAT_TOKENS.items():
         tokenizer.id_to_token[i] = s
+    # Fail honestly if the think constants disagree with the tokenizer's actual
+    # <think>/</think> ids: render/parse inject THINK/THINK_END as raw ids, so a
+    # mismatch would silently train/serve reasoning spans on the wrong token.
+    for name, want in (("<think>", THINK), ("</think>", THINK_END)):
+        have = tokenizer.token_to_id.get(name)
+        if have is not None and have != want:
+            raise ValueError(
+                f"chat_format {name} id {want} != tokenizer's {have}; "
+                f"update THINK/THINK_END to match this vocab before training/serving"
+            )
     return tokenizer
 
 

@@ -321,7 +321,7 @@ def collect_openthoughts3(max_samples: int = 100000) -> list[dict]:
          "conversations": [{"from": "human"/"gpt", "value": str}]}
 
     The `<think>` / `</think>` tags MUST be preserved verbatim — they
-    align with our special token IDs (`<think>=4`, `</think>=5`) and
+    align with our special token IDs (`<think>=10`, `</think>=11`) and
     must not be collapsed by whitespace normalization.
     """
     if not _ensure_datasets():

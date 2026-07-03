@@ -394,6 +394,10 @@ def main() -> None:
     t0 = time.time()
     perm = torch.randperm(X.shape[0])
     cursor = 0
+    # Finite default so a no-op resume (start_step >= total_steps, e.g. re-exporting
+    # a finished run's model.pth) passes the final-save guard instead of raising
+    # NameError on an undefined loss_acc.
+    loss_acc = 0.0
     for step in range(start_step, total_steps):
         lr = get_lr(step, args.warmup, total_steps, args.lr, schedule=args.schedule, decay_frac=args.wsd_decay_frac)
         for g in optim.param_groups:

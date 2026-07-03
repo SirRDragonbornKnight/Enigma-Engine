@@ -152,6 +152,19 @@ def main():
                             if len(tokens) < 5:
                                 continue
 
+                            # Bounds guard: an out-of-range id means the tokenizer
+                            # disagrees with the vocab_size we record in the header
+                            # -> at train time it indexes the embedding / CE loss
+                            # out of bounds (CUDA device-side assert). Fail honestly
+                            # here rather than write a poisoned corpus.
+                            if vocab_size > 0:
+                                bad = max(tokens)
+                                if bad >= vocab_size or min(tokens) < 0:
+                                    raise SystemExit(
+                                        f"tokenizer emitted id {bad} outside [0, {vocab_size}) "
+                                        f"-- vocab/tokenizer mismatch; refusing to write tokens.bin"
+                                    )
+
                             # Append EOS as document separator
                             tokens.append(eos_id)
 

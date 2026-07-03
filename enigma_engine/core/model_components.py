@@ -536,7 +536,12 @@ class Attention(nn.Module):
             and x.is_cuda
             and x.dtype in (torch.float16, torch.bfloat16)
             and not use_cache  # Flash doesn't support incremental decode
-            and (mask is None or T == k.shape[1])  # Full sequence, not cached
+            and mask is None  # this flash call only does causal masking; an
+            # additive pad/packed mask MUST go through the SDPA path below or
+            # padding gets attended to (was: `mask is None or T == k.shape[1]`,
+            # which let a padded full-seq prefill silently drop the mask)
+            and not self.use_differential_attn  # diff-attn needs the two-softmax
+            # subtraction; the flash kernel would compute plain attention instead
         )
 
         if use_flash:

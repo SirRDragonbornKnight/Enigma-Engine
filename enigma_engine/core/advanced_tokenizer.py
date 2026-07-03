@@ -196,14 +196,27 @@ class AdvancedBPETokenizer:
                 self.merges = [tuple(m) for m in data["merges"]]
                 self.merge_ranks = {m: i for i, m in enumerate(self.merges)}
 
-            # Stage B-1: standard format has no separate special_tokens
-            # dict; derive from token_to_id.
+            # Re-sync EVERY special token to the LOADED vocab. The __init__
+            # defaults use a compact 0..7 range (e.g. <think>=4), but a real
+            # BPETokenizer-written vocab can place them elsewhere (<think>=10,
+            # </think>=11; 4/5 are <sep>/<mask> there). Without this, encode()
+            # would emit the stale default id while decode()/id_to_token use the
+            # file's id -> control tokens stop round-tripping. Any special the
+            # file lacks is dropped so encode can't emit a phantom id.
+            for stok in list(self.special_tokens):
+                file_id = self.token_to_id.get(stok)
+                if file_id is None:
+                    self.special_tokens.pop(stok, None)
+                else:
+                    self.special_tokens[stok] = file_id
+            self.pad_token_id = self.token_to_id.get(self.pad_token, self.pad_token_id)
+            self.bos_token_id = self.token_to_id.get(self.bos_token, self.bos_token_id)
+            self.eos_token_id = self.token_to_id.get(self.eos_token, self.eos_token_id)
+            self.unk_token_id = self.token_to_id.get(self.unk_token, self.unk_token_id)
+            self.think_start_id = self.token_to_id.get("<think>")
+            self.think_end_id = self.token_to_id.get("</think>")
             self.search_start_id = self.token_to_id.get("<search>")
             self.search_end_id = self.token_to_id.get("</search>")
-            if self.search_start_id is None:
-                self.special_tokens.pop("<search>", None)
-            if self.search_end_id is None:
-                self.special_tokens.pop("</search>", None)
 
             self.vocab_size = len(self.token_to_id)
         else:

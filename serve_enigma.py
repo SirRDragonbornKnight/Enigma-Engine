@@ -94,6 +94,14 @@ if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
 EOS_ID = getattr(tokenizer, "eos_token_id", 2)
 BOS_ID = getattr(tokenizer, "bos_token_id", 1)
 
+# Always keep this many ids of the context free for the reply. Prompt and
+# generation share the fixed max_context window; without a reserve a large
+# client max_tokens would shrink the prompt budget toward zero and the model
+# would answer from a near-empty context (confident garbage). We keep the
+# prompt intact (up to max_context - MIN_GEN_TOKENS) and let generation take
+# whatever room is left — never the other way around.
+MIN_GEN_TOKENS = 64
+
 # Instruct mode: SFT checkpoints (finetune_enigma.py) carry meta.chat_format.
 # Base checkpoints get the plain-transcript bridge below. Attaching the chat
 # tokens is safe either way — plain text encodes byte-identically.
@@ -195,12 +203,16 @@ def _generate_text(
     # Clamp the GENERATION side too: she trains at block 1024, and the RoPE
     # table ends at 2x max_seq_len — an unclamped client max_tokens could walk
     # past both. (2026-06-11 audit finding.)
-    max_tokens = max(1, min(int(max_tokens), ARGS.max_context - 2))
-    budget = max(2, ARGS.max_context - max_tokens)
-    if len(ids) > budget - 1:
-        ids = ids[-(budget - 1) :]  # keep the most recent context
+    # Reserve the prompt first, generation second: keep the most recent
+    # prompt context (up to max_context - MIN_GEN_TOKENS ids, leaving 1 for
+    # BOS), then give generation whatever room is left. Prompt + generation
+    # always fit in max_context; the prompt is never squeezed to a stub.
+    prompt_cap = ARGS.max_context - MIN_GEN_TOKENS
+    if len(ids) > prompt_cap - 1:
+        ids = ids[-(prompt_cap - 1) :]  # keep the most recent context
     if not ids or ids[0] != BOS_ID:
         ids = [BOS_ID] + ids
+    max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     temperature = max(float(temperature), 1e-3)  # sampling requires > 0
     hold = max((len(s) for s in stop_texts), default=1) - 1
@@ -239,7 +251,9 @@ def _gen_ids(
     """ID-level generation for instruct mode: render_chat already built the
     exact prompt (BOS included, no trailing EOS — the whole encode() EOS
     gotcha is bypassed). Yields raw token ids; stops on EOS/<|im_end|>."""
-    max_tokens = max(1, min(int(max_tokens), ARGS.max_context - 2))
+    # Defensive: prompt + generation must fit in max_context (caller already
+    # sized max_tokens against len(ids), but never let a bad caller overflow).
+    max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     temperature = max(float(temperature), 1e-3)
     with _GEN_LOCK, torch.no_grad():
@@ -291,8 +305,13 @@ def _openai_tool_calls(calls: list[dict]) -> list[dict]:
 
 def _chat_instruct(req: ChatReq):
     msgs = _with_context([m.model_dump(exclude_none=True) for m in req.messages], req)
-    max_tokens = max(1, min(int(req.max_tokens), ARGS.max_context - 2))
-    prompt_ids = render_chat(tokenizer, msgs, add_generation_prompt=True, max_ids=ARGS.max_context - max_tokens)
+    # Reserve the prompt first: render it into up to max_context - MIN_GEN_TOKENS
+    # ids, then let generation take whatever room is left (capped by the client's
+    # request). A large client max_tokens can no longer starve the prompt.
+    prompt_ids = render_chat(
+        tokenizer, msgs, add_generation_prompt=True, max_ids=ARGS.max_context - MIN_GEN_TOKENS
+    )
+    max_tokens = max(1, min(int(req.max_tokens), ARGS.max_context - len(prompt_ids)))
     created = int(time.time())
     cid = f"chatcmpl-{created}"
     gen = _gen_ids(prompt_ids, max_tokens, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END))

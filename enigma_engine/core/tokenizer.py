@@ -21,16 +21,15 @@ Converts sentences into sequences of integers for the neural network.
 
 📊 TOKENIZER HIERARCHY (best to worst):
     1. AdvancedBPETokenizer - Byte-level BPE, handles any input, learns from data
-    2. CharacterTokenizer  - Full character coverage with dictionary
-    3. SimpleTokenizer     - Basic character + common words (NO dependencies!)
+    2. SimpleTokenizer     - Basic character + common words (NO dependencies!)
 
 🏷️ SPECIAL TOKENS:
     • <pad>    - Padding (ID: 0)
     • <s>      - Start of sequence (ID: 1)
     • </s>     - End of sequence (ID: 2)
     • <unk>    - Unknown token (ID: 3)
-    • <think>  - Start of reasoning block (ID: 4)
-    • </think> - End of reasoning block (ID: 5)
+    • <think>  - Start of reasoning block (ID: 10)
+    • </think> - End of reasoning block (ID: 11)
 
 🔗 CONNECTED FILES:
     → USES:      enigma_engine/vocab_model/ (vocabulary files)
@@ -45,8 +44,7 @@ Converts sentences into sequences of integers for the neural network.
     tokenizer = get_tokenizer()
 
     # Or specify type
-    tokenizer = get_tokenizer("bpe")      # Advanced BPE
-    tokenizer = get_tokenizer("char")     # Character-level
+    tokenizer = get_tokenizer("bpe")      # Advanced BPE (the live tokenizer)
     tokenizer = get_tokenizer("simple")   # Simple fallback
 
     # Encode/Decode
@@ -57,7 +55,6 @@ Converts sentences into sequences of integers for the neural network.
 
 📖 SEE ALSO:
     • enigma_engine/core/bpe_tokenizer.py      - BPE implementation
-    • enigma_engine/core/char_tokenizer.py     - Character tokenizer
     • enigma_engine/core/advanced_tokenizer.py - Advanced tokenizer
 """
 
@@ -767,12 +764,11 @@ def get_tokenizer(tokenizer_type: str = "auto", vocab_path: Optional[str | Path]
 
     Args:
         tokenizer_type: Type of tokenizer to load
-            - "auto": Best available (tiktoken > bpe > char > simple)
+            - "auto": Best available (tiktoken > bpe)
             - "tiktoken": Fast GPT-style tokenizer (requires tiktoken)
-            - "bpe": Advanced BPE tokenizer
+            - "bpe": Advanced BPE tokenizer (the live model's tokenizer)
             - "advanced": Alias for "bpe"
-            - "char": Character-level tokenizer
-            - "simple": Simple character tokenizer
+            - "simple": Simple character tokenizer (explicit only)
         vocab_path: Optional path to vocabulary file
         use_cache: Whether to cache and reuse tokenizer instances (default: True)
 
@@ -830,28 +826,9 @@ def get_tokenizer(tokenizer_type: str = "auto", vocab_path: Optional[str | Path]
             if tokenizer_type in ("bpe", "advanced"):
                 raise
 
-    # Try Character tokenizer
-    if tokenizer_type in ("auto", "char", "character"):
-        try:
-            from .char_tokenizer import CharacterTokenizer
-
-            char_vocab = vocab_path / "char_vocab.json" if vocab_path.is_dir() else vocab_path
-
-            if char_vocab.exists():
-                tok = CharacterTokenizer(vocab_file=char_vocab, use_dictionary=True)
-                logger.info(f"Loaded character tokenizer from {char_vocab}")
-                return _cache_and_return(tok)
-            else:
-                # Create new character tokenizer
-                tok = CharacterTokenizer(use_dictionary=True)
-                VOCAB_DIR.mkdir(parents=True, exist_ok=True)
-                tok.save_vocab(VOCAB_DIR / "char_vocab.json")
-                logger.info("Created new character tokenizer")
-                return _cache_and_return(tok)
-        except ImportError as e:
-            logger.warning(f"Could not load character tokenizer: {e}")
-            if tokenizer_type in ("char", "character"):
-                raise
+    # ("char"/"character" was a CharacterTokenizer backend whose module no
+    # longer exists — the feature is honestly absent. An explicit request falls
+    # through to the RuntimeError below rather than crashing on a missing import.)
 
     # Explicit simple tokenizer (never auto-selected)
     if tokenizer_type == "simple":
@@ -921,30 +898,10 @@ def train_tokenizer(
 
         return tokenizer
 
-    elif tokenizer_type in ("char", "character"):
-        from .char_tokenizer import CharacterTokenizer
-
-        # Character tokenizer builds vocab from data
-        full_text = "\n".join(texts)
-        tokenizer = CharacterTokenizer(use_dictionary=True)
-
-        # Add any new characters from training data
-        for char in set(full_text):
-            if char not in tokenizer.token_to_id:
-                idx = len(tokenizer.token_to_id)
-                tokenizer.token_to_id[char] = idx
-                tokenizer.id_to_token[idx] = char
-
-        tokenizer.vocab_size = len(tokenizer.token_to_id)
-
-        # Save
-        save_path = Path(output_path) if output_path else VOCAB_DIR / "char_vocab.json"
-        tokenizer.save_vocab(save_path)
-
-        return tokenizer
-
     else:
-        raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
+        # "char"/"character" (CharacterTokenizer) was removed — the module no
+        # longer exists. Fail honestly instead of crashing on a missing import.
+        raise ValueError(f"Unsupported tokenizer type: {tokenizer_type!r} (only 'bpe'/'advanced' are trainable)")
 
 
 # =============================================================================

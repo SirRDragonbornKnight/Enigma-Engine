@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import struct
 import sys
 import time
 from pathlib import Path
@@ -211,6 +212,26 @@ def main() -> None:
                 "resume: checkpoint predates schedule recording — trusting CLI args (this run will record them)",
                 flush=True,
             )
+
+    # Validate the ETOK header before trusting the stream. Without this a stale
+    # or truncated tokens.bin would silently memmap a wrong token count (numpy
+    # just drops trailing bytes), training on a misaligned/short corpus while
+    # reporting the JSON's numbers. Fail loudly instead.
+    file_bytes = TOKENS_BIN.stat().st_size
+    with open(TOKENS_BIN, "rb") as _fh:
+        magic, _ver, bpt, hdr_total, _hdr_vocab, _eos = struct.unpack("<4sIIQII", _fh.read(28))
+    if magic != b"ETOK":
+        raise SystemExit(f"{TOKENS_BIN} is not an ETOK corpus (magic {magic!r}) -- refusing to train")
+    stream_bytes = file_bytes - HEADER_BYTES
+    if bpt != 4 or stream_bytes % 4 != 0:
+        raise SystemExit(
+            f"{TOKENS_BIN} stream is not uint32-aligned (bpt={bpt}, {stream_bytes} bytes after header) -- truncated?"
+        )
+    if hdr_total != stream_bytes // 4:
+        raise SystemExit(
+            f"{TOKENS_BIN} header claims {hdr_total:,} tokens but the file holds "
+            f"{stream_bytes // 4:,} (stale header or truncated write) -- refusing to train"
+        )
 
     # memmap the uint32 token stream after the 256-byte header.
     data = np.memmap(TOKENS_BIN, dtype=np.uint32, mode="r", offset=HEADER_BYTES)
@@ -428,6 +449,10 @@ def main() -> None:
     t0 = time.time()
     base_tokens = start_step * tokens_per_step
     seen = base_tokens
+    # Finite default so a no-op resume (start_step >= total_steps, e.g. re-exporting
+    # a finished run's model.pth) passes the final-save guard instead of raising
+    # NameError on an undefined loss_acc.
+    loss_acc = 0.0
     for step in range(start_step, total_steps):
         lr = get_lr(step, args.warmup, total_steps, args.lr, schedule=args.schedule, decay_frac=args.wsd_decay_frac)
         for g in optim.param_groups:
