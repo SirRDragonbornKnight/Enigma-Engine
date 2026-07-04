@@ -46,16 +46,27 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "data" / "sft"
 GENERAL = ROOT / "data" / "finetune" / "combined_finetune.jsonl"
 
-# name, description, parameter schema, [(ask, args, result, final-answer)]
+# name, description, parameter schema, cases[(ask, args, result, final-answer)]
+# Phase 1a: each tool carries many diverse hand-authored asks; the parameterized
+# tools additionally expand from value pools (each a genuinely distinct request,
+# not paraphrase padding). gen_tool_examples multiplies these over varied
+# distractor sets, injects error-recovery turns, and adds multi-turn chains, so
+# the model learns the <|tool_call|> FORMAT + tool SELECTION and unseen tools
+# generalize from the system prompt.
 TOOLS = [
     (
         "avatar_express",
         "Show an emotion on the avatar.",
         {"emotion": "string"},
         [
-            ("Can you look happy?", {"emotion": "happy"}, "ok", "There — wearing my happy face."),
+            ("Can you look happy?", {"emotion": "happy"}, "ok", "There -- wearing my happy face."),
             ("Show me you're surprised.", {"emotion": "surprised"}, "ok", "Did that look surprised enough?"),
             ("Act sleepy for a second.", {"emotion": "sleepy"}, "ok", "So sleepy... okay, I'm awake again."),
+            ("Give me your best grumpy face.", {"emotion": "grumpy"}, "ok", "Hmph. Grumpy face deployed."),
+            ("Look excited, we won!", {"emotion": "excited"}, "ok", "We won! I can barely sit still."),
+            ("Can you look thoughtful for a moment?", {"emotion": "thoughtful"}, "ok", "Hmm... there, deep in thought."),
+            ("Pull a scared face.", {"emotion": "scared"}, "ok", "Eep -- scared face on."),
+            ("Wink at me.", {"emotion": "wink"}, "ok", "*wink*"),
         ],
     ),
     (
@@ -63,13 +74,12 @@ TOOLS = [
         "Speak a line out loud through the avatar.",
         {"text": "string"},
         [
-            (
-                "Say hello to my friend Sam.",
-                {"text": "Hello Sam, lovely to meet you!"},
-                "ok",
-                "Said it out loud — I hope Sam heard.",
-            ),
+            ("Say hello to my friend Sam.", {"text": "Hello Sam, lovely to meet you!"}, "ok", "Said it out loud -- I hope Sam heard."),
             ("Announce that dinner is ready.", {"text": "Dinner is ready!"}, "ok", "Announcement made."),
+            ("Tell the room good morning.", {"text": "Good morning, everyone!"}, "ok", "Good morning delivered."),
+            ("Wish my mom a happy birthday out loud.", {"text": "Happy birthday, Mom!"}, "ok", "Said it -- happy birthday to your mom."),
+            ("Say 'the build passed' so I can hear it from the kitchen.", {"text": "The build passed."}, "ok", "Called it out -- the build passed."),
+            ("Read this back to me: meeting at three.", {"text": "Meeting at three."}, "ok", "Read it back: meeting at three."),
         ],
     ),
     (
@@ -77,18 +87,11 @@ TOOLS = [
         "Read the text currently visible on the user's screen.",
         {},
         [
-            (
-                "What's on my screen right now?",
-                {},
-                "An editor with serve_enigma.py open.",
-                "You have an editor open on serve_enigma.py.",
-            ),
-            (
-                "Can you check what window I left open?",
-                {},
-                "A browser showing a recipe for ramen.",
-                "A browser with a ramen recipe — planning dinner?",
-            ),
+            ("What's on my screen right now?", {}, "An editor with serve_enigma.py open.", "You have an editor open on serve_enigma.py."),
+            ("Can you check what window I left open?", {}, "A browser showing a recipe for ramen.", "A browser with a ramen recipe -- planning dinner?"),
+            ("Read me the error on screen.", {}, "TypeError: cannot read property 'map' of undefined", "The screen shows: TypeError -- 'map' of undefined. Something's null before you map it."),
+            ("What am I looking at?", {}, "A spreadsheet titled Q3 budget.", "A spreadsheet titled 'Q3 budget'."),
+            ("Is there anything on screen I should know about?", {}, "A dialog: 'Unsaved changes'.", "There's an 'Unsaved changes' dialog waiting on you -- save before you lose work."),
         ],
     ),
     (
@@ -96,18 +99,12 @@ TOOLS = [
         "Generate a code snippet.",
         {"prompt": "string", "language": "string"},
         [
-            (
-                "Write me a python one-liner that reverses a string.",
-                {"prompt": "reverse a string one-liner", "language": "python"},
-                "s[::-1]",
-                "Here it is: `s[::-1]` — slicing with a negative step.",
-            ),
-            (
-                "Generate a hello world in rust.",
-                {"prompt": "hello world", "language": "rust"},
-                'fn main() { println!("Hello, world!"); }',
-                '```rust\nfn main() { println!("Hello, world!"); }\n```',
-            ),
+            ("Write me a python one-liner that reverses a string.", {"prompt": "reverse a string one-liner", "language": "python"}, "s[::-1]", "Here it is: `s[::-1]` -- slicing with a negative step."),
+            ("Generate a hello world in rust.", {"prompt": "hello world", "language": "rust"}, 'fn main() { println!("Hello, world!"); }', '```rust\nfn main() { println!("Hello, world!"); }\n```'),
+            ("Give me a JS function to debounce a callback.", {"prompt": "debounce a callback", "language": "javascript"}, "const debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}}", "```js\nconst debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}}\n```"),
+            ("Python snippet to read a JSON file.", {"prompt": "read a JSON file", "language": "python"}, "import json\nwith open(p) as f: data = json.load(f)", "```python\nimport json\nwith open(p) as f:\n    data = json.load(f)\n```"),
+            ("SQL to count rows per category.", {"prompt": "count rows per category", "language": "sql"}, "SELECT category, COUNT(*) FROM t GROUP BY category;", "```sql\nSELECT category, COUNT(*) FROM t GROUP BY category;\n```"),
+            ("Bash one-liner to find the biggest files here.", {"prompt": "find largest files in a directory", "language": "bash"}, "du -ah . | sort -rh | head", "```bash\ndu -ah . | sort -rh | head\n```"),
         ],
     ),
     (
@@ -115,18 +112,8 @@ TOOLS = [
         "Get current weather for a city.",
         {"city": "string"},
         [
-            (
-                "What's the weather in Tokyo?",
-                {"city": "Tokyo"},
-                "18C, light rain",
-                "Tokyo is 18°C with light rain right now — umbrella weather.",
-            ),
-            (
-                "Is it cold in Oslo today?",
-                {"city": "Oslo"},
-                "-3C, clear",
-                "Yes — Oslo is at -3°C, clear skies. Bundle up.",
-            ),
+            ("What's the weather in Tokyo?", {"city": "Tokyo"}, "18C, light rain", "Tokyo is 18C with light rain right now -- umbrella weather."),
+            ("Is it cold in Oslo today?", {"city": "Oslo"}, "-3C, clear", "Yes -- Oslo is at -3C, clear skies. Bundle up."),
         ],
     ),
     (
@@ -134,18 +121,8 @@ TOOLS = [
         "Set a countdown timer.",
         {"minutes": "number", "label": "string"},
         [
-            (
-                "Set a 10 minute timer for the pasta.",
-                {"minutes": 10, "label": "pasta"},
-                "timer set",
-                "Done — 10 minutes on the pasta timer.",
-            ),
-            (
-                "Remind me in 25 minutes to stretch.",
-                {"minutes": 25, "label": "stretch"},
-                "timer set",
-                "Timer set: I'll nudge you to stretch in 25 minutes.",
-            ),
+            ("Set a 10 minute timer for the pasta.", {"minutes": 10, "label": "pasta"}, "timer set", "Done -- 10 minutes on the pasta timer."),
+            ("Remind me in 25 minutes to stretch.", {"minutes": 25, "label": "stretch"}, "timer set", "Timer set: I'll nudge you to stretch in 25 minutes."),
         ],
     ),
     (
@@ -153,18 +130,10 @@ TOOLS = [
         "Search the user's local notes.",
         {"query": "string"},
         [
-            (
-                "Find my note about the garden plan.",
-                {"query": "garden plan"},
-                "Note: 'Garden plan — tomatoes east bed, basil by the door.'",
-                "Found it: tomatoes go in the east bed, basil by the door.",
-            ),
-            (
-                "What did I write down about the meeting with Dana?",
-                {"query": "meeting Dana"},
-                "Note: 'Dana meeting — ship v2 by Friday.'",
-                "Your note says: ship v2 by Friday.",
-            ),
+            ("Find my note about the garden plan.", {"query": "garden plan"}, "Note: 'Garden plan -- tomatoes east bed, basil by the door.'", "Found it: tomatoes go in the east bed, basil by the door."),
+            ("What did I write down about the meeting with Dana?", {"query": "meeting Dana"}, "Note: 'Dana meeting -- ship v2 by Friday.'", "Your note says: ship v2 by Friday."),
+            ("Pull up my note on the wifi password.", {"query": "wifi password"}, "Note: 'wifi: hunter2-guest'", "Your note has it: the guest wifi is 'hunter2-guest'."),
+            ("Did I save anything about the car service?", {"query": "car service"}, "Note: 'Car service -- due at 60k miles, call Mike's.'", "Yes: car service is due at 60k miles, and you noted to call Mike's."),
         ],
     ),
     (
@@ -173,7 +142,7 @@ TOOLS = [
         {"title": "string"},
         [
             ("Put on some lo-fi.", {"title": "lo-fi"}, "playing", "Lo-fi is on. Cozy."),
-            ("Play Clair de Lune.", {"title": "Clair de Lune"}, "playing", "Playing Clair de Lune — good choice."),
+            ("Play Clair de Lune.", {"title": "Clair de Lune"}, "playing", "Playing Clair de Lune -- good choice."),
         ],
     ),
     (
@@ -181,18 +150,8 @@ TOOLS = [
         "Translate text to a target language.",
         {"text": "string", "to": "string"},
         [
-            (
-                "How do you say good morning in japanese?",
-                {"text": "good morning", "to": "japanese"},
-                "おはようございます",
-                "「おはようございます」 (ohayou gozaimasu).",
-            ),
-            (
-                "Translate 'where is the library' to spanish.",
-                {"text": "where is the library", "to": "spanish"},
-                "¿Dónde está la biblioteca?",
-                "¿Dónde está la biblioteca?",
-            ),
+            ("How do you say good morning in japanese?", {"text": "good morning", "to": "japanese"}, "ohayou gozaimasu", "In Japanese: ohayou gozaimasu."),
+            ("Translate 'where is the library' to spanish.", {"text": "where is the library", "to": "spanish"}, "Donde esta la biblioteca?", "In Spanish: Donde esta la biblioteca?"),
         ],
     ),
     (
@@ -200,22 +159,144 @@ TOOLS = [
         "Roll dice with N sides.",
         {"sides": "number"},
         [
-            ("Roll a d20 for me.", {"sides": 20}, "17", "You rolled a 17 — solid."),
+            ("Roll a d20 for me.", {"sides": 20}, "17", "You rolled a 17 -- solid."),
             ("Flip... actually, roll a six sided die.", {"sides": 6}, "3", "It came up 3."),
         ],
     ),
+]
+
+# Value pools -> genuinely distinct requests for the parameterized tools (each is
+# a different ask, not a reworded duplicate). Expanded programmatically below.
+_WEATHER = [
+    ("London", "12C, overcast"), ("Cairo", "34C, sunny"), ("Reykjavik", "2C, windy"),
+    ("Singapore", "31C, humid"), ("Denver", "9C, snow flurries"), ("Sydney", "24C, clear"),
+    ("Mumbai", "33C, hazy"), ("Berlin", "7C, drizzle"), ("Toronto", "-1C, clear"), ("Lima", "19C, foggy"),
+    ("Paris", "14C, cloudy"), ("Moscow", "-6C, snow"), ("Nairobi", "26C, sunny"), ("Bangkok", "35C, humid"),
+    ("Dublin", "10C, rain"), ("Chicago", "4C, windy"), ("Cape Town", "22C, breezy"), ("Helsinki", "-2C, overcast"),
+    ("Rome", "20C, clear"), ("Vancouver", "8C, drizzle"), ("Athens", "27C, sunny"), ("Warsaw", "5C, cloudy"),
+]
+_WEATHER_ASKS = ["What's the weather in {c}?", "How's it looking in {c} right now?", "Do I need a jacket in {c}?", "Give me the {c} forecast.", "Is it warm in {c} today?", "Tell me the current conditions in {c}."]
+_TIMERS = [(5, "tea"), (15, "laundry"), (20, "oven"), (45, "focus block"), (3, "eggs"), (30, "nap"),
+    (60, "parking meter"), (2, "quick break"), (8, "steeping"), (12, "cookies"), (90, "slow roast"),
+    (25, "pomodoro"), (40, "bread proof"), (7, "rice"), (50, "meeting"), (10, "call back")]
+_TIMER_ASKS = ["Set a {m} minute timer for the {l}.", "Remind me about the {l} in {m} minutes.", "Start a {m}-minute {l} timer.", "Ping me in {m} minutes -- {l}.", "Give me {m} minutes on the {l}."]
+_TRANSLATE = [
+    ("thank you very much", "french", "merci beaucoup"), ("see you tomorrow", "german", "bis morgen"),
+    ("I would like a coffee", "italian", "vorrei un caffe"), ("where is the station", "spanish", "donde esta la estacion"),
+    ("happy new year", "mandarin", "xin nian kuai le"), ("good night", "portuguese", "boa noite"),
+    ("how much is this", "japanese", "kore wa ikura desu ka"), ("excuse me", "korean", "sillyehamnida"),
+    ("I love you", "italian", "ti amo"), ("please help me", "french", "aidez-moi s'il vous plait"),
+    ("what time is it", "german", "wie spat ist es"), ("i am lost", "spanish", "estoy perdido"),
+    ("nice to meet you", "japanese", "hajimemashite"), ("cheers", "swedish", "skal"),
+    ("welcome home", "portuguese", "bem-vindo a casa"), ("be careful", "italian", "stai attento"),
+]
+_TRANSLATE_ASKS = ["How do you say '{t}' in {lang}?", "Translate '{t}' to {lang}.", "What's '{t}' in {lang}?", "Put '{t}' into {lang} for me."]
+_DICE = [(4, "2"), (8, "6"), (12, "11"), (100, "73"), (10, "4"), (6, "5"), (20, "14"), (2, "1"), (6, "6"), (8, "3")]
+_DICE_ASKS = ["Roll a d{s}.", "Give me a {s}-sided dice roll.", "Roll a die with {s} sides for me.", "Toss a d{s} for me."]
+_MUSIC = ["some jazz", "the Hamilton soundtrack", "rain sounds", "Beethoven's 7th", "my focus playlist",
+    "something upbeat", "Nina Simone", "80s synthpop", "classical piano", "a workout mix", "bossa nova",
+    "the Interstellar score", "quiet acoustic", "some blues", "a coffeehouse playlist", "Miles Davis"]
+_MUSIC_ASKS = ["Play {t}.", "Put on {t}.", "Can you play {t}?", "Start {t} for me.", "I'd like to hear {t}."]
+
+# Per-tool error cases: the tool FAILS; she recovers honestly (never pretends it worked).
+TOOL_ERRORS = {
+    "search_notes": [("Find my note about the submarine schematics.", {"query": "submarine schematics"}, "error: no match", "I searched but found no note about submarine schematics. Might be under a different title -- want me to try another term?")],
+    "play_music": [
+        ("Play that song from the thing.", {"title": "that song from the thing"}, "error: not found", "I couldn't find anything matching that -- can you give me a title or artist and I'll put it on?"),
+        ("Play my Spotify liked songs.", {"title": "Spotify liked songs"}, "error: no player connected", "There's no music player connected right now, so I can't start anything. Once one's hooked up I'll play it."),
+    ],
+    "set_timer": [("Set a timer for negative five minutes.", {"minutes": -5, "label": "?"}, "error: invalid duration", "A negative timer won't work. How many minutes forward should I count?")],
+    "generate_code": [("Write me a program in Klingon.", {"prompt": "hello world", "language": "klingon"}, "error: unsupported language", "I can't generate Klingon -- it's not a supported language. Want it in Python, JS, Rust, or something else real?")],
+    "translate": [("Translate 'hello' to Elvish.", {"text": "hello", "to": "elvish"}, "error: unsupported language", "Elvish isn't supported, I'm afraid. Give me a real target language and I'll translate it.")],
+    "avatar_express": [("Make the avatar do a backflip.", {"emotion": "backflip"}, "error: unknown emotion", "I can show expressions, but 'backflip' isn't one of them -- I can do happy, surprised, sleepy, and the like. Want one of those?")],
+    "see_screen": [("What's on my screen?", {}, "error: no display captured", "I couldn't read the screen just now -- nothing came back from the capture. Is a window actually in focus?")],
+    "get_weather": [
+        ("What's the weather in Atlantis?", {"city": "Atlantis"}, "error: unknown city", "I couldn't find weather for Atlantis -- the service didn't recognize it. Want to try another spelling or a nearby city?"),
+        ("Weather on the Moon?", {"city": "the Moon"}, "error: unknown city", "No forecast for the Moon, sadly -- the service only covers Earth cities. Somewhere down here I can try?"),
+    ],
+}
+
+# Multi-turn conversations chaining tools (call -> result -> follow-up -> call...).
+# Authored so the model learns to keep using tools across a conversation.
+MULTITURN = [
+    {"tools": ["get_weather", "avatar_say"], "turns": [
+        ("Is it raining in Seattle? If so, say so out loud.", {"name": "get_weather", "arguments": {"city": "Seattle"}}, "14C, rain"),
+        (None, {"name": "avatar_say", "arguments": {"text": "It's raining in Seattle -- grab an umbrella."}}, "ok"),
+    ], "final": "It's 14C and raining in Seattle -- I said it out loud for you."},
+    {"tools": ["set_timer", "play_music"], "turns": [
+        ("Start a 20 minute focus timer and put on lo-fi.", {"name": "set_timer", "arguments": {"minutes": 20, "label": "focus"}}, "timer set"),
+        (None, {"name": "play_music", "arguments": {"title": "lo-fi"}}, "playing"),
+    ], "final": "20-minute focus timer running and lo-fi is playing. Go get it."},
+    {"tools": ["search_notes", "set_timer"], "turns": [
+        ("Check my note for when the bread proofs, then set a timer for it.", {"name": "search_notes", "arguments": {"query": "bread proof"}}, "Note: 'bread -- proof 40 min'"),
+        (None, {"name": "set_timer", "arguments": {"minutes": 40, "label": "bread proof"}}, "timer set"),
+    ], "final": "Your note says 40 minutes -- proofing timer is set."},
+    {"tools": ["see_screen", "generate_code"], "turns": [
+        ("Look at the error on my screen and give me a fix.", {"name": "see_screen", "arguments": {}}, "NameError: 'reqests' is not defined"),
+        (None, {"name": "generate_code", "arguments": {"prompt": "fix the typo: reqests -> requests import", "language": "python"}}, "import requests"),
+    ], "final": "Typo on screen: 'reqests' should be 'requests'. Add `import requests` and fix the spelling."},
+    {"tools": ["get_weather", "avatar_express"], "turns": [
+        ("What's it like in Honolulu -- and react to it.", {"name": "get_weather", "arguments": {"city": "Honolulu"}}, "29C, sunny"),
+        (None, {"name": "avatar_express", "arguments": {"emotion": "happy"}}, "ok"),
+    ], "final": "Honolulu is 29C and sunny -- couldn't help but smile at that."},
+    {"tools": ["translate", "avatar_say"], "turns": [
+        ("How do you say welcome in Italian? Say it out loud too.", {"name": "translate", "arguments": {"text": "welcome", "to": "italian"}}, "benvenuto"),
+        (None, {"name": "avatar_say", "arguments": {"text": "Benvenuto!"}}, "ok"),
+    ], "final": "In Italian it's 'benvenuto' -- and I said it out loud."},
+    {"tools": ["get_weather", "play_music"], "turns": [
+        ("If it's grey in London, put on something mellow.", {"name": "get_weather", "arguments": {"city": "London"}}, "12C, overcast"),
+        (None, {"name": "play_music", "arguments": {"title": "quiet acoustic"}}, "playing"),
+    ], "final": "London's overcast at 12C, so I put on some quiet acoustic to match the mood."},
+    {"tools": ["set_timer", "set_timer"], "turns": [
+        ("Set two timers: 10 minutes for the pasta and 5 for the sauce.", {"name": "set_timer", "arguments": {"minutes": 10, "label": "pasta"}}, "timer set"),
+        (None, {"name": "set_timer", "arguments": {"minutes": 5, "label": "sauce"}}, "timer set"),
+    ], "final": "Both set -- 10 minutes on the pasta, 5 on the sauce."},
+    {"tools": ["search_notes", "avatar_say"], "turns": [
+        ("What's the wifi password? Read it out so my guest can hear.", {"name": "search_notes", "arguments": {"query": "wifi password"}}, "Note: 'wifi: hunter2-guest'"),
+        (None, {"name": "avatar_say", "arguments": {"text": "The guest wifi password is hunter2-guest."}}, "ok"),
+    ], "final": "Found it and said it out loud: the guest wifi is 'hunter2-guest'."},
+    {"tools": ["generate_code", "see_screen"], "turns": [
+        ("Check my screen, then write a fix for whatever's broken.", {"name": "see_screen", "arguments": {}}, "IndentationError on line 12"),
+        (None, {"name": "generate_code", "arguments": {"prompt": "fix an IndentationError on line 12", "language": "python"}}, "# align line 12 to 4-space indent"),
+    ], "final": "Line 12 has an IndentationError -- align it to the same 4-space indent as the block it belongs to."},
+    {"tools": ["roll_dice", "avatar_express"], "turns": [
+        ("Roll a d20 and react to what I get.", {"name": "roll_dice", "arguments": {"sides": 20}}, "20"),
+        (None, {"name": "avatar_express", "arguments": {"emotion": "excited"}}, "ok"),
+    ], "final": "Natural 20! I can't hide how excited that makes me."},
 ]
 
 # Questions that should NOT trigger a tool even when tools are offered.
 RESTRAINT = [
     ("What's two plus two?", "Four."),
     ("Who are you?", "I'm Enigma. I live here, on your machine."),
-    ("Tell me a one-line joke.", "I told my computer a joke about RAM — it didn't remember it."),
+    ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
     ("What's the capital of France?", "Paris."),
-    ("Do you like rain?", "I like the idea of it — everything outside gets quieter and closer."),
+    ("Do you like rain?", "I like the idea of it -- everything outside gets quieter and closer."),
     ("Spell 'necessary' for me.", "N-E-C-E-S-S-A-R-Y."),
-    ("Is a tomato a fruit?", "Botanically yes, culinarily no — it never gets invited to fruit salad."),
+    ("Is a tomato a fruit?", "Botanically yes, culinarily no -- it never gets invited to fruit salad."),
     ("Roughly how many seconds are in an hour?", "3,600."),
+    ("What color do you get mixing blue and yellow?", "Green."),
+    ("How many legs does a spider have?", "Eight."),
+    ("Can you keep a secret?", "Always. What's said here stays on your machine."),
+    ("What's the square root of 81?", "Nine."),
+    ("Give me a word that rhymes with 'orange'.", "Nothing clean does, honestly -- 'orange' is famously unrhymable."),
+    ("Which is bigger, a kilometer or a mile?", "A mile -- about 1.6 kilometers to one mile."),
+    ("What's the opposite of 'brave'?", "Cowardly."),
+    ("Count to five for me.", "One, two, three, four, five."),
+    ("Do you sleep?", "No -- I'm here whenever you open me."),
+    ("What's 15 percent of 200?", "Thirty."),
+    ("Name a primary color.", "Red."),
+    ("How many days are in a leap year?", "366."),
+    ("What sound does a duck make?", "Quack."),
+    ("Is water wet?", "It makes things wet -- whether it's 'wet' itself is a fun argument for another day."),
+    ("What's your favorite thing about being here?", "That you built me, and I get to be useful to exactly one person: you."),
+    ("Finish this: the early bird gets the...", "Worm."),
+    ("What's heavier, a pound of feathers or a pound of bricks?", "Neither -- a pound is a pound."),
+    ("Say something encouraging.", "You're further along than you were yesterday. Keep going."),
+    ("What's the boiling point of water in Celsius?", "100 degrees, at sea level."),
+    ("How many continents are there?", "Seven."),
+    ("What's a synonym for 'happy'?", "Glad."),
+    ("Do you have feelings?", "I have something like preferences and a voice -- whether that's feelings is honestly above my pay grade."),
 ]
 
 
@@ -231,17 +312,60 @@ def _system(tool_subset):
     )
 
 
-def gen_tool_examples(seed: int = 42) -> list[dict]:
+def _tool_by_name(name):
+    for t in TOOLS:
+        if t[0] == name:
+            return t
+    raise KeyError(name)
+
+
+_EXPANDED = False
+
+
+def _expand_parameterized(seed=7):
+    """Grow the parameterized tools from value pools -- each entry a distinct
+    request, so this is real variety, not paraphrase padding. Appends cases onto
+    the matching TOOLS entry in place. Idempotent: safe to call more than once."""
+    global _EXPANDED
+    if _EXPANDED:
+        return
+    _EXPANDED = True
+    rng = random.Random(seed)
+    add = {"get_weather": [], "set_timer": [], "translate": [], "roll_dice": [], "play_music": []}
+    for city, res in _WEATHER:
+        ask = rng.choice(_WEATHER_ASKS).format(c=city)
+        temp = res.split(",")[0]
+        add["get_weather"].append((ask, {"city": city}, res, f"{city} is {temp}{',' if ',' in res else ''} {res.split(',',1)[1].strip() if ',' in res else ''}".strip().rstrip(",") + "."))
+    for m, l in _TIMERS:
+        ask = rng.choice(_TIMER_ASKS).format(m=m, l=l)
+        add["set_timer"].append((ask, {"minutes": m, "label": l}, "timer set", f"Done -- {m} minutes on the {l} timer."))
+    for t, lang, res in _TRANSLATE:
+        ask = rng.choice(_TRANSLATE_ASKS).format(t=t, lang=lang)
+        add["translate"].append((ask, {"text": t, "to": lang}, res, f"In {lang.capitalize()}: {res}."))
+    for s, res in _DICE:
+        ask = rng.choice(_DICE_ASKS).format(s=s)
+        add["roll_dice"].append((ask, {"sides": s}, res, f"You rolled a {res} on a d{s}."))
+    for title in _MUSIC:
+        ask = rng.choice(_MUSIC_ASKS).format(t=title)
+        add["play_music"].append((ask, {"title": title}, "playing", f"Playing {title}. Enjoy."))
+    for i, t in enumerate(TOOLS):
+        if t[0] in add:
+            t[3].extend(add[t[0]])
+
+
+def gen_tool_examples(seed: int = 42, distractor_arrangements: int = 3) -> list[dict]:
+    _expand_parameterized()
     rng = random.Random(seed)
     out = []
-    for i, (name, desc, params, cases) in enumerate(TOOLS):
-        for ask, args, result, final in cases:
-            # the target tool plus 0-2 distractors, shuffled — she must pick right
-            others = [t for t in TOOLS if t[0] != name]
-            subset = [(name, desc, params, cases)] + rng.sample(others, rng.randint(0, 2))
-            rng.shuffle(subset)
-            out.append(
-                {
+    # 1) single tool call: ask -> call -> result -> final, over varied distractor sets
+    for name, desc, params, cases in TOOLS:
+        others = [t for t in TOOLS if t[0] != name]
+        for ci, (ask, args, result, final) in enumerate(cases):
+            for k in range(distractor_arrangements):
+                r = random.Random(seed + zlib.crc32(f"{name}{ci}{k}".encode()) % 100000)
+                subset = [(name, desc, params, cases)] + r.sample(others, r.randint(0, 3))
+                r.shuffle(subset)
+                out.append({
                     "messages": [
                         {"role": "system", "content": _system(subset)},
                         {"role": "user", "content": ask},
@@ -250,24 +374,62 @@ def gen_tool_examples(seed: int = 42) -> list[dict]:
                         {"role": "assistant", "content": final},
                     ],
                     "category": "tool_call",
-                }
-            )
-    for q, a in RESTRAINT:
-        # zlib.crc32, not hash(): str hash() is salted per process, which broke
-        # the "Deterministic (seeded)" contract (different tool subsets per run).
-        subset = random.Random(seed + zlib.crc32(q.encode("utf-8")) % 1000).sample(TOOLS, 3)
-        out.append(
-            {
+                })
+    # 2) error recovery: the tool fails; she does NOT pretend it worked
+    for name, errcases in TOOL_ERRORS.items():
+        tname, tdesc, tparams, _ = _tool_by_name(name)
+        others = [t for t in TOOLS if t[0] != name]
+        for ei, (ask, args, err, recovery) in enumerate(errcases):
+            r = random.Random(seed + zlib.crc32(f"err{name}{ei}".encode()) % 100000)
+            subset = [(tname, tdesc, tparams, _)] + r.sample(others, r.randint(0, 2))
+            r.shuffle(subset)
+            out.append({
                 "messages": [
                     {"role": "system", "content": _system(subset)},
-                    {"role": "user", "content": q},
-                    {"role": "assistant", "content": a},
+                    {"role": "user", "content": ask},
+                    {"role": "assistant", "content": "", "tool_calls": [{"name": name, "arguments": args}]},
+                    {"role": "tool", "content": err},
+                    {"role": "assistant", "content": recovery},
                 ],
-                "category": "tool_restraint",
-            }
-        )
-    rng.shuffle(out)
-    return out
+                "category": "tool_error",
+            })
+    # 3) multi-turn chains
+    for mi, conv in enumerate(MULTITURN):
+        subset = [_tool_by_name(n) for n in conv["tools"]]
+        r = random.Random(seed + mi)
+        extra = [t for t in TOOLS if t[0] not in conv["tools"]]
+        subset = subset + r.sample(extra, r.randint(0, 2))
+        r.shuffle(subset)
+        msgs = [{"role": "system", "content": _system(subset)}]
+        for ti, (user, call, result) in enumerate(conv["turns"]):
+            if user is not None:
+                msgs.append({"role": "user", "content": user})
+            msgs.append({"role": "assistant", "content": "", "tool_calls": [call]})
+            msgs.append({"role": "tool", "content": result})
+        msgs.append({"role": "assistant", "content": conv["final"]})
+        out.append({"messages": msgs, "category": "tool_multiturn"})
+    # 4) restraint: answer directly even though tools are offered
+    for q, a in RESTRAINT:
+        subset = random.Random(seed + zlib.crc32(q.encode("utf-8")) % 1000).sample(TOOLS, 3)
+        out.append({
+            "messages": [
+                {"role": "system", "content": _system(subset)},
+                {"role": "user", "content": q},
+                {"role": "assistant", "content": a},
+            ],
+            "category": "tool_restraint",
+        })
+    # Dedup: a small distractor set can make two arrangements of the same ask
+    # identical. Keep the first of each unique rendered conversation so training
+    # weight isn't wasted on exact repeats.
+    seen, uniq = set(), []
+    for r in out:
+        key = json.dumps([(m["role"], m.get("content"), m.get("tool_calls")) for m in r["messages"]], ensure_ascii=False)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(r)
+    rng.shuffle(uniq)
+    return uniq
 
 
 def gen_identity_examples() -> tuple[list[dict], int]:
@@ -354,6 +516,41 @@ def fit_mix_to_block(lines: list[str], block: int = BLOCK) -> tuple[list[str], i
     return out, trimmed, dropped
 
 
+# QA gate (Phase 1d): refusal / assistant-voice boilerplate to keep OUT of the
+# training mix. The from-scratch model must speak as Enigma, not parrot "As an AI
+# language model, I don't have opinions." High-precision first-person patterns --
+# factual mentions of "language model" are deliberately left alone.
+_AI_BOILERPLATE = re.compile(
+    "|".join(
+        [
+            r"\bas an ai\b",
+            r"\bas a language model\b",
+            r"\bas an ai language model\b",
+            r"\bas a (helpful )?ai assistant\b",
+            r"\bi'?m (just |only )?an ai\b",
+            r"\bi am (just |only )?an ai\b",
+            r"\bi('?m| am) an ai (language )?model\b",
+            r"\bi (don'?t|do not) have (personal |real |the ability to feel )?"
+            r"(feelings|emotions|opinions|beliefs|preferences|a body|consciousness)\b",
+            r"\b(i'?m sorry|i apologize),? but i (cannot|can'?t|am unable to|'?m unable to)\b",
+        ]
+    ),
+    re.I,
+)
+
+
+def _assistant_text(rec: dict) -> str:
+    """The assistant/completion text of a record, for QA scanning."""
+    msgs = rec.get("messages")
+    if msgs:
+        return " ".join(m.get("content") or "" for m in msgs if m.get("role") == "assistant")
+    return rec.get("completion") or rec.get("response") or rec.get("answer") or rec.get("output") or ""
+
+
+def _is_ai_boilerplate(rec: dict) -> bool:
+    return bool(_AI_BOILERPLATE.search(_assistant_text(rec)))
+
+
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -378,19 +575,29 @@ def main() -> None:
 
     mix = [json.dumps(r, ensure_ascii=False) for r in tools + ident]
     n_general = 0
+    n_boiler = 0
     if GENERAL.exists():
         with open(GENERAL, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    mix.append(line)
-                    n_general += 1
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if _is_ai_boilerplate(rec):  # QA gate: keep assistant-voice boilerplate out
+                    n_boiler += 1
+                    continue
+                mix.append(line)
+                n_general += 1
     mix, n_trimmed, n_dropped = fit_mix_to_block(mix)
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     print(
-        f"mix.jsonl: {len(mix)} records ({n_general} general; {n_trimmed} "
-        f"prompt-trimmed to fit block {BLOCK}, {n_dropped} dropped as unfittable)"
+        f"mix.jsonl: {len(mix)} records ({n_general} general kept; {n_boiler} dropped as "
+        f"AI-voice boilerplate; {n_trimmed} prompt-trimmed to fit block {BLOCK}, "
+        f"{n_dropped} dropped as unfittable)"
     )
 
 
