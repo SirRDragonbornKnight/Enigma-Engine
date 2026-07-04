@@ -100,7 +100,12 @@ class ForgeConfig:
     # ─────────────────────────────────────────────────────────────────────────
     # ENHANCED KV-CACHE
     # ─────────────────────────────────────────────────────────────────────────
-    sliding_window: Optional[int] = None  # Sliding window attention length
+    # Sliding-window attention length. PARTIAL: only honored when an explicit
+    # attention mask is materialized (padded batches -> _get_causal_mask). The
+    # fast causal path (plain training/prefill, mask=None) and KV-cache decode
+    # do NOT apply it, and the cache is not windowed -- so on the normal
+    # train/generate paths this currently does nothing. Wire those before use.
+    sliding_window: Optional[int] = None
 
     # ─────────────────────────────────────────────────────────────────────────
     # MEMORY OPTIMIZATION

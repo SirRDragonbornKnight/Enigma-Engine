@@ -363,6 +363,13 @@ class Enigma(nn.Module):
         distance are also masked with ``-inf`` so each token only attends to
         at most ``sliding_window`` previous positions.  This reduces
         attention from O(n²) to O(n·w) for long sequences (e.g. Mistral).
+
+        NOTE: this mask is only built when the forward pass materializes an
+        explicit attention mask (padded batches). Plain causal training/prefill
+        and KV-cache decode take the fast ``is_causal`` path with ``mask=None``
+        and do NOT apply the window, and the KV-cache is not windowed. So the
+        window is currently a no-op on the normal train/generate paths -- wire
+        the fast + decode paths (and cache eviction) before relying on it.
         """
         sw = self.config.sliding_window
         if self._causal_mask is None or self._causal_mask_size < size:
@@ -765,6 +772,11 @@ class Enigma(nn.Module):
         # Validate input shape
         if input_ids.dim() != 2:
             raise ValueError(f"input_ids must be 2D [batch, seq_len], got shape {list(input_ids.shape)}")
+        # Single-sequence only: the KV-cache, per-step sampling and stop-token
+        # test (next_token.squeeze().item()) are all written for batch 1. Fail
+        # honestly instead of crashing mid-generation on a batched input.
+        if input_ids.shape[0] != 1:
+            raise ValueError(f"generate() supports batch size 1 only, got {input_ids.shape[0]}")
 
         # Validate device match
         model_device = next(self.parameters()).device
@@ -865,6 +877,10 @@ class Enigma(nn.Module):
             for token in model.generate_stream(input_ids):
                 print(tokenizer.decode([token.item()]), end='', flush=True)
         """
+        if input_ids.dim() != 2 or input_ids.shape[0] != 1:
+            raise ValueError(
+                f"generate_stream() supports a single 2D [1, seq_len] sequence, got shape {list(input_ids.shape)}"
+            )
         self.clear_cache()
         stop_tokens = stop_tokens or [2]
 

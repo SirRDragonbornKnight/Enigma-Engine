@@ -255,8 +255,7 @@ class TestCombineAllText:
 
     def test_text_file_uses_canonical_chat_format(self, tmp_path):
         """Block format: 'User: <p>\\n\\nAssistant: <c>' with blank
-        line between blocks. Matches router.py L315-L317 BackgroundTrainer
-        format and the existing GUI chat format."""
+        line between blocks (the canonical plain-transcript chat format)."""
         import collect_finetuning_data as cf
         import json
 

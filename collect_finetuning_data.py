@@ -75,10 +75,9 @@ def _write_jsonl(pairs: list[dict], path: Path) -> int:
 def _write_combined_text(pairs: list[dict], path: Path) -> int:
     """Write pairs as canonical 'User: ...\\n\\nAssistant: ...' blocks.
 
-    Matches the chat format used by `BackgroundTrainer` (router.py L315)
-    and the GUI chat path so the SFT trainer (which reads plain text via
-    `Path.read_text`) can consume the collected fine-tune data without
-    a JSONL-aware loader. Closes the D-11 consumer-side gap.
+    Uses the canonical plain-transcript format so the SFT trainer (which reads
+    plain text via `Path.read_text`) can consume the collected fine-tune data
+    without a JSONL-aware loader. Closes the D-11 consumer-side gap.
 
     Empty prompts or completions are skipped — a malformed block like
     'User: \\n\\nAssistant: foo' would teach the model that empty input
@@ -169,6 +168,10 @@ def collect_oasst() -> list[dict]:
         # Pick highest-ranked (lowest rank number)
         assistant_replies.sort(key=lambda x: x[0])
         best = assistant_replies[0][1]
+        # Enforce the English-only contract on the REPLY too, not just the
+        # prompt: OASST replies can be a different language than their root.
+        if best.get("lang", "en") != "en":
+            continue
         completion = _clean_text(best["text"])
         if not completion or len(completion) < 10:
             continue

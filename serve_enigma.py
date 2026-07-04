@@ -27,13 +27,14 @@ from pathlib import Path
 
 import torch
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
     CHAT_FORMAT_NAME,
     IM_END,
+    ROLES,
     attach_chat_tokens,
     parse_assistant_ids,
     render_chat,
@@ -443,6 +444,12 @@ def list_models():
 
 @app.post("/v1/chat/completions")
 def chat(req: ChatReq):
+    # Validate roles up front: an unknown role is CLIENT error (400), not a
+    # server crash (500). Without this the ValueError from chat_format's
+    # renderer leaks a stack trace and returns a generic 500.
+    bad = sorted({m.role for m in req.messages if m.role not in ROLES})
+    if bad:
+        raise HTTPException(status_code=400, detail=f"unknown chat role(s) {bad}; need one of {list(ROLES)}")
     if INSTRUCT:
         return _chat_instruct(req)
     messages = list(req.messages)
@@ -493,7 +500,9 @@ def chat(req: ChatReq):
     # Usage counts what the model actually saw/produced: the fed prompt is
     # [BOS]+body (trailing EOS stripped), generated ids carry no specials —
     # so don't let encode()'s BOS/EOS bracketing inflate the numbers.
-    n_prompt = len(tokenizer.encode(prompt, add_special_tokens=False)) + 1
+    # cap at what _generate_text actually feeds (it trims an over-long prompt to
+    # max_context - MIN_GEN_TOKENS); don't report tokens the model never saw.
+    n_prompt = min(len(tokenizer.encode(prompt, add_special_tokens=False)) + 1, ARGS.max_context - MIN_GEN_TOKENS)
     n_out = len(tokenizer.encode(text, add_special_tokens=False)) if text else 0
     return {
         "id": cid,
@@ -547,7 +556,8 @@ def completions(req: CompletionReq):
 
     text = "".join(gen)
     # Same accounting as chat: fed = [BOS]+body, generated ids have no specials.
-    n_prompt = len(tokenizer.encode(req.prompt, add_special_tokens=False)) + 1
+    # cap at what _generate_text actually feeds (over-long prompts are trimmed)
+    n_prompt = min(len(tokenizer.encode(req.prompt, add_special_tokens=False)) + 1, ARGS.max_context - MIN_GEN_TOKENS)
     n_out = len(tokenizer.encode(text, add_special_tokens=False)) if text else 0
     return {
         "id": cid,
