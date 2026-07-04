@@ -222,6 +222,15 @@ def main() -> None:
         magic, _ver, bpt, hdr_total, _hdr_vocab, _eos = struct.unpack("<4sIIQII", _fh.read(28))
     if magic != b"ETOK":
         raise SystemExit(f"{TOKENS_BIN} is not an ETOK corpus (magic {magic!r}) -- refusing to train")
+    # tokens.json is written AFTER the bin (pretokenize_data.py); a crash in
+    # between leaves a new bin + stale JSON. The JSON's vocab sizes the model,
+    # so a mismatch means embedding/CE indices can run out of bounds (or waste
+    # rows). Trust the bin's own header over the sidecar and fail loudly.
+    if _hdr_vocab and _hdr_vocab != vocab_meta:
+        raise SystemExit(
+            f"{TOKENS_BIN} header says vocab {_hdr_vocab} but tokens.json says {vocab_meta} "
+            f"(stale sidecar?) -- refusing to train"
+        )
     stream_bytes = file_bytes - HEADER_BYTES
     if bpt != 4 or stream_bytes % 4 != 0:
         raise SystemExit(
@@ -366,8 +375,10 @@ def main() -> None:
                     f"{args.optimizer} ({exc}) — the run was saved with a different "
                     f"optimizer; refusing to continue with reset moments"
                 ) from None
-        start_step = int(ck.get("step", 0))
-        print(f"resumed from {args.resume} at step {start_step}", flush=True)
+        # ck["step"] is a COMPLETED step (saved after its optimizer update);
+        # resume at the next one instead of training it twice.
+        start_step = int(ck.get("step", -1)) + 1
+        print(f"resumed from {args.resume} after step {start_step - 1} (next: {start_step})", flush=True)
 
     # torch.compile after any resume-load so weights land in raw_model first. The
     # compiled wrapper is used only for fwd/bwd; save/load/optimizer stay on

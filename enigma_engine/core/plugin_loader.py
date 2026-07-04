@@ -127,21 +127,44 @@ def _ast_scan_dangers(source: str, filename: str) -> list[str]:
 
     flags: list[str] = []
 
+    # Map local bindings back to their real module/name so aliasing and
+    # `from X import Y` can't slip a dangerous call past the scan:
+    #   import os as o           -> {"o": "os"}          (o.system -> os.system)
+    #   from os import system    -> {"system": "os.system"}
+    module_aliases: dict[str, str] = {}
+    imported_funcs: dict[str, str] = {}
+    _dangerous_leaves = {p.split(".")[-1] for p in _DANGEROUS_ATTRS}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_aliases[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                imported_funcs[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+
+    def _matches_dangerous(full: str) -> bool:
+        return any(full == pat or full.endswith("." + pat) for pat in _DANGEROUS_ATTRS)
+
     for node in ast.walk(tree):
         # Dangerous bare calls: exec(...), eval(...), etc.
         if isinstance(node, ast.Call):
             func = node.func
-            # Direct name call: exec(...)
-            if isinstance(func, ast.Name) and func.id in _DANGEROUS_CALLS:
-                flags.append(f"line {node.lineno}: {func.id}() (dangerous builtin)")
-            # Attribute call: os.system(...)
+            # Direct name call: exec(...), or a `from os import system` binding
+            if isinstance(func, ast.Name):
+                if func.id in _DANGEROUS_CALLS:
+                    flags.append(f"line {node.lineno}: {func.id}() (dangerous builtin)")
+                else:
+                    bound = imported_funcs.get(func.id)
+                    if bound and _matches_dangerous(bound):
+                        flags.append(f"line {node.lineno}: {func.id}() -> {bound} (dangerous call)")
+            # Attribute call: os.system(...), incl. aliased `import os as o`
             elif isinstance(func, ast.Attribute):
                 full = _resolve_attr(func)
                 if full:
-                    for pattern in _DANGEROUS_ATTRS:
-                        if full == pattern or full.endswith("." + pattern):
-                            flags.append(f"line {node.lineno}: {full}() (dangerous call)")
-                            break
+                    head, _, rest = full.partition(".")
+                    resolved = f"{module_aliases[head]}.{rest}" if rest and head in module_aliases else full
+                    if _matches_dangerous(full) or _matches_dangerous(resolved):
+                        flags.append(f"line {node.lineno}: {resolved}() (dangerous call)")
 
         # Import of subprocess or os — flag for awareness
         # (We only block *calls*, but log this import)

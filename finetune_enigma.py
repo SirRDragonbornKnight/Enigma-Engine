@@ -280,7 +280,9 @@ def main() -> None:
             optim.load_state_dict(ck["optimizer"])
         except Exception as exc:
             raise SystemExit(f"resume: optimizer state does not fit --optimizer {args.optimizer} ({exc})") from None
-        start_step = int(ck.get("step", 0))
+        # ck["step"] is a COMPLETED step (saved after its optimizer update);
+        # resume at the next one instead of training it twice.
+        start_step = int(ck.get("step", -1)) + 1
     del ck
 
     use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
@@ -394,6 +396,15 @@ def main() -> None:
     t0 = time.time()
     perm = torch.randperm(X.shape[0])
     cursor = 0
+    # Resume continues the ORIGINAL data order: replay the already-consumed
+    # micro-batches through the same perm/reshuffle logic (identical randperm
+    # calls -> identical RNG stream). Without this a resumed run restarts at
+    # the head of the permutation and never reaches the tail examples.
+    for _ in range(start_step * args.grad_accum):
+        if cursor + args.micro_batch > X.shape[0]:
+            perm = torch.randperm(X.shape[0])
+            cursor = 0
+        cursor += args.micro_batch
     # Finite default so a no-op resume (start_step >= total_steps, e.g. re-exporting
     # a finished run's model.pth) passes the final-save guard instead of raising
     # NameError on an undefined loss_acc.

@@ -764,7 +764,10 @@ def get_tokenizer(tokenizer_type: str = "auto", vocab_path: Optional[str | Path]
 
     Args:
         tokenizer_type: Type of tokenizer to load
-            - "auto": Best available (tiktoken > bpe)
+            - "auto": the repo's trained BPE vocab if present, else tiktoken.
+              (This is a from-scratch model: a foreign cl100k tokenizer would
+              silently mismatch its 4718-vocab. "auto" no longer grabs
+              tiktoken when the trained vocab exists.)
             - "tiktoken": Fast GPT-style tokenizer (requires tiktoken)
             - "bpe": Advanced BPE tokenizer (the live model's tokenizer)
             - "advanced": Alias for "bpe"
@@ -792,8 +795,15 @@ def get_tokenizer(tokenizer_type: str = "auto", vocab_path: Optional[str | Path]
                 _tokenizer_cache[cache_key] = tok
         return tok
 
+    # "auto" prefers the repo's OWN trained BPE vocab over tiktoken: this is a
+    # from-scratch model, and a foreign cl100k tokenizer (different vocab, no
+    # chat/special tokens) silently mismatches. Only fall through to tiktoken
+    # when no trained vocab is present (generic-scaffold convenience).
+    _bpe_vocab = (vocab_path / "bpe_vocab.json") if vocab_path.is_dir() else vocab_path
+    _skip_tiktoken_for_auto = tokenizer_type == "auto" and Path(_bpe_vocab).exists()
+
     # Try tiktoken first (fastest)
-    if tokenizer_type in ("auto", "tiktoken"):
+    if tokenizer_type in ("auto", "tiktoken") and not _skip_tiktoken_for_auto:
         try:
             tok = TiktokenWrapper()
             logger.info("Loaded tiktoken tokenizer (cl100k_base)")

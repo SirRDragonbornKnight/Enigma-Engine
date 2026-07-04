@@ -190,7 +190,14 @@ class TrainingJobConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_mode_data(self) -> "TrainingJobConfig":
         if self.mode == "sft":
-            self._require_non_empty_string(self.data, "sft", "data")
+            # Trainer.train accepts raw text OR a list of rows; a .jsonl/.json
+            # 'data' path is materialized into a list BEFORE validation runs
+            # (materialize_dispatch_payload), so both shapes must pass here.
+            if isinstance(self.data, list):
+                if not self.data:
+                    raise ValueError("mode 'sft' expects 'data' to be non-empty")
+            else:
+                self._require_non_empty_string(self.data, "sft", "data")
 
         if self.mode in {"dpo", "simpo", "orpo", "reward_model"}:
             self._validate_preference_rows(self.mode, self.data)

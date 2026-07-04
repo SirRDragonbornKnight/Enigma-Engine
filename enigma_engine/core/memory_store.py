@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,9 @@ class MemoryStore:
         self.dir = Path(path)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.file = self.dir / "memories.jsonl"
+        # serve_enigma's endpoints run in FastAPI's threadpool: without a lock,
+        # two concurrent add() calls read the same len() and mint duplicate ids.
+        self._lock = threading.Lock()
         self._records: list[dict[str, Any]] = []
         if self.file.exists():
             with open(self.file, encoding="utf-8") as f:
@@ -54,13 +58,14 @@ class MemoryStore:
         text = " ".join(str(text).split())
         if not text:
             raise ValueError("empty memory")
-        rec = {"id": len(self._records) + 1, "text": text, "kind": kind}
-        if source:
-            rec["source"] = source
-        self._records.append(rec)
-        with open(self.file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        return rec
+        with self._lock:
+            rec = {"id": len(self._records) + 1, "text": text, "kind": kind}
+            if source:
+                rec["source"] = source
+            self._records.append(rec)
+            with open(self.file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            return rec
 
     def all(self) -> list[dict]:
         return list(self._records)

@@ -102,6 +102,10 @@ class NF4Linear(nn.Module):
             bias=linear.bias is not None,
             block_size=block_size,
         )
+        # Buffers are allocated on CPU in __init__; move them to the source
+        # weight's device BEFORE quantizing so a CUDA-resident model doesn't
+        # end up with CPU NF4 buffers that crash on the next forward.
+        nf4.to(linear.weight.device)
         nf4._quantize(linear.weight.detach())
         if linear.bias is not None:
             nf4.bias = nn.Parameter(linear.bias.detach().clone())

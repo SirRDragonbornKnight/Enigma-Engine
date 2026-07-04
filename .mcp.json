@@ -3,6 +3,11 @@
     "serena": {
       "command": "C:\\Users\\SirKn\\.local\\bin\\serena.exe",
       "args": ["start-mcp-server", "--context", "desktop-app", "--project", "C:\\Users\\SirKn\\Enigma Engine", "--enable-web-dashboard", "False"]
+    },
+    "basic-memory": {
+      "command": "C:\\Users\\SirKn\\.local\\bin\\basic-memory.exe",
+      "args": ["mcp"],
+      "env": { "BASIC_MEMORY_ENV": "user" }
     }
   }
 }

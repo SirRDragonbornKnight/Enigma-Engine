@@ -62,11 +62,18 @@ def main():
     # Load tokenizer (same one training uses)
     # ------------------------------------------------------------------
     print("\nLoading tokenizer...")
-    tokenizer = get_tokenizer()
+    # 'bpe' -- never 'auto', which prefers tiktoken when installed and would
+    # silently write a cl100k corpus incompatible with the bpe pipeline
+    # (pretrain/finetune/serve all pin 'bpe').
+    tokenizer = get_tokenizer("bpe")
     vocab_size = getattr(tokenizer, "vocab_size", 0)
     eos_id = getattr(tokenizer, "eos_token_id", 2)
     tok_name = type(tokenizer).__name__
     print(f"  Tokenizer: {tok_name}  (vocab={vocab_size:,}, eos={eos_id})")
+    # The EOS separator is written after every document; it must satisfy the
+    # same bounds guard as the document tokens or the corpus is poisoned.
+    if vocab_size > 0 and not (0 <= eos_id < vocab_size):
+        raise SystemExit(f"eos_token_id {eos_id} outside [0, {vocab_size}) -- refusing to write tokens.bin")
 
     # ------------------------------------------------------------------
     # Build source directory list

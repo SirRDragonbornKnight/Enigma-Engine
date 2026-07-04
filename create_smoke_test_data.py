@@ -443,11 +443,11 @@ def main():
     print(f"  Basic/Solo: {basic_path.relative_to(Path.cwd())}")
     print(f"  DPO/RLHF:  {dpo_path.relative_to(Path.cwd())}")
     print("\nUsage in FORGE:")
-    print("  Pre-Train  → select 'data/pretrain' directory")
-    print("  Basic/Solo → browse to 'data/smoke_test_basic.txt'")
-    print("  DPO        → browse to 'data/smoke_test_dpo.jsonl'")
-    print("  RLHF       → browse to 'data/smoke_test_dpo.jsonl'")
-    print("  Distill / AI-Guided / Dialogue / Self-Play → no data file needed")
+    print("  Pre-Train  -> select 'data/pretrain' directory")
+    print("  Basic/Solo -> browse to 'data/smoke_test_basic.txt'")
+    print("  DPO        -> browse to 'data/smoke_test_dpo.jsonl'")
+    print("  RLHF       -> browse to 'data/smoke_test_dpo.jsonl'")
+    print("  Distill / AI-Guided / Dialogue / Self-Play -> no data file needed")
 
 
 if __name__ == "__main__":

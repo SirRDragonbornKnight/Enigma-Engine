@@ -236,6 +236,14 @@ def apply_rotary_embedding(x: torch.Tensor, freqs_cis: torch.Tensor, start_pos: 
     Returns:
         Rotated tensor, same shape as input
     """
+    if not freqs_cis.is_complex():
+        # Module.to(bf16/fp16) casts complex buffers real, silently dropping the
+        # imaginary (sin) half -- every position rotation would be wrong with no
+        # error. Fail honestly: keep weights fp32 and use autocast instead.
+        raise TypeError(
+            "freqs_cis is not complex (model.half()/.to(dtype) corrupted the RoPE "
+            "buffer); keep the model fp32 and use torch.autocast for mixed precision"
+        )
     seq_len = x.shape[1]
     end_pos = start_pos + seq_len
     if end_pos > freqs_cis.shape[0]:
@@ -359,6 +367,7 @@ class Attention(nn.Module):
         # T3-1: Cross-layer KV sharing (YOCO-style)
         # Set by Enigma.__init__() to point followers at the leader's Attention.
         self._kv_share_source: Optional["Attention"] = None
+        self._kv_is_leader: bool = False  # set by Enigma.__init__ when sharing is on
         self._shared_kv: Optional[tuple[torch.Tensor, torch.Tensor]] = None
 
         # T5-6: Multi-Head Latent Attention (MLA) — low-rank KV compression
@@ -491,8 +500,11 @@ class Attention(nn.Module):
                 # O(1) index write instead of O(n) torch.cat() + realloc
                 self._kv_cache.update(k, v)
                 k, v = self._kv_cache.get()
-            else:
-                # T3-1: Store K, V for follower layers (training mode)
+            elif self._kv_is_leader:
+                # T3-1: Store K, V for follower layers (training mode).
+                # Gated to actual leaders: pinning graph-attached activations
+                # on every layer wasted VRAM and broke deepcopy(model)
+                # (DPO/KTO reference models) after any training forward.
                 self._shared_kv = (k, v)
 
         # ─────────────────────────────────────────────────────────────────────

@@ -2735,8 +2735,15 @@ class Trainer:
         # Setup scheduler
         self._total_training_steps = total_steps
 
-        warmup = _effective_warmup(self.config.warmup_steps, total_steps)
-        decay_steps = max(1, total_steps - warmup)
+        # total_steps counts MICRO-batches (state.step's unit), but
+        # scheduler.step() fires once per OPTIMIZER step — one per
+        # max_grad_accumulation micro-batches (plus one per epoch-end
+        # remainder flush). Size the schedule in optimizer steps or with
+        # accum>1 the run ends with the LR stuck near peak.
+        accum = max(1, self.config.max_grad_accumulation)
+        sched_total = max(1, -(-est_batches_per_epoch // accum) * self.config.epochs)  # ceil div
+        warmup = _effective_warmup(self.config.warmup_steps, sched_total)
+        decay_steps = max(1, sched_total - warmup)
 
         warmup_scheduler = LambdaLR(self.optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / warmup))
 
@@ -2852,6 +2859,7 @@ class Trainer:
 
             epoch_loss = 0.0
             epoch_tokens = 0
+            n_epoch_batches = 0
 
             progress_base = int(5 + (epoch / self.config.epochs) * 90)
             self._emit_progress(progress_base, f"Epoch {epoch + 1}/{self.config.epochs}")
@@ -2995,6 +3003,25 @@ class Trainer:
                 # On fast GPUs the batch loop can starve the main
                 # thread; sleep(0) releases our time-slice.
                 time.sleep(0)
+                n_epoch_batches = batch_idx + 1
+
+            # End-of-epoch remainder flush (mirrors V-1 in train_vision): if
+            # the epoch's micro-batch count doesn't divide the accumulation
+            # window, the tail grads must step now — otherwise they bleed
+            # into the next epoch's first window and are dropped at run end.
+            if n_epoch_batches % self.config.max_grad_accumulation != 0 and not self._should_stop():
+                if self.config.gradient_clip > 0:
+                    if self.scaler is not None:
+                        self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
+                if self.scaler is not None:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+                self.optimizer.zero_grad()
+                if self.scheduler is not None:
+                    self.scheduler.step()
 
             # Epoch complete
             avg_epoch_loss = epoch_loss / max(1, epoch_tokens)
@@ -3441,8 +3468,12 @@ class Trainer:
         counters so training can resume exactly where it left off.
         """
         try:
+            # torch.compile wraps the model in OptimizedModule, which prefixes
+            # every state-dict key with '_orig_mod.'. Save the RAW module so
+            # checkpoints stay loadable by serve/gui/uncompiled trainers.
+            _raw_model = getattr(self.model, "_orig_mod", self.model)
             checkpoint = {
-                "model_state_dict": self.model.state_dict(),
+                "model_state_dict": _raw_model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "training_state": {
                     "epoch": self.state.epoch,
@@ -3628,7 +3659,11 @@ class Trainer:
             if state_dict is None:
                 # Assume the whole checkpoint is a bare state dict
                 state_dict = checkpoint
-            self.model.load_state_dict(state_dict)
+            # Strip torch.compile's '_orig_mod.' prefix (legacy checkpoints
+            # saved from a compiled Trainer) and load into the raw module.
+            state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+            _raw_model = getattr(self.model, "_orig_mod", self.model)
+            _raw_model.load_state_dict(state_dict)
 
             opt_state = checkpoint.get("optimizer_state_dict")
             if opt_state:
@@ -3774,17 +3809,17 @@ class Trainer:
         import torch.nn.functional as F
 
         attn_mask = attention_mask[:, :-1] if attention_mask is not None else None
-        logits, _ = model(input_ids[:, :-1], targets=None, attention_mask=attn_mask)
+        # Enigma.forward returns bare logits when targets is None
+        out = model(input_ids[:, :-1], targets=None, attention_mask=attn_mask)
+        logits = out[0] if isinstance(out, tuple) else out
         # logits: (B, L-1, V)
         log_probs = F.log_softmax(logits, dim=-1)
         targets = labels[:, 1:]  # shift right
 
-        # Gather log-probs for target tokens
-        per_token = log_probs.gather(2, targets.unsqueeze(-1)).squeeze(-1)
-
-        # Mask out padding — labels use -100 for ignored positions,
-        # 0 is a valid token ID (pad_token) that should still be masked.
+        # Labels use -100 for ignored positions; gather() cannot index -100,
+        # so clamp to a valid id and rely on the mask to zero those slots.
         mask = (targets != -100).float()
+        per_token = log_probs.gather(2, targets.clamp(min=0).unsqueeze(-1)).squeeze(-1)
         return (per_token * mask).sum(dim=-1) / mask.sum(dim=-1).clamp(min=1)
 
     def _encode_dpo_pair(
@@ -3870,7 +3905,8 @@ class Trainer:
                     generated: list[int] = []
                     for _tok_idx in range(max_new_tokens):
                         with torch.no_grad():
-                            logits, _ = self.model(ids, targets=None)
+                            out = self.model(ids, targets=None)
+                        logits = out[0] if isinstance(out, tuple) else out
                         next_logit = logits[:, -1, :]
                         # Temperature sampling with T=0.8
                         probs = torch.softmax(next_logit / 0.8, dim=-1)
@@ -3878,7 +3914,11 @@ class Trainer:
                         generated.append(next_id)
                         if next_id == eos_id:
                             break
-                        ids = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
+                        # No KV cache here: the model must see the full
+                        # sequence each step, not just the newest token.
+                        ids = torch.cat(
+                            [ids, torch.tensor([[next_id]], dtype=torch.long, device=self.device)], dim=1
+                        )
                     resp_text = self.tokenizer.decode(generated)
                     score = reward_fn(prompt_text, resp_text)
                     responses.append((resp_text, score))

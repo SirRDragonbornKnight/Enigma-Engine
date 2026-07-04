@@ -482,8 +482,14 @@ def fit_mix_to_block(lines: list[str], block: int = BLOCK) -> tuple[list[str], i
                 dropped += 1
                 continue
             msgs = [{"role": "user", "content": prompt}, {"role": "assistant", "content": completion}]
-        # cheap fast-path: every BPE token is >=1 char, so short text always fits
-        if sum(len(m.get("content") or "") for m in msgs) + 64 <= limit:
+        # cheap fast-path: for ASCII content token_count <= char_count in BOTH
+        # char-mode and utf8-byte-mode tokenizers (1 byte/char, merges only
+        # shrink), so a short ASCII record always fits. Non-ASCII in byte-mode
+        # can expand 1 char -> several tokens, so those fall through to a real
+        # render rather than being trusted here (else they'd pass as "fits" and
+        # get silently dropped by the trainer -- the bug this function prevents).
+        contents = [m.get("content") or "" for m in msgs]
+        if all(c.isascii() for c in contents) and sum(len(c) for c in contents) + 64 <= limit:
             out.append(line)
             continue
         ids, _ = render_training(tok, msgs)

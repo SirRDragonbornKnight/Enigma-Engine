@@ -186,7 +186,13 @@ def _find_stop(text: str, stop_texts: tuple[str, ...]) -> int:
 
 
 def _generate_text(
-    prompt: str, max_tokens: int, temperature: float, top_p: float, stop_texts: tuple[str, ...] = (), min_p: float = 0.0
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    stop_texts: tuple[str, ...] = (),
+    min_p: float = 0.0,
+    stats: dict | None = None,
 ):
     """Yield text deltas from her KV-cached streaming path.
 
@@ -194,6 +200,12 @@ def _generate_text(
     n<=max_tokens) so BPE merges never split mid-character across deltas. The
     last len(stop)-1 chars are held back until we know a stop marker isn't
     forming, then flushed.
+
+    ``stats`` (if given) is filled once the generator finishes:
+    prompt_tokens = ids actually fed, completion_tokens = ids actually
+    sampled, finish = "stop" (eos / stop marker) or "length" (budget spent).
+    Re-encoding the decoded text is NOT a substitute — strip() plus BPE
+    re-merge under-count what the model really produced.
     """
     # encode() brackets text as [BOS]...[EOS]; drop the trailing EOS so she
     # CONTINUES the prompt instead of seeing a finished document, and ensure
@@ -214,10 +226,16 @@ def _generate_text(
     if not ids or ids[0] != BOS_ID:
         ids = [BOS_ID] + ids
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
+    if stats is None:
+        stats = {}
+    stats["prompt_tokens"] = len(ids)
+    stats["completion_tokens"] = 0
+    stats["finish"] = "stop"
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     temperature = max(float(temperature), 1e-3)  # sampling requires > 0
     hold = max((len(s) for s in stop_texts), default=1) - 1
     emitted = 0
+    saw_eos = False
     out_ids: list[int] = []
     with _GEN_LOCK, torch.no_grad():
         for t in model.generate_stream(
@@ -225,11 +243,13 @@ def _generate_text(
         ):
             tid = int(t.item())
             if tid == EOS_ID:
+                saw_eos = True
                 break
             out_ids.append(tid)
             text = tokenizer.decode(out_ids)
             cut = _find_stop(text, stop_texts)
             if cut != -1:
+                stats["completion_tokens"] = len(out_ids)
                 if cut > emitted:
                     yield text[emitted:cut]
                 return
@@ -237,6 +257,9 @@ def _generate_text(
             if safe_end > emitted:
                 yield text[emitted:safe_end]
                 emitted = safe_end
+    stats["completion_tokens"] = len(out_ids)
+    if not saw_eos and len(out_ids) >= max_tokens:
+        stats["finish"] = "length"  # budget spent, not a natural end
     # Natural end (eos or token budget): flush the held tail.
     text = tokenizer.decode(out_ids)
     cut = _find_stop(text, stop_texts)
@@ -447,6 +470,8 @@ def chat(req: ChatReq):
     # Validate roles up front: an unknown role is CLIENT error (400), not a
     # server crash (500). Without this the ValueError from chat_format's
     # renderer leaks a stack trace and returns a generic 500.
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="messages must be a non-empty list")
     bad = sorted({m.role for m in req.messages if m.role not in ROLES})
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown chat role(s) {bad}; need one of {list(ROLES)}")
@@ -460,7 +485,8 @@ def chat(req: ChatReq):
     prompt = _render_transcript(messages)
     created = int(time.time())
     cid = f"chatcmpl-{created}"
-    gen = _generate_text(prompt, req.max_tokens, req.temperature, req.top_p, _STOP_TEXTS, min_p=req.min_p)
+    stats: dict = {}
+    gen = _generate_text(prompt, req.max_tokens, req.temperature, req.top_p, _STOP_TEXTS, min_p=req.min_p, stats=stats)
 
     if req.stream:
 
@@ -487,7 +513,7 @@ def chat(req: ChatReq):
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": MODEL_ID,
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": stats.get("finish", "stop")}],
                     }
                 )
                 + "\n\n"
@@ -497,19 +523,17 @@ def chat(req: ChatReq):
         return StreamingResponse(events(), media_type="text/event-stream")
 
     text = "".join(gen).strip()
-    # Usage counts what the model actually saw/produced: the fed prompt is
-    # [BOS]+body (trailing EOS stripped), generated ids carry no specials —
-    # so don't let encode()'s BOS/EOS bracketing inflate the numbers.
-    # cap at what _generate_text actually feeds (it trims an over-long prompt to
-    # max_context - MIN_GEN_TOKENS); don't report tokens the model never saw.
-    n_prompt = min(len(tokenizer.encode(prompt, add_special_tokens=False)) + 1, ARGS.max_context - MIN_GEN_TOKENS)
-    n_out = len(tokenizer.encode(text, add_special_tokens=False)) if text else 0
+    # Usage is ground truth from _generate_text: ids actually fed and ids
+    # actually sampled. (Re-encoding the stripped text under-counted — BPE
+    # re-merge + strip() lost tokens the model really produced.)
+    n_prompt = stats["prompt_tokens"]
+    n_out = stats["completion_tokens"]
     return {
         "id": cid,
         "object": "chat.completion",
         "created": created,
         "model": MODEL_ID,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": stats["finish"]}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
 
@@ -518,7 +542,8 @@ def chat(req: ChatReq):
 def completions(req: CompletionReq):
     created = int(time.time())
     cid = f"cmpl-{created}"
-    gen = _generate_text(req.prompt, req.max_tokens, req.temperature, req.top_p, min_p=req.min_p)
+    stats: dict = {}
+    gen = _generate_text(req.prompt, req.max_tokens, req.temperature, req.top_p, min_p=req.min_p, stats=stats)
 
     if req.stream:
 
@@ -545,7 +570,7 @@ def completions(req: CompletionReq):
                         "object": "text_completion",
                         "created": created,
                         "model": MODEL_ID,
-                        "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
+                        "choices": [{"index": 0, "text": "", "finish_reason": stats.get("finish", "stop")}],
                     }
                 )
                 + "\n\n"
@@ -555,16 +580,15 @@ def completions(req: CompletionReq):
         return StreamingResponse(events(), media_type="text/event-stream")
 
     text = "".join(gen)
-    # Same accounting as chat: fed = [BOS]+body, generated ids have no specials.
-    # cap at what _generate_text actually feeds (over-long prompts are trimmed)
-    n_prompt = min(len(tokenizer.encode(req.prompt, add_special_tokens=False)) + 1, ARGS.max_context - MIN_GEN_TOKENS)
-    n_out = len(tokenizer.encode(text, add_special_tokens=False)) if text else 0
+    # Usage is ground truth from _generate_text: ids actually fed and sampled.
+    n_prompt = stats["prompt_tokens"]
+    n_out = stats["completion_tokens"]
     return {
         "id": cid,
         "object": "text_completion",
         "created": created,
         "model": MODEL_ID,
-        "choices": [{"index": 0, "text": text, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "text": text, "finish_reason": stats["finish"]}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
 
@@ -590,6 +614,6 @@ def memory_list(q: str | None = None, k: int = 5):
 
 
 if __name__ == "__main__":
-    print(f"Enigma OpenAI-compatible API → http://{ARGS.host}:{ARGS.port}/v1", flush=True)
+    print(f"Enigma OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     print(f"In Odysseus:  /setup local http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     uvicorn.run(app, host=ARGS.host, port=ARGS.port, log_level="warning")

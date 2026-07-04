@@ -246,6 +246,11 @@ class Enigma(nn.Module):
                 leader_idx = (i // layers_per_group) * layers_per_group
                 if i != leader_idx:
                     layer.attention._kv_share_source = self.layers[leader_idx].attention
+                else:
+                    # Only leaders store _shared_kv (followers read it within
+                    # the same forward); non-leader/non-sharing layers must
+                    # not pin graph-attached activations on the module.
+                    layer.attention._kv_is_leader = True
 
         # Output (padded for GPU alignment, weight-tied with embeddings)
         Norm = RMSNorm if self.config.use_rms_norm else nn.LayerNorm
@@ -485,9 +490,11 @@ class Enigma(nn.Module):
             mask = attention_mask_2d.to(device=h.device, dtype=h.dtype)
         elif T > 1 and attention_mask is not None:
             # Padding present: materialize causal + pad as one additive mask.
-            mask = self._get_causal_mask(T).to(device=h.device).unsqueeze(0).unsqueeze(0)
+            # Match h.dtype (like the packed-mask branch) — a bare fp32 mask on a
+            # bf16/fp16 model outside autocast raises "invalid dtype for bias" in SDPA.
+            mask = self._get_causal_mask(T).to(device=h.device, dtype=h.dtype).unsqueeze(0).unsqueeze(0)
             # attention_mask shape: (B, T) → (B, 1, 1, T)
-            pad_mask = (1 - attention_mask.unsqueeze(1).unsqueeze(2).float()) * (torch.finfo(h.dtype).min)
+            pad_mask = (1 - attention_mask.unsqueeze(1).unsqueeze(2).to(h.dtype)) * (torch.finfo(h.dtype).min)
             mask = mask + pad_mask
         # else: plain causal (T>1, no pad) or single-token decode (T==1) → mask stays
         # None; attention applies is_causal=True (correct for this decoder-only model).
@@ -498,6 +505,13 @@ class Enigma(nn.Module):
             h = layer(h, self.freqs_cis, mask, use_cache, start_pos)
             if self.early_exit_layer > 0 and i == self.early_exit_layer - 1:
                 _early_h = h
+
+        # T3-1: shared K/V is intra-forward plumbing (leader writes, followers
+        # read within this same pass) — drop it so no graph-attached activation
+        # outlives the forward (VRAM + deepcopy safety).
+        if getattr(self.config, "kv_share_groups", 0) > 0:
+            for layer in self.layers:
+                layer.attention._shared_kv = None
 
         h_normed = self.norm(h)
 

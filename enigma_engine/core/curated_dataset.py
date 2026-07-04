@@ -287,14 +287,24 @@ class CuratedDataset:
             return
         with self._lock:
             loaded: list[DatasetEntry] = []
+            bad = 0
             try:
                 with open(self.path, "r", encoding="utf-8") as f:
-                    for line in f:
+                    for lineno, line in enumerate(f, 1):
                         line = line.strip()
-                        if line:
-                            data = json.loads(line)
-                            loaded.append(DatasetEntry.from_dict(data))
+                        if not line:
+                            continue
+                        # Skip-and-count per line: one corrupt line must not
+                        # discard the whole dataset (a later save() would then
+                        # clobber every previously curated entry).
+                        try:
+                            loaded.append(DatasetEntry.from_dict(json.loads(line)))
+                        except Exception as exc:
+                            bad += 1
+                            logger.error("Dataset line %d unreadable, skipped: %s", lineno, exc)
                 self._entries = loaded
+                if bad:
+                    logger.warning("Dataset loaded with %d unreadable line(s) skipped", bad)
                 logger.info("Dataset loaded: %d entries from %s", len(self._entries), self.path)
             except Exception as exc:
                 logger.error("Dataset load error: %s", exc)
