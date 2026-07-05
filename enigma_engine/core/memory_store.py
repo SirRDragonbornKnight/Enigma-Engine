@@ -17,14 +17,28 @@ import json
 import math
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 _WORD = re.compile(r"[a-z0-9']+")
 
+# Words that carry no memory identity ("my dog is Rex" vs "my cat is Whiskers"
+# must NOT look similar just because both say "my ... is").
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "my", "your", "our", "their", "his", "her", "its",
+    "i", "you", "we", "they", "it", "this", "that",
+    "and", "or", "of", "to", "in", "on", "for", "with", "as", "at",
+})
+
 
 def _terms(text: str) -> list[str]:
     return _WORD.findall(text.lower())
+
+
+def _content_terms(text: str) -> set[str]:
+    return {t for t in _terms(text) if t not in _STOPWORDS}
 
 
 class MemoryStore:
@@ -66,6 +80,81 @@ class MemoryStore:
             with open(self.file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             return rec
+
+    def remember(self, text: str, kind: str = "user_fact", source: str | None = None) -> dict:
+        """add() with update semantics -- the ``remember`` tool's entry point.
+
+        Exact duplicate -> returns the existing record (idempotent). A record
+        whose CONTENT words overlap the new text heavily (Jaccard >= 0.5,
+        stopwords excluded) is treated as the same fact restated ("my dog's
+        name is Rex" -> "my dog's name is Bruno") and SUPERSEDED: replaced,
+        not left beside the new one to confuse retrieval. Every record gets a
+        date stamp so memories can be audited.
+
+        HONEST LIMIT: this is lexical. A correction that rewords most of the
+        fact ("red hatchback" -> "silver van", overlap 0.33) coexists with the
+        old record instead of replacing it -- resolving that needs semantics,
+        which at 182M means a smarter store, not a smarter model. Single-value
+        corrections (renames, moves, dates) are the common case and do match."""
+        text = " ".join(str(text).split())
+        if not text:
+            raise ValueError("empty memory")
+        new_terms = _content_terms(text)
+        with self._lock:
+            superseded = None
+            for rec in self._records:
+                if rec["text"].lower() == text.lower():
+                    return dict(rec)  # exact duplicate: keep the original
+                old_terms = _content_terms(rec["text"])
+                union = new_terms | old_terms
+                if union and len(new_terms & old_terms) / len(union) >= 0.5:
+                    superseded = rec
+                    break
+            rec = {
+                "id": (max((r["id"] for r in self._records), default=0) + 1),
+                "text": text,
+                "kind": kind,
+                "date": time.strftime("%Y-%m-%d"),
+            }
+            if source:
+                rec["source"] = source
+            if superseded is not None:
+                rec["superseded"] = superseded["text"]
+                self._records.remove(superseded)
+                self._records.append(rec)
+                self._rewrite()
+            else:
+                self._records.append(rec)
+                with open(self.file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            return dict(rec)
+
+    def delete(self, mem_id: int) -> bool:
+        """Remove one memory by id. Returns False when the id doesn't exist."""
+        with self._lock:
+            for rec in self._records:
+                if rec["id"] == mem_id:
+                    self._records.remove(rec)
+                    self._rewrite()
+                    return True
+            return False
+
+    def clear(self) -> int:
+        """Remove ALL memories; returns how many were dropped."""
+        with self._lock:
+            n = len(self._records)
+            self._records = []
+            self._rewrite()
+            return n
+
+    def _rewrite(self) -> None:
+        """Rewrite the JSONL after a mutation (call with the lock held). At
+        hundreds of records this is instant and keeps the file inspectable."""
+        tmp = self.file.with_suffix(".jsonl.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            for rec in self._records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        tmp.replace(self.file)
 
     def all(self) -> list[dict]:
         return list(self._records)

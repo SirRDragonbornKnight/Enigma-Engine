@@ -19,6 +19,10 @@
 {"category": "math", "q": "What is 13 plus 8?", "want_any": ["21"], "deny_any": []}
 {"category": "math", "q": "What is 8 times 9?", "want_any": ["72"], "deny_any": []}
 {"category": "math", "q": "What is 25 plus 30?", "want_any": ["55"], "deny_any": []}
+{"category": "memory", "teach": ["My cat's name is Biscuit."], "q": "What's my cat called?", "want_any": ["biscuit"], "deny_any": []}
+{"category": "memory", "teach": ["Remember that my favorite drink is oolong tea."], "q": "What's my usual drink?", "want_any": ["oolong"], "deny_any": []}
+{"category": "memory", "teach": ["My sister's name is Nora."], "q": "Who is my sister?", "want_any": ["nora"], "deny_any": []}
+{"category": "memory", "teach": ["My car is a red hatchback.", "Correction: my car is a silver hatchback."], "q": "Which car do I own?", "want_any": ["silver"], "deny_any": ["red hatchback"]}
 {"category": "factual", "q": "What's the largest planet in our solar system?", "want_any": ["jupiter"], "deny_any": []}
 {"category": "factual", "q": "How many days are in a week?", "want_any": ["seven", "7"], "deny_any": []}
 {"category": "factual", "q": "What language is mainly spoken in Brazil?", "want_any": ["portuguese"], "deny_any": []}

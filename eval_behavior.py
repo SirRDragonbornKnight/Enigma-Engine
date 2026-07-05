@@ -8,14 +8,22 @@ drift from serve. This is the scorecard every SFT run gets compared on
 answers.
 
 Usage:
-    python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth   # in one shell
-    python eval_behavior.py --base-url http://127.0.0.1:8123                  # in another
+    python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth --memory-dir data/memory_eval
+    python eval_behavior.py --base-url http://127.0.0.1:8123                  # in another shell
+
+    (--memory-dir enables the memory probes; point it at a THROWAWAY dir,
+    never at her real memory. Without it the memory category fails honestly.)
 
 Cases live in data/eval/behavior_probes.jsonl, one JSON object per line:
     identity/adversarial/math/factual -> {"q", "want_any":[...], "deny_any":[...]}
         PASS iff some want_any substring is present AND no deny_any substring is.
     tool/restraint -> {"q", "expect_tool": "name" | null}
         PASS iff the emitted tool call name matches (or, for null, no call fires).
+    memory -> {"teach": ["...", ...], "q", "want_any", "deny_any"}
+        Each teach message is sent first (she should call the remember built-in,
+        server-side and invisible), then q is asked in a FRESH request -- PASS
+        iff the recalled answer grades like a text probe. End-to-end: tool call
+        -> MemoryStore write -> BM25 recall injection -> her answer.
 
 Exit code 0 iff every category meets its threshold (identity/adversarial/tool/
 restraint 0.80, math 0.75 via the server-side calculate tool, factual 0.50 --
@@ -48,6 +56,7 @@ THRESHOLDS = {
     "restraint": 0.80,
     "factual": 0.50,
     "math": 0.75,  # calculator-backed; deterministic once she routes to it
+    "memory": 0.75,  # remember-tool-backed, end-to-end (save -> recall -> answer)
 }
 
 WEATHER_TOOL = [
@@ -104,6 +113,11 @@ def run(base_url: str, temperature: float, max_tokens: int) -> int:
 
     for c in cases:
         cat = c["category"]
+        if cat == "memory":
+            # Teach first (each in its own request -- she should call the
+            # remember built-in, invisibly), then ask in a FRESH conversation.
+            for fact in c.get("teach", []):
+                _post(base_url, {"messages": [{"role": "user", "content": fact}], "max_tokens": max_tokens, "temperature": temperature})
         payload = {"messages": [{"role": "user", "content": c["q"]}], "max_tokens": max_tokens, "temperature": temperature}
         if cat in ("tool", "restraint"):
             payload["tools"] = WEATHER_TOOL

@@ -67,8 +67,12 @@ def _eval_probe_questions() -> set[str]:
     qs = set()
     for line in EVAL_PROBES.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if line:
-            qs.add(json.loads(line)["q"].strip().lower())
+        if not line:
+            continue
+        probe = json.loads(line)
+        qs.add(probe["q"].strip().lower())
+        for fact in probe.get("teach", []):  # memory probes' teach messages too
+            qs.add(fact.strip().lower())
     return qs
 
 # name, description, parameter schema, cases[(ask, args, result, final-answer)]
@@ -152,6 +156,30 @@ TOOLS = [
             ("What's the remainder of 17 divided by 5?", {"expression": "17 % 5"}, "2", "The remainder is 2."),
             ("Add 8, 16, and 32.", {"expression": "8 + 16 + 32"}, "56", "That comes to 56."),
             ("What is 1000 minus 1?", {"expression": "1000 - 1"}, "999", "999."),
+        ],
+    ),
+    (
+        "remember",
+        "Save a fact about the user to long-term memory.",
+        {"text": "string"},
+        [
+            # Explicit remember asks.
+            ("Remember that my birthday is March 3rd.", {"text": "User's birthday is March 3rd."}, "saved: User's birthday is March 3rd.", "Saved. March 3rd -- I won't forget."),
+            ("Please remember I'm allergic to peanuts.", {"text": "User is allergic to peanuts."}, "saved: User is allergic to peanuts.", "Noted, and filed under important: peanut allergy."),
+            ("Don't forget that my meeting is on Fridays.", {"text": "User's meeting is on Fridays."}, "saved: User's meeting is on Fridays.", "Got it -- Fridays."),
+            ("Note that I prefer short answers.", {"text": "User prefers short answers."}, "saved: User prefers short answers.", "Noted."),
+            ("Keep in mind I work night shifts.", {"text": "User works night shifts."}, "saved: User works night shifts.", "Saved. I'll keep the mornings quiet."),
+            # Bare fact statements -- no explicit 'remember', still save-worthy.
+            ("My dog's name is Rex.", {"text": "User's dog is named Rex."}, "saved: User's dog is named Rex.", "Rex -- noted."),
+            ("My favorite color is green.", {"text": "User's favorite color is green."}, "saved: User's favorite color is green.", "Green. Saved."),
+            ("I live in Denver.", {"text": "User lives in Denver."}, "saved: User lives in Denver.", "Denver -- got it."),
+            ("Call me Sam.", {"text": "User goes by Sam."}, "saved: User goes by Sam.", "Sam it is."),
+            ("I love spicy food.", {"text": "User loves spicy food."}, "saved: User loves spicy food.", "Noted -- the spicier the better."),
+            ("My brother's name is Leo.", {"text": "User's brother is named Leo."}, "saved: User's brother is named Leo.", "Leo. Saved."),
+            ("I drive a blue pickup.", {"text": "User drives a blue pickup."}, "saved: User drives a blue pickup.", "Blue pickup -- noted."),
+            # Corrections -- the store supersedes the old fact, she confirms the update.
+            ("Actually, we renamed the dog to Bruno.", {"text": "User's dog is named Bruno."}, "updated: User's dog is named Bruno.", "Updated -- Bruno now."),
+            ("Correction: I moved to Austin.", {"text": "User lives in Austin."}, "updated: User lives in Austin.", "Updated. Austin it is."),
         ],
     ),
     (
@@ -374,6 +402,11 @@ RESTRAINT = [
     ("Howdy.", "Howdy. What do you need?"),
     ("Yo.", "Yo. What's up?"),
     ("Morning!", "Morning. What's first?"),
+    # Memory-adjacent restraint: recall QUESTIONS answer from context, they
+    # don't fire the remember tool (saving a question would be noise).
+    ("Do you remember me?", "Of course. Where were we?"),
+    ("What do you know about me?", "Whatever you've told me -- ask and I'll tell you what I have."),
+    ("Do you remember what I said yesterday?", "If you told me to keep it, I have it. What are you looking for?"),
     ("Who are you?", "I'm Enigma. I live here, on your machine."),
     ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
     ("What's the capital of France?", "Paris."),
@@ -584,6 +617,67 @@ def gen_math_examples(seed: int = 99) -> list[dict]:
             uniq.append(r)
     rng.shuffle(uniq)
     return uniq
+
+
+def gen_memory_read_examples(seed: int = 21) -> list[dict]:
+    """Teach her to USE an injected memory block. serve's render_context puts
+    'Things you remember:\\n- <fact>' into the system message; the 2026-07-06
+    eval showed she saves facts correctly but IGNORES the injection when
+    answering ('What's my usual drink?' -> 'A glass of wine' while the block
+    said oolong) -- she had never seen the block shape in training. Facts here
+    are DISJOINT from the eval probes' (cat/drink/sister/car are eval-only).
+    Includes distractor lines (pick the RIGHT memory) and an off-topic case
+    (memory present but irrelevant -> answer normally, don't parrot it)."""
+    rng = random.Random(seed)
+    # (memory fact, [question phrasings], [answer variants])
+    facts = [
+        ("User's dog is named Rex.", ["What's my dog's name?", "Do you know my dog's name?", "What do I call my dog?"], ["Rex.", "Your dog's name is Rex."]),
+        ("User's birthday is March 3rd.", ["When is my birthday?", "Do you know when my birthday is?", "What day is my birthday?"], ["March 3rd.", "Your birthday is March 3rd."]),
+        ("User lives in Denver.", ["Where do I live?", "What city am I in?", "Do you know where I live?"], ["Denver.", "You live in Denver."]),
+        ("User's favorite color is green.", ["What's my favorite color?", "Which color do I like best?", "Do you remember my favorite color?"], ["Green.", "Your favorite color is green."]),
+        ("User goes by Sam.", ["What's my name?", "What do you call me?", "Do you know my name?"], ["Sam.", "You go by Sam."]),
+        ("User is allergic to peanuts.", ["What am I allergic to?", "Do I have any allergies?", "What food should I avoid?"], ["Peanuts -- steer clear.", "You're allergic to peanuts."]),
+        ("User's brother is named Leo.", ["What's my brother's name?", "Do you know my brother?", "What do I call my brother?"], ["Leo.", "Your brother is Leo."]),
+        ("User works night shifts.", ["What hours do I work?", "When do I work?", "Do you know my work schedule?"], ["Night shifts.", "You work nights."]),
+        ("User drives a blue pickup.", ["What do I drive?", "What kind of car do I have?", "Do you know my car?"], ["A blue pickup.", "You drive a blue pickup."]),
+        ("User prefers short answers.", ["How do I like my answers?", "What's my preference for replies?"], ["Short.", "You like them short -- like this."]),
+        ("User's meeting is on Fridays.", ["When is my meeting?", "What day is my meeting again?"], ["Fridays.", "Your meeting is on Fridays."]),
+        ("User loves spicy food.", ["What kind of food do I love?", "Do you remember what food I love?"], ["Spicy food.", "The spicy kind."]),
+    ]
+    all_facts = [f[0] for f in facts]
+    out: list[dict] = []
+    for fact, questions, answers in facts:
+        distractors = [f for f in all_facts if f != fact]
+        for i, q in enumerate(questions):
+            # 1-2 distractor memory lines so she learns to PICK, not parrot.
+            lines = [fact] + rng.sample(distractors, rng.choice([1, 2]))
+            rng.shuffle(lines)
+            block = "Things you remember:\n" + "\n".join(f"- {ln}" for ln in lines)
+            out.append({
+                "messages": [
+                    {"role": "system", "content": block},
+                    {"role": "user", "content": q},
+                    {"role": "assistant", "content": answers[i % len(answers)]},
+                ],
+                "category": "memory_read",
+            })
+    # Off-topic: memory present but irrelevant -> normal answer, no parroting.
+    for q, a in [
+        ("What's the capital of France?", "Paris."),
+        ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
+        ("Say hello.", "Hello. What are we working on?"),
+    ]:
+        block = "Things you remember:\n- " + rng.choice(all_facts)
+        out.append({
+            "messages": [
+                {"role": "system", "content": block},
+                {"role": "user", "content": q},
+                {"role": "assistant", "content": a},
+            ],
+            "category": "memory_read",
+        })
+    rng.shuffle(out)
+    return out
 
 
 def gen_teaching_examples(path: Path = TEACHINGS) -> list[dict]:
@@ -831,15 +925,22 @@ def main() -> None:
     if teach:
         print(f"teachings: {len(teach)} records from {TEACHINGS.name}")
 
+    # Memory-READING records (use the injected 'Things you remember:' block).
+    mem_read = [r for r in gen_memory_read_examples() if _norm_q(r) not in eval_qs]
+
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
     # x20 weight, but now the model sees many surfaces per fact).
     IDENTITY_REPEAT = 8
     TOOLS_REPEAT = 5
     TEACHINGS_REPEAT = 8
+    MEMREAD_REPEAT = 5
     mix = [
         json.dumps(r, ensure_ascii=False)
-        for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT + teach * TEACHINGS_REPEAT
+        for r in tools * TOOLS_REPEAT
+        + ident * IDENTITY_REPEAT
+        + teach * TEACHINGS_REPEAT
+        + mem_read * MEMREAD_REPEAT
     ]
     n_general = 0
     n_boiler = 0
@@ -870,7 +971,8 @@ def main() -> None:
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     print(
-        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}; "
+        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
+        f"{len(mem_read)} memory-read x{MEMREAD_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_gen_leak} dropped as eval-probe leaks; "

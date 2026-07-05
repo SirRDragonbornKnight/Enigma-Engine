@@ -304,4 +304,35 @@ Gaps discovered by reading actual Enigma source code, not just repo comparisons:
 
 ## Comparable systems / prior art (shipped products in Enigma's problem space)
 
+### Chat-memory systems (researched 2026-07-06 for the `remember` tool decision)
+
+Question asked: adopt an existing memory layer for Enigma serve, or build on `memory_store.py`?
+Verdict: **build the thin `remember` built-in tool on our MemoryStore** — every serious framework
+delegates the intelligent parts (extract/summarize/conflict-resolve) to a frontier-class LLM, which
+a 182M from-scratch model cannot be and which a routed Ollama model would make un-hers (Muppet
+pattern). The shipped prior art for OUR design is ChatGPT itself: its saved memories are a `bio`
+TOOL the model calls, injected into context next turn (0xeb/TheBigPromptLibrary documents it).
+Even the SLM-memory research floor (LightMem, arXiv 2604.07798) is 1B+ online models.
+
+- **letta-ai/letta** (MemGPT) ⬜ — agent runtime where the model self-edits labeled memory blocks
+  via tool calls (core/recall/archival tiers; "sleep-time" background agents consolidate). Apache-2.0.
+  NOT adoptable (it's a whole runtime, wants frontier models; sleep-time agent is explicitly "use a
+  larger model"). MINE THE IDEAS: memory as model-editable blocks; a later offline consolidation
+  pass when a bigger Enigma exists. Added 2026-07-06.
+- **mem0ai/mem0** ⬜ — memory library, ~48k★. Self-hosted still REQUIRES an extractor LLM (default
+  OpenAI gpt-5-mini) + embedding model + vector store; the LLM does extraction + conflict
+  resolution. Its LOCOMO benchmark war with Zep (both claim SOTA, both scores collapse under the
+  other's re-evaluation, 84%->58% and back) is the case study in not trusting "said to work well."
+  MINE THE IDEA: update-on-contradiction memory ops (ADD/UPDATE/DELETE decided per new fact).
+  Added 2026-07-06.
+- **getzep/zep** ⬜ — temporal knowledge graph memory (community edition self-hostable). Strongest
+  at "what was true in Q1?" temporal reasoning; same extractor-LLM dependency, Go service + graph
+  DB to babysit. Overkill for personal-facts scale. Added 2026-07-06.
+- **CaviraOSS/OpenMemory** ⬜ — the only genuinely local-first one: Python/Node SDK, SQLite,
+  embeddings optional (Ollama or a no-model "synthetic fallback"), runs offline. But it's a
+  storage/retrieval engine — the decide-what-to-save step is still the assistant's job (MCP tool
+  calls), which is precisely the part we have to train Enigma to do regardless. Adopting it would
+  replace our working BM25 store with a dependency, not solve the hard part. Re-visit if we ever
+  want its decay/sector model. Added 2026-07-06.
+
 - **tinyhumansai/openhuman** ⬜ — private, local-first desktop AI companion. Rust 61.6% / TS 35.5%, Tauri+CEF shell, SQLite. 32.3k★, 3.1k forks, GPL-3.0 (copyleft — borrow *ideas*, not code), early beta. The closest shipped parallel to the **Odysseus + Modkit + avatar** trinity: desktop mascot w/ voice + "background thinking" (≈ avatar), local "Memory Tree" w/ hierarchical summarization + Obsidian wiki (≈ Odysseus memory), model routing per workload (≈ `enigma_engine/router.py`), native tools web/fs/git/voice (≈ mods/skills), optional Ollama. **What they have that we don't:** 118+ one-click OAuth integrations via **Composio** + auto-fetch (every 20 min) into the Memory Tree → "warm-start" memory; **TokenJuice** context compression (~80% cost cut). **What we have that they don't:** we forge our *own* model (they only route to existing LLMs); a real rigged GLB avatar engine (theirs is a mascot gimmick). Mine for: Composio integration layer + auto-ingesting hierarchical Memory Tree (directly upgrades `memory_store.py`). Added 2026-06-15.

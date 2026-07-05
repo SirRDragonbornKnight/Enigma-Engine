@@ -299,21 +299,29 @@ def _last_user_text(messages: list[Msg]) -> str:
     return ""
 
 
-# Built-in tools serve executes ITSELF (no client round-trip). calculate is
-# always offered: a from-scratch 182M model can't compute arithmetic in-weights
-# (tokenizer splits numbers inconsistently), so it routes math here and reports
-# the exact result. Same spec shape make_sft_data trains on -> flat params.
-_BUILTIN_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "calculate",
-            "description": "Evaluate an arithmetic expression and return the exact result.",
-            "parameters": {"expression": "string"},
-        },
-    }
-]
-_BUILTIN_NAMES = {"calculate"}
+# Built-in tools serve executes ITSELF (no client round-trip), in the same
+# spec shape make_sft_data trains on (flat params). calculate: a from-scratch
+# 182M model can't compute arithmetic in-weights (tokenizer splits numbers
+# inconsistently). remember: the ChatGPT-bio-tool pattern -- she calls it when
+# the user states a fact worth keeping, serve writes it to the MemoryStore,
+# and render_context injects it back on every future relevant ask.
+_CALC_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "calculate",
+        "description": "Evaluate an arithmetic expression and return the exact result.",
+        "parameters": {"expression": "string"},
+    },
+}
+_REMEMBER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "remember",
+        "description": "Save a fact about the user to long-term memory.",
+        "parameters": {"text": "string"},
+    },
+}
+_BUILTIN_NAMES = {"calculate", "remember"}
 _MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
 
 # The calculate tool is offered ONLY when the ask looks arithmetic. Injecting
@@ -338,6 +346,38 @@ def _looks_arithmetic(text: str) -> bool:
     return has_digit and bool(_ARITH_KEYWORDS.search(text) or _ARITH_SYMBOLS.search(text))
 
 
+# remember is offered only when the message states something save-worthy:
+# an explicit remember ask, or a first-person fact/preference. Same rationale
+# as the calculate gate -- an ever-present tool prompt degrades normal chat.
+_MEMORABLE = re.compile(
+    r"\b(remember|don'?t forget|note (that|this)|keep in mind|save (this|that)|"
+    r"call me|my name('s| is)|"
+    r"my \w+('s)? (name |birthday |anniversary )?(is|are)|"
+    r"i (like|love|hate|prefer|live|work|drive|play|always|never|usually)|"
+    r"i'?m (allergic|from|married|working))\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_memorable(text: str) -> bool:
+    return bool(text) and MEMORY is not None and bool(_MEMORABLE.search(text))
+
+
+def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
+    """The built-ins to offer for this request. calculate rides along in
+    client tool-mode (a tool prompt exists anyway; math grammar is distinctive
+    enough that it never steals calls). remember is intent-gated ALWAYS:
+    offered merely because other tools were, it stole tool calls -- measured
+    2026-07-06, 'Check the weather in Toronto' -> remember("User's weather
+    for Toronto is correct") instead of get_weather."""
+    tools = []
+    if client_mode or _looks_arithmetic(user_text):
+        tools.append(_CALC_TOOL)
+    if _looks_memorable(user_text):  # checks MEMORY is enabled too
+        tools.append(_REMEMBER_TOOL)
+    return tools
+
+
 def _execute_builtin(name: str, arguments: dict) -> str:
     """Run a server-side built-in tool and return its result string. Errors
     come back as text (fed to the model) rather than raising -- an engine that
@@ -348,6 +388,14 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             return format_result(evaluate(expr))
         except CalcError as exc:
             return f"error: {exc}"
+    if name == "remember":
+        if MEMORY is None:
+            return "error: memory disabled (start serve with --memory-dir)"
+        text = str(arguments.get("text", "")).strip()
+        if not text:
+            return "error: nothing to remember"
+        rec = MEMORY.remember(text, source="chat")
+        return f"updated: {rec['text']}" if rec.get("superseded") else f"saved: {rec['text']}"
     return f"error: unknown tool {name!r}"
 
 
@@ -359,12 +407,10 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
         mem = MEMORY.render_context(_last_user_text(req.messages), tokenizer, max_ids=128)
         if mem:
             extra.append(mem)
-    # Offer calculate only for arithmetic asks (or when the client is already
-    # in tool-mode); otherwise normal chat gets a tool prompt it never trained
-    # with and degrades. Client tools are always honored.
+    # Built-ins are gated on intent (see _builtin_tools); client tools are
+    # always honored.
     client_tools = list(req.tools or [])
-    offer_calc = client_tools or _looks_arithmetic(_last_user_text(req.messages))
-    all_tools = (_BUILTIN_TOOLS if offer_calc else []) + client_tools
+    all_tools = _builtin_tools(_last_user_text(req.messages), bool(client_tools)) + client_tools
     if all_tools:
         tools_block = render_tools_system(all_tools)
         if not (msgs and msgs[0].get("role") == "system"):
@@ -724,6 +770,22 @@ def memory_list(q: str | None = None, k: int = 5):
         return {"error": "memory disabled — start with --memory-dir"}
     recs = MEMORY.search(q, k=k) if q else MEMORY.all()[-k:]
     return {"count": len(MEMORY), "results": recs}
+
+
+@app.delete("/v1/memory/{mem_id}")
+def memory_delete(mem_id: int):
+    """User control over her memory (the ChatGPT-memory-management parallel):
+    a saved fact can always be inspected (GET) and removed."""
+    if MEMORY is None:
+        return {"error": "memory disabled — start with --memory-dir"}
+    return {"ok": MEMORY.delete(mem_id), "count": len(MEMORY)}
+
+
+@app.delete("/v1/memory")
+def memory_clear():
+    if MEMORY is None:
+        return {"error": "memory disabled — start with --memory-dir"}
+    return {"ok": True, "cleared": MEMORY.clear()}
 
 
 if __name__ == "__main__":
