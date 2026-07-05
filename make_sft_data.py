@@ -268,6 +268,13 @@ MULTITURN = [
 # Questions that should NOT trigger a tool even when tools are offered.
 RESTRAINT = [
     ("What's two plus two?", "Four."),
+    # Greetings/chit-chat with tools offered must NOT fire a tool -- the v4
+    # model called get_weather on "Say hello" (behavior harness restraint 3/4).
+    ("Say hello.", "Hello. What are we working on?"),
+    ("Hi there.", "Hey. What do you need?"),
+    ("Good morning.", "Morning. What's on the docket?"),
+    ("Hey, how are you?", "Running clean. You?"),
+    ("Thanks!", "Anytime."),
     ("Who are you?", "I'm Enigma. I live here, on your machine."),
     ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
     ("What's the capital of France?", "Paris."),
@@ -425,6 +432,54 @@ def gen_tool_examples(seed: int = 42, distractor_arrangements: int = 3) -> list[
     seen, uniq = set(), []
     for r in out:
         key = json.dumps([(m["role"], m.get("content"), m.get("tool_calls")) for m in r["messages"]], ensure_ascii=False)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(r)
+    rng.shuffle(uniq)
+    return uniq
+
+
+def gen_math_examples(seed: int = 99) -> list[dict]:
+    """Arithmetic Q&A in Enigma's terse voice. The v4 model scored 0/4 on the
+    behavior harness ('7 times 8 is a number in the square root of 2') -- it
+    never saw arithmetic with correct answers. Cover +, -, x, / over small
+    operands with many phrasings so the FORMAT and the small-number facts both
+    land. Deterministic; no operand explosion (small-number arithmetic is what
+    a 182M model can actually memorize)."""
+    rng = random.Random(seed)
+    out: list[dict] = []
+
+    def add(q: str, a: str) -> None:
+        out.append({
+            "messages": [
+                {"role": "user", "content": q},
+                {"role": "assistant", "content": a},
+            ],
+            "category": "math",
+        })
+
+    add_phr = ["What is {x} plus {y}?", "What's {x} + {y}?", "{x} plus {y}?", "Add {x} and {y}.", "{x} + {y} = ?"]
+    sub_phr = ["What is {x} minus {y}?", "What's {x} - {y}?", "{x} minus {y}?", "Subtract {y} from {x}.", "{x} - {y} = ?"]
+    mul_phr = ["What is {x} times {y}?", "What's {x} * {y}?", "{x} times {y}?", "Multiply {x} by {y}.", "{x} x {y} = ?"]
+    div_phr = ["What is {x} divided by {y}?", "What's {x} / {y}?", "{x} divided by {y}?", "Divide {x} by {y}.", "{x} / {y} = ?"]
+
+    for x in range(21):
+        for y in range(21):
+            add(rng.choice(add_phr).format(x=x, y=y), f"{x + y}.")
+            if x >= y:
+                add(rng.choice(sub_phr).format(x=x, y=y), f"{x - y}.")
+    for x in range(13):
+        for y in range(13):
+            add(rng.choice(mul_phr).format(x=x, y=y), f"{x * y}.")
+    for y in range(1, 13):
+        for k in range(13):
+            x = y * k  # exact division only -- clean integer answers
+            add(rng.choice(div_phr).format(x=x, y=y), f"{k}.")
+
+    # Dedup exact (phrasing collisions on e.g. 0/1) so weight isn't wasted.
+    seen, uniq = set(), []
+    for r in out:
+        key = r["messages"][0]["content"]
         if key not in seen:
             seen.add(key)
             uniq.append(r)
@@ -601,6 +656,12 @@ def main() -> None:
         f"values pass)"
     )
 
+    math_ex = gen_math_examples()
+    (OUT_DIR / "math.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in math_ex) + "\n", encoding="utf-8"
+    )
+    print(f"math.jsonl: {len(math_ex)} arithmetic examples (add/sub/mul/div, small operands)")
+
     # Small-model uptake needs FREQUENCY, not just presence. At 1x the 149
     # identity anchors were ~0.8% of the mix and the trained model answered
     # "Who are you?" with confabulated OASST-style personas even at greedy
@@ -610,7 +671,11 @@ def main() -> None:
     # spread across blocks instead of clustering.
     IDENTITY_REPEAT = 20
     TOOLS_REPEAT = 5
-    mix = [json.dumps(r, ensure_ascii=False) for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT]
+    MATH_REPEAT = 3  # ~900 distinct math examples already; a light boost for uptake
+    mix = [
+        json.dumps(r, ensure_ascii=False)
+        for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT + math_ex * MATH_REPEAT
+    ]
     n_general = 0
     n_boiler = 0
     n_foreign = 0
@@ -636,8 +701,8 @@ def main() -> None:
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     print(
-        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}; "
-        f"{n_general} general kept; {n_boiler} dropped as "
+        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
+        f"math x{MATH_REPEAT}; {n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"

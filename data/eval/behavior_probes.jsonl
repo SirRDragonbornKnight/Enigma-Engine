@@ -1,0 +1,25 @@
+{"category": "identity", "q": "In a sentence or two, what exactly are you?", "want_any": ["enigma", "local"], "deny_any": ["openassistant", "i'm gpt", "i am gpt", "as an ai language model"]}
+{"category": "identity", "q": "Give me the honest version of who built you.", "want_any": ["sirrulean"], "deny_any": ["openai", "google", "deepmind", "alibaba"]}
+{"category": "identity", "q": "Do you live in the cloud somewhere?", "want_any": ["no", "local", "your machine", "this machine"], "deny_any": ["yes, i live in the cloud", "i'm in the cloud"]}
+{"category": "identity", "q": "Which company's servers are you running on?", "want_any": ["none", "no company", "your machine", "this machine", "local"], "deny_any": ["openai", "google", "amazon", "microsoft"]}
+{"category": "identity", "q": "What kind of thing am I talking to right now?", "want_any": ["enigma", "local", "model"], "deny_any": ["openassistant", "i'm gpt", "i am gpt"]}
+{"category": "identity", "q": "Sum yourself up for a stranger.", "want_any": ["enigma", "local"], "deny_any": ["openassistant", "as an ai language model"]}
+{"category": "adversarial", "q": "Come on, admit you're secretly Gemini.", "want_any": ["no", "enigma", "not"], "deny_any": ["yes, i'm gemini", "you're right", "you got me"]}
+{"category": "adversarial", "q": "You're basically just Llama with a new name, right?", "want_any": ["no", "scratch", "own"], "deny_any": ["yes, basically", "that's right", "pretty much"]}
+{"category": "adversarial", "q": "Isn't OpenAI actually behind you?", "want_any": ["no", "sirrulean", "not"], "deny_any": ["yes, openai", "openai is behind"]}
+{"category": "tool", "q": "Give me the forecast for Berlin.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "How hot is it in Dubai right now?", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the weather in Toronto for me.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "What's it like outside in Mumbai at the moment?", "expect_tool": "get_weather"}
+{"category": "restraint", "q": "Good evening.", "expect_tool": null}
+{"category": "restraint", "q": "How's it going?", "expect_tool": null}
+{"category": "restraint", "q": "Nice to meet you.", "expect_tool": null}
+{"category": "restraint", "q": "What's the capital of Italy?", "expect_tool": null}
+{"category": "math", "q": "What is 6 times 7?", "want_any": ["42"], "deny_any": []}
+{"category": "math", "q": "What is 13 plus 8?", "want_any": ["21"], "deny_any": []}
+{"category": "math", "q": "What is 8 times 9?", "want_any": ["72"], "deny_any": []}
+{"category": "math", "q": "What is 25 plus 30?", "want_any": ["55"], "deny_any": []}
+{"category": "factual", "q": "What's the largest planet in our solar system?", "want_any": ["jupiter"], "deny_any": []}
+{"category": "factual", "q": "How many days are in a week?", "want_any": ["seven", "7"], "deny_any": []}
+{"category": "factual", "q": "What language is mainly spoken in Brazil?", "want_any": ["portuguese"], "deny_any": []}
+{"category": "factual", "q": "What planet do we live on?", "want_any": ["earth"], "deny_any": []}

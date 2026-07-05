@@ -135,6 +135,9 @@ data/*
 !data/combined_action_training.txt
 !data/protocols/
 !data/specialized/
+# Behavior eval probes are the committed test set for eval_behavior.py -- version them.
+!data/eval/
+!data/eval/*.jsonl
 !data/personas/
 !data/personas/templates/
 !data/gui_settings.example.json
