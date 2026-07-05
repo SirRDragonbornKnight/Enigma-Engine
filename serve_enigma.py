@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import threading
 import time
@@ -40,6 +41,7 @@ from enigma_engine.core.chat_format import (
     render_chat,
     render_tools_system,
 )
+from enigma_engine.core.calculator import CalcError, evaluate, format_result
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.tokenizer import get_tokenizer
@@ -297,15 +299,74 @@ def _last_user_text(messages: list[Msg]) -> str:
     return ""
 
 
+# Built-in tools serve executes ITSELF (no client round-trip). calculate is
+# always offered: a from-scratch 182M model can't compute arithmetic in-weights
+# (tokenizer splits numbers inconsistently), so it routes math here and reports
+# the exact result. Same spec shape make_sft_data trains on -> flat params.
+_BUILTIN_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Evaluate an arithmetic expression and return the exact result.",
+            "parameters": {"expression": "string"},
+        },
+    }
+]
+_BUILTIN_NAMES = {"calculate"}
+_MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
+
+# The calculate tool is offered ONLY when the ask looks arithmetic. Injecting
+# it on EVERY request poisoned normal chat: identity/factual training never saw
+# a tool system-prompt, so a permanent one dragged the model into "calculator
+# mode" (garbage like "your syntax violates the validity criterion" for
+# "sum yourself up"). Gate on intent instead -- non-math chat gets no tool
+# prompt and behaves; arithmetic gets the calculator.
+_ARITH_KEYWORDS = re.compile(
+    r"\b(plus|minus|times|divided|divide|multiply|multiplied|product|sum|subtract|"
+    r"square root|squared|cubed|percent|modulo|remainder|to the power)\b",
+    re.IGNORECASE,
+)
+# A digit next to an arithmetic operator, e.g. "7 * 8", "100 / 4", "2 ** 10".
+_ARITH_SYMBOLS = re.compile(r"\d\s*[-+*/%^]\s*\d|\d\s*(?:x|X)\s*\d")
+
+
+def _looks_arithmetic(text: str) -> bool:
+    if not text:
+        return False
+    has_digit = any(c.isdigit() for c in text)
+    return has_digit and bool(_ARITH_KEYWORDS.search(text) or _ARITH_SYMBOLS.search(text))
+
+
+def _execute_builtin(name: str, arguments: dict) -> str:
+    """Run a server-side built-in tool and return its result string. Errors
+    come back as text (fed to the model) rather than raising -- an engine that
+    fails honestly beats one that 500s mid-conversation."""
+    if name == "calculate":
+        expr = str(arguments.get("expression", "")).strip()
+        try:
+            return format_result(evaluate(expr))
+        except CalcError as exc:
+            return f"error: {exc}"
+    return f"error: unknown tool {name!r}"
+
+
 def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
-    """Fold tool specs and retrieved memories into the system message."""
+    """Fold tool specs and retrieved memories into the system message. The
+    built-in calculate tool is ALWAYS offered alongside any client tools."""
     extra = []
     if MEMORY is not None:
         mem = MEMORY.render_context(_last_user_text(req.messages), tokenizer, max_ids=128)
         if mem:
             extra.append(mem)
-    if req.tools:
-        tools_block = render_tools_system(req.tools)
+    # Offer calculate only for arithmetic asks (or when the client is already
+    # in tool-mode); otherwise normal chat gets a tool prompt it never trained
+    # with and degrades. Client tools are always honored.
+    client_tools = list(req.tools or [])
+    offer_calc = client_tools or _looks_arithmetic(_last_user_text(req.messages))
+    all_tools = (_BUILTIN_TOOLS if offer_calc else []) + client_tools
+    if all_tools:
+        tools_block = render_tools_system(all_tools)
         if not (msgs and msgs[0].get("role") == "system"):
             # Training's tool examples ALWAYS lead with this exact preamble
             # (make_sft_data._system, single \n before "Available tools:");
@@ -339,44 +400,92 @@ def _openai_tool_calls(calls: list[dict]) -> list[dict]:
 
 def _chat_instruct(req: ChatReq):
     msgs = _with_context([m.model_dump(exclude_none=True) for m in req.messages], req)
-    # Reserve the prompt first: render it into up to max_context - MIN_GEN_TOKENS
-    # ids, then let generation take whatever room is left (capped by the client's
-    # request). A large client max_tokens can no longer starve the prompt.
-    prompt_ids = render_chat(
-        tokenizer, msgs, add_generation_prompt=True, max_ids=ARGS.max_context - MIN_GEN_TOKENS
-    )
-    max_tokens = max(1, min(int(req.max_tokens), ARGS.max_context - len(prompt_ids)))
     created = int(time.time())
     cid = f"chatcmpl-{created}"
-    gen = _gen_ids(prompt_ids, max_tokens, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END))
+
+    def _hop(cur_msgs: list[dict]):
+        # Reserve the prompt first (render into max_context - MIN_GEN_TOKENS ids),
+        # then let generation take the room that's left; a large client max_tokens
+        # can no longer starve the prompt.
+        prompt_ids = render_chat(
+            tokenizer, cur_msgs, add_generation_prompt=True, max_ids=ARGS.max_context - MIN_GEN_TOKENS
+        )
+        hop_max = max(1, min(int(req.max_tokens), ARGS.max_context - len(prompt_ids)))
+        return prompt_ids, hop_max
+
+    def _apply_builtins(cur_msgs: list[dict], out: dict, parsed: list[dict]) -> list[dict]:
+        # Append the assistant turn that made the calls, then each built-in's
+        # result, so the next hop sees a coherent tool trace.
+        named = [{"name": c["name"], "arguments": c.get("arguments") or {}} for c in parsed if c.get("name")]
+        nxt = cur_msgs + [{"role": "assistant", "content": out.get("content") or "", "tool_calls": named}]
+        for c in parsed:
+            if c.get("name") in _BUILTIN_NAMES:
+                nxt = nxt + [{"role": "tool", "content": _execute_builtin(c["name"], c.get("arguments") or {})}]
+        return nxt
+
+    def _loop_on_builtins(parsed: list[dict], hop: int) -> bool:
+        # Execute-and-loop ONLY when every named call is a built-in and hops
+        # remain. A mixed batch (built-in + client tool) is surfaced whole
+        # instead: executing half and looping would leave the client's call
+        # dangling in the trace and never delivered. Likewise a built-in call
+        # on the final hop is surfaced, not dropped -- the client seeing a
+        # "calculate" call it can answer beats the action silently vanishing.
+        named = [c for c in parsed if c.get("name")]
+        return bool(named) and all(c["name"] in _BUILTIN_NAMES for c in named) and hop < _MAX_TOOL_HOPS
 
     if req.stream:
 
         def events():
-            from enigma_engine.core.chat_format import (
-                THINK,
-                THINK_END,
-                TOOL_CALL,
-                TOOL_CALL_END,
-            )
+            from enigma_engine.core.chat_format import THINK, THINK_END, TOOL_CALL, TOOL_CALL_END
 
-            all_ids: list[int] = []
-            content_ids: list[int] = []
-            emitted = 0
-            depth = 0
-            for tid in gen:
-                all_ids.append(tid)
-                if tid in (THINK, TOOL_CALL):
-                    depth += 1
+            cur_msgs = msgs
+            for hop in range(_MAX_TOOL_HOPS + 1):
+                prompt_ids, hop_max = _hop(cur_msgs)
+                gen = _gen_ids(prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END))
+                all_ids: list[int] = []
+                content_ids: list[int] = []
+                emitted = 0
+                depth = 0
+                for tid in gen:
+                    all_ids.append(tid)
+                    if tid in (THINK, TOOL_CALL):
+                        depth += 1
+                        continue
+                    if tid in (THINK_END, TOOL_CALL_END):
+                        depth = max(0, depth - 1)
+                        continue
+                    if depth:
+                        continue  # span ids surface at the end, parsed — not as text
+                    content_ids.append(tid)
+                    text = tokenizer.decode(content_ids, skip_special_tokens=True)
+                    if len(text) > emitted:
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {
+                                    "id": cid,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": MODEL_ID,
+                                    "choices": [
+                                        {"index": 0, "delta": {"content": text[emitted:]}, "finish_reason": None}
+                                    ],
+                                }
+                            )
+                            + "\n\n"
+                        )
+                        emitted = len(text)
+                out = parse_assistant_ids(tokenizer, all_ids)
+                parsed = out["tool_calls"]
+                # A built-in-only batch (calculate) is executed here, then we
+                # loop to let the model answer from the result -- the client
+                # never sees it. Anything else is surfaced whole.
+                if _loop_on_builtins(parsed, hop):
+                    cur_msgs = _apply_builtins(cur_msgs, out, parsed)
                     continue
-                if tid in (THINK_END, TOOL_CALL_END):
-                    depth = max(0, depth - 1)
-                    continue
-                if depth:
-                    continue  # span ids surface at the end, parsed — not as text
-                content_ids.append(tid)
-                text = tokenizer.decode(content_ids, skip_special_tokens=True)
-                if len(text) > emitted:
+                calls = _openai_tool_calls(parsed)
+                raw_bits = [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
+                if raw_bits:
                     yield (
                         "data: "
                         + json.dumps(
@@ -385,17 +494,28 @@ def _chat_instruct(req: ChatReq):
                                 "object": "chat.completion.chunk",
                                 "created": created,
                                 "model": MODEL_ID,
-                                "choices": [{"index": 0, "delta": {"content": text[emitted:]}, "finish_reason": None}],
+                                "choices": [
+                                    {"index": 0, "delta": {"content": "\n".join(raw_bits)}, "finish_reason": None}
+                                ],
                             }
                         )
                         + "\n\n"
                     )
-                    emitted = len(text)
-            out = parse_assistant_ids(tokenizer, all_ids)
-            calls = _openai_tool_calls(out["tool_calls"])
-            # surface unparsable tool calls' raw text rather than dropping it
-            raw_bits = [c["raw"] for c in out["tool_calls"] if not c.get("name") and c.get("raw")]
-            if raw_bits:
+                if calls:
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "id": cid,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": MODEL_ID,
+                                "choices": [{"index": 0, "delta": {"tool_calls": calls}, "finish_reason": None}],
+                            }
+                        )
+                        + "\n\n"
+                    )
+                finish = "tool_calls" if calls else ("length" if len(all_ids) >= hop_max else "stop")
                 yield (
                     "data: "
                     + json.dumps(
@@ -404,69 +524,52 @@ def _chat_instruct(req: ChatReq):
                             "object": "chat.completion.chunk",
                             "created": created,
                             "model": MODEL_ID,
-                            "choices": [
-                                {"index": 0, "delta": {"content": "\n".join(raw_bits)}, "finish_reason": None}
-                            ],
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                         }
                     )
                     + "\n\n"
                 )
-            if calls:
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "id": cid,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": MODEL_ID,
-                            "choices": [{"index": 0, "delta": {"tool_calls": calls}, "finish_reason": None}],
-                        }
-                    )
-                    + "\n\n"
-                )
-            finish = "tool_calls" if calls else ("length" if len(all_ids) >= max_tokens else "stop")
-            yield (
-                "data: "
-                + json.dumps(
-                    {
-                        "id": cid,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": MODEL_ID,
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
-                    }
-                )
-                + "\n\n"
-            )
+                break
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
-    out_ids = list(gen)
-    out = parse_assistant_ids(tokenizer, out_ids)
+    # Non-stream: run the built-in tool loop to completion, accumulating usage.
+    cur_msgs = msgs
+    n_prompt = n_out = 0
+    out: dict = {"content": "", "tool_calls": []}
+    out_ids: list[int] = []
+    last_max = 1
+    for hop in range(_MAX_TOOL_HOPS + 1):
+        prompt_ids, last_max = _hop(cur_msgs)
+        out_ids = list(_gen_ids(prompt_ids, last_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END)))
+        out = parse_assistant_ids(tokenizer, out_ids)
+        n_prompt += len(prompt_ids)
+        n_out += len(out_ids)
+        parsed = out["tool_calls"]
+        if _loop_on_builtins(parsed, hop):
+            cur_msgs = _apply_builtins(cur_msgs, out, parsed)
+            continue
+        break
+
     calls = _openai_tool_calls(out["tool_calls"])
     # A tool call whose JSON didn't parse has no name — surface its raw text
     # as content instead of silently dropping the model's action.
     raw_bits = [c["raw"] for c in out["tool_calls"] if not c.get("name") and c.get("raw")]
-    content = "\n".join(t for t in [out["content"], *raw_bits] if t)
+    content = "\n".join(t for t in [out.get("content"), *raw_bits] if t)
     message = {"role": "assistant", "content": content or (None if calls else "")}
     if calls:
         message["tool_calls"] = calls
     # honest finish_reason: a generation that spent the whole budget was cut
     # off ("length"), not naturally finished ("stop")
-    finish = "tool_calls" if calls else ("length" if len(out_ids) >= max_tokens else "stop")
+    finish = "tool_calls" if calls else ("length" if len(out_ids) >= last_max else "stop")
     return {
         "id": cid,
         "object": "chat.completion",
         "created": created,
         "model": MODEL_ID,
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
-        "usage": {
-            "prompt_tokens": len(prompt_ids),
-            "completion_tokens": len(out_ids),
-            "total_tokens": len(prompt_ids) + len(out_ids),
-        },
+        "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
 
 
