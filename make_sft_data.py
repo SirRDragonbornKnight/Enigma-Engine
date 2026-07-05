@@ -439,7 +439,10 @@ def gen_identity_examples() -> tuple[list[dict], int]:
     out, dropped = [], 0
     for category, pairs in EXAMPLES.items():
         for q, a in pairs:
-            if re.search(r"qwen|base model|built on", a, re.IGNORECASE):
+            # Safety net for stale lineage claims only. "built on" was removed:
+            # it false-positived ordinary technical prose ("commits someone else
+            # has built on") and silently dropped a good depth_on_demand anchor.
+            if re.search(r"qwen|base model", a, re.IGNORECASE):
                 dropped += 1
                 continue
             out.append(
@@ -541,6 +544,25 @@ _AI_BOILERPLATE = re.compile(
             r"\b(i'?m sorry|i apologize),? but i (cannot|can'?t|am unable to|'?m unable to)\b",
         ]
     ),
+    re.IGNORECASE,
+)
+
+# QA gate 2: assistant text that claims a FOREIGN identity. OASST answers
+# where the assistant names itself ("I'm OpenAssistant... trained by
+# DeepMind") compete head-on with Enigma's own identity anchors on the most
+# common question there is -- the v2 model literally introduced itself as
+# OpenAssistant until these were purged (measured 2026-07-05: 79 of 20,094
+# general records).
+_FOREIGN_IDENTITY = re.compile(
+    "|".join(
+        [
+            r"open[- ]?assistant",
+            r"\bLAION\b",
+            r"trained by (deepmind|deep mind|openai|google|meta|anthropic|microsoft)",
+            r"developed by (openai|google|deepmind|meta|anthropic|microsoft)",
+            r"\bi('m| am) (chatgpt|chat gpt|gpt-?[345]|claude|llama|bard|gemini|alexa|siri)\b",
+        ]
+    ),
     re.I,
 )
 
@@ -579,9 +601,19 @@ def main() -> None:
         f"values pass)"
     )
 
-    mix = [json.dumps(r, ensure_ascii=False) for r in tools + ident]
+    # Small-model uptake needs FREQUENCY, not just presence. At 1x the 149
+    # identity anchors were ~0.8% of the mix and the trained model answered
+    # "Who are you?" with confabulated OASST-style personas even at greedy
+    # decoding (measured 2026-07-05: "I'm David Bradley..."); tool calls
+    # echoed the schema instead of filling arguments. Oversample the minority
+    # slices to ~13% identity / ~9% tools; pack_blocks shuffles, so repeats
+    # spread across blocks instead of clustering.
+    IDENTITY_REPEAT = 20
+    TOOLS_REPEAT = 5
+    mix = [json.dumps(r, ensure_ascii=False) for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT]
     n_general = 0
     n_boiler = 0
+    n_foreign = 0
     if GENERAL.exists():
         with open(GENERAL, encoding="utf-8") as f:
             for line in f:
@@ -595,14 +627,19 @@ def main() -> None:
                 if _is_ai_boilerplate(rec):  # QA gate: keep assistant-voice boilerplate out
                     n_boiler += 1
                     continue
+                if _FOREIGN_IDENTITY.search(_assistant_text(rec)):  # QA gate 2: no foreign self-identity
+                    n_foreign += 1
+                    continue
                 mix.append(line)
                 n_general += 1
     mix, n_trimmed, n_dropped = fit_mix_to_block(mix)
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     print(
-        f"mix.jsonl: {len(mix)} records ({n_general} general kept; {n_boiler} dropped as "
-        f"AI-voice boilerplate; {n_trimmed} prompt-trimmed to fit block {BLOCK}, "
+        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}; "
+        f"{n_general} general kept; {n_boiler} dropped as "
+        f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
+        f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
     )
 
