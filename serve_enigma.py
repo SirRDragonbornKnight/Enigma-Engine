@@ -305,7 +305,17 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
         if mem:
             extra.append(mem)
     if req.tools:
-        extra.append(render_tools_system(req.tools))
+        tools_block = render_tools_system(req.tools)
+        if not (msgs and msgs[0].get("role") == "system"):
+            # Training's tool examples ALWAYS lead with this exact preamble
+            # (make_sft_data._system, single \n before "Available tools:");
+            # a system message that OPENS with "Available tools:" is a shape
+            # the model never saw.
+            tools_block = (
+                "You are Enigma. You can use tools when they are needed; "
+                "answer directly when they are not.\n" + tools_block
+            )
+        extra.append(tools_block)
     if not extra:
         return msgs
     if msgs and msgs[0].get("role") == "system":

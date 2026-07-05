@@ -68,6 +68,21 @@ TOOL_SYNTAX = (
 )
 
 
+def _flat_params(params) -> dict:
+    """JSON-schema tool parameters -> the flat ``{name: type}`` shape ALL the
+    SFT data uses (make_sft_data TOOLS). OpenAI clients send a full schema
+    ({"type": "object", "properties": {...}}); the model has never seen one,
+    and given one it mimics the schema shape in its arguments (measured
+    2026-07-05 on the v4 checkpoint). Normalize here so the served spec is
+    byte-shaped like training."""
+    if isinstance(params, dict) and isinstance(params.get("properties"), dict):
+        return {
+            k: (v.get("type", "string") if isinstance(v, dict) else "string")
+            for k, v in params["properties"].items()
+        }
+    return params if isinstance(params, dict) else {}
+
+
 def render_tools_system(tools) -> str:
     """OpenAI-style tool specs -> the system-prompt suffix that teaches/reminds
     the call syntax. The SAME text the SFT data uses (make_sft_data.py), so
@@ -80,7 +95,7 @@ def render_tools_system(tools) -> str:
                 {
                     "name": fn.get("name"),
                     "description": fn.get("description", ""),
-                    "parameters": fn.get("parameters", {}),
+                    "parameters": _flat_params(fn.get("parameters", {})),
                 },
                 ensure_ascii=False,
             )
