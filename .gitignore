@@ -142,6 +142,10 @@ data/*
 !data/personas/templates/
 !data/gui_settings.example.json
 
+# User-authored teachings hold PERSONAL facts -- never push them to GitHub.
+# The committed template is teachings.example.jsonl.
+/teachings.jsonl
+
 # Keep models structure
 models/*
 !models/.gitkeep

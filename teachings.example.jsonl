@@ -1,0 +1,16 @@
+# Teachings -- facts YOU explain to Enigma that get baked into her weights.
+# Copy this file to teachings.jsonl (gitignored -- your facts stay off GitHub),
+# add entries, then run the 10-minute loop:
+#   python make_sft_data.py
+#   python finetune_enigma.py --data data\sft\mix.jsonl --init models\enigma_pretrain_large\latest.pth --out models\enigma_sft --epochs 2 --lr 2e-05 --warmup 50 --micro-batch 8 --grad-accum 4 --block 1024 --weight-decay 0.0 --grad-clip 1.0 --optimizer adamw --schedule cosine --seed 1337 --val-frac 0.02
+#
+# One JSON object per line; lines starting with # are comments. Two shapes:
+#   {"questions": ["...", "...", "..."], "answers": ["...", "..."]}   <- preferred
+#   {"q": "...", "a": "..."}                                          <- single pair
+#
+# LESSON (measured 2026-07-05): ONE phrasing teaches a flashcard, not the fact
+# -- identity went 17% -> 83% on unseen phrasings only after paraphrase
+# diversity. Give each teaching 3+ question phrasings and 2+ answer wordings.
+#
+# Example (remove the leading # to activate):
+# {"questions": ["What's my favorite anime?", "Which anime do I like most?", "Do you know my favorite show?"], "answers": ["Steins;Gate -- you've got good taste.", "That'd be Steins;Gate."]}

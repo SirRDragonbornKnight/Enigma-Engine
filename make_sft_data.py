@@ -47,14 +47,16 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "data" / "sft"
 GENERAL = ROOT / "data" / "finetune" / "combined_finetune.jsonl"
 EVAL_PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
+TEACHINGS = ROOT / "teachings.jsonl"  # user-authored; gitignored (see teachings.example.jsonl)
 
 
 def _norm_q(rec: dict) -> str:
-    """The record's first user question, normalized for eval-leak comparison."""
+    """The record's first user question, normalized for eval-leak comparison.
+    Handles both the messages shape and the general data's prompt/completion."""
     for m in rec.get("messages", []):
         if m.get("role") == "user" and m.get("content"):
             return m["content"].strip().lower()
-    return ""
+    return (rec.get("prompt") or "").strip().lower()
 
 
 def _eval_probe_questions() -> set[str]:
@@ -340,6 +342,22 @@ RESTRAINT = [
     ("How's life?", "Quiet and fast, the way I like it. You?"),
     ("You doing okay?", "Always. What's up with you?"),
     ("Everything good with you?", "All good here. What do you need?"),
+    # Round 2 (2026-07-05 eval): the two held-out probes STILL fired
+    # get_weather while every trained near-neighbor held. Train the failing
+    # n-grams inside LARGER strings (supersets / word-level variants) -- never
+    # the exact probe strings, and no punctuation-only twins (that would just
+    # game the eval).
+    ("Hey, how's it going?", "Running clean. What's up?"),
+    ("How's it going today?", "Going smooth. What do you need?"),
+    ("How's it going over there?", "All quiet in here. What's up on your side?"),
+    ("So, how's it going?", "Well enough -- ready to work. You?"),
+    ("How's it going, Enigma?", "Running clean, as always. What are we doing?"),
+    ("It's nice to meet you.", "Nice to meet you too. What are we building?"),
+    ("So nice to meet you.", "Likewise. What brings you here?"),
+    ("Very nice to meet you.", "Likewise. What are we working on?"),
+    ("Nice to finally meet you.", "Same here. Where do we start?"),
+    ("Nice meeting you.", "Likewise. What do you need?"),
+    ("Great to meet you.", "You too. What's first?"),
     ("What's happening?", "Not much -- waiting on you. What's happening with you?"),
     ("What's new?", "Same me, minus a little uncertainty each training run. You?"),
     ("What's up?", "Not much -- waiting to be useful. What's up with you?"),
@@ -568,6 +586,57 @@ def gen_math_examples(seed: int = 99) -> list[dict]:
     return uniq
 
 
+def gen_teaching_examples(path: Path = TEACHINGS) -> list[dict]:
+    """User-authored facts from teachings.jsonl -> training records (the
+    'explain something and she learns it' channel). One JSON object per line;
+    ``#`` lines are comments. Shapes: {"questions": [...], "answers": [...]}
+    (preferred) or {"q": ..., "a": ...}. Questions cross rotating answers like
+    identity_paraphrases -- the measured lesson (2026-07-05) is that ONE
+    phrasing teaches a flashcard; diversity teaches the fact. Malformed lines
+    are skipped LOUDLY, never silently."""
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    n_thin = 0
+    for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(f"{path.name}:{ln}: SKIPPED (bad JSON: {exc.msg})")
+            continue
+        qs = rec.get("questions") or ([rec["q"]] if rec.get("q") else [])
+        ans = rec.get("answers") or ([rec["a"]] if rec.get("a") else [])
+        qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()]
+        ans = [a.strip() for a in ans if isinstance(a, str) and a.strip()]
+        if not qs or not ans:
+            print(f"{path.name}:{ln}: SKIPPED (needs questions + answers)")
+            continue
+        if len(qs) < 3:
+            n_thin += 1
+        for i, q in enumerate(qs):
+            picks = [ans[i % len(ans)]]
+            nxt = ans[(i + 1) % len(ans)]
+            if nxt != picks[0]:
+                picks.append(nxt)
+            for a in picks:
+                out.append({
+                    "messages": [
+                        {"role": "user", "content": q},
+                        {"role": "assistant", "content": a},
+                    ],
+                    "category": "teaching",
+                })
+    if n_thin:
+        print(
+            f"{path.name}: NOTE {n_thin} teaching(s) have <3 question phrasings -- "
+            f"single phrasings memorize the string, not the fact"
+        )
+    return out
+
+
 def gen_identity_examples() -> tuple[list[dict], int]:
     """Re-emit identity_anchors anchors as messages; drop Qwen-era claims."""
     from identity_anchors import EXAMPLES
@@ -756,18 +825,26 @@ def main() -> None:
     # confidently-wrong numbers. Revisit with a digit-aware tokenizer (Phase 7)
     # or a bigger model (Phase 3). gen_math_examples() stays in the file, unused.
 
+    # User-authored teachings (teachings.jsonl, gitignored) ride the same
+    # oversample weight as identity -- few records, personally important.
+    teach = [r for r in gen_teaching_examples() if _norm_q(r) not in eval_qs]
+    if teach:
+        print(f"teachings: {len(teach)} records from {TEACHINGS.name}")
+
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
     # x20 weight, but now the model sees many surfaces per fact).
     IDENTITY_REPEAT = 8
     TOOLS_REPEAT = 5
+    TEACHINGS_REPEAT = 8
     mix = [
         json.dumps(r, ensure_ascii=False)
-        for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT
+        for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT + teach * TEACHINGS_REPEAT
     ]
     n_general = 0
     n_boiler = 0
     n_foreign = 0
+    n_gen_leak = 0
     if GENERAL.exists():
         with open(GENERAL, encoding="utf-8") as f:
             for line in f:
@@ -784,6 +861,9 @@ def main() -> None:
                 if _FOREIGN_IDENTITY.search(_assistant_text(rec)):  # QA gate 2: no foreign self-identity
                     n_foreign += 1
                     continue
+                if _norm_q(rec) in eval_qs:  # eval-leak guard covers GENERAL too
+                    n_gen_leak += 1
+                    continue
                 mix.append(line)
                 n_general += 1
     mix, n_trimmed, n_dropped = fit_mix_to_block(mix)
@@ -793,6 +873,7 @@ def main() -> None:
         f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
+        f"{n_gen_leak} dropped as eval-probe leaks; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
     )
