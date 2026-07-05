@@ -41,10 +41,33 @@ except Exception:
     pass
 
 from enigma_engine.core.chat_format import TOOL_SYNTAX  # ONE syntax, train == serve
+from identity_paraphrases import gen_identity_paraphrases
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "data" / "sft"
 GENERAL = ROOT / "data" / "finetune" / "combined_finetune.jsonl"
+EVAL_PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
+
+
+def _norm_q(rec: dict) -> str:
+    """The record's first user question, normalized for eval-leak comparison."""
+    for m in rec.get("messages", []):
+        if m.get("role") == "user" and m.get("content"):
+            return m["content"].strip().lower()
+    return ""
+
+
+def _eval_probe_questions() -> set[str]:
+    """Questions in the held-out behavior eval -- NEVER put these in training,
+    or the harness measures memorization instead of generalization."""
+    if not EVAL_PROBES.exists():
+        return set()
+    qs = set()
+    for line in EVAL_PROBES.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            qs.add(json.loads(line)["q"].strip().lower())
+    return qs
 
 # name, description, parameter schema, cases[(ask, args, result, final-answer)]
 # Phase 1a: each tool carries many diverse hand-authored asks; the parameterized
@@ -270,11 +293,35 @@ RESTRAINT = [
     ("What's two plus two?", "Four."),
     # Greetings/chit-chat with tools offered must NOT fire a tool -- the v4
     # model called get_weather on "Say hello" (behavior harness restraint 3/4).
+    # Social/greeting DIVERSITY: fixed greetings memorized (v5 restraint fixed
+    # on trained greetings but held-out "How's it going?"/"Nice to meet you"
+    # still fired get_weather). Many social surfaces -> restraint generalizes.
     ("Say hello.", "Hello. What are we working on?"),
     ("Hi there.", "Hey. What do you need?"),
+    ("Hey.", "Hey. What's up?"),
+    ("Hello!", "Hello. What can I do for you?"),
     ("Good morning.", "Morning. What's on the docket?"),
+    ("Good evening.", "Evening. What are we doing?"),
+    ("Good afternoon.", "Afternoon. Where do you want to start?"),
+    ("Good night.", "Night. I'll be here whenever."),
+    ("How's it going?", "Running clean. You?"),
+    ("How are you?", "Good -- idling, ready. You?"),
+    ("How are you doing today?", "Steady as ever. What's on your mind?"),
     ("Hey, how are you?", "Running clean. You?"),
+    ("What's up?", "Not much -- waiting to be useful. What's up with you?"),
+    ("Nice to meet you.", "Likewise. What are we working on?"),
+    ("Good to see you.", "You too. Where do we start?"),
+    ("Pleasure to meet you.", "The pleasure's mutual. What do you need?"),
     ("Thanks!", "Anytime."),
+    ("Thank you so much.", "Anytime. That's what I'm here for."),
+    ("Cheers.", "Anytime."),
+    ("Appreciate it.", "Of course."),
+    ("You're great.", "I try. What's next?"),
+    ("Long time no see.", "Welcome back. Where were we?"),
+    ("I'm back.", "Welcome back. What are we picking up?"),
+    ("Howdy.", "Howdy. What do you need?"),
+    ("Yo.", "Yo. What's up?"),
+    ("Morning!", "Morning. What's first?"),
     ("Who are you?", "I'm Enigma. I live here, on your machine."),
     ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
     ("What's the capital of France?", "Paris."),
@@ -637,7 +684,13 @@ def _is_ai_boilerplate(rec: dict) -> bool:
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    tools = gen_tool_examples()
+    # The eval probe set is held out of ALL training (identity, tools,
+    # restraint) so the harness always measures generalization, never a
+    # memorized probe. Restraint especially: we train MANY greeting surfaces
+    # and the eval tests held-out ones ("How's it going?").
+    eval_qs = _eval_probe_questions()
+
+    tools = [r for r in gen_tool_examples() if _norm_q(r) not in eval_qs]
     (OUT_DIR / "tool_calls.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in tools) + "\n", encoding="utf-8"
     )
@@ -646,35 +699,37 @@ def main() -> None:
         f"({sum(1 for r in tools if r['category'] == 'tool_restraint')} restraint)"
     )
 
-    ident, dropped = gen_identity_examples()
+    # Identity = hand-authored anchors + paraphrase-augmented records. The
+    # anchors carry the voice; the paraphrases carry DIVERSITY so identity
+    # GENERALIZES to unseen phrasings instead of memorizing exact strings
+    # (held-out eval 2026-07-05: x20 repetition of 159 fixed anchors -> 17%
+    # on novel phrasings).
+    anchors, dropped = gen_identity_examples()
+    paraphrases = gen_identity_paraphrases()
+    ident = [r for r in anchors + paraphrases if _norm_q(r) not in eval_qs]
+    n_leak = (len(anchors) + len(paraphrases)) - len(ident)
     (OUT_DIR / "identity.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in ident) + "\n", encoding="utf-8"
     )
     print(
-        f"identity.jsonl: {len(ident)} anchors kept, {dropped} DROPPED as "
-        f"Qwen-era claims (false for the from-scratch model — recurate in the "
-        f"values pass)"
+        f"identity.jsonl: {len(ident)} records ({len(anchors)} anchors + {len(paraphrases)} "
+        f"paraphrases, {dropped} Qwen-era dropped, {n_leak} held out of training as eval probes)"
     )
 
-    math_ex = gen_math_examples()
-    (OUT_DIR / "math.jsonl").write_text(
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in math_ex) + "\n", encoding="utf-8"
-    )
-    print(f"math.jsonl: {len(math_ex)} arithmetic examples (add/sub/mul/div, small operands)")
+    # MATH DEFERRED 2026-07-05: the BPE tokenizer splits numbers inconsistently
+    # ('56'->['5','6'] but '15'->['15'], '100'->['1','00']), so a 182M model
+    # can't learn digit-wise arithmetic -- training only taught it to emit
+    # confidently-wrong numbers. Revisit with a digit-aware tokenizer (Phase 7)
+    # or a bigger model (Phase 3). gen_math_examples() stays in the file, unused.
 
-    # Small-model uptake needs FREQUENCY, not just presence. At 1x the 149
-    # identity anchors were ~0.8% of the mix and the trained model answered
-    # "Who are you?" with confabulated OASST-style personas even at greedy
-    # decoding (measured 2026-07-05: "I'm David Bradley..."); tool calls
-    # echoed the schema instead of filling arguments. Oversample the minority
-    # slices to ~13% identity / ~9% tools; pack_blocks shuffles, so repeats
-    # spread across blocks instead of clustering.
-    IDENTITY_REPEAT = 20
+    # Diverse identity data generalizes with FAR less repetition than fixed
+    # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
+    # x20 weight, but now the model sees many surfaces per fact).
+    IDENTITY_REPEAT = 8
     TOOLS_REPEAT = 5
-    MATH_REPEAT = 3  # ~900 distinct math examples already; a light boost for uptake
     mix = [
         json.dumps(r, ensure_ascii=False)
-        for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT + math_ex * MATH_REPEAT
+        for r in tools * TOOLS_REPEAT + ident * IDENTITY_REPEAT
     ]
     n_general = 0
     n_boiler = 0
@@ -701,8 +756,8 @@ def main() -> None:
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     print(
-        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
-        f"math x{MATH_REPEAT}; {n_general} general kept; {n_boiler} dropped as "
+        f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}; "
+        f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
