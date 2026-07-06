@@ -2,10 +2,8 @@
 
 Pre-refocus findings targeted the Qwen-era engine (`inference.py`,
 `engine_generation.py`, `api/server.py`, …) — those findings and their
-fixes live in git history. Suite baseline today:
-**364 passed; ruff clean on the live/changed files.** (Repo-wide `ruff check .`
-still flags pre-existing style nits in legacy scratch/collector scripts and
-`mods/` — cosmetic, untouched by the 06-11 work; sweep opportunistically.)
+fixes live in git history. Suite baseline today (2026-07-06):
+**405 passed; repo-wide `ruff check` clean.**
 
 ## Open
 
