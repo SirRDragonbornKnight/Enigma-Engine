@@ -178,6 +178,11 @@ def quantize_linear_nf4(
     Layers are frozen (``requires_grad=False``) after quantization.
     Returns the number of layers quantized.
 
+    Layers whose weight tensor is shared with another parameter (e.g. an
+    output head weight-tied to the token embedding) are always skipped:
+    replacing one side of the tie with a quantized snapshot would break
+    the sharing while the other side keeps the full-precision tensor.
+
     Args:
         model: Model to quantize in-place.
         block_size: NF4 block size.
@@ -187,6 +192,13 @@ def quantize_linear_nf4(
     count = 0
     replacements: list[tuple[nn.Module, str, NF4Linear]] = []
 
+    # Storage pointers that appear under more than one parameter mark
+    # weight tying (e.g. model.output.weight IS tok_embeddings.weight).
+    ptr_counts: dict[int, int] = {}
+    for _, param in model.named_parameters(remove_duplicate=False):
+        ptr = param.data_ptr()
+        ptr_counts[ptr] = ptr_counts.get(ptr, 0) + 1
+
     for name, module in model.named_modules():
         if name in skip:
             continue
@@ -195,6 +207,9 @@ def quantize_linear_nf4(
             if full_name in skip:
                 continue
             if isinstance(child, nn.Linear):
+                if ptr_counts.get(child.weight.data_ptr(), 0) > 1:
+                    logger.info("Skipping weight-tied Linear layer: %s", full_name)
+                    continue
                 nf4 = NF4Linear.from_linear(child, block_size=block_size)
                 nf4.requires_grad_(False)
                 replacements.append((module, child_name, nf4))

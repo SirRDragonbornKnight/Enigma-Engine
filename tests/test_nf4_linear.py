@@ -269,3 +269,39 @@ class TestQuantizeModel:
         model = nn.Sequential(nn.ReLU(), nn.Dropout())
         count = quantize_linear_nf4(model)
         assert count == 0
+
+
+class TestTiedWeightSkip:
+    """Weight-tied Linear layers must keep their fp tensor (tying intact)."""
+
+    class _TiedModel(nn.Module):
+        """Mirrors the engine's embedding/output-head weight tying."""
+
+        def __init__(self):
+            super().__init__()
+            self.tok_embeddings = nn.Embedding(16, 8)
+            self.hidden = nn.Linear(8, 8)
+            self.output = nn.Linear(8, 16, bias=False)
+            self.output.weight = self.tok_embeddings.weight
+
+        def forward(self, ids):
+            return self.output(self.hidden(self.tok_embeddings(ids)))
+
+    def test_tied_output_head_skipped(self):
+        model = self._TiedModel()
+        count = quantize_linear_nf4(model)
+        assert count == 1  # only the untied hidden layer
+        assert isinstance(model.hidden, NF4Linear)
+        assert isinstance(model.output, nn.Linear)
+        assert model.output.weight is model.tok_embeddings.weight
+
+    def test_tying_survives_forward(self):
+        model = self._TiedModel()
+        quantize_linear_nf4(model)
+        ids = torch.tensor([[0, 3, 7]])
+        out = model(ids)
+        assert out.shape == (1, 3, 16)
+        # Mutating the embedding must still reflect in the output head
+        with torch.no_grad():
+            model.tok_embeddings.weight.zero_()
+        assert model.output.weight.abs().max().item() == 0.0

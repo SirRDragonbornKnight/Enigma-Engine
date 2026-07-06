@@ -619,6 +619,11 @@ def apply_lora(
         adapter_name: Name for the adapter
         merge: If True, merge into base weights permanently
 
+    Raises:
+        ValueError: If no key in ``lora_weights`` matches the model's
+            state_dict (same silent-no-op case that
+            :func:`merge_lora_weights` guards against).
+
     Example:
         weights = load_lora_weights("coding_adapter.pth")
         apply_lora(model, weights, "coding")
@@ -627,20 +632,45 @@ def apply_lora(
         merge_lora_weights(model, lora_weights)
         return
 
-    # Apply without merging - keep as separate adapter
-    if not hasattr(model, "_lora_adapters"):
-        model._lora_adapters = {}
-
-    model._lora_adapters[adapter_name] = lora_weights
-
     # Load weights into model's LoRA layers
     state_dict = model.state_dict()
+    matched = 0
+    skipped: list[str] = []
     for key, value in lora_weights.items():
         if key in state_dict:
             state_dict[key] = value
+            matched += 1
+        else:
+            skipped.append(key)
+
+    if matched == 0:
+        # Silent-corruption guard, mirroring merge_lora_weights: every
+        # key was filtered out, so the adapter would have been
+        # registered with zero effect on the model. Fail loud instead
+        # of logging "Applied" and returning.
+        raise ValueError(
+            "apply_lora: no keys in lora_weights matched the model's "
+            "state_dict. The adapter would have had no effect. "
+            "Pre-process the LoRA state dict to use this model's "
+            f"weight names. First 3 unmatched keys: {skipped[:3]}"
+        )
+
+    if skipped:
+        logger.warning(
+            "apply_lora: %d/%d keys not in model state_dict (loaded %d). First skipped: %s",
+            len(skipped),
+            len(lora_weights),
+            matched,
+            skipped[:3],
+        )
+
+    # Register the adapter only after the match check passes
+    if not hasattr(model, "_lora_adapters"):
+        model._lora_adapters = {}
+    model._lora_adapters[adapter_name] = lora_weights
 
     model.load_state_dict(state_dict, strict=False)
-    logger.info(f"Applied LoRA adapter: {adapter_name}")
+    logger.info("Applied LoRA adapter '%s' (%d tensors)", adapter_name, matched)
 
 
 def merge_lora_weights(model: nn.Module, lora_weights: Dict[str, torch.Tensor]) -> None:

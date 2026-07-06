@@ -211,25 +211,21 @@ class KVCache:
 
         seq_len = k.shape[1]
 
-        # Truncate if single update exceeds cache capacity
+        # A single update larger than the cache cannot be stored, and the
+        # sliding-window shift below assumes seq_len <= max_seq_len.
         if seq_len > self.max_seq_len:
-            logger.warning(
-                "KV cache: seq_len %d exceeds max_seq_len %d — truncating to last %d positions",
-                seq_len,
-                self.max_seq_len,
-                self.max_seq_len,
+            raise ValueError(
+                f"KV cache capacity exceeded: update has seq_len={seq_len} "
+                f"but the cache holds max_seq_len={self.max_seq_len}; "
+                "allocate a larger cache or split the update"
             )
-            k = k[:, -self.max_seq_len :]
-            v = v[:, -self.max_seq_len :]
-            seq_len = self.max_seq_len
-            position = 0
 
         end_pos = position + seq_len
 
         # Warn on overflow
         if end_pos > self.max_seq_len:
             logger.warning(
-                "KV cache overflow: seq_len %d at pos %d exceeds max_seq_len %d — shifting with sliding window",
+                "KV cache overflow: seq_len %d at pos %d exceeds max_seq_len %d -- shifting with sliding window",
                 seq_len,
                 position,
                 self.max_seq_len,
@@ -758,50 +754,70 @@ class H2OKVCache(KVCache):
         # Mask out recent window so they don't compete with HH slots
         scores[:, recent_start : self.current_pos] = -float("inf")
 
-        # Top-k across all non-recent positions
+        # Top-k across all non-recent positions, chosen per batch row —
+        # each row accumulates its own attention scores, so its heavy
+        # hitters differ. Every row keeps the same count (hh_k + recent),
+        # because the recent window is masked out of the top-k candidates.
         hh_k = min(self.heavy_hitter_count, recent_start)
-        if hh_k > 0:
-            _, hh_indices = scores[0].topk(hh_k, sorted=False)
-            keep_idx = sorted(set(hh_indices.tolist()) | recent_idx)
-        else:
-            keep_idx = sorted(recent_idx)
 
-        if len(keep_idx) >= self.current_pos:
+        def _keep_for_row(row_scores: torch.Tensor) -> list[int]:
+            if hh_k <= 0:
+                return sorted(recent_idx)
+            _, hh_indices = row_scores.topk(hh_k, sorted=False)
+            return sorted(set(hh_indices.tolist()) | recent_idx)
+
+        if self.batch_size == 1:
+            # Single-row fast path: one top-k
+            keep_rows = [_keep_for_row(scores[0])]
+        else:
+            keep_rows = [_keep_for_row(scores[b]) for b in range(self.batch_size)]
+
+        keep_len = len(keep_rows[0])
+        if keep_len >= self.current_pos:
             return  # No eviction needed
 
-        keep_t = torch.tensor(keep_idx, dtype=torch.long, device=self.device)
+        # (batch, keep_len) — per-row gather indices
+        keep_t = torch.tensor(keep_rows, dtype=torch.long, device=self.device)
+
+        def _compact(buf: torch.Tensor) -> None:
+            idx = keep_t.view(self.batch_size, keep_len, *([1] * (buf.dim() - 2)))
+            idx = idx.expand(-1, -1, *buf.shape[2:])
+            buf[:, :keep_len] = buf.gather(1, idx)
 
         # Compact the cache
+        _compact(self._cache_k)
+        _compact(self._cache_v)
         if self.quantize:
-            self._cache_k[:, : len(keep_idx)] = self._cache_k[:, keep_t]
-            self._cache_v[:, : len(keep_idx)] = self._cache_v[:, keep_t]
-            self._scale_k[:, : len(keep_idx)] = self._scale_k[:, keep_t]
-            self._scale_v[:, : len(keep_idx)] = self._scale_v[:, keep_t]
+            _compact(self._scale_k)
+            _compact(self._scale_v)
             # S739: compact zero-point tensors alongside scales
             if self._zp_k is not None:
-                self._zp_k[:, : len(keep_idx)] = self._zp_k[:, keep_t]
-                self._zp_v[:, : len(keep_idx)] = self._zp_v[:, keep_t]
-        else:
-            self._cache_k[:, : len(keep_idx)] = self._cache_k[:, keep_t]
-            self._cache_v[:, : len(keep_idx)] = self._cache_v[:, keep_t]
+                _compact(self._zp_k)
+                _compact(self._zp_v)
 
         # Compact attention scores
         new_scores = torch.zeros_like(self._attn_scores)
-        new_scores[:, : len(keep_idx)] = self._attn_scores[:, keep_t]
+        new_scores[:, :keep_len] = self._attn_scores.gather(1, keep_t)
         self._attn_scores = new_scores
 
-        # Zero out evicted slots
+        # Zero out evicted slots; quantized buffers also reset their
+        # scales and zero-points so stale entries cannot decode.
         old_pos = self.current_pos
-        self.current_pos = len(keep_idx)
-        if not self.quantize:
-            self._cache_k[:, self.current_pos : old_pos].zero_()
-            self._cache_v[:, self.current_pos : old_pos].zero_()
+        self.current_pos = keep_len
+        self._cache_k[:, self.current_pos : old_pos].zero_()
+        self._cache_v[:, self.current_pos : old_pos].zero_()
+        if self.quantize:
+            self._scale_k[:, self.current_pos : old_pos].fill_(1.0)
+            self._scale_v[:, self.current_pos : old_pos].fill_(1.0)
+            if self._zp_k is not None:
+                self._zp_k[:, self.current_pos : old_pos].zero_()
+                self._zp_v[:, self.current_pos : old_pos].zero_()
 
         logger.debug(
-            "H2O eviction: %d → %d tokens (HH=%d, recent=%d)",
+            "H2O eviction: %d -> %d tokens (HH=%d, recent=%d)",
             old_pos,
             self.current_pos,
-            len(keep_idx) - len(recent_idx),
+            keep_len - len(recent_idx),
             len(recent_idx),
         )
 
@@ -1026,6 +1042,10 @@ class TurboQuantKVCache(KVCache):
 
         Heads with the lowest importance scores get INT4 quantization.
         Called automatically by :meth:`update` at the configured interval.
+
+        When a head's assignment flips, its cached history is re-encoded
+        from the old buffer into the new one so that :meth:`get` keeps
+        returning valid values for past positions.
         """
         n_int4 = max(0, int(self.n_kv_heads * self.int4_fraction))
         if n_int4 == 0 or n_int4 >= self.n_kv_heads:
@@ -1036,12 +1056,47 @@ class TurboQuantKVCache(KVCache):
         new_int4 = torch.zeros_like(self._is_int4)
         new_int4[sorted_idx[:n_int4]] = True
 
-        if not torch.equal(new_int4, self._is_int4):
-            self._is_int4 = new_int4
-            logger.debug(
-                "TurboQuant rebalanced: INT4 heads=%s",
-                sorted_idx[:n_int4].tolist(),
+        if torch.equal(new_int4, self._is_int4):
+            return
+
+        pos = self.current_pos
+        if pos > 0:
+            kv_buffers = (
+                (self._cache_k, self._scale_k, self._zp_k, self._cache_k_int4, self._scale_k_int4),
+                (self._cache_v, self._scale_v, self._zp_v, self._cache_v_int4, self._scale_v_int4),
             )
+
+            # Heads moving INT8 -> INT4: decode INT8 history, re-encode packed
+            to_int4 = new_int4 & ~self._is_int4
+            if to_int4.any():
+                for cache, scale, zp, cache4, scale4 in kv_buffers:
+                    hist = self._dequantize_tensor(
+                        cache[:, :pos, to_int4],
+                        scale[:, :pos, to_int4],
+                        zp[:, :pos, to_int4],
+                    )
+                    packed, s4 = self._quantize_int4(hist)
+                    cache4[:, :pos, to_int4] = packed
+                    scale4[:, :pos, to_int4] = s4
+
+            # Heads moving INT4 -> INT8: decode packed history, re-encode INT8
+            to_int8 = self._is_int4 & ~new_int4
+            if to_int8.any():
+                for cache, scale, zp, cache4, scale4 in kv_buffers:
+                    hist = self._dequantize_int4(
+                        cache4[:, :pos, to_int8],
+                        scale4[:, :pos, to_int8],
+                    )
+                    q, s8, z8 = self._quantize_tensor(hist)
+                    cache[:, :pos, to_int8] = q
+                    scale[:, :pos, to_int8] = s8
+                    zp[:, :pos, to_int8] = z8
+
+        self._is_int4 = new_int4
+        logger.debug(
+            "TurboQuant rebalanced: INT4 heads=%s",
+            sorted_idx[:n_int4].tolist(),
+        )
 
     def update(
         self,
@@ -1061,11 +1116,43 @@ class TurboQuantKVCache(KVCache):
             raise ValueError(f"KV cache batch mismatch: cache={self.batch_size}, k={k.shape[0]}, v={v.shape[0]}")
 
         seq_len = k.shape[1]
+
+        # A single update larger than the cache cannot be stored.
+        if seq_len > self.max_seq_len:
+            raise ValueError(
+                f"KV cache capacity exceeded: update has seq_len={seq_len} "
+                f"but the cache holds max_seq_len={self.max_seq_len}; "
+                "allocate a larger cache or split the update"
+            )
+
         end_pos = position + seq_len
 
         if end_pos > self.max_seq_len:
-            # Use parent's sliding window logic for overflow
-            return super().update(k, v, position)
+            # Sliding-window overflow: shift every storage buffer (INT8 and
+            # INT4, data and scales) left together so the mixed-precision
+            # read path sees one consistent layout.
+            logger.warning(
+                "KV cache overflow: seq_len %d at pos %d exceeds max_seq_len %d -- shifting with sliding window",
+                seq_len,
+                position,
+                self.max_seq_len,
+            )
+            shift = end_pos - self.max_seq_len
+            for name in (
+                "_cache_k",
+                "_cache_v",
+                "_scale_k",
+                "_scale_v",
+                "_zp_k",
+                "_zp_v",
+                "_cache_k_int4",
+                "_cache_v_int4",
+                "_scale_k_int4",
+                "_scale_v_int4",
+            ):
+                setattr(self, name, torch.roll(getattr(self, name), -shift, dims=1))
+            position = self.max_seq_len - seq_len
+            end_pos = self.max_seq_len
 
         # INT8 heads — standard parent quantization
         int8_mask = ~self._is_int4
@@ -1277,6 +1364,14 @@ class StreamingLLMCache(KVCache):
                         :, src_start : src_start + actual_keep
                     ].clone()
                     self._scale_v[:, dst_start : dst_start + actual_keep] = self._scale_v[
+                        :, src_start : src_start + actual_keep
+                    ].clone()
+                    # Asymmetric dequantization reads q * scale + zero_point,
+                    # so the zero-points shift together with data and scales.
+                    self._zp_k[:, dst_start : dst_start + actual_keep] = self._zp_k[
+                        :, src_start : src_start + actual_keep
+                    ].clone()
+                    self._zp_v[:, dst_start : dst_start + actual_keep] = self._zp_v[
                         :, src_start : src_start + actual_keep
                     ].clone()
                 else:

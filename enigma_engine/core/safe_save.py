@@ -85,6 +85,11 @@ def atomic_safetensors_save(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         save_file(tensors, str(tmp_path), metadata=metadata)
+        # fsync before the rename (see atomic_torch_save for the
+        # power-loss rationale). save_file exposes no file handle, so
+        # reopen the completed temp file to force its data to disk.
+        with open(tmp_path, "rb+") as f:
+            os.fsync(f.fileno())
         os.replace(tmp_path, path)
     except BaseException:
         try:

@@ -703,15 +703,17 @@ class Enigma(nn.Module):
                 )
             h = h + self.pos[:, :T]
 
-        # Build causal mask on demand
+        # Build causal mask on demand. Match h.dtype (same constraint as the
+        # main forward): a bare fp32 mask on a bf16/fp16 model outside
+        # autocast raises "invalid dtype for bias" in SDPA.
         mask = None
         if T > 1:
-            mask = self._get_causal_mask(T).to(device=h.device).unsqueeze(0).unsqueeze(0)
+            mask = self._get_causal_mask(T).to(device=h.device, dtype=h.dtype).unsqueeze(0).unsqueeze(0)
 
             # Combine with attention_mask if provided via kwargs
             attention_mask = kwargs.get("attention_mask")
             if attention_mask is not None:
-                pad_mask = (1 - attention_mask.unsqueeze(1).unsqueeze(2).float()) * (torch.finfo(h.dtype).min)
+                pad_mask = (1 - attention_mask.unsqueeze(1).unsqueeze(2).to(h.dtype)) * (torch.finfo(h.dtype).min)
                 mask = mask + pad_mask
 
         # Transform through layers
@@ -929,7 +931,9 @@ class Enigma(nn.Module):
             with open(config_file, encoding="utf-8") as f:
                 model = cls.from_config(json.load(f))
         else:
-            model = cls()
+            # config is a required constructor argument; no config file means
+            # default dimensions
+            model = cls(ForgeConfig())
 
         weights_file = path / "weights.pth" if path.is_dir() else path
         if weights_file.exists():
@@ -1137,19 +1141,11 @@ class Enigma(nn.Module):
             model = Forge.from_huggingface("gpt2")
             model = Forge.from_huggingface("microsoft/phi-2")
         """
-        try:
-            from .huggingface_loader import convert_huggingface_to_forge
-
-            logger.info(f"Loading HuggingFace model: {model_id}")
-            return convert_huggingface_to_forge(model_id, **kwargs)
-        except ImportError:
-            logger.error(
-                "HuggingFace model loading requires transformers library. Install with: pip install transformers"
-            )
-            raise
-        except Exception as e:
-            logger.error(f"Failed to load HuggingFace model: {e}")
-            raise
+        raise NotImplementedError(
+            "from_huggingface: no HuggingFace-to-Enigma converter ships in this build "
+            "(there is no huggingface_loader module); load Enigma checkpoints with "
+            "from_pretrained or from_safetensors instead"
+        )
 
     @classmethod
     def from_safetensors(cls, path: Union[str, Path], **kwargs) -> "Enigma":
@@ -1185,7 +1181,7 @@ class Enigma(nn.Module):
                 model = cls.from_config(json.load(f))
         else:
             logger.warning("No config file found, using default config")
-            model = cls()
+            model = cls(ForgeConfig())
 
         # Load weights
         logger.info(f"Loading Safetensors from: {path}")
@@ -1218,17 +1214,11 @@ class Enigma(nn.Module):
         Example:
             model = Forge.from_gguf("llama-2-7b.Q4_K_M.gguf")
         """
-        try:
-            from .gguf_loader import load_gguf_model
-
-            logger.info(f"Loading GGUF model from: {path}")
-            return load_gguf_model(str(path), **kwargs)
-        except ImportError:
-            logger.error("GGUF model loading requires gguf library. Install with: pip install gguf")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to load GGUF model: {e}")
-            raise
+        raise NotImplementedError(
+            "from_gguf: no GGUF-to-Enigma converter ships in this build "
+            "(there is no gguf_loader module); load Enigma checkpoints with "
+            "from_pretrained or from_safetensors instead"
+        )
 
     @classmethod
     def from_onnx(cls, path: Union[str, Path], **kwargs) -> "Enigma":
@@ -1253,18 +1243,11 @@ class Enigma(nn.Module):
         Example:
             model = Forge.from_onnx("model.onnx")
         """
-        logger.info(f"Loading ONNX model from: {path}")
-
-        try:
-            from .onnx_loader import load_onnx_model
-
-            return load_onnx_model(str(path), **kwargs)
-        except ImportError:
-            logger.error("ONNX model loading requires onnx library. Install with: pip install onnx")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to load ONNX model: {e}")
-            raise
+        raise NotImplementedError(
+            "from_onnx: no ONNX-to-Enigma converter ships in this build "
+            "(there is no onnx_loader module); load Enigma checkpoints with "
+            "from_pretrained or from_safetensors instead"
+        )
 
     # =========================================================================
     # 🎯 LORA & ADAPTER SUPPORT
