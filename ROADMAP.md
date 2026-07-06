@@ -119,6 +119,14 @@ masking, then re-SFT.
 + self-play (RL-C). Realistic at 182M: DPO on format/tone/values preferences.
 The "won't turn evil" property comes from Phase 1c authorship more than RL.
 
+**DONE 2026-07-06 (measured):** `make_dpo_data.py` (176 authored-voice vs
+measured-failure-mode pairs) + `dpo_enigma.py` (policy + frozen reference,
+render_training masks). At lr 2e-6 x2 epochs DPO OVER-OPTIMIZED and damaged
+her (identity 83->50%, factual 50->0%) — at 182M DPO is a nudge or a wrecking
+ball. At lr 5e-7 x1 epoch: preference accuracy 100% with margin AND the full
+scorecard held (26/29, all gates PASS) — ADOPTED (`models/enigma_dpo`, now
+what Start-Enigma serves; revert = point it back at `models/enigma_sft`).
+
 ## Phase 7 — The next generation (the big fork; weeks of GPU)
 
 Only when the current lineage hits a measured ceiling:

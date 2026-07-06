@@ -18,7 +18,7 @@ if ($up) {
 # training-ops gotcha). Logs go to serve_enigma.log in the repo.
 $log = Join-Path $engineDir "serve_enigma.log"
 Start-Process -FilePath $python `
-    -ArgumentList "serve_enigma.py", "--port", "$port", "--model", "models\enigma_sft\model.pth", "--memory-dir", "data\memory" `
+    -ArgumentList "serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth", "--memory-dir", "data\memory" `
     -WorkingDirectory $engineDir `
     -WindowStyle Hidden `
     -RedirectStandardOutput $log `
