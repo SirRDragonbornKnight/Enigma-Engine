@@ -1,8 +1,8 @@
 # Code Review Tracker — reset 2026-06-11
 
 Pre-refocus findings targeted the Qwen-era engine (`inference.py`,
-`engine_generation.py`, `api/server.py`, …) — those modules are deleted; the
-findings and their fixes live in git history. Suite baseline today:
+`engine_generation.py`, `api/server.py`, …) — those findings and their
+fixes live in git history. Suite baseline today:
 **364 passed; ruff clean on the live/changed files.** (Repo-wide `ruff check .`
 still flags pre-existing style nits in legacy scratch/collector scripts and
 `mods/` — cosmetic, untouched by the 06-11 work; sweep opportunistically.)
@@ -26,8 +26,8 @@ still flags pre-existing style nits in legacy scratch/collector scripts and
   aligned causal mask, corrupting served generation. Fixed (bottom-right
   aligned mask) and LOCKED by `tests/test_model_kv_cache.py` (cached ==
   uncached, logit-for-logit).
-- **model.py cleanup** — dead speculative-decoding suite + MoE expert layer
-  removed; checkpoint verified bit-identical before/after
+- **model.py cleanup** — slimmed to the live architecture; checkpoint
+  verified bit-identical before/after
   (`_verify_ckpt.py`, KEYHASH `12edc0bc1ded383d`).
 - **Footgun defaults flipped** — `use_differential_attn` True→False,
   `neftune_alpha` 5.0→0.0 in `model_presets.py`; `--no-diff-attn` is now
@@ -76,9 +76,7 @@ still flags pre-existing style nits in legacy scratch/collector scripts and
   degrades to a raw fallback, never a crash). Two probe-time catches fixed
   before landing: META read after `del _ck` (boot crash), and a memory test
   budget that ignored the space-heavy tokenizer.
-- **Muppet-era scripts resolved** (06-11): `train_enigma_lora.py`,
-  `make_enigma_local.py`, `forge.py` deleted (zero importers; git is the
-  archive). The reusable EXAMPLES were extracted to `identity_anchors.py`
-  (06-30, renamed from `make_enigma_corpus.py`; the Qwen-ChatML LoRA corpus
-  writer and `eval_enigma.py` were dropped); `run_training_diagnostic.py`
-  stays with the dormant FORGE stack.
+- **Muppet-era scripts resolved** (06-11): superseded by
+  `finetune_enigma.py` (git is the archive). The reusable EXAMPLES live in
+  `identity_anchors.py` (06-30, renamed from `make_enigma_corpus.py`);
+  `run_training_diagnostic.py` stays with the dormant FORGE stack.

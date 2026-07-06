@@ -52,8 +52,8 @@
    stays compact until a length-extension anneal.
 5. **Values/identity corpus.** Constitutive alignment: hand-curated examples,
    scaling the proven identity-lock approach. The seed exists
-   (`data/sft/identity.jsonl`: 122 anchors kept; 8 Qwen-era claims DROPPED as
-   false for the from-scratch model). The curation pass is the user's
+   (`data/sft/identity.jsonl`: 122 from-scratch-true anchors; the old
+   Qwen-era claims are false for this model). The curation pass is the user's
    authorship. The WHY lives in the vision memory (Jarvis-class companion
    that provably won't turn evil).
 6. **Avatar embodiment.** The avatar is its own repo now (`C:\Users\SirKn\Enigma Avatar\`); its `TODO.md` is AUTHORITATIVE for that

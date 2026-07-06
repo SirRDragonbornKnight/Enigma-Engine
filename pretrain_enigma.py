@@ -5,8 +5,7 @@ pre-tokenized ``data/pretrain/tokens.bin`` corpus (56.6B tokens, vocab 4718).
 This is the genuine own-brained model: a from-scratch transformer that learns
 language from the data, NOT a wrapper around someone else's model. It loads
 the SAME AdvancedBPETokenizer that produced ``tokens.bin`` and streams the
-tokens via memmap (nanoGPT-style; the old whole-corpus-in-RAM toy ``forge.py``
-is deleted — git history has it). The instruct pass lives in
+tokens via memmap (nanoGPT-style). The instruct pass lives in
 ``finetune_enigma.py``; both passes share the optimizer/schedule arsenal in
 ``enigma_engine.core.optim``.
 

@@ -1,10 +1,9 @@
 """Modkit smoke tests — the kept Forge core (model, tokenizer, LoRA config) and
 mod discovery.
 
-The monolith-era engine/GUI/inference tests were removed in the refocus to
-Modkit; their deep coverage lives in git history (pre-refocus, dde5c99) and is
-tracked for selective restore. The dispatcher/Trainer path stays covered by
-``test_training_dispatch.py``.
+The monolith-era engine/GUI/inference deep coverage lives in git history
+(pre-refocus, dde5c99) and is tracked for selective restore. The
+dispatcher/Trainer path stays covered by ``test_training_dispatch.py``.
 """
 
 from dataclasses import replace

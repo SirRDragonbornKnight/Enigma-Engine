@@ -1,8 +1,8 @@
 # Cleanup Tracker — reset 2026-06-11
 
-The previous file-by-file tracker described a tree that no longer exists
-(`gui/`, `web/`, `services/`, `api/`, the Qwen-era `engine_*`/`inference`/`rag`
-modules — all deleted in the Modkit refocus; see git history). Current truth:
+This tracker describes the tree as it stands today; earlier eras (`gui/`,
+`web/`, `services/`, `api/`, the Qwen-era `engine_*`/`inference`/`rag`
+modules) live in git history. Current truth:
 
 ## Package state — `enigma_engine/`, 39 files / ~23.8k LOC
 
@@ -26,11 +26,9 @@ modules — all deleted in the Modkit refocus; see git history). Current truth:
   `progressive_growing.py`, `weight_mapping.py`, `adaptive_trainer.py`,
   `commands.py`, `plugin_loader.py`, `mod_tools.py`, `hardware_detection.py`,
   `config/`.
-- **Deleted 2026-06-11** (verified zero importers before deletion):
-  `core/monologue.py`, `core/personality_data.py` (its distillation prompts
-  are an idea-source for the values corpus — retrieve from git when needed),
-  the ghost `api/` dir (compiled bytecode only), and all stale `__pycache__`
-  (held .pyc for ~37 deleted modules across two Python versions).
+- **In git history only (idea-source, not code):** `core/personality_data.py`'s
+  distillation prompts are an idea-source for the values corpus — retrieve
+  from git when needed.
 
 ## Root scripts
 
@@ -38,10 +36,8 @@ modules — all deleted in the Modkit refocus; see git history). Current truth:
   `make_sft_data.py` (06-11), `serve_enigma.py`, `sample_enigma.py`,
   `pretokenize_data.py`,
   `identity_anchors.py` (its EXAMPLES feed make_sft_data; renamed from
-  `make_enigma_corpus.py` 06-30, Qwen-LoRA corpus writer dropped),
+  `make_enigma_corpus.py` 06-30),
   `_verify_ckpt.py` (standing checkpoint fingerprint — keep).
-- **Removed (06-30, Modkit/Qwen-LoRA era):** `eval_enigma.py` (base-Qwen-vs-LoRA
-  eval — obsolete for the from-scratch model).
 - **Corpus provenance (keep):** `collect_pretraining_data.py`,
   `collect_finetuning_data.py`, `collect_distill_data.py`,
   `collect_search_data.py`, `collect_vision_data.py`,
@@ -49,8 +45,7 @@ modules — all deleted in the Modkit refocus; see git history). Current truth:
 - **Scratch (tracked since 721d25e; delete when stale):** `_append_anime.py`,
   `_collect_anime_ln.py`, `_fix_anime_coverage.py`, `_audit_eval.py`.
 - **Muppet-era — RESOLVED at instruct-pass design (2026-06-11):**
-  `train_enigma_lora.py`, `make_enigma_local.py`, `forge.py` DELETED (zero
-  importers; superseded by `finetune_enigma.py`; git is the archive).
+  superseded by `finetune_enigma.py` (git is the archive).
   `run_training_diagnostic.py` kept — it travels with the dormant FORGE
   stack.
 

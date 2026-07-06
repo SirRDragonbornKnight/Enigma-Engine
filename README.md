@@ -33,11 +33,11 @@ avatar, and run the avatar against any LLM.
 
 ## A note on older docs ("Modkit")
 
-This repo is mid-transition. It began as **"Enigma AI Engine"**, briefly became **"Modkit"**
+This repo began as **"Enigma AI Engine"**, briefly became **"Modkit"**
 (a *Forge* that LoRA-fine-tuned Qwen, plus an MCP layer for Odysseus), and is now the
-**from-scratch Enigma LLM** described in `CLAUDE.md`. The Modkit-era entry points
-(`forge.py`, `train_enigma_lora.py`, `make_enigma_local.py`, `modkit_mcp.py`) have been
-removed. **If a doc still says "Modkit" or references those files, it predates the pivot —
+**from-scratch Enigma LLM** described in `CLAUDE.md`. **If a doc still says "Modkit" or
+references Modkit-era entry points (`forge.py`, `train_enigma_lora.py`,
+`make_enigma_local.py`, `modkit_mcp.py`), it predates the pivot —
 `CLAUDE.md` is the current source of truth.**
 
 ## License

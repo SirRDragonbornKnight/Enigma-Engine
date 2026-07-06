@@ -738,9 +738,10 @@ def gen_identity_examples() -> tuple[list[dict], int]:
     out, dropped = [], 0
     for category, pairs in EXAMPLES.items():
         for q, a in pairs:
-            # Safety net for stale lineage claims only. "built on" was removed:
-            # it false-positived ordinary technical prose ("commits someone else
-            # has built on") and silently dropped a good depth_on_demand anchor.
+            # Safety net for stale lineage claims only. Match narrowly: a
+            # "built on" pattern false-positives ordinary technical prose
+            # ("commits someone else has built on") and silently drops a good
+            # depth_on_demand anchor.
             if re.search(r"qwen|base model", a, re.IGNORECASE):
                 dropped += 1
                 continue

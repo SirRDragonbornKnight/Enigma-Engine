@@ -37,8 +37,8 @@ Muppet.
 - User-teaching channels live: `remember` tool (facts from chat, instant) and
   `teachings.jsonl` (user-authored facts baked into weights, ~10-min loop).
 - Best checkpoint backed up: `Enigma Backups\enigma_sft_memory_pass` (SHA256).
-- Avatar wiring: dropped at user direction (2026-07-06) — Phase 5 is Odysseus
-  + memory growth only.
+- Avatar wiring: out of scope by user decision (2026-07-06) — Phase 5 is
+  Odysseus + memory growth only.
 - Measured ceilings + remake design recorded in `PHASE7_GATE.md`.
 - CANNOT yet (receipts in `PHASE7_GATE.md`): converse long (block 1024),
   recall broad facts (~50%, capacity), compute without the tool, stay crisp
@@ -68,7 +68,7 @@ The old roadmap said it first: "Before the REAL pass: fatten the tool corpus
   distill corpus (74% of completions >985 tokens, measured 2026-07-03). Target:
   10k-30k conversations that fit block 1024.
 - **1c. Values/identity corpus — the USER'S authorship** (constitutive alignment:
-  recurate the 8 dropped Qwen-era anchors, scale to a few hundred). Claude builds
+  rewrite the 8 Qwen-era anchors from-scratch-true, scale to a few hundred). Claude builds
   tooling/QA only.
 - **1d. QA gate before any GPU time:** refusal-boilerplate scan (proven clean
   2026-07-03: 1 hit in 647 records, and it was a BBQ invitation), dedupe,

@@ -7,8 +7,8 @@ the incremental cached path must equal the logits from a full no-cache
 recompute over the same realized sequence — otherwise served output silently
 diverges from the model's true distribution.
 
-These tests lock that equivalence (deep model coverage that was removed in
-the Modkit refocus; see HANDOFF.md "Restore Forge test coverage").
+These tests lock that equivalence — the deep model coverage for the
+serving path.
 
 ⚠️ COVERAGE MATRIX — learned the hard way. A genuine KV-cache decode bug
 (SDPA called with ``is_causal=True`` for the rectangular q_len=1 / k_len=L

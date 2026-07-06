@@ -324,11 +324,10 @@ class Builtin3DGen:
 class Local3DGen:
     """Local 3D generation using Shap-E.
 
-    2.1-threed slice (May 25 2026): removed silent fallback to Builtin3DGen.
-    Previously load() would import Shap-E, swallow ImportError/Exception, and
-    masquerade as loaded by promoting the builtin placeholder. Callers saw
-    'local' loaded successfully while actually receiving placeholder output.
-    Honors §4 'loud-on-real-issue, silent-on-normal-path'.
+    load() must fail loudly: never swallow ImportError/Exception and
+    masquerade as loaded by promoting the builtin placeholder — callers would
+    see 'local' loaded successfully while actually receiving placeholder
+    output. Honors §4 'loud-on-real-issue, silent-on-normal-path'.
     """
 
     def __init__(self, use_cpu: bool = False):

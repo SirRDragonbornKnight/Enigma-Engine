@@ -909,8 +909,8 @@ def train_tokenizer(
         return tokenizer
 
     else:
-        # "char"/"character" (CharacterTokenizer) was removed — the module no
-        # longer exists. Fail honestly instead of crashing on a missing import.
+        # Only 'bpe'/'advanced' are trainable. Fail honestly instead of
+        # guessing at an unsupported tokenizer type.
         raise ValueError(f"Unsupported tokenizer type: {tokenizer_type!r} (only 'bpe'/'advanced' are trainable)")
 
 

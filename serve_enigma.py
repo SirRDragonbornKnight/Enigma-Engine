@@ -12,8 +12,8 @@ the padded embedding). /v1/chat/completions therefore bridges by rendering the
 conversation as a plain-text transcript she continues; /v1/completions is her
 native shape.
 
-Replaces the rejected Qwen-wrapper server (the "Muppet", removed 2026-06-11; its
-<tool_call> parsing lives in git history and returns with the instruct pass).
+Replaces the rejected Qwen-wrapper server (the "Muppet"; its <tool_call>
+parsing lives in git history and returns with the instruct pass).
 """
 
 from __future__ import annotations

@@ -91,7 +91,7 @@ All services use TCP with JSON messages:
 
 ## Providers
 
-Each service supports multiple providers (all local — cloud providers removed in REALIGN-1.1):
+Each service supports multiple providers (all local):
 
 | Service | Providers |
 |---------|-----------|
