@@ -15,6 +15,28 @@ from typing import Any, Optional, Union
 
 logger = logging.getLogger(__name__)
 
+# Reserved-token names decode() strips when skip_special_tokens=True. Kept
+# separate from special_tokens, which also drives encode(): adding a name
+# there changes how its literal text tokenizes, while this list only affects
+# decode output. Covers every reserved name a BPETokenizer-written vocab can
+# carry, including the pretraining-era ids this class never encodes itself.
+_RESERVED_TOKEN_NAMES = (
+    "<pad>",
+    "<s>",
+    "</s>",
+    "<unk>",
+    "<sep>",
+    "<mask>",
+    "<Q>",
+    "<A>",
+    "<USER>",
+    "<BOT>",
+    "<think>",
+    "</think>",
+    "<search>",
+    "</search>",
+)
+
 
 class AdvancedBPETokenizer:
     """
@@ -87,6 +109,18 @@ class AdvancedBPETokenizer:
             self._init_base_vocab()
 
         self.vocab_size = len(self.token_to_id)
+        self._sync_decode_skip_ids()
+
+    def _sync_decode_skip_ids(self) -> None:
+        """Collect the vocab's reserved-token ids for decode() to strip.
+        Includes reserved names present in the file but absent from
+        special_tokens (which must stay encode-exact for the trained vocab)."""
+        ids = set(self.special_tokens.values())
+        for name in _RESERVED_TOKEN_NAMES:
+            tid = self.token_to_id.get(name)
+            if tid is not None:
+                ids.add(tid)
+        self._decode_skip_ids = ids
 
     @staticmethod
     def _compute_cache_cap() -> int:
@@ -222,6 +256,7 @@ class AdvancedBPETokenizer:
         else:
             raise ValueError(f"Unknown tokenizer format in {vocab_file}")
 
+        self._sync_decode_skip_ids()
         logger.info(f"Loaded tokenizer from {vocab_file} with {self.vocab_size} tokens")
 
     def save(self, vocab_file: Union[str, Path]) -> None:
@@ -378,7 +413,10 @@ class AdvancedBPETokenizer:
         """
         chars = []
 
-        special_ids = set(self.special_tokens.values()) if skip_special_tokens else set()
+        # Union at call time: attach_chat_tokens and callers can extend
+        # special_tokens after load, and the reserved-name set covers vocab
+        # ids that special_tokens deliberately omits (encode-exactness).
+        special_ids = (set(self.special_tokens.values()) | self._decode_skip_ids) if skip_special_tokens else set()
 
         for tid in token_ids:
             if tid in special_ids:

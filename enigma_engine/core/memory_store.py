@@ -53,7 +53,10 @@ class MemoryStore:
         self._lock = threading.Lock()
         self._records: list[dict[str, Any]] = []
         if self.file.exists():
-            with open(self.file, encoding="utf-8") as f:
+            # utf-8-sig: hand-edited files are inside the contract, and
+            # Windows editors save UTF-8 with a BOM that would otherwise
+            # corrupt the first line's JSON. Writes stay plain UTF-8.
+            with open(self.file, encoding="utf-8-sig") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -64,9 +67,29 @@ class MemoryStore:
                         continue
                     if isinstance(rec, dict) and rec.get("text"):
                         self._records.append(rec)
+        # Hand-edited files are inside the contract (module docstring): a
+        # record whose id is missing or not an int gets renumbered here so
+        # the max+1 id arithmetic in add()/remember() always sees ints.
+        # bool is excluded explicitly (it is an int subclass).
+        next_id = (
+            max(
+                (r["id"] for r in self._records if isinstance(r.get("id"), int) and not isinstance(r.get("id"), bool)),
+                default=0,
+            )
+            + 1
+        )
+        renumbered = False
+        for rec in self._records:
+            if not isinstance(rec.get("id"), int) or isinstance(rec.get("id"), bool):
+                rec["id"] = next_id
+                next_id += 1
+                renumbered = True
+        if renumbered:
+            self._rewrite()
 
     def __len__(self) -> int:
-        return len(self._records)
+        with self._lock:
+            return len(self._records)
 
     def add(self, text: str, kind: str = "fact", source: str | None = None) -> dict:
         text = " ".join(str(text).split())
@@ -159,33 +182,37 @@ class MemoryStore:
         tmp.replace(self.file)
 
     def all(self) -> list[dict]:
-        return list(self._records)
+        with self._lock:
+            return list(self._records)
 
     def search(self, query: str, k: int = 3) -> list[dict]:
         """BM25 (k1=1.5, b=0.75). Returns up to k records, best first; records
-        sharing no term with the query never match."""
+        sharing no term with the query never match. Reads take the same lock
+        as writers: scoring zips _records with per-record term vectors, and a
+        concurrent supersede between the two passes would misalign the pairs."""
         q_terms = _terms(query)
-        if not q_terms or not self._records:
-            return []
-        docs = [_terms(r["text"]) for r in self._records]
-        n = len(docs)
-        avg_len = sum(len(d) for d in docs) / n
-        df: dict[str, int] = {}
-        for d in docs:
-            for t in set(d):
-                df[t] = df.get(t, 0) + 1
-        k1, b = 1.5, 0.75
-        scored = []
-        for rec, d in zip(self._records, docs):
-            score = 0.0
-            for t in q_terms:
-                tf = d.count(t)
-                if not tf:
-                    continue
-                idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
-                score += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(d) / avg_len))
-            if score > 0:
-                scored.append((score, rec))
+        with self._lock:
+            if not q_terms or not self._records:
+                return []
+            docs = [_terms(r["text"]) for r in self._records]
+            n = len(docs)
+            avg_len = sum(len(d) for d in docs) / n
+            df: dict[str, int] = {}
+            for d in docs:
+                for t in set(d):
+                    df[t] = df.get(t, 0) + 1
+            k1, b = 1.5, 0.75
+            scored = []
+            for rec, d in zip(self._records, docs):
+                score = 0.0
+                for t in q_terms:
+                    tf = d.count(t)
+                    if not tf:
+                        continue
+                    idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
+                    score += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(d) / avg_len))
+                if score > 0:
+                    scored.append((score, rec))
         scored.sort(key=lambda s: -s[0])
         return [rec for _, rec in scored[:k]]
 

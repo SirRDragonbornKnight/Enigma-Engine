@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import re
 import sys
 import threading
@@ -187,6 +188,53 @@ def _find_stop(text: str, stop_texts: tuple[str, ...]) -> int:
     return min(hits) if hits else -1
 
 
+_GEN_DONE = object()
+
+
+def _stream_ids_locked(
+    x: torch.Tensor, max_tokens: int, temperature: float, top_p: float, min_p: float, stop_tokens: list[int]
+):
+    """Yield token ids from the model without holding _GEN_LOCK across
+    consumer waits. A worker thread owns the lock for the whole generation
+    and hands ids over an unbounded queue, so a slow or stalled SSE client
+    can never keep other requests blocked on the lock; the ids themselves
+    are bounded by max_tokens. A consumer that goes away (client disconnect)
+    sets the cancel flag and the worker stops at the next token."""
+    q: queue.Queue = queue.Queue()
+    cancel = threading.Event()
+
+    def worker():
+        try:
+            with _GEN_LOCK, torch.no_grad():
+                for t in model.generate_stream(
+                    x,
+                    max_new_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stop_tokens=stop_tokens,
+                    min_p=min_p,
+                ):
+                    if cancel.is_set():
+                        break
+                    q.put(int(t.item()))
+        except BaseException as exc:
+            q.put(exc)
+        finally:
+            q.put(_GEN_DONE)
+
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        while True:
+            item = q.get()
+            if item is _GEN_DONE:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        cancel.set()
+
+
 def _generate_text(
     prompt: str,
     max_tokens: int,
@@ -239,26 +287,22 @@ def _generate_text(
     emitted = 0
     saw_eos = False
     out_ids: list[int] = []
-    with _GEN_LOCK, torch.no_grad():
-        for t in model.generate_stream(
-            x, max_new_tokens=max_tokens, temperature=temperature, top_p=top_p, stop_tokens=[EOS_ID], min_p=min_p
-        ):
-            tid = int(t.item())
-            if tid == EOS_ID:
-                saw_eos = True
-                break
-            out_ids.append(tid)
-            text = tokenizer.decode(out_ids)
-            cut = _find_stop(text, stop_texts)
-            if cut != -1:
-                stats["completion_tokens"] = len(out_ids)
-                if cut > emitted:
-                    yield text[emitted:cut]
-                return
-            safe_end = max(emitted, len(text) - hold)
-            if safe_end > emitted:
-                yield text[emitted:safe_end]
-                emitted = safe_end
+    for tid in _stream_ids_locked(x, max_tokens, temperature, top_p, min_p, [EOS_ID]):
+        if tid == EOS_ID:
+            saw_eos = True
+            break
+        out_ids.append(tid)
+        text = tokenizer.decode(out_ids)
+        cut = _find_stop(text, stop_texts)
+        if cut != -1:
+            stats["completion_tokens"] = len(out_ids)
+            if cut > emitted:
+                yield text[emitted:cut]
+            return
+        safe_end = max(emitted, len(text) - hold)
+        if safe_end > emitted:
+            yield text[emitted:safe_end]
+            emitted = safe_end
     stats["completion_tokens"] = len(out_ids)
     if not saw_eos and len(out_ids) >= max_tokens:
         stats["finish"] = "length"  # budget spent, not a natural end
@@ -266,7 +310,10 @@ def _generate_text(
     text = tokenizer.decode(out_ids)
     cut = _find_stop(text, stop_texts)
     if cut != -1:
+        # A stop marker completed inside the held tail: this is a marker
+        # stop, not a budget cut.
         text = text[:cut]
+        stats["finish"] = "stop"
     if len(text) > emitted:
         yield text[emitted:]
 
@@ -282,14 +329,10 @@ def _gen_ids(
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     temperature = max(float(temperature), 1e-3)
-    with _GEN_LOCK, torch.no_grad():
-        for t in model.generate_stream(
-            x, max_new_tokens=max_tokens, temperature=temperature, top_p=top_p, stop_tokens=list(stop_ids), min_p=min_p
-        ):
-            tid = int(t.item())
-            if tid in stop_ids:
-                break
-            yield tid
+    for tid in _stream_ids_locked(x, max_tokens, temperature, top_p, min_p, list(stop_ids)):
+        if tid in stop_ids:
+            break
+        yield tid
 
 
 def _last_user_text(messages: list[Msg]) -> str:
@@ -385,6 +428,11 @@ def _execute_builtin(name: str, arguments: dict) -> str:
     """Run a server-side built-in tool and return its result string. Errors
     come back as text (fed to the model) rather than raising -- an engine that
     fails honestly beats one that 500s mid-conversation."""
+    # The model can emit any valid JSON as "arguments" (a bare string parses
+    # fine); only an object supports .get(), so anything else is a tool error
+    # fed back to her, not an exception.
+    if not isinstance(arguments, dict):
+        return f"error: tool arguments must be a JSON object, got {type(arguments).__name__}"
     if name == "calculate":
         expr = str(arguments.get("expression", "")).strip()
         try:
@@ -488,6 +536,7 @@ def _chat_instruct(req: ChatReq):
             from enigma_engine.core.chat_format import THINK, THINK_END, TOOL_CALL, TOOL_CALL_END
 
             cur_msgs = msgs
+            raw_all: list[str] = []
             for hop in range(_MAX_TOOL_HOPS + 1):
                 prompt_ids, hop_max = _hop(cur_msgs)
                 gen = _gen_ids(prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END))
@@ -526,6 +575,10 @@ def _chat_instruct(req: ChatReq):
                         emitted = len(text)
                 out = parse_assistant_ids(tokenizer, all_ids)
                 parsed = out["tool_calls"]
+                # Unparsable call text is collected across hops -- a malformed
+                # action generated alongside an executed built-in surfaces at
+                # the end instead of vanishing with the loop.
+                raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
                 # A built-in-only batch (calculate) is executed here, then we
                 # loop to let the model answer from the result -- the client
                 # never sees it. Anything else is surfaced whole.
@@ -533,7 +586,7 @@ def _chat_instruct(req: ChatReq):
                     cur_msgs = _apply_builtins(cur_msgs, out, parsed)
                     continue
                 calls = _openai_tool_calls(parsed)
-                raw_bits = [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
+                raw_bits = raw_all
                 if raw_bits:
                     yield (
                         "data: "
@@ -589,6 +642,7 @@ def _chat_instruct(req: ChatReq):
     out: dict = {"content": "", "tool_calls": []}
     out_ids: list[int] = []
     last_max = 1
+    raw_all: list[str] = []
     for hop in range(_MAX_TOOL_HOPS + 1):
         prompt_ids, last_max = _hop(cur_msgs)
         out_ids = list(_gen_ids(prompt_ids, last_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END)))
@@ -596,15 +650,17 @@ def _chat_instruct(req: ChatReq):
         n_prompt += len(prompt_ids)
         n_out += len(out_ids)
         parsed = out["tool_calls"]
+        # A tool call whose JSON didn't parse has no name — its raw text is
+        # collected across hops and surfaced as content instead of silently
+        # dropping the model's action.
+        raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
         if _loop_on_builtins(parsed, hop):
             cur_msgs = _apply_builtins(cur_msgs, out, parsed)
             continue
         break
 
     calls = _openai_tool_calls(out["tool_calls"])
-    # A tool call whose JSON didn't parse has no name — surface its raw text
-    # as content instead of silently dropping the model's action.
-    raw_bits = [c["raw"] for c in out["tool_calls"] if not c.get("name") and c.get("raw")]
+    raw_bits = raw_all
     content = "\n".join(t for t in [out.get("content"), *raw_bits] if t)
     message = {"role": "assistant", "content": content or (None if calls else "")}
     if calls:
