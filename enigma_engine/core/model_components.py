@@ -997,6 +997,11 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.layer_id = layer_id
         self.use_checkpoint = config.use_gradient_checkpointing
+        # Checkpointed backward recomputes the block AFTER Enigma.forward has
+        # dropped the intra-forward shared K/V, so a follower layer would
+        # rebuild K/V from its own projections -- weights that never ran in
+        # the forward pass. The forward guard below refuses the combination.
+        self._kv_shared = getattr(config, "kv_share_groups", 0) > 0
         self.use_moe = config.use_moe
 
         # Choose normalization type based on config
@@ -1132,6 +1137,13 @@ class TransformerBlock(nn.Module):
         # Use gradient checkpointing during training if enabled
         # Don't use with KV-cache as it doesn't make sense (inference only)
         if self.use_checkpoint and self.training and not use_cache:
+            if self._kv_shared:
+                raise RuntimeError(
+                    "gradient checkpointing cannot be combined with kv_share_groups: "
+                    "shared K/V is dropped after the forward pass, so backward "
+                    "recomputation would rebuild follower layers from projection "
+                    "weights that never ran forward; disable one of the two"
+                )
             return torch.utils.checkpoint.checkpoint(
                 self._forward_impl,
                 x,

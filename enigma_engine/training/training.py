@@ -2696,6 +2696,7 @@ class Trainer:
 
                 total_steps = est_batches_per_epoch * self.config.epochs
                 batches = None  # Not used in streaming mode
+                _retokenize_per_epoch = False  # streaming re-tokenizes per epoch already
                 val_batches: list[tuple[torch.Tensor, torch.Tensor]] = []
 
             else:
@@ -2712,6 +2713,18 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Failed to create batches: {e}")
                     raise
+
+                # BPE-dropout only augments when each epoch sees a fresh
+                # tokenisation; a batch list built once would freeze a single
+                # noised tokenisation for the whole run, so the epoch loop
+                # rebuilds from the raw sequences when dropout is active.
+                import inspect as _inspect
+
+                _retokenize_per_epoch = (
+                    self.config.bpe_dropout > 0
+                    and self.config.epochs > 1
+                    and "dropout" in _inspect.signature(self.tokenizer.encode).parameters
+                )
 
                 val_batches = []
                 if val_sequences:
@@ -2741,7 +2754,15 @@ class Trainer:
         # remainder flush). Size the schedule in optimizer steps or with
         # accum>1 the run ends with the LR stuck near peak.
         accum = max(1, self.config.max_grad_accumulation)
-        sched_total = max(1, -(-est_batches_per_epoch // accum) * self.config.epochs)  # ceil div
+        steps_per_epoch = -(-est_batches_per_epoch // accum)  # ceil div
+        sched_total = max(1, steps_per_epoch * self.config.epochs)
+        # A mid-epoch (save_every_steps) checkpoint resumes at the last
+        # COMPLETED epoch, so the interrupted epoch's already-scheduled steps
+        # run again on top of the restored scheduler state. Stretch the
+        # schedule by that surplus: past T_max CosineAnnealingLR turns back
+        # UP toward peak and the WSD decay walks below its floor.
+        replayed_steps = max(0, self.state.step - self.state.epoch * steps_per_epoch)
+        sched_total += replayed_steps
         warmup = _effective_warmup(self.config.warmup_steps, sched_total)
         decay_steps = max(1, sched_total - warmup)
 
@@ -2763,9 +2784,10 @@ class Trainer:
                 decay_start = int(_decay_steps * (1.0 - _wsd_frac))
                 if step < decay_start:
                     return 1.0  # stable phase
-                # linear decay
+                # linear decay, floored at min_lr_ratio so steps beyond the
+                # planned total hold the final LR instead of going negative
                 progress = (step - decay_start) / max(1, _decay_steps - decay_start)
-                return 1.0 - (1.0 - min_lr_ratio) * progress
+                return max(min_lr_ratio, 1.0 - (1.0 - min_lr_ratio) * progress)
 
             post_warmup_scheduler = LambdaLR(self.optimizer, lr_lambda=_wsd_lambda)
         else:
@@ -2831,12 +2853,12 @@ class Trainer:
         def _cleanup_temp_files():
             """Remove streaming temp files if they exist.
 
-            For disk-backed mode, the caller owns the data file
-            so we must not delete it.
+            For disk-backed mode, the caller owns the data file and both
+            _seq_file and _val_file alias it, so neither may be deleted.
             """
-            files_to_clean = [_val_file]
+            files_to_clean = []
             if not _disk_backed:
-                files_to_clean.append(_seq_file)
+                files_to_clean.extend([_val_file, _seq_file])
             for _f in files_to_clean:
                 if _f is not None:
                     try:
@@ -2872,6 +2894,10 @@ class Trainer:
                 random.shuffle(indices)
                 epoch_batches = self._stream_batches(_seq_file, seq_offsets, indices, max_seq_len)
             else:
+                if _retokenize_per_epoch and epoch > start_epoch:
+                    # Fresh BPE-dropout tokenisation for this epoch (see the
+                    # eager-path setup above).
+                    batches = list(self._create_batches(sequences, max_length=max_seq_len))
                 random.shuffle(batches)
                 epoch_batches = batches
 
@@ -3269,6 +3295,13 @@ class Trainer:
 
         # Gradient accumulation step
         if (batch_idx + 1) % self.config.max_grad_accumulation == 0:
+            # Under fp16 AMP the accumulated grads are still multiplied by the
+            # loss scale; unscale before touching them so noise injection and
+            # clipping both operate on true-magnitude gradients. scaler.step()
+            # skips its internal unscale when it already happened here.
+            if self.scaler is not None and (self.config.gradient_noise_eta > 0 or self.config.gradient_clip > 0):
+                self.scaler.unscale_(self.optimizer)
+
             # Gradient noise injection (Neelakantan et al.) with
             # warmup/decay envelope (T2-3).
             if self.config.gradient_noise_eta > 0:
@@ -3291,8 +3324,6 @@ class Trainer:
                         p.grad.add_(torch.randn_like(p.grad) * noise_std)
 
             if self.config.gradient_clip > 0:
-                if self.scaler is not None:
-                    self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
 
             if self.scaler is not None:
@@ -3795,7 +3826,12 @@ class Trainer:
         labels: "torch.Tensor",
         attention_mask: "torch.Tensor | None" = None,
     ) -> "torch.Tensor":
-        """Compute per-sample average log-probability of *labels*.
+        """Compute per-sample summed log-probability of *labels*.
+
+        Summed (not length-averaged): the DPO/APO/KTO losses downstream apply
+        beta to log pi(y|x) ratios per Rafailov et al., and dpo_enigma.py's
+        standalone loop scores sequences the same way, so beta values stay
+        comparable across both paths and with reference implementations.
 
         Args:
             model: The model to evaluate.
@@ -3804,7 +3840,7 @@ class Trainer:
             attention_mask: (B, L) mask where 1=real, 0=pad.
 
         Returns:
-            (B,) tensor of average log-probabilities.
+            (B,) tensor of summed log-probabilities.
         """
         import torch.nn.functional as F
 
@@ -3820,7 +3856,7 @@ class Trainer:
         # so clamp to a valid id and rely on the mask to zero those slots.
         mask = (targets != -100).float()
         per_token = log_probs.gather(2, targets.clamp(min=0).unsqueeze(-1)).squeeze(-1)
-        return (per_token * mask).sum(dim=-1) / mask.sum(dim=-1).clamp(min=1)
+        return (per_token * mask).sum(dim=-1)
 
     def _encode_dpo_pair(
         self,
@@ -4059,12 +4095,18 @@ class Trainer:
                 break
 
             epoch_loss = 0.0
+            n_epoch_pairs = 0
             random.shuffle(pairs)
             self.optimizer.zero_grad()
 
             progress_base = int(5 + (epoch / self.config.epochs) * 90)
             self._emit_progress(progress_base, f"DPO Epoch {epoch + 1}/{self.config.epochs}")
 
+            # Online pairs generated mid-epoch are staged here and join the
+            # pool for the NEXT epoch's shuffle; appending to `pairs` while
+            # it is being iterated would train them un-shuffled at the tail
+            # and skew this epoch's loss average and flush modulus.
+            fresh_pairs: list = []
             for i, (input_ids, chosen_labels, rejected_labels, attention_mask) in enumerate(pairs):
                 if self._should_stop():
                     break
@@ -4116,6 +4158,7 @@ class Trainer:
                     return self.state
 
                 epoch_loss += batch_loss
+                n_epoch_pairs += 1
 
                 # Step optimizer every accum_steps pairs
                 if (i + 1) % accum_steps == 0:
@@ -4136,10 +4179,12 @@ class Trainer:
                             sample_prompts, reward_fn, n_samples=dpo_online_samples
                         )
                         for item in new_items:
-                            self._encode_dpo_pair(item, pairs, max_len_dpo)
+                            self._encode_dpo_pair(item, fresh_pairs, max_len_dpo)
+
+            pairs.extend(fresh_pairs)
 
             # Flush remaining accumulated gradients at epoch end
-            if len(pairs) % accum_steps != 0:
+            if n_epoch_pairs % accum_steps != 0:
                 if self.config.gradient_clip > 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
                 self.optimizer.step()
@@ -4148,7 +4193,7 @@ class Trainer:
                     self.scheduler.step()
                 self.state.step += 1
 
-            avg_loss = epoch_loss / max(len(pairs), 1)
+            avg_loss = epoch_loss / max(n_epoch_pairs, 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
             self._emit_loss(avg_loss)
@@ -4446,7 +4491,10 @@ class Trainer:
         self._emit_progress(5, f"KTO: {len(pos_samples)} good, {len(neg_samples)} bad")
         logger.info(f"KTO training: {len(pos_samples)} desirable, {len(neg_samples)} undesirable, beta={beta}")
 
-        # Compute KL baseline from reference on desirable samples
+        # Compute KL baseline from reference on desirable samples. Scaled by
+        # beta and clamped non-negative so it lives on the same scale as the
+        # rewards it offsets (reward = beta * logratio below), matching the
+        # KTO formulation where the reference point is beta * KL(policy||ref).
         kl_baseline = torch.tensor(0.0, device=self.device)
         if pos_samples:
             with torch.no_grad():
@@ -4462,7 +4510,7 @@ class Trainer:
                     else:
                         ref_lp = self._get_sequence_logps(ref_model, ids, labels, attention_mask=mask)
                     kl_vals.append((policy_lp - ref_lp).mean())
-                kl_baseline = torch.stack(kl_vals).mean()
+                kl_baseline = (beta * torch.stack(kl_vals).mean()).clamp(min=0.0)
 
         checkpoint_dir = Path(self.config.checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
