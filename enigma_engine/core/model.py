@@ -364,29 +364,16 @@ class Enigma(nn.Module):
     def _get_causal_mask(self, size: int) -> torch.Tensor:
         """Return a (size, size) causal mask, cached and grown on demand.
 
-        When ``config.sliding_window`` is set, positions beyond the window
-        distance are also masked with ``-inf`` so each token only attends to
-        at most ``sliding_window`` previous positions.  This reduces
-        attention from O(n²) to O(n·w) for long sequences (e.g. Mistral).
-
-        NOTE: this mask is only built when the forward pass materializes an
-        explicit attention mask (padded batches). Plain causal training/prefill
-        and KV-cache decode take the fast ``is_causal`` path with ``mask=None``
-        and do NOT apply the window, and the KV-cache is not windowed. So the
-        window is currently a no-op on the normal train/generate paths -- wire
-        the fast + decode paths (and cache eviction) before relying on it.
+        Only built when the forward pass materializes an explicit attention
+        mask (padded batches). Plain causal training/prefill and KV-cache
+        decode take the fast ``is_causal`` path with ``mask=None``.
         """
-        sw = self.config.sliding_window
         if self._causal_mask is None or self._causal_mask_size < size:
             # Build at the requested size (never shrink)
             new_size = max(size, self._causal_mask_size)
             device = next(self.parameters()).device
             mask = torch.full((new_size, new_size), float("-inf"), device=device)
             mask = torch.triu(mask, diagonal=1)
-            # Sliding window: also mask positions beyond window distance
-            if sw is not None and sw > 0:
-                sw_mask = torch.tril(torch.ones(new_size, new_size, device=device), diagonal=-sw - 1)
-                mask = mask.masked_fill(sw_mask.bool(), float("-inf"))
             self._causal_mask = mask
             self._causal_mask_size = new_size
         return self._causal_mask[:size, :size]

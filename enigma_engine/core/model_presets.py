@@ -61,7 +61,6 @@ class ForgeConfig:
     │ rope_scaling_type   │ RoPE scaling for extended context              │
     │ rope_scaling_factor │ Scaling multiplier for context extension       │
     │ use_moe            │ Enable Mixture of Experts architecture          │
-    │ sliding_window     │ Sliding window attention length                 │
     └────────────────────────────────────────────────────────────────────────┘
     """
 
@@ -96,16 +95,6 @@ class ForgeConfig:
     # MIXTURE OF EXPERTS (MoE)
     # ─────────────────────────────────────────────────────────────────────────
     use_moe: bool = False  # Enable MoE architecture (gates the model_components branch)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # ENHANCED KV-CACHE
-    # ─────────────────────────────────────────────────────────────────────────
-    # Sliding-window attention length. PARTIAL: only honored when an explicit
-    # attention mask is materialized (padded batches -> _get_causal_mask). The
-    # fast causal path (plain training/prefill, mask=None) and KV-cache decode
-    # do NOT apply it, and the cache is not windowed -- so on the normal
-    # train/generate paths this currently does nothing. Wire those before use.
-    sliding_window: Optional[int] = None
 
     # ─────────────────────────────────────────────────────────────────────────
     # MEMORY OPTIMIZATION
@@ -335,7 +324,6 @@ class ForgeConfig:
             "rope_scaling_type": self.rope_scaling_type,
             "rope_scaling_factor": self.rope_scaling_factor,
             "use_moe": self.use_moe,
-            "sliding_window": self.sliding_window,
             "use_gradient_checkpointing": self.use_gradient_checkpointing,
             "vision_hidden_size": self.vision_hidden_size,
             "audio_hidden_size": self.audio_hidden_size,
@@ -380,7 +368,6 @@ class ForgeConfig:
             "rope_scaling_type",
             "rope_scaling_factor",
             "use_moe",
-            "sliding_window",
             "use_gradient_checkpointing",
             "vision_hidden_size",
             "audio_hidden_size",
