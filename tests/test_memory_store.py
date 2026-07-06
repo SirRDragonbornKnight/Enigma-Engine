@@ -101,6 +101,22 @@ def test_low_overlap_correction_coexists_documented_limit(tmp_path):
     assert len(m) == 2
 
 
+def test_add_never_reuses_an_id_after_delete(tmp_path):
+    # add() must mint max+1, not len+1: after a delete (or a supersede) a
+    # len-based id collides with a surviving record, and delete-by-id then
+    # hits the wrong one.
+    m = MemoryStore(tmp_path)
+    m.add("First fact.")
+    b = m.add("Second fact.")
+    c = m.add("Third fact.")
+    m.delete(b["id"])
+    d = m.add("Fourth fact.")
+    ids = [r["id"] for r in m.all()]
+    assert len(ids) == len(set(ids))  # every id unique
+    assert d["id"] > c["id"]  # ids only move forward
+    assert m.delete(d["id"]) is True  # targeted delete hits the new record
+
+
 def test_delete_and_clear(tmp_path):
     m = MemoryStore(tmp_path)
     a = m.remember("User's dog is named Rex.")

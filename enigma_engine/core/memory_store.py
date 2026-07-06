@@ -73,7 +73,9 @@ class MemoryStore:
         if not text:
             raise ValueError("empty memory")
         with self._lock:
-            rec = {"id": len(self._records) + 1, "text": text, "kind": kind}
+            # max+1, not len+1: delete()/supersede shrink the list, and a
+            # len-based id would collide with a surviving record.
+            rec = {"id": max((r["id"] for r in self._records), default=0) + 1, "text": text, "kind": kind}
             if source:
                 rec["source"] = source
             self._records.append(rec)

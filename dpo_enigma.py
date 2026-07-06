@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import random
 import time
 from pathlib import Path
@@ -190,6 +191,7 @@ def main() -> None:
     policy.train()
     t0 = time.time()
     step = 0
+    last_loss = 0.0
     for _epoch in range(args.epochs):
         rng.shuffle(train_pairs)
         for s in range(0, steps_per_epoch * args.micro_batch, args.micro_batch):
@@ -198,10 +200,16 @@ def main() -> None:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), args.grad_clip)
             optim.step()
+            last_loss = loss.item()
             if step % 10 == 0:
                 rate = (step + 1) / (time.time() - t0)
-                print(f"step {step}/{total_steps} loss {loss.item():.4f} acc {acc:.2f} ({rate:.2f} step/s)", flush=True)
+                print(f"step {step}/{total_steps} loss {last_loss:.4f} acc {acc:.2f} ({rate:.2f} step/s)", flush=True)
             step += 1
+
+    if not math.isfinite(last_loss):
+        # Same guard as pretrain/finetune's final save: never ship NaN weights
+        # as the deliverable.
+        raise SystemExit(f"FINAL SAVE REFUSED: last loss is not finite ({last_loss})")
 
     if n_val:
         vl, va = estimate_val()
