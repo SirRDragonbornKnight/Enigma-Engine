@@ -1137,7 +1137,9 @@ class TransformerBlock(nn.Module):
         # Use gradient checkpointing during training if enabled
         # Don't use with KV-cache as it doesn't make sense (inference only)
         if self.use_checkpoint and self.training and not use_cache:
-            if self._kv_shared:
+            # getattr: whole-model pickles created before this attribute
+            # existed bypass __init__ on load
+            if getattr(self, "_kv_shared", False):
                 raise RuntimeError(
                     "gradient checkpointing cannot be combined with kv_share_groups: "
                     "shared K/V is dropped after the forward pass, so backward "

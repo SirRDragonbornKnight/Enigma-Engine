@@ -218,6 +218,9 @@ def _stream_ids_locked(
                         break
                     q.put(int(t.item()))
         except BaseException as exc:
+            # Also print: after a client disconnect nobody drains the queue,
+            # and a generation error (e.g. CUDA state) must not vanish.
+            print(f"generation worker error: {exc!r}", flush=True)
             q.put(exc)
         finally:
             q.put(_GEN_DONE)

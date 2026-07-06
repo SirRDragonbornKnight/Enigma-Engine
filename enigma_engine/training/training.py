@@ -2761,7 +2761,11 @@ class Trainer:
         # run again on top of the restored scheduler state. Stretch the
         # schedule by that surplus: past T_max CosineAnnealingLR turns back
         # UP toward peak and the WSD decay walks below its floor.
-        replayed_steps = max(0, self.state.step - self.state.epoch * steps_per_epoch)
+        # state.step counts MICRO-batches while the scheduler steps once per
+        # OPTIMIZER step, so the surplus is computed in micro-batches against
+        # the micro-batch estimate and converted with the same ceil division.
+        replayed_micro = self.state.step - self.state.epoch * est_batches_per_epoch
+        replayed_steps = max(0, -(-replayed_micro // accum))
         sched_total += replayed_steps
         warmup = _effective_warmup(self.config.warmup_steps, sched_total)
         decay_steps = max(1, sched_total - warmup)
@@ -3447,16 +3451,24 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        # Enable gradient checkpointing if not already on
+        # Enable gradient checkpointing if not already on. Models with shared
+        # K/V cannot take the checkpointed path (the layer forward refuses the
+        # combination), so the retry for them runs with cache cleared only.
         if not self.config.use_gradient_checkpointing:
-            self.config.use_gradient_checkpointing = True
-            if hasattr(self.model, "gradient_checkpointing_enable"):
-                self.model.gradient_checkpointing_enable()
+            if getattr(getattr(self.model, "config", None), "kv_share_groups", 0) > 0:
+                logger.warning(
+                    "Not enabling gradient checkpointing for the retry: kv_share_groups is "
+                    "active and checkpointed backward cannot rebuild shared K/V"
+                )
             else:
-                for layer in getattr(self.model, "layers", []):
-                    if hasattr(layer, "use_checkpoint"):
-                        layer.use_checkpoint = True
-            logger.info("Gradient checkpointing enabled to reduce VRAM usage")
+                self.config.use_gradient_checkpointing = True
+                if hasattr(self.model, "gradient_checkpointing_enable"):
+                    self.model.gradient_checkpointing_enable()
+                else:
+                    for layer in getattr(self.model, "layers", []):
+                        if hasattr(layer, "use_checkpoint"):
+                            layer.use_checkpoint = True
+                logger.info("Gradient checkpointing enabled to reduce VRAM usage")
 
     def _restore_pending_state(self) -> None:
         """Restore scheduler and scaler state stashed by load_checkpoint."""
@@ -4336,13 +4348,22 @@ class Trainer:
                 if self._should_stop():
                     break
 
-                # Average log-probs = implicit reward (no ref model)
+                # SimPO's implicit reward is LENGTH-NORMALIZED:
+                # r(y|x) = (1/|y|) * log pi(y|x) -- reference-free preference
+                # training is only sound when reward is not confounded by
+                # response length, and beta/gamma are calibrated to that
+                # scale. The shared helper returns summed logps (the DPO/KTO
+                # scale), so divide by each side's scored-token count here.
                 policy_chosen = self._get_sequence_logps(
                     self.model, input_ids[:1], chosen_labels, attention_mask=attn_mask[:1]
                 )
                 policy_rejected = self._get_sequence_logps(
                     self.model, input_ids[1:], rejected_labels, attention_mask=attn_mask[1:]
                 )
+                chosen_len = (chosen_labels[:, 1:] != -100).sum(dim=-1).clamp(min=1)
+                rejected_len = (rejected_labels[:, 1:] != -100).sum(dim=-1).clamp(min=1)
+                policy_chosen = policy_chosen / chosen_len
+                policy_rejected = policy_rejected / rejected_len
 
                 # SimPO loss: -log sigma(beta * (r_c - r_r) - gamma)
                 import torch.nn.functional as _F

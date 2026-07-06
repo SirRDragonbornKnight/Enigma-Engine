@@ -79,11 +79,16 @@ class MemoryStore:
             + 1
         )
         renumbered = False
+        seen_ids: set[int] = set()
         for rec in self._records:
-            if not isinstance(rec.get("id"), int) or isinstance(rec.get("id"), bool):
+            rid = rec.get("id")
+            # Duplicate ids (a copy-paste hand edit) would make id-based
+            # delete/supersede ambiguous, so later duplicates get fresh ids.
+            if not isinstance(rid, int) or isinstance(rid, bool) or rid in seen_ids:
                 rec["id"] = next_id
                 next_id += 1
                 renumbered = True
+            seen_ids.add(rec["id"])
         if renumbered:
             self._rewrite()
 
