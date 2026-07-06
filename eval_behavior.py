@@ -133,7 +133,7 @@ def run(base_url: str, temperature: float, max_tokens: int) -> int:
             detail = _ascii(content[:60])
 
         by_cat.setdefault(cat, []).append(ok)
-        print(f"[{cat:11} {'ok' if ok else 'XX'}] {c['q'][:44]:44} -> {detail}")
+        print(f"[{cat:11} {'ok' if ok else 'XX'}] {_ascii(c['q'][:44]):44} -> {detail}")
 
     print("\n=== SCORECARD ===")
     all_pass = True

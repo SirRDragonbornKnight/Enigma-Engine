@@ -74,7 +74,7 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (404 tests as of 2026-07-06). The
+9. **The python suite is engine-only** (418 tests as of 2026-07-06). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) with its
    own Node suite — run `node --test` there.
 10. **Model capacity ceilings are measured, not guessed.** `PHASE7_GATE.md`

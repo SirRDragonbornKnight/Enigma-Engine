@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from typing import TYPE_CHECKING, Any
@@ -31,6 +32,34 @@ if TYPE_CHECKING:
     from torch import nn
 
 logger = logging.getLogger(__name__)
+
+# Live tool-call markers wrapping the JSON payload
+# (enigma_engine/core/chat_format.py TOOL_SYNTAX / TOOL_CALL markers).
+TOOL_CALL_OPEN = "<|tool_call|>"
+TOOL_CALL_CLOSE = "<|/tool_call|>"
+
+
+def _parsed_tool_name(response: str) -> str | None:
+    """Return the tool name from the first live tool call in ``response``.
+
+    A tool call is ``<|tool_call|>{json}<|/tool_call|>`` with a JSON
+    payload carrying a ``"name"`` field. Returns None when no well-formed
+    call is present.
+    """
+    if not response:
+        return None
+    start = response.find(TOOL_CALL_OPEN)
+    if start < 0:
+        return None
+    start += len(TOOL_CALL_OPEN)
+    end = response.find(TOOL_CALL_CLOSE, start)
+    payload = response[start:end] if end >= 0 else response[start:]
+    try:
+        obj = json.loads(payload.strip())
+    except (ValueError, TypeError):
+        return None
+    name = obj.get("name") if isinstance(obj, dict) else None
+    return name if isinstance(name, str) else None
 
 
 def evaluate_model(
@@ -143,13 +172,13 @@ def evaluate_tool_usage(
     test_cases: list[dict[str, Any]],
     device: str = "cuda",
 ) -> dict[str, Any]:
-    """Evaluate model's tool/command usage accuracy.
+    """Evaluate model's tool usage accuracy.
 
     Args:
         model: The model to evaluate
         tokenizer: Tokenizer for encoding/decoding
         engine: EnigmaEngine instance for command execution
-        test_cases: List of dicts with "prompt" and "expected_command" keys
+        test_cases: List of dicts with "prompt" and "expected_tool" keys
         device: Device to run evaluation on
 
     Returns:
@@ -177,7 +206,7 @@ def evaluate_tool_usage(
                 prompt = test_case.get("prompt")
                 if not prompt:
                     continue
-                expected_cmd = test_case.get("expected_command", "")
+                expected_tool = test_case.get("expected_tool", "")
 
                 # Generate response
                 response = engine.generate(
@@ -186,12 +215,9 @@ def evaluate_tool_usage(
                     temperature=0.0,  # Deterministic for evaluation
                 )
 
-                # Check if expected command appears in response
-                if expected_cmd and expected_cmd.lower() in response.lower():
-                    successes += 1
-                # Or check if any command was used successfully
-                elif "[CMD]" in response and "[/CMD]" in response:
-                    # Could validate command execution here
+                # Parse the live tool-call payload and match the tool name
+                called = _parsed_tool_name(response)
+                if called is not None and expected_tool and called.lower() == expected_tool.lower():
                     successes += 1
 
             except Exception as exc:
@@ -227,27 +253,20 @@ DEFAULT_TEST_PROMPTS = [
 ]
 
 
-# Default tool/command test cases for evaluating command usage accuracy
+# Default tool test cases for evaluating tool usage accuracy.
+# Tool names match the live pipeline (make_sft_data.py TOOLS / serve_enigma.py).
 DEFAULT_TOOL_TEST_CASES: list[dict[str, str]] = [
     {
-        "prompt": "Search the web for the latest Python release",
-        "expected_command": "search.web",
+        "prompt": "What is 7 times 8?",
+        "expected_tool": "calculate",
     },
     {
-        "prompt": "Read the file data/training.txt",
-        "expected_command": "file.read",
+        "prompt": "Remember that my birthday is March 3rd.",
+        "expected_tool": "remember",
     },
     {
-        "prompt": "Write 'hello world' to outputs/test.txt",
-        "expected_command": "file.write",
-    },
-    {
-        "prompt": "Search for images of neural network diagrams",
-        "expected_command": "search.images",
-    },
-    {
-        "prompt": "List all files in the data directory",
-        "expected_command": "file.list",
+        "prompt": "What's the weather in Tokyo?",
+        "expected_tool": "get_weather",
     },
 ]
 

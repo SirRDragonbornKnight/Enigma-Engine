@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Generate text from a pretrained Enigma checkpoint (the from-scratch model).
 
-python sample_enigma.py                                   # uses latest base checkpoint
-python sample_enigma.py --ckpt models/enigma_pretrain_base/latest.pth --prompts "The" "In 1850"
+python sample_enigma.py                                   # uses the completed pretrain model
+python sample_enigma.py --ckpt models/enigma_pretrain_large/model.pth --prompts "The" "In 1850"
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default=str(ROOT / "models" / "enigma_pretrain_base" / "latest.pth"))
+    ap.add_argument("--ckpt", default=str(ROOT / "models" / "enigma_pretrain_large" / "model.pth"))
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--max-new", type=int, default=50)
     ap.add_argument("--temperature", type=float, default=0.8)

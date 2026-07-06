@@ -56,7 +56,8 @@ def _dedup_pairs(pairs: list[dict]) -> list[dict]:
     seen = set()
     unique = []
     for item in pairs:
-        key = hashlib.sha256((item["prompt"] + item["completion"]).encode()).digest()[:16]
+        # NUL separator keeps ("ab","c") distinct from ("a","bc")
+        key = hashlib.sha256((item["prompt"] + "\x00" + item["completion"]).encode()).digest()[:16]
         if key not in seen:
             seen.add(key)
             unique.append(item)
@@ -462,7 +463,14 @@ def collect_smoltalk2(
             completion = ""
             for turn in messages:
                 role = turn.get("role", "")
-                content = _clean_text(turn.get("content", ""))
+                raw = turn.get("content", "") or ""
+                # `<think>` content needs its newlines verbatim (the tags align
+                # with special token IDs) -- same handling as collect_openthoughts3.
+                # Non-think content keeps whitespace-collapsing cleanup.
+                if "<think>" in raw:
+                    content = raw.strip()
+                else:
+                    content = _clean_text(raw)
                 if role == "system" and content and not system:
                     system = content
                 elif role == "user" and content and not prompt:

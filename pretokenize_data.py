@@ -3,7 +3,11 @@
 
 Reads source text files from data/pretrain/ subdirectories (same sources
 as collect_pretraining_data.py), tokenizes them using the project tokenizer,
-and writes a flat binary file of uint32 token IDs separated by EOS tokens.
+and writes a flat binary file of uint32 token IDs. tokenizer.encode() adds
+BOS and EOS (add_special_tokens defaults True) and one more EOS is appended
+per document, so the on-disk layout for each document is:
+    <bos> ...content... <eos> <eos>
+This matches the existing tokens.bin corpus and pretrain lineage exactly.
 
 Output:
     data/pretrain/tokens.bin   - Binary array of uint32 token IDs
@@ -172,7 +176,10 @@ def main():
                                         f"-- vocab/tokenizer mismatch; refusing to write tokens.bin"
                                     )
 
-                            # Append EOS as document separator
+                            # encode() already appended one EOS; this second
+                            # EOS terminates the document. Per-document layout is
+                            # <bos> ...content... <eos> <eos>, matching the
+                            # existing tokens.bin corpus.
                             tokens.append(eos_id)
 
                             # Write uint32 little-endian via array module

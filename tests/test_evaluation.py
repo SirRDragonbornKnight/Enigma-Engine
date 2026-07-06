@@ -44,6 +44,70 @@ class TestTrainingEvaluation:
         assert "failures" in result
 
 
+class TestToolUsageLiveFormat:
+    """evaluate_tool_usage grades the live <|tool_call|>{json}<|/tool_call|> format."""
+
+    def test_matching_tool_name_passes(self):
+        """A live tool call whose name matches expected_tool counts as success."""
+        from enigma_engine.training.training_evaluation import evaluate_tool_usage
+
+        engine = MagicMock()
+        engine.generate.return_value = (
+            '<|tool_call|>{"name": "calculate", "arguments": {"expression": "7 * 8"}}<|/tool_call|>'
+        )
+        model = MagicMock()
+        model.training = False
+        cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
+        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        assert result["successes"] == 1
+        assert result["success_rate"] == 1.0
+
+    def test_name_match_is_case_insensitive(self):
+        """Tool-name matching ignores case."""
+        from enigma_engine.training.training_evaluation import evaluate_tool_usage
+
+        engine = MagicMock()
+        engine.generate.return_value = '<|tool_call|>{"name": "Get_Weather", "arguments": {"city": "Tokyo"}}<|/tool_call|>'
+        model = MagicMock()
+        model.training = False
+        cases = [{"prompt": "Weather in Tokyo?", "expected_tool": "get_weather"}]
+        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        assert result["successes"] == 1
+
+    def test_wrong_tool_name_fails(self):
+        """A live tool call with a different name is not a success."""
+        from enigma_engine.training.training_evaluation import evaluate_tool_usage
+
+        engine = MagicMock()
+        engine.generate.return_value = '<|tool_call|>{"name": "get_weather", "arguments": {"city": "Tokyo"}}<|/tool_call|>'
+        model = MagicMock()
+        model.training = False
+        cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
+        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        assert result["successes"] == 0
+
+    def test_legacy_cmd_format_not_counted(self):
+        """The retired [CMD]...[/CMD] format no longer scores as a tool call."""
+        from enigma_engine.training.training_evaluation import evaluate_tool_usage
+
+        engine = MagicMock()
+        engine.generate.return_value = "[CMD]calculate[/CMD]"
+        model = MagicMock()
+        model.training = False
+        cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
+        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        assert result["successes"] == 0
+
+    def test_default_tool_cases_use_live_tool_names(self):
+        """DEFAULT_TOOL_TEST_CASES reference tools that exist in the live pipeline."""
+        from enigma_engine.training.training_evaluation import DEFAULT_TOOL_TEST_CASES
+
+        assert len(DEFAULT_TOOL_TEST_CASES) > 0
+        names = {c["expected_tool"] for c in DEFAULT_TOOL_TEST_CASES}
+        assert names <= {"calculate", "remember", "get_weather"}
+        assert all("expected_command" not in c for c in DEFAULT_TOOL_TEST_CASES)
+
+
 class TestEvalModelModeRestore:
     """Evaluation functions must restore model.training mode."""
 
@@ -90,8 +154,8 @@ class TestEvalModelModeRestore:
         assert model.training
 
         engine = MagicMock()
-        engine.generate.return_value = "search.web result"
-        cases = [{"prompt": "test", "expected_command": "search.web"}]
+        engine.generate.return_value = '<|tool_call|>{"name": "calculate", "arguments": {"expression": "7 * 8"}}<|/tool_call|>'
+        cases = [{"prompt": "test", "expected_tool": "calculate"}]
         evaluate_tool_usage(model, None, engine, cases, device="cpu")
         assert model.training, "model should be back in training mode"
 

@@ -1,12 +1,19 @@
 """
 Progressive Model Growing — expand a trained model to a larger architecture.
 
-Net2Net-inspired weight expansion that preserves learned behavior:
+Net2Net-inspired weight expansion:
 - Width expansion (dim, heads, hidden_dim): zero-pad new dimensions
 - Depth expansion (n_layers): spread old layers, identity-init new ones
 
-The expanded model produces identical output to the source model on day 1,
-then unlocks new capacity through continued training.
+Depth growth is output-preserving: identity-initialized layers zero their
+attention/FFN outputs, so the residual stream passes through unchanged and
+the expanded model reproduces the source model's output on day 1.
+
+Width growth is a warm start, NOT output-preserving: zero-padding the extra
+dimensions changes the RMSNorm statistics (RMS is taken over the padded dim,
+scaling normalized activations by sqrt(src.dim/tgt.dim)), and growing head_dim
+reassigns the RoPE frequency basis. A width-grown model needs further training
+to converge.
 """
 
 from __future__ import annotations
@@ -121,8 +128,11 @@ def expand_model_weights(
 
     Uses Net2Net-inspired zero-initialization:
     - Old weights are copied into their corresponding positions
-    - New dimensions are zero-initialized (function-preserving)
-    - New layers use identity initialization (zero residual output)
+    - New dimensions are zero-initialized (a width warm start: zero-padding
+      shifts RMSNorm statistics and head_dim growth reassigns RoPE
+      frequencies, so width growth is not output-preserving)
+    - New layers use identity initialization (zero residual output, which
+      IS output-preserving for depth growth)
 
     Args:
         source_sd: State dict from the smaller model.
