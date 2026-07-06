@@ -5,7 +5,104 @@ Pre-refocus findings targeted the Qwen-era engine (`inference.py`,
 fixes live in git history. Suite baseline today (2026-07-06, post
 audit-fix pass): **418 passed; repo-wide `ruff check` clean.**
 
-## Open
+## Open — round-2 audit backlog (2026-07-06, all receipts verified)
+
+None of these touch the live pretrain -> SFT -> serve path; they are traps in
+dormant/auxiliary code, ranked for whenever that code gets wired up.
+
+**RL stack (`rl_training.py`) — do not use until repaired:**
+- `RewardModel`/`ProcessRewardModel` hold the base model's modules BY
+  REFERENCE and `freeze_base=True` (default) sets `requires_grad=False` on
+  the live policy's own parameters — building a reward model from the policy
+  silently freezes the policy (proven by probe). Reward scoring also runs in
+  train mode (dropout active) once the trainer flips the shared layers.
+- GRPO and ReMax compute the PPO clip ratio against the FROZEN-at-start
+  reference, not the rollout policy — once the policy drifts past clip_range
+  the gradient is exactly zero and learning silently stalls (RLHF/SelfPlay do
+  it correctly).
+- RLHF/SelfPlay LoRA checkpoints cannot resume: save writes PEFT-prefixed
+  keys, load runs before the wrap on the raw model (strict mismatch).
+- NEFTune noise is active during rollout logp collection (train mode), so
+  the PPO baseline/KL are randomized when `neftune_alpha > 0`.
+- `math_reward` regex has no parenthesis support: "What is (2+3)*4?" infers
+  ground truth 5, scoring the CORRECT answer 0.0 and the WRONG one 1.0
+  (proven) — an active reward inversion on inferred-truth prompts.
+- GRPO/ReMax average epoch reward over all prompts including skipped ones.
+
+**Command/plugin surface — dead on arrival:**
+- `commands.get_registry()` imports `builtin_commands`, which does not exist
+  anywhere; first call raises ModuleNotFoundError and, because the singleton
+  is assigned before the import, every later call returns an EMPTY registry
+  with no error (proven). Plugins therefore never load either.
+- `sanitize_args` splits on whitespace and strips parens — Windows paths
+  with spaces / `(x86)` arrive mangled at mods.
+- `mod_tools` treats falsy mod replies ("", 0, {}) as "did not respond".
+
+**Model merging (`model_merging.py`):**
+- Checkpoints without a config dict (every bare state dict / .safetensors)
+  are silently stamped with DEFAULT architecture (dim=512, vocab=32000) in
+  the merged file (proven) — serve/finetune later rebuild the wrong model.
+- Key intersection silently drops tensors present in only one model;
+  `_ARCH_FIELDS` misses qk_norm/layer_scale/MLA/kv_share so validation
+  passes configs whose state dicts differ.
+- SLERP anti-parallel case: merged tensor silently zeroed or amplified
+  ~900x (proven); only the parallel case is guarded.
+- TIES sign election is an unweighted sign count, not the paper's
+  magnitude-weighted vote; `weights` ignored during election.
+
+**Queues/monitors:**
+- `TrainingQueue.stop()` then `start()` spawns a second loop thread and
+  revives the old one — two jobs run concurrently (proven); job claim is
+  two separate lock acquisitions.
+- `load_state()` mutates jobs without the lock; `summary()` prints
+  non-ASCII icons (cp1252 crash); `training_monitor._append_to_history`
+  is an unlocked read-modify-write.
+
+**Collectors / pretokenize:**
+- `pretokenize_data.SOURCE_DIRS` omits dclm/finemath/the_stack — corpora the
+  collector writes and combine includes never enter tokens.bin, silently.
+- `collect_distill_data.collect()` never adds written keys to `done`
+  (duplicate prompts write duplicate rows, proven); `_rewrite_combined_text`
+  claims dedup it does not do.
+- HTTP Range resume appends a 200 full-body response onto the partial file;
+  the size check then blesses the corrupt archive as complete.
+- `fetch_stackexchange` marks a site COMPLETE after a mid-file XML parse
+  error and deletes the archive — partial data frozen forever.
+- `combine_all()` KeyErrors on any foreign-shaped row (e.g. DPO triple) in
+  data/finetune (proven); crashes at the END of a long run.
+- HF-streaming resume: generic exception discards the pending batch but
+  saves the advanced `records_consumed` — those records are skipped forever.
+- `fetch_the_stack` reads v1 field names against the-stack-v2 (always-empty
+  text -> "Done: 0 files" with no diagnostic).
+- 9 logger lines with `->` arrows (U+2192) hard-fail cp1252 consoles
+  (`collect_finetuning_data` x7, `collect_vision_data` x1); 6 more em-dash
+  lines violate the ASCII rule.
+- `create_smoke_test_data.py`: crashes from a non-repo cwd; missing mkdir
+  for a fresh clone.
+
+**Packaging / config truth:**
+- `pyproject.toml` console-scripts and `Launch Enigma.bat` target `run.py`,
+  which does not exist — packaged CLI and launcher are dead.
+- `yaml` + `pydantic` imported by `training/schema.py` but declared nowhere.
+- `Start-Enigma.bat` serves the raw PRETRAIN model while advertising chat
+  (`Start-Enigma.ps1` correctly serves the DPO model).
+- ~20 CONFIG-dict knobs in `config/defaults.py` are read by nothing,
+  including `require_api_key` and `blocked_paths`/`blocked_patterns` whose
+  comments claim protections that do not exist (grep receipts); dirs are
+  mkdir'd from defaults BEFORE user/env overrides load.
+- `model_utils.recommend_model_size()` always returns "small" (reads a key
+  the hardware dict never has, proven) and shadows the working
+  `hardware_detection` version via `core/model.py` re-export;
+  `estimate_memory_usage` prices int4 = int8.
+- `config_for_param_target` drops `rope_theta` (500000 -> 10000, proven);
+  no callers today.
+- Rust BPE: no staleness guard on the prebuilt .pyd (no toolchain to
+  rebuild); Rust vs Python `train()` break frequency ties differently
+  (encode parity verified identical).
+- `CuratedDataset.save()` snapshot-then-write races a concurrent save;
+  `dataset._iter_directory` skips unreadable files with no log line.
+
+## Open (carried)
 
 - **PERF (gated):** ToMe token-merging helpers in `model_components.py` use
   Python loops — matters only if `tome_ratio` is ever enabled (0.0 everywhere).
@@ -17,6 +114,23 @@ audit-fix pass): **418 passed; repo-wide `ruff check` clean.**
 - **torch.compile on Windows:** MFU ceiling ~23–26% from graph breaks; the
   live path is eager + SDPA (`is_causal=True` fast kernel). Chasing the
   compile ceiling is high-risk/low-reward on this stack. Deferred.
+
+## Recently closed (2026-07-06 round-2: corrections to the fix pass)
+
+The round-2 adversarial review of the fix commits themselves found and
+closed (commit 0636e8d7):
+- schedule replay surplus was computed in micro-batches against an
+  optimizer-step total (resume with accum>1 stretched the schedule ~accum x);
+  now converted with the same ceil division.
+- SimPO consumed the now-summed logp helper but its reward is defined
+  length-normalized; normalization now happens inside `train_simpo`.
+- the OOM retry enabled gradient checkpointing unconditionally, which the
+  new kv-share guard turns into a hard crash; the retry now skips
+  checkpointing on kv-shared models.
+- duplicate ids in hand-edited memories.jsonl are renumbered at load
+  (id-based delete was ambiguous); generation-worker errors after a client
+  disconnect are printed instead of vanishing; the kv-share guard tolerates
+  whole-model pickles created before the attribute existed.
 
 ## Recently closed (2026-07-06 full-audit fix pass)
 
