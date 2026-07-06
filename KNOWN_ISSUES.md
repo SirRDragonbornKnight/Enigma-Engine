@@ -1,4 +1,4 @@
-# Known Issues — current as of 2026-06-11
+# Known Issues — current as of 2026-07-06
 
 _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
 `CLEANUP_TRACKER.md` (file state)._
@@ -59,8 +59,9 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
    (today's 51k) get the plain-transcript bridge — she may continue the
    dialogue with invented speakers (observed: "Petitioner:"); stop markers
    catch `User:`/`Enigma:` turns only. SFT checkpoints (`meta.chat_format`
-   from `finetune_enigma.py`) get the real template + tool calls. The
-   instruct INFRASTRUCTURE is built; the pass itself runs after pretraining.
+   from `finetune_enigma.py`) get the real template + tool calls. SFT
+   checkpoints are live (`models/enigma_sft*`); serve auto-detects per
+   checkpoint.
 5. **base_v2 (122M @ step 2,000) is pipeline-validation quality only** —
    barely trained. Don't judge her by it; probe the large 51k checkpoint.
 6. **Vendored weight:** `enigma_engine/bin/llama-server/` is ~1.06 GB of CUDA
@@ -73,12 +74,11 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is coupled to the avatar mod:** `test_avatar_rig.py`
-   shells into the avatar's Node test suite, so avatar work-in-progress can
-   fail `pytest` with zero enigma involvement. Before blaming enigma code,
-   read which test failed.
-10. **SFT data is a seed, not a meal.** The tool-format corpus is 29
-    examples (extend `make_sft_data.py`'s TOOLS/cases before the real pass);
-    the 1,999-record general corpus is mostly LONGER than block 1024 — those
-    are skipped at train time with a count until the length-extension anneal.
-    Identity seed: 122 anchors; the values corpus is the user's curation.
+9. **The python suite is engine-only** (404 tests as of 2026-07-06). The
+   avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) with its
+   own Node suite — run `node --test` there.
+10. **Model capacity ceilings are measured, not guessed.** `PHASE7_GATE.md`
+    holds the receipts: long conversation (block 1024), broad-fact recall
+    (~50%), raw arithmetic (bypassed via the server-side `calculate` tool).
+    Current SFT data state lives in `ROADMAP.md` (Phase 1 DONE, Phase 2
+    exit criteria met 26/29).
