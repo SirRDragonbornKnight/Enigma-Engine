@@ -28,6 +28,22 @@ Muppet.
   anchors), converse long (block 1024).
 - **The bottleneck is no longer code — it is data.**
 
+## Update 2026-07-06 (measured, `eval_behavior.py` held-out scorecard)
+
+- **Phase 1 DONE, Phase 2 EXIT CRITERIA MET**: 26/29 (90%) — identity 83%,
+  adversarial/tool/restraint 100%, math 100% via the `calculate` built-in,
+  memory 4/4 end-to-end via the `remember` built-in (she saves what you tell
+  her, supersedes corrections, recalls across conversations). Suite 404.
+- User-teaching channels live: `remember` tool (facts from chat, instant) and
+  `teachings.jsonl` (user-authored facts baked into weights, ~10-min loop).
+- Best checkpoint backed up: `Enigma Backups\enigma_sft_memory_pass` (SHA256).
+- Avatar wiring: dropped at user direction (2026-07-06) — Phase 5 is Odysseus
+  + memory growth only.
+- Measured ceilings + remake design recorded in `PHASE7_GATE.md`.
+- CANNOT yet (receipts in `PHASE7_GATE.md`): converse long (block 1024),
+  recall broad facts (~50%, capacity), compute without the tool, stay crisp
+  under far-out-of-distribution attacks.
+
 ---
 
 ## Phase 0 — Lock in today (minutes; do first)
@@ -84,6 +100,10 @@ continued pretraining on long documents (<10B tokens) + intra-document attention
 masking, then re-SFT.
 - Unlocks: real multi-turn tool loops, memory-injection headroom — and the 74%
   of the distill corpus that is currently too long becomes usable SFT data.
+- **Data receipt (measured 2026-07-06, 3.6% sample of tokens.bin):** docs >=2048
+  tokens hold 86.5% of all corpus tokens (~49B) — 5x the <10B the recipe needs.
+  Median doc 958 tokens, p90 3,741. The long-doc prerequisite is MET; what
+  remains is the training work (theta raise + doc-masked continuation + re-SFT).
 
 ## Phase 5 — Embodiment (the point of it all; mostly glue)
 
@@ -107,7 +127,9 @@ Only when the current lineage hits a measured ceiling:
 - Deeper-thinner architecture, Muon + WSD from step 0, native block 2048,
   350-700M params — the 5090 (32GB) can carry it.
 - HRM stays a PARKED experiment (heed the ARC Prize critique).
-- **Gate: a written list of things Phase 2-5 Enigma provably cannot do.**
+- **Gate: a written list of things Phase 2-5 Enigma provably cannot do —
+  that list now lives in `PHASE7_GATE.md` (started 2026-07-06, receipts
+  included; gate NOT yet open — Phase 4/5 first).**
 
 ---
 

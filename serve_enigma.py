@@ -352,9 +352,12 @@ def _looks_arithmetic(text: str) -> bool:
 _MEMORABLE = re.compile(
     r"\b(remember|don'?t forget|note (that|this)|keep in mind|save (this|that)|"
     r"call me|my name('s| is)|"
-    r"my \w+('s)? (name |birthday |anniversary )?(is|are)|"
+    # "my <up to 3 words> is/are": covers "my dog's name is", "my favorite
+    # season is" (two attribute words -- a single-\w+ pattern missed it,
+    # measured 2026-07-06). Offering is cheap; she decides whether to call.
+    r"my (\w+('s)? ){1,3}(is|are)\b|"
     r"i (like|love|hate|prefer|live|work|drive|play|always|never|usually)|"
-    r"i'?m (allergic|from|married|working))\b",
+    r"i'?m (allergic|from|married|working))",
     re.IGNORECASE,
 )
 
