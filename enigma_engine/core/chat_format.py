@@ -3,7 +3,7 @@ foundation. ONE canonical renderer shared by ``finetune_enigma.py`` (training)
 and ``serve_enigma.py`` (serving), so the train/serve template can never
 diverge — that divergence is the classic instruct-model bug class.
 
-Token plan (KNOWN_ISSUES #8 / the padded embedding): the base vocab is 4718
+Token plan (the padded embedding): the base vocab is 4718
 (IDs 0..4717); the embedding is padded to 4736, leaving 18 free rows that
 pretraining never targets. Chat tokens live there:
 

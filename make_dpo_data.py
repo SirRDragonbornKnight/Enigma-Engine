@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build DPO preference pairs -- ROADMAP Phase 6 (alignment polish).
+"""Build DPO preference pairs -- the alignment polish.
 
 DPO teaches a PREFERENCE between two answers to the same question; at 182M the
 realistic targets are format/tone/identity-integrity (not new knowledge). The

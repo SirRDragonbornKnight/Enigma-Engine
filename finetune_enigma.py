@@ -2,8 +2,8 @@
 """Finetune (SFT) the from-scratch Enigma into an instruct/tool model — the
 "hands" pass of the roadmap.
 
-Bespoke per the 2026-06-11 ruling (CLEANUP_TRACKER): the dormant FORGE stack
-stays dormant; this follows the proven ``pretrain_enigma.py`` pattern and
+Bespoke by design — the dormant FORGE stack stays dormant; this follows
+the proven ``pretrain_enigma.py`` pattern and
 shares its arsenal from ``enigma_engine.core.optim`` (``build_optimizer``/
 ``get_lr`` — so ``--optimizer muon`` and ``--schedule wsd`` work here too).
 
@@ -200,7 +200,7 @@ def main() -> None:
         if not src.exists():
             raise SystemExit(
                 f"--init {src} not found — the instruct pass starts from a "
-                f"pretrained checkpoint (her run is user-gated; see SUGGESTIONS.md)"
+                f"pretrained checkpoint (her run is user-gated)"
             )
     try:
         ck = torch.load(src, map_location=device, weights_only=False)

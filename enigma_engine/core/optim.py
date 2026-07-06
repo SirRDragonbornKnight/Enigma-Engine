@@ -33,7 +33,7 @@ def get_lr(
     or ``wsd``: hold at peak, then LINEAR decay to ZERO over the last
     ``decay_frac`` of the run. WSD/D2Z beats cosine at high tokens-per-param and,
     unlike cosine, lets a "finished" run keep training from the stable phase —
-    the multi-epoch lever (see SUGGESTIONS.md, 2026 landscape check)."""
+    the multi-epoch lever."""
     if step < warmup:
         return peak * (step + 1) / max(1, warmup)
     if schedule == "wsd":

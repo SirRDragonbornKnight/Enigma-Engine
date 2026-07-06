@@ -1,8 +1,8 @@
 """Local memory for Enigma — the runtime-learning layer.
 
 Her weights are frozen between training passes; THIS is where day-to-day
-learning lives (the frozen-weights + external-memory consensus, see
-SUGGESTIONS.md roadmap step 4). Design constraints, in order: black-box
+learning lives (the frozen-weights + external-memory consensus). Design
+constraints, in order: black-box
 (stdlib-only, no embedding service, no deps), inspectable (plain JSONL a human
 can read and edit), small (she serves with a 1024-token context — retrieval
 must be sharp, not big).

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """DPO (Direct Preference Optimization) pass over the instruct model --
-ROADMAP Phase 6. Teaches Enigma to PREFER her authored voice over the
+the alignment polish. Teaches Enigma to PREFER her authored voice over the
 measured failure modes (foreign identity, boilerplate, sycophancy) without
 a reward model or PPO machinery: policy + frozen reference, one loss.
 

@@ -312,8 +312,8 @@ def estimate_memory_usage(size: str, quantization: str = "none") -> dict[str, fl
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared between AppState.load_model() (load-time gate) and
 # EnigmaEngine._encode_prompt() (per-prompt gate) to enforce the same
-# tokenizer/model contract. See AA code maker.md §4 "Token-ID bounds must
-# be validated before tensors hit CUDA."
+# tokenizer/model contract: token-id bounds are validated before tensors
+# hit CUDA.
 
 
 def get_model_vocab_limit(model: Any) -> Optional[int]:

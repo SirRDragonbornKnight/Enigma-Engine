@@ -3,9 +3,8 @@
 Drives a RUNNING serve_enigma server (the real production path: chat_format
 rendering + tool parsing + sampling), so a passing score here means the
 actual served behavior passes -- not an in-process approximation that could
-drift from serve. This is the scorecard every SFT run gets compared on
-(ROADMAP Phase 2). Trusts no logged number: it asks the model and grades the
-answers.
+drift from serve. This is the scorecard every SFT run gets compared on.
+Trusts no logged number: it asks the model and grades the answers.
 
 Usage:
     python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth --memory-dir data/memory_eval
@@ -42,7 +41,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
 
-# Per-category pass thresholds. Identity/tools are the ROADMAP exit criteria.
+# Per-category pass thresholds. Identity/tools are the exit criteria.
 # A None threshold is INFORMATIONAL -- measured but non-gating.
 #   math -- WAS informational (the BPE tokenizer splits numbers inconsistently,
 #     so in-weights arithmetic is a wall). NOW gated again: a server-side
