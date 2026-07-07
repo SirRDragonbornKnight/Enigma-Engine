@@ -33,10 +33,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Live tool-call markers wrapping the JSON payload
-# (enigma_engine/core/chat_format.py TOOL_SYNTAX / TOOL_CALL markers).
-TOOL_CALL_OPEN = "<|tool_call|>"
-TOOL_CALL_CLOSE = "<|/tool_call|>"
+# Live tool-call markers wrapping the JSON payload, taken from the
+# canonical chat renderer so the wire format cannot drift from here.
+from enigma_engine.core.chat_format import CHAT_TOKENS, TOOL_CALL, TOOL_CALL_END
+
+_MARKER_BY_ID = {token_id: text for text, token_id in CHAT_TOKENS.items()}
+TOOL_CALL_OPEN = _MARKER_BY_ID[TOOL_CALL]
+TOOL_CALL_CLOSE = _MARKER_BY_ID[TOOL_CALL_END]
 
 
 def _parsed_tool_name(response: str) -> str | None:
@@ -177,7 +180,10 @@ def evaluate_tool_usage(
     Args:
         model: The model to evaluate
         tokenizer: Tokenizer for encoding/decoding
-        engine: EnigmaEngine instance for command execution
+        engine: Object whose ``generate(prompt, ...)`` applies the live
+            chat template and tool offer before sampling. The model emits
+            ``<|tool_call|>`` only inside the rendered chat format, so a
+            bare-completion engine scores every case as a miss.
         test_cases: List of dicts with "prompt" and "expected_tool" keys
         device: Device to run evaluation on
 
@@ -207,6 +213,12 @@ def evaluate_tool_usage(
                 if not prompt:
                     continue
                 expected_tool = test_case.get("expected_tool", "")
+                if not expected_tool and "expected_command" in test_case:
+                    logger.warning(
+                        "tool eval: test case has 'expected_command' but no "
+                        "'expected_tool'; grading reads 'expected_tool' only, "
+                        "so this case cannot score"
+                    )
 
                 # Generate response
                 response = engine.generate(

@@ -190,22 +190,25 @@ class KVCache:
         result = grouped * scale.unsqueeze(-1) + zero_point.unsqueeze(-1)
         return result.view(*leading, D)
 
-    def update(self, k: torch.Tensor, v: torch.Tensor, position: Optional[int] = None) -> int:
-        """
-        Update cache with new keys and values.
+    def _rollable_buffers(self) -> tuple[str, ...]:
+        """Names of the [batch, seq, ...] storage buffers a sliding-window
+        shift must move together. Subclasses with extra storage extend this
+        so overflow keeps every buffer on one consistent layout."""
+        if self.quantize:
+            return ("_cache_k", "_cache_v", "_scale_k", "_scale_v", "_zp_k", "_zp_v")
+        return ("_cache_k", "_cache_v")
 
-        Args:
-            k: New keys [batch, seq_len, n_kv_heads, head_dim]
-            v: New values [batch, seq_len, n_kv_heads, head_dim]
-            position: Starting position to write (defaults to current_pos)
+    def _begin_update(self, k: torch.Tensor, v: torch.Tensor, position: Optional[int]) -> tuple[int, int]:
+        """Validate an update and resolve its write window.
 
-        Returns:
-            New current position after update
+        The shared update contract: batch sizes must match, a single update
+        larger than the cache is refused outright, and an update that runs
+        past the end shifts every buffer named by :meth:`_rollable_buffers`
+        left (sliding window). Returns the resolved (position, end_pos).
         """
         if position is None:
             position = self.current_pos
 
-        # Validate batch size
         if k.shape[0] != self.batch_size or v.shape[0] != self.batch_size:
             raise ValueError(f"KV cache batch mismatch: cache={self.batch_size}, k={k.shape[0]}, v={v.shape[0]}")
 
@@ -222,7 +225,6 @@ class KVCache:
 
         end_pos = position + seq_len
 
-        # Warn on overflow
         if end_pos > self.max_seq_len:
             logger.warning(
                 "KV cache overflow: seq_len %d at pos %d exceeds max_seq_len %d -- shifting with sliding window",
@@ -230,22 +232,27 @@ class KVCache:
                 position,
                 self.max_seq_len,
             )
-            # Shift existing cache left to make room
             shift = end_pos - self.max_seq_len
-
-            if self.quantize:
-                self._cache_k = torch.roll(self._cache_k, -shift, dims=1)
-                self._cache_v = torch.roll(self._cache_v, -shift, dims=1)
-                self._scale_k = torch.roll(self._scale_k, -shift, dims=1)
-                self._scale_v = torch.roll(self._scale_v, -shift, dims=1)
-                self._zp_k = torch.roll(self._zp_k, -shift, dims=1)
-                self._zp_v = torch.roll(self._zp_v, -shift, dims=1)
-            else:
-                self._cache_k = torch.roll(self._cache_k, -shift, dims=1)
-                self._cache_v = torch.roll(self._cache_v, -shift, dims=1)
-
+            for name in self._rollable_buffers():
+                setattr(self, name, torch.roll(getattr(self, name), -shift, dims=1))
             position = self.max_seq_len - seq_len
             end_pos = self.max_seq_len
+
+        return position, end_pos
+
+    def update(self, k: torch.Tensor, v: torch.Tensor, position: Optional[int] = None) -> int:
+        """
+        Update cache with new keys and values.
+
+        Args:
+            k: New keys [batch, seq_len, n_kv_heads, head_dim]
+            v: New values [batch, seq_len, n_kv_heads, head_dim]
+            position: Starting position to write (defaults to current_pos)
+
+        Returns:
+            New current position after update
+        """
+        position, end_pos = self._begin_update(k, v, position)
 
         # Store new K, V (with optional quantization)
         if self.quantize:
@@ -766,11 +773,7 @@ class H2OKVCache(KVCache):
             _, hh_indices = row_scores.topk(hh_k, sorted=False)
             return sorted(set(hh_indices.tolist()) | recent_idx)
 
-        if self.batch_size == 1:
-            # Single-row fast path: one top-k
-            keep_rows = [_keep_for_row(scores[0])]
-        else:
-            keep_rows = [_keep_for_row(scores[b]) for b in range(self.batch_size)]
+        keep_rows = [_keep_for_row(scores[b]) for b in range(self.batch_size)]
 
         keep_len = len(keep_rows[0])
         if keep_len >= self.current_pos:
@@ -1098,6 +1101,16 @@ class TurboQuantKVCache(KVCache):
             sorted_idx[:n_int4].tolist(),
         )
 
+    def _rollable_buffers(self) -> tuple[str, ...]:
+        # INT8 and INT4 storage (data and scales) shift together so the
+        # mixed-precision read path sees one consistent layout.
+        return super()._rollable_buffers() + (
+            "_cache_k_int4",
+            "_cache_v_int4",
+            "_scale_k_int4",
+            "_scale_v_int4",
+        )
+
     def update(
         self,
         k: torch.Tensor,
@@ -1108,51 +1121,7 @@ class TurboQuantKVCache(KVCache):
 
         INT4 heads use packed storage; INT8 heads use standard parent storage.
         """
-        if position is None:
-            position = self.current_pos
-
-        # Validate batch size
-        if k.shape[0] != self.batch_size or v.shape[0] != self.batch_size:
-            raise ValueError(f"KV cache batch mismatch: cache={self.batch_size}, k={k.shape[0]}, v={v.shape[0]}")
-
-        seq_len = k.shape[1]
-
-        # A single update larger than the cache cannot be stored.
-        if seq_len > self.max_seq_len:
-            raise ValueError(
-                f"KV cache capacity exceeded: update has seq_len={seq_len} "
-                f"but the cache holds max_seq_len={self.max_seq_len}; "
-                "allocate a larger cache or split the update"
-            )
-
-        end_pos = position + seq_len
-
-        if end_pos > self.max_seq_len:
-            # Sliding-window overflow: shift every storage buffer (INT8 and
-            # INT4, data and scales) left together so the mixed-precision
-            # read path sees one consistent layout.
-            logger.warning(
-                "KV cache overflow: seq_len %d at pos %d exceeds max_seq_len %d -- shifting with sliding window",
-                seq_len,
-                position,
-                self.max_seq_len,
-            )
-            shift = end_pos - self.max_seq_len
-            for name in (
-                "_cache_k",
-                "_cache_v",
-                "_scale_k",
-                "_scale_v",
-                "_zp_k",
-                "_zp_v",
-                "_cache_k_int4",
-                "_cache_v_int4",
-                "_scale_k_int4",
-                "_scale_v_int4",
-            ):
-                setattr(self, name, torch.roll(getattr(self, name), -shift, dims=1))
-            position = self.max_seq_len - seq_len
-            end_pos = self.max_seq_len
+        position, end_pos = self._begin_update(k, v, position)
 
         # INT8 heads — standard parent quantization
         int8_mask = ~self._is_int4

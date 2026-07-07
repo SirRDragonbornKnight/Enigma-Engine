@@ -690,6 +690,10 @@ class TrainingState:
 
     epoch: int = 0
     step: int = 0
+    # Micro-batch count at the last epoch boundary. Lets a resume compute
+    # the interrupted epoch's replayed micro-batches exactly instead of
+    # estimating them. -1 = loaded from a checkpoint predating the field.
+    epoch_start_step: int = 0
     best_loss: float = float("inf")
     total_tokens: int = 0
     training_losses: list[float] = field(default_factory=list)
@@ -1243,8 +1247,17 @@ class Trainer:
         # Gradient checkpointing - trades compute for VRAM savings.
         # Must be enabled BEFORE _estimate_batch_size() so the auto-batch
         # trial runs with the same memory profile as real training.
+        # Models with shared K/V cannot take the checkpointed path (the
+        # layer forward refuses the combination), so training runs
+        # without it rather than crashing at the first forward.
         if self.config.use_gradient_checkpointing:
-            if hasattr(self.model, "gradient_checkpointing_enable"):
+            if self._kv_share_blocks_checkpointing():
+                logger.warning(
+                    "Not enabling gradient checkpointing: kv_share_groups is "
+                    "active and checkpointed backward cannot rebuild shared K/V"
+                )
+                self.config.use_gradient_checkpointing = False
+            elif hasattr(self.model, "gradient_checkpointing_enable"):
                 self.model.gradient_checkpointing_enable()
             else:
                 for layer in getattr(self.model, "layers", []):
@@ -2762,9 +2775,16 @@ class Trainer:
         # schedule by that surplus: past T_max CosineAnnealingLR turns back
         # UP toward peak and the WSD decay walks below its floor.
         # state.step counts MICRO-batches while the scheduler steps once per
-        # OPTIMIZER step, so the surplus is computed in micro-batches against
-        # the micro-batch estimate and converted with the same ceil division.
-        replayed_micro = self.state.step - self.state.epoch * est_batches_per_epoch
+        # OPTIMIZER step, so the surplus is computed in micro-batches and
+        # converted with the same ceil division. epoch_start_step (recorded
+        # at each epoch boundary) makes the surplus exact; the estimate
+        # fallback covers checkpoints predating the field, and in streaming
+        # mode it drifts (est_batches_per_epoch is a floor estimate while
+        # window tails and short-sequence drops shift the actual count).
+        if self.state.epoch_start_step >= 0:
+            replayed_micro = self.state.step - self.state.epoch_start_step
+        else:
+            replayed_micro = self.state.step - self.state.epoch * est_batches_per_epoch
         replayed_steps = max(0, -(-replayed_micro // accum))
         sched_total += replayed_steps
         warmup = _effective_warmup(self.config.warmup_steps, sched_total)
@@ -3057,6 +3077,7 @@ class Trainer:
             avg_epoch_loss = epoch_loss / max(1, epoch_tokens)
             self.state.training_losses.append(avg_epoch_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
 
             logger.info(f"Epoch {epoch + 1} complete: loss={avg_epoch_loss:.4f}")
 
@@ -3447,7 +3468,7 @@ class Trainer:
         checkpointing (trades compute for VRAM) and clears the CUDA
         cache so the retry has the best chance of succeeding.
         """
-        logger.warning("CUDA out of memory — clearing cache and enabling gradient checkpointing for retry: %s", exc)
+        logger.warning("CUDA out of memory -- clearing cache and enabling gradient checkpointing for retry: %s", exc)
         self.optimizer.zero_grad(set_to_none=True)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -3455,7 +3476,7 @@ class Trainer:
         # K/V cannot take the checkpointed path (the layer forward refuses the
         # combination), so the retry for them runs with cache cleared only.
         if not self.config.use_gradient_checkpointing:
-            if getattr(getattr(self.model, "config", None), "kv_share_groups", 0) > 0:
+            if self._kv_share_blocks_checkpointing():
                 logger.warning(
                     "Not enabling gradient checkpointing for the retry: kv_share_groups is "
                     "active and checkpointed backward cannot rebuild shared K/V"
@@ -3469,6 +3490,14 @@ class Trainer:
                         if hasattr(layer, "use_checkpoint"):
                             layer.use_checkpoint = True
                 logger.info("Gradient checkpointing enabled to reduce VRAM usage")
+
+    def _kv_share_blocks_checkpointing(self) -> bool:
+        """Whether cross-layer KV sharing rules out gradient checkpointing.
+
+        Followers reuse the leader's K/V from the same forward pass, which
+        checkpointed recomputation discards and cannot rebuild.
+        """
+        return getattr(getattr(self.model, "config", None), "kv_share_groups", 0) > 0
 
     def _restore_pending_state(self) -> None:
         """Restore scheduler and scaler state stashed by load_checkpoint."""
@@ -3521,6 +3550,7 @@ class Trainer:
                 "training_state": {
                     "epoch": self.state.epoch,
                     "step": self.state.step,
+                    "epoch_start_step": self.state.epoch_start_step,
                     "best_loss": self.state.best_loss,
                     "total_tokens": self.state.total_tokens,
                     "training_losses": self.state.training_losses,
@@ -3715,6 +3745,7 @@ class Trainer:
             state = checkpoint.get("training_state", {})
             self.state.epoch = state.get("epoch", 0)
             self.state.step = state.get("step", 0)
+            self.state.epoch_start_step = state.get("epoch_start_step", -1)
             self.state.best_loss = state.get("best_loss", float("inf"))
             self.state.total_tokens = state.get("total_tokens", 0)
             self.state.training_losses = state.get("training_losses", [])
@@ -4076,6 +4107,15 @@ class Trainer:
         self._emit_progress(5, f"DPO training: {len(pairs)} pairs")
         logger.info(f"DPO training: {len(pairs)} preference pairs, beta={beta}")
 
+        # Online pairs train in the epoch after they are generated, so a
+        # single-epoch run has no epoch left to consume them.
+        if reward_fn is not None and dpo_online_interval > 0 and self.config.epochs < 2:
+            logger.warning(
+                "Online DPO is inactive: generated pairs train in the next "
+                "epoch and epochs=%d leaves none. Set epochs>=2.",
+                self.config.epochs,
+            )
+
         # Gradient accumulation: batch N pairs before optimizer step
         accum_steps = max(1, self.config.max_grad_accumulation)
 
@@ -4182,8 +4222,15 @@ class Trainer:
                         self.scheduler.step()
                     self.state.step += 1
 
-                    # T2-5: Online DPO - generate fresh pairs periodically
-                    if reward_fn is not None and dpo_online_interval > 0 and self.state.step % dpo_online_interval == 0:
+                    # T2-5: Online DPO - generate fresh pairs periodically.
+                    # Staged pairs join the pool for the NEXT epoch, so the
+                    # final epoch generates none (nothing would train them).
+                    if (
+                        reward_fn is not None
+                        and dpo_online_interval > 0
+                        and epoch + 1 < self.config.epochs
+                        and self.state.step % dpo_online_interval == 0
+                    ):
                         sample_prompts = random.sample(
                             [d["prompt"] for d in preference_data if d.get("prompt")], k=min(4, len(preference_data))
                         )
@@ -4208,6 +4255,7 @@ class Trainer:
             avg_loss = epoch_loss / max(n_epoch_pairs, 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
             self._emit_loss(avg_loss)
             logger.info(f"DPO Epoch {epoch + 1}: loss={avg_loss:.4f}")
 
@@ -4391,6 +4439,7 @@ class Trainer:
             avg_loss = epoch_loss / max(len(pairs), 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
             self._emit_loss(avg_loss)
             logger.info(f"SimPO Epoch {epoch + 1}: loss={avg_loss:.4f}")
 
@@ -4589,6 +4638,7 @@ class Trainer:
             avg_loss = epoch_loss / max(len(all_samples), 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
             self._emit_loss(avg_loss)
             logger.info(f"KTO Epoch {epoch + 1}: loss={avg_loss:.4f}")
 
@@ -4788,6 +4838,7 @@ class Trainer:
             avg_loss = epoch_loss / max(len(pairs), 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
             self._emit_loss(avg_loss)
             logger.info(f"ORPO Epoch {epoch + 1}: loss={avg_loss:.4f}")
 
@@ -5292,6 +5343,7 @@ class Trainer:
             avg_loss = epoch_loss / max(epoch_steps, 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
             self._emit_loss(avg_loss)
             logger.info(f"Vision Epoch {epoch + 1}: avg_loss={avg_loss:.4f}")
 
@@ -5781,6 +5833,7 @@ class Trainer:
             avg_loss = epoch_loss / max(epoch_steps, 1)
             self.state.training_losses.append(avg_loss)
             self.state.epoch = epoch + 1
+            self.state.epoch_start_step = self.state.step
             self._emit_loss(avg_loss)
             logger.info(f"Audio Epoch {epoch + 1}: avg_loss={avg_loss:.4f}")
 

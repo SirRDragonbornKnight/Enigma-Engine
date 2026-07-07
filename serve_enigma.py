@@ -89,6 +89,34 @@ STEP = _ck.get("step")
 META = _ck.get("meta") or {}  # finetune_enigma stamps chat_format here
 del _ck
 
+# Always keep this many ids of the context free for the reply. Prompt and
+# generation share the fixed max_context window; without a reserve a large
+# client max_tokens would shrink the prompt budget toward zero and the model
+# would answer from a near-empty context (confident garbage). We keep the
+# prompt intact (up to max_context - MIN_GEN_TOKENS) and let generation take
+# whatever room is left — never the other way around.
+MIN_GEN_TOKENS = 64
+
+# Prompt truncation budgets against ARGS.max_context, but the model's KV
+# cache holds min(max_seq_len, MAX_CACHE_SEQ_LEN) positions and refuses a
+# larger prefill outright — clamp so an oversize --max-context cannot let
+# prompts through that the cache will reject.
+from enigma_engine.core.model_components import Attention as _Attn
+
+_CACHE_CAP = min(CONFIG.max_seq_len, _Attn.MAX_CACHE_SEQ_LEN)
+if ARGS.max_context > _CACHE_CAP:
+    print(
+        f"  WARN: --max-context {ARGS.max_context} exceeds the model's KV cache "
+        f"capacity {_CACHE_CAP}; clamping to {_CACHE_CAP}",
+        flush=True,
+    )
+    ARGS.max_context = _CACHE_CAP
+if ARGS.max_context <= MIN_GEN_TOKENS:
+    raise SystemExit(
+        f"max_context {ARGS.max_context} leaves no prompt budget after the "
+        f"{MIN_GEN_TOKENS}-token generation reserve; this model context is too small to serve"
+    )
+
 tokenizer = get_tokenizer("bpe")  # the exact tokenizer that built tokens.bin
 if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
     print(
@@ -97,14 +125,6 @@ if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
     )
 EOS_ID = getattr(tokenizer, "eos_token_id", 2)
 BOS_ID = getattr(tokenizer, "bos_token_id", 1)
-
-# Always keep this many ids of the context free for the reply. Prompt and
-# generation share the fixed max_context window; without a reserve a large
-# client max_tokens would shrink the prompt budget toward zero and the model
-# would answer from a near-empty context (confident garbage). We keep the
-# prompt intact (up to max_context - MIN_GEN_TOKENS) and let generation take
-# whatever room is left — never the other way around.
-MIN_GEN_TOKENS = 64
 
 # Instruct mode: SFT checkpoints (finetune_enigma.py) carry meta.chat_format.
 # Base checkpoints get the plain-transcript bridge below. Attaching the chat
@@ -589,8 +609,7 @@ def _chat_instruct(req: ChatReq):
                     cur_msgs = _apply_builtins(cur_msgs, out, parsed)
                     continue
                 calls = _openai_tool_calls(parsed)
-                raw_bits = raw_all
-                if raw_bits:
+                if raw_all:
                     yield (
                         "data: "
                         + json.dumps(
@@ -600,7 +619,7 @@ def _chat_instruct(req: ChatReq):
                                 "created": created,
                                 "model": MODEL_ID,
                                 "choices": [
-                                    {"index": 0, "delta": {"content": "\n".join(raw_bits)}, "finish_reason": None}
+                                    {"index": 0, "delta": {"content": "\n".join(raw_all)}, "finish_reason": None}
                                 ],
                             }
                         )
@@ -663,8 +682,7 @@ def _chat_instruct(req: ChatReq):
         break
 
     calls = _openai_tool_calls(out["tool_calls"])
-    raw_bits = raw_all
-    content = "\n".join(t for t in [out.get("content"), *raw_bits] if t)
+    content = "\n".join(t for t in [out.get("content"), *raw_all] if t)
     message = {"role": "assistant", "content": content or (None if calls else "")}
     if calls:
         message["tool_calls"] = calls

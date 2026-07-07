@@ -137,3 +137,33 @@ def test_curated_dataset_survives_corrupt_line(tmp_path):
     ds.save()
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert len(lines) == 2
+
+
+def test_kv_share_config_normalizes_gradient_checkpointing():
+    """kv_share_groups + checkpointing cannot work (followers reuse the
+    leader's K/V, which checkpointed recomputation cannot rebuild): the
+    config normalizes the flag off so stamped checkpoints still load, and
+    the explicit enabler refuses outright."""
+    cfg = ForgeConfig(
+        vocab_size=64, dim=32, n_layers=2, n_heads=2, max_seq_len=32,
+        kv_share_groups=2, use_gradient_checkpointing=True,
+    )
+    assert cfg.use_gradient_checkpointing is False
+    # round-trip: a checkpoint config stamped with the old default loads
+    cfg2 = ForgeConfig.from_dict(cfg.to_dict() | {"use_gradient_checkpointing": True})
+    assert cfg2.use_gradient_checkpointing is False
+    m = _tiny(n_layers=4, kv_share_groups=2)
+    with pytest.raises(ValueError):
+        m.gradient_checkpointing_enable()
+
+
+def test_load_lora_mismatched_adapter_stays_unregistered(tmp_path):
+    """A LoRA file whose keys match nothing raises AND leaves no phantom
+    entry in _lora_adapters (a later merge_lora() must find nothing)."""
+    m = _tiny()
+    p = tmp_path / "bad_adapter.pth"
+    torch.save({"nonexistent.lora_A.weight": torch.zeros(2, 2)}, p)
+    with pytest.raises(ValueError):
+        m.load_lora(p, adapter_name="bad")
+    assert "bad" not in getattr(m, "_lora_adapters", {})
+    m.merge_lora()  # nothing registered -> warning path, no raise

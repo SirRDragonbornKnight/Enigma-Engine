@@ -333,7 +333,16 @@ class Enigma(nn.Module):
 
         Trades ~30% extra compute for ~50% VRAM savings by recomputing
         activations during the backward pass instead of storing them.
+
+        Raises:
+            ValueError: If the model uses kv_share_groups; checkpointed
+                recomputation cannot rebuild K/V shared across layers.
         """
+        if getattr(self.config, "kv_share_groups", 0) > 0:
+            raise ValueError(
+                "gradient checkpointing cannot be combined with kv_share_groups: "
+                "checkpointed recomputation cannot rebuild K/V shared across layers"
+            )
         for layer in self.layers:
             layer.use_checkpoint = True
 
@@ -1123,23 +1132,12 @@ class Enigma(nn.Module):
 
     @classmethod
     def from_huggingface(cls, model_id: str, **kwargs) -> "Enigma":
-        """
-        Load a model from HuggingFace Hub or local HuggingFace format.
+        """Absent feature: no HuggingFace-to-Enigma converter ships in
+        this build, so this always raises. Load Enigma checkpoints with
+        :meth:`from_pretrained` or :meth:`from_safetensors`.
 
-        📖 WHAT THIS DOES:
-        Downloads and converts a HuggingFace transformer model to Forge format.
-        Supports most decoder-only models (GPT-2, GPT-Neo, LLaMA, etc.).
-
-        Args:
-            model_id: HuggingFace model ID (e.g., "gpt2") or local path
-            **kwargs: Additional arguments (cache_dir, revision, etc.)
-
-        Returns:
-            Forge model with loaded weights
-
-        Example:
-            model = Forge.from_huggingface("gpt2")
-            model = Forge.from_huggingface("microsoft/phi-2")
+        Raises:
+            NotImplementedError: Always.
         """
         raise NotImplementedError(
             "from_huggingface: no HuggingFace-to-Enigma converter ships in this build "
@@ -1192,27 +1190,12 @@ class Enigma(nn.Module):
 
     @classmethod
     def from_gguf(cls, path: Union[str, Path], **kwargs) -> "Enigma":
-        """
-        Load a model from GGUF format (llama.cpp compatible).
+        """Absent feature: no GGUF-to-Enigma converter ships in this
+        build, so this always raises. Load Enigma checkpoints with
+        :meth:`from_pretrained` or :meth:`from_safetensors`.
 
-        📖 WHAT THIS DOES:
-        Loads quantized models in GGUF format, commonly used by llama.cpp.
-        Automatically dequantizes weights to PyTorch tensors.
-
-        ⚠️ NOTE:
-        GGUF models are often quantized (Q4, Q8, etc.). Loading converts
-        them to full precision PyTorch, which may use more memory than
-        the original GGUF file.
-
-        Args:
-            path: Path to .gguf file
-            **kwargs: Additional arguments
-
-        Returns:
-            Forge model with loaded weights
-
-        Example:
-            model = Forge.from_gguf("llama-2-7b.Q4_K_M.gguf")
+        Raises:
+            NotImplementedError: Always.
         """
         raise NotImplementedError(
             "from_gguf: no GGUF-to-Enigma converter ships in this build "
@@ -1222,26 +1205,12 @@ class Enigma(nn.Module):
 
     @classmethod
     def from_onnx(cls, path: Union[str, Path], **kwargs) -> "Enigma":
-        """
-        Load a model from ONNX format.
+        """Absent feature: no ONNX-to-Enigma converter ships in this
+        build, so this always raises. Load Enigma checkpoints with
+        :meth:`from_pretrained` or :meth:`from_safetensors`.
 
-        📖 WHAT THIS DOES:
-        Loads a model exported to ONNX format and converts it to Enigma.
-        Useful for cross-platform deployment and inference optimization.
-
-        ⚠️ NOTE:
-        ONNX models may have optimizations that don't translate perfectly
-        to PyTorch. Some features may not work after conversion.
-
-        Args:
-            path: Path to .onnx file
-            **kwargs: Additional arguments
-
-        Returns:
-            Forge model with loaded weights
-
-        Example:
-            model = Forge.from_onnx("model.onnx")
+        Raises:
+            NotImplementedError: Always.
         """
         raise NotImplementedError(
             "from_onnx: no ONNX-to-Enigma converter ships in this build "
@@ -1291,10 +1260,9 @@ class Enigma(nn.Module):
             apply_lora(self, lora_weights, merge=True)
             logger.info(f"Merged LoRA adapter '{adapter_name}' into base weights")
         else:
-            # Keep as separate adapter
-            if not hasattr(self, "_lora_adapters"):
-                self._lora_adapters = {}
-            self._lora_adapters[adapter_name] = lora_weights
+            # Keep as separate adapter; apply_lora registers it in
+            # self._lora_adapters once its key-match check passes, so a
+            # mismatched adapter is never left registered
             apply_lora(self, lora_weights, adapter_name=adapter_name)
             logger.info(f"Loaded LoRA adapter '{adapter_name}'")
 

@@ -246,6 +246,18 @@ class ForgeConfig:
             if self.rope_scaling_factor <= 0:
                 raise ValueError(f"rope_scaling_factor must be positive, got {self.rope_scaling_factor}")
 
+        # Cross-layer KV sharing: followers reuse the leader's K/V from the
+        # same forward pass, which checkpointed recomputation discards and
+        # cannot rebuild layer-by-layer. Normalized rather than refused so
+        # checkpoints stamped with the default flag still load (inference
+        # never touches checkpointing).
+        if self.kv_share_groups > 0 and self.use_gradient_checkpointing:
+            logger.warning(
+                "kv_share_groups is active: disabling use_gradient_checkpointing "
+                "(checkpointed backward cannot rebuild K/V shared across layers)"
+            )
+            self.use_gradient_checkpointing = False
+
     def validate(self) -> bool:
         """
         Run read-only validation on the config.

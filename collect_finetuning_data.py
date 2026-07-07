@@ -461,9 +461,17 @@ def collect_smoltalk2(
             system = ""
             prompt = ""
             completion = ""
+            malformed = False
             for turn in messages:
                 role = turn.get("role", "")
                 raw = turn.get("content", "") or ""
+                # Structured content (a list of content parts) is outside the
+                # plain-string schema this collector handles. The whole record
+                # is dropped: skipping just the turn could pair the first user
+                # prompt with a later assistant reply to a different question.
+                if not isinstance(raw, str):
+                    malformed = True
+                    break
                 # `<think>` content needs its newlines verbatim (the tags align
                 # with special token IDs) -- same handling as collect_openthoughts3.
                 # Non-think content keeps whitespace-collapsing cleanup.
@@ -480,7 +488,7 @@ def collect_smoltalk2(
                     # first assistant reply is enough for SFT pair
                     break
 
-            if not prompt or not completion:
+            if malformed or not prompt or not completion:
                 continue
             if len(prompt) < 5 or len(completion) < 10:
                 continue

@@ -104,6 +104,12 @@ dormant/auxiliary code, ranked for whenever that code gets wired up.
 
 ## Open (carried)
 
+- **H2O overflow score desync (pre-existing, dormant):** `H2OKVCache` keeps a
+  per-position `_attn_scores` buffer that the base sliding-window overflow
+  shift does not roll (true before and after the `_rollable_buffers` hook —
+  H2O never overrode `update()`). Only the base `KVCache` is on the live path;
+  when H2O is next touched, decide whether scores should roll with positions
+  (one-line `_rollable_buffers` override) or reset on shift.
 - **PERF (gated):** ToMe token-merging helpers in `model_components.py` use
   Python loops — matters only if `tome_ratio` is ever enabled (0.0 everywhere).
   Deferred.

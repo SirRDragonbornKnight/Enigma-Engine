@@ -127,3 +127,20 @@ def test_delete_and_clear(tmp_path):
     assert m.clear() == 1
     assert len(m) == 0
     assert len(MemoryStore(tmp_path)) == 0  # clear persisted
+
+
+def test_load_renumbers_duplicate_ids_even_when_file_is_readonly(tmp_path):
+    """Renumbered ids go live in memory even when the file cannot be
+    rewritten (read-only attribute); loading must not raise."""
+    import os
+    import stat
+
+    f = tmp_path / "memories.jsonl"
+    f.write_text('{"id": 1, "text": "alpha"}\n{"id": 1, "text": "beta"}\n', encoding="utf-8")
+    os.chmod(f, stat.S_IREAD)
+    try:
+        m = MemoryStore(tmp_path)
+        ids = [r["id"] for r in m.all()]
+        assert len(set(ids)) == 2, f"duplicate ids survived load: {ids}"
+    finally:
+        os.chmod(f, stat.S_IREAD | stat.S_IWRITE)

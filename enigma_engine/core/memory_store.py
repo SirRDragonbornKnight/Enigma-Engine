@@ -14,12 +14,15 @@ few thousand memories — lexical scoring is the boring, proven choice.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _WORD = re.compile(r"[a-z0-9']+")
 
@@ -39,6 +42,12 @@ def _terms(text: str) -> list[str]:
 
 def _content_terms(text: str) -> set[str]:
     return {t for t in _terms(text) if t not in _STOPWORDS}
+
+
+def _valid_id(value: Any) -> bool:
+    """A usable record id: an int, excluding bool (an int subclass a hand
+    edit like ``"id": true`` would otherwise smuggle past the arithmetic)."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 class MemoryStore:
@@ -68,29 +77,34 @@ class MemoryStore:
                     if isinstance(rec, dict) and rec.get("text"):
                         self._records.append(rec)
         # Hand-edited files are inside the contract (module docstring): a
-        # record whose id is missing or not an int gets renumbered here so
-        # the max+1 id arithmetic in add()/remember() always sees ints.
-        # bool is excluded explicitly (it is an int subclass).
-        next_id = (
-            max(
-                (r["id"] for r in self._records if isinstance(r.get("id"), int) and not isinstance(r.get("id"), bool)),
-                default=0,
-            )
-            + 1
-        )
+        # record whose id is missing or not a valid int gets renumbered here
+        # so the max+1 id arithmetic in add()/remember() always sees ints.
+        next_id = max((r["id"] for r in self._records if _valid_id(r.get("id"))), default=0) + 1
         renumbered = False
         seen_ids: set[int] = set()
         for rec in self._records:
             rid = rec.get("id")
             # Duplicate ids (a copy-paste hand edit) would make id-based
             # delete/supersede ambiguous, so later duplicates get fresh ids.
-            if not isinstance(rid, int) or isinstance(rid, bool) or rid in seen_ids:
+            if not _valid_id(rid) or rid in seen_ids:
                 rec["id"] = next_id
                 next_id += 1
                 renumbered = True
             seen_ids.add(rec["id"])
         if renumbered:
-            self._rewrite()
+            # The renumbered ids are live in memory either way; a file that
+            # cannot be replaced right now (read-only attribute, another
+            # process holding it on Windows) must not stop the store from
+            # loading. The next successful rewrite persists them.
+            try:
+                self._rewrite()
+            except OSError as exc:
+                logger.warning(
+                    "memory store: could not persist renumbered ids to %s (%s); "
+                    "continuing with in-memory ids",
+                    self.file,
+                    exc,
+                )
 
     def __len__(self) -> int:
         with self._lock:
