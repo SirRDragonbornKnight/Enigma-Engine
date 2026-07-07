@@ -91,6 +91,15 @@ def main() -> None:
     ap.add_argument("--out", default=None)
     ap.add_argument("--resume", default=None)
     ap.add_argument(
+        "--init-from",
+        default=None,
+        help="warm-start a NEW run from a checkpoint's WEIGHTS: rebuild the "
+        "architecture from the checkpoint and load its weights, but start at "
+        "step 0 with a fresh optimizer and a fresh schedule/warmup (CLI args, "
+        "not the checkpoint's). For length extension / continued pretraining "
+        "at a new --block. Mutually exclusive with --resume.",
+    )
+    ap.add_argument(
         "--override-schedule",
         action="store_true",
         help="on resume, let CLI schedule args override the checkpoint's recorded schedule",
@@ -165,19 +174,34 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    # Load the resume checkpoint EARLY: its recorded schedule must be restored
-    # before anything derived from schedule args (block, val windows, token
-    # budget) is computed. A typo'd --resume must hard-fail here — the old
-    # behavior silently started a FRESH run into the same --out directory.
+    # --resume (exact continuation) and --init-from (warm-start a NEW run from
+    # a checkpoint's weights) both load a checkpoint EARLY, but only resume
+    # restores the recorded schedule/optimizer/step. They are mutually
+    # exclusive.
+    if args.resume and args.init_from:
+        raise SystemExit("--resume and --init-from are mutually exclusive")
+    warm_start = bool(args.init_from)
+    ckpt_arg = args.resume or args.init_from
+    # Warm-start guards, checked before loading anything heavy: a warm-start is
+    # a NEW run (immutable-lineage rule), so it must have an explicit --out that
+    # is not the source checkpoint's own directory (which it would clobber).
+    if warm_start:
+        if not args.out:
+            raise SystemExit("--init-from requires an explicit --out <new dir> (a warm-start is a new run)")
+        if Path(args.out).resolve() == Path(ckpt_arg).resolve().parent:
+            raise SystemExit(
+                f"--init-from would write into the source model's directory ({args.out}); "
+                "pass --out <new dir> so the checkpoint you warm-started from is not overwritten"
+            )
     ck = None
-    if args.resume:
-        rp = Path(args.resume)
+    if ckpt_arg:
+        rp = Path(ckpt_arg)
         if not rp.exists() and rp.name == "latest.pth" and (rp.parent / "prev.pth").exists():
-            print(f"resume: {rp} missing -> falling back to {rp.parent / 'prev.pth'}", flush=True)
+            print(f"load: {rp} missing -> falling back to {rp.parent / 'prev.pth'}", flush=True)
             rp = rp.parent / "prev.pth"
         if not rp.exists():
             raise SystemExit(
-                f"--resume {args.resume} not found (no prev.pth fallback either) — "
+                f"checkpoint {ckpt_arg} not found (no prev.pth fallback either) — "
                 f"refusing to silently start a fresh run"
             )
         try:
@@ -187,12 +211,14 @@ def main() -> None:
             if rp.name == "latest.pth" and prev.exists():
                 # corrupt-but-present latest (e.g. power loss mid-write):
                 # fall back to the rotated previous generation
-                print(f"resume: {rp} unreadable ({exc}) -> falling back to {prev}", flush=True)
+                print(f"load: {rp} unreadable ({exc}) -> falling back to {prev}", flush=True)
                 rp = prev
                 ck = torch.load(rp, map_location=device)
             else:
                 raise
-        saved_sched = ck.get("schedule")
+        # Warm-start keeps the CLI schedule (fresh warmup at the new block);
+        # only exact resume restores the checkpoint's recorded schedule.
+        saved_sched = ck.get("schedule") if not warm_start else None
         if saved_sched:
             diffs = {k: (v, getattr(args, k)) for k, v in saved_sched.items() if getattr(args, k, None) != v}
             if args.override_schedule:
@@ -206,7 +232,7 @@ def main() -> None:
                     setattr(args, k, v)
                 for k, (ck_v, cli_v) in diffs.items():
                     print(f"resume: schedule[{k}] = {ck_v} from checkpoint (CLI {cli_v} ignored)", flush=True)
-        else:
+        elif not warm_start:
             print(
                 "resume: checkpoint predates schedule recording — trusting CLI args (this run will record them)",
                 flush=True,
@@ -296,7 +322,7 @@ def main() -> None:
     # so its recorded schedule could win before schedule-derived values were computed.)
     if ck is not None:
         config = ForgeConfig.from_dict(ck["config"])
-        print(f"resume: config rebuilt from checkpoint ({args.resume})", flush=True)
+        print(f"{'init-from' if warm_start else 'resume'}: config rebuilt from checkpoint ({ckpt_arg})", flush=True)
     else:
         config = get_preset(args.size, vocab_size=vocab_size)
         config.neftune_alpha = 0.0  # NEFTune is a finetuning trick; off for pretraining
@@ -363,21 +389,32 @@ def main() -> None:
         real_missing = [k for k in missing if "freqs_cis" not in k and "causal_mask" not in k]
         if unexpected or real_missing:
             raise SystemExit(
-                f"resume arch mismatch — refusing to corrupt: missing={real_missing[:5]} unexpected={unexpected[:5]}"
+                f"{'init-from' if warm_start else 'resume'} arch mismatch — refusing to corrupt: "
+                f"missing={real_missing[:5]} unexpected={unexpected[:5]}"
             )
-        if "optimizer" in ck:
-            try:
-                optim.load_state_dict(ck["optimizer"])
-            except Exception as exc:
-                raise SystemExit(
-                    f"resume: checkpoint optimizer state does not fit --optimizer "
-                    f"{args.optimizer} ({exc}) — the run was saved with a different "
-                    f"optimizer; refusing to continue with reset moments"
-                ) from None
-        # ck["step"] is a COMPLETED step (saved after its optimizer update);
-        # resume at the next one instead of training it twice.
-        start_step = int(ck.get("step", -1)) + 1
-        print(f"resumed from {args.resume} after step {start_step - 1} (next: {start_step})", flush=True)
+        if warm_start:
+            # Fresh optimizer moments + fresh schedule; start_step stays 0.
+            # A short warmup at the new --block re-stabilizes the converged
+            # weights on the new sequence length.
+            print(
+                f"init-from {args.init_from}: loaded weights, starting a fresh run at step 0 "
+                f"(block {block}, fresh {args.schedule} schedule, warmup {args.warmup})",
+                flush=True,
+            )
+        else:
+            if "optimizer" in ck:
+                try:
+                    optim.load_state_dict(ck["optimizer"])
+                except Exception as exc:
+                    raise SystemExit(
+                        f"resume: checkpoint optimizer state does not fit --optimizer "
+                        f"{args.optimizer} ({exc}) — the run was saved with a different "
+                        f"optimizer; refusing to continue with reset moments"
+                    ) from None
+            # ck["step"] is a COMPLETED step (saved after its optimizer update);
+            # resume at the next one instead of training it twice.
+            start_step = int(ck.get("step", -1)) + 1
+            print(f"resumed from {args.resume} after step {start_step - 1} (next: {start_step})", flush=True)
 
     # torch.compile after any resume-load so weights land in raw_model first. The
     # compiled wrapper is used only for fwd/bwd; save/load/optimizer stay on
