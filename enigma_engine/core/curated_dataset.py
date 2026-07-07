@@ -271,14 +271,17 @@ class CuratedDataset:
 
     def save(self) -> None:
         """Save dataset to JSONL file."""
+        from enigma_engine.core.safe_save import atomic_write_text
+
+        # The write stays under the lock: releasing it between snapshot and
+        # write lets two concurrent save() calls land in either order, so
+        # the older snapshot can end up as the file's final content.
         with self._lock:
             content = "".join(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n" for entry in self._entries)
             approved = sum(1 for e in self._entries if e.status == "approved")
             pending = sum(1 for e in self._entries if e.status == "pending")
             total = len(self._entries)
-        from enigma_engine.core.safe_save import atomic_write_text
-
-        atomic_write_text(self.path, content)
+            atomic_write_text(self.path, content)
         logger.info("Dataset saved: %d entries (%d approved, %d pending)", total, approved, pending)
 
     def load(self) -> None:

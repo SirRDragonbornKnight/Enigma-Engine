@@ -3,14 +3,19 @@
 Pre-refocus findings targeted the Qwen-era engine (`inference.py`,
 `engine_generation.py`, `api/server.py`, …) — those findings and their
 fixes live in git history. Suite baseline today (2026-07-06, post
-audit-fix pass): **418 passed; repo-wide `ruff check` clean.**
+backlog-fix pass): **440 passed; repo-wide `ruff check` clean.**
 
-## Open — round-2 audit backlog (2026-07-06, all receipts verified)
+## Closed — round-2 audit backlog (2026-07-06, all FIXED)
 
-None of these touch the live pretrain -> SFT -> serve path; they are traps in
-dormant/auxiliary code, ranked for whenever that code gets wired up.
+The dormant/auxiliary-code backlog below was worked through end to end in a
+seven-phase fix pass (each phase: fix -> regression tests -> full suite + ruff
+-> adversarial self-review of the diff). RL stack, command/plugin surface,
+model merging, queues/monitors, collectors, and packaging are all repaired;
+the tool-eval and H2O items previously deferred are done too. Kept here as the
+record of what was wrong. Nothing below touched the live pretrain -> SFT ->
+serve lineage.
 
-**RL stack (`rl_training.py`) — do not use until repaired:**
+**RL stack (`rl_training.py`) — REPAIRED (Phase 7):**
 - `RewardModel`/`ProcessRewardModel` hold the base model's modules BY
   REFERENCE and `freeze_base=True` (default) sets `requires_grad=False` on
   the live policy's own parameters — building a reward model from the policy
@@ -104,12 +109,6 @@ dormant/auxiliary code, ranked for whenever that code gets wired up.
 
 ## Open (carried)
 
-- **H2O overflow score desync (pre-existing, dormant):** `H2OKVCache` keeps a
-  per-position `_attn_scores` buffer that the base sliding-window overflow
-  shift does not roll (true before and after the `_rollable_buffers` hook —
-  H2O never overrode `update()`). Only the base `KVCache` is on the live path;
-  when H2O is next touched, decide whether scores should roll with positions
-  (one-line `_rollable_buffers` override) or reset on shift.
 - **PERF (gated):** ToMe token-merging helpers in `model_components.py` use
   Python loops — matters only if `tome_ratio` is ever enabled (0.0 everywhere).
   Deferred.

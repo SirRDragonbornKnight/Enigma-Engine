@@ -167,3 +167,29 @@ def test_load_lora_mismatched_adapter_stays_unregistered(tmp_path):
         m.load_lora(p, adapter_name="bad")
     assert "bad" not in getattr(m, "_lora_adapters", {})
     m.merge_lora()  # nothing registered -> warning path, no raise
+
+
+def test_recommend_model_size_reflects_hardware():
+    """The dict-facing wrapper sizes by the actual VRAM/RAM tiers rather
+    than answering a constant."""
+    from enigma_engine.core.model_utils import recommend_model_size
+
+    big = {"gpu_available": True, "gpu_vram_gb": 24.0, "ram_gb": 64.0}
+    tiny = {"gpu_available": False, "gpu_vram_gb": 0.0, "ram_gb": 1.0}
+    assert recommend_model_size(big) == "large"
+    assert recommend_model_size(tiny) == "pi_zero"
+
+
+def test_config_for_param_target_keeps_preset_fields():
+    """A preset match carries the WHOLE preset (rope_theta included), not
+    a handful of fields with the rest reset to dataclass defaults."""
+    from enigma_engine.core.model_presets import (
+        MODEL_PRESETS,
+        config_for_param_target,
+        estimate_parameters,
+    )
+
+    target = estimate_parameters(MODEL_PRESETS["medium"])
+    name, cfg = config_for_param_target(target)
+    assert name == "medium"
+    assert cfg.rope_theta == MODEL_PRESETS["medium"].rope_theta == 500000.0

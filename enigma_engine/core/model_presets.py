@@ -780,6 +780,9 @@ def config_for_param_target(target: int, vocab_size: int = 32000) -> tuple:
     """
     import math
 
+    if vocab_size <= 0:
+        raise ValueError(f"vocab_size must be positive, got {vocab_size}")
+
     best_name = "small"
     best_distance = float("inf")
     best_est = 0
@@ -794,18 +797,13 @@ def config_for_param_target(target: int, vocab_size: int = 32000) -> tuple:
             best_name = name
             best_est = est
 
-    # If closest preset is within 20% of target, use it directly
+    # If closest preset is within 20% of target, use it directly.
+    # Deepcopy the whole preset: rebuilding from a handful of fields
+    # silently resets everything else (rope_theta, feature toggles) to
+    # the dataclass defaults.
     if best_est > 0 and best_distance / best_est < 0.2:
-        preset = MODEL_PRESETS[best_name]
-        result = ForgeConfig(
-            vocab_size=vocab_size,
-            dim=preset.dim,
-            n_layers=preset.n_layers,
-            n_heads=preset.n_heads,
-            n_kv_heads=preset.n_kv_heads,
-            max_seq_len=preset.max_seq_len,
-            dropout=preset.dropout,
-        )
+        result = copy.deepcopy(MODEL_PRESETS[best_name])
+        result.vocab_size = vocab_size
         return best_name, result
 
     # No close preset — compute a custom config to match the target

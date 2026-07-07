@@ -58,8 +58,8 @@ def register_mod_commands(registry: Any, mods_dir: Path, router: Any = None) -> 
     """Register all mod commands in the engine command registry.
 
     Creates commands like ``imagegen.generate``, ``voice.listen``, etc.
-    Skips commands already registered (e.g. manually defined ones
-    in builtin_commands.py take precedence).
+    Skips commands already registered (earlier registrations, e.g. from
+    plugins, take precedence).
 
     Returns the number of newly registered commands.
     """
@@ -86,7 +86,9 @@ def register_mod_commands(registry: Any, mods_dir: Path, router: Any = None) -> 
                 message = {"command": cmd_name, "args": args}
                 try:
                     result = r.send_to_mod(mod_id, message)
-                    if result:
+                    # None = no reply; falsy replies ("", 0, {}) are real
+                    # responses and must not read as silence
+                    if result is not None:
                         return CommandResult(True, str(result))
                     return CommandResult(False, f"[ERROR] Mod '{mod_id}' did not respond")
                 except Exception as exc:

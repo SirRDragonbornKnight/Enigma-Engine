@@ -721,6 +721,22 @@ class H2OKVCache(KVCache):
             dtype=torch.float32,
         )
 
+    def _rollable_buffers(self) -> tuple[str, ...]:
+        # Scores accumulate per position, so an overflow shift must move
+        # them with the K/V they score.
+        return super()._rollable_buffers() + ("_attn_scores",)
+
+    def update(self, k: torch.Tensor, v: torch.Tensor, position: Optional[int] = None) -> int:
+        start = self.current_pos if position is None else position
+        overflowed = start + k.shape[1] > self.max_seq_len
+        result = super().update(k, v, position)
+        if overflowed:
+            # The overflow roll wraps evicted positions' scores into the
+            # slots the new tokens were just written to; new tokens start
+            # with no accumulated attention.
+            self._attn_scores[:, self.current_pos - k.shape[1] : self.current_pos].zero_()
+        return result
+
     def accumulate_attention(self, attn_weights: torch.Tensor) -> None:
         """Accumulate attention scores for eviction decisions.
 

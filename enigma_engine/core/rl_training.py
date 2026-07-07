@@ -339,6 +339,26 @@ class ReplayBuffer:
 # =============================================================================
 
 
+def _load_state_or_fail(model: nn.Module, state: dict, label: str) -> None:
+    """Load a checkpoint state dict, tolerating the LoRA-wrap key differences
+    but hard-failing when the checkpoint matches nothing.
+
+    strict=False is needed because a LoRA-wrapped model's keys carry PEFT
+    prefixes; but a fully-mismatched checkpoint (wrong architecture, or a
+    non-LoRA save into a wrapped model) would otherwise load ZERO weights
+    silently. Per the repo's checkpoint contract, refuse that outright.
+    """
+    result = model.load_state_dict(state, strict=False)
+    model_keys = set(model.state_dict())
+    loaded = model_keys - set(result.missing_keys)
+    if not loaded:
+        raise ValueError(
+            f"{label} checkpoint matched none of the model's parameters "
+            f"({len(state)} checkpoint keys, {len(model_keys)} model keys); "
+            "architecture or LoRA-wrap state differs from the saved model."
+        )
+
+
 def _get_response_logps(
     model: nn.Module,
     full_ids: torch.Tensor,
@@ -400,6 +420,7 @@ def _get_logps_hidden_entropy(
     model: nn.Module,
     full_ids: torch.Tensor,
     prompt_len: int,
+    apply_neftune: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Single forward pass returning logps, hidden states, and entropy.
 
@@ -429,8 +450,11 @@ def _get_logps_hidden_entropy(
 
     config = getattr(model, "config", None)
 
-    # Keep parity with Enigma.forward() training behavior.
-    if model.training and config is not None and config.neftune_alpha > 0:
+    # Keep parity with Enigma.forward() training behavior, but callers
+    # collecting rollout/reference log-probs pass apply_neftune=False:
+    # embedding noise there randomizes the PPO ratio denominator and the
+    # KL estimate.
+    if apply_neftune and model.training and config is not None and config.neftune_alpha > 0:
         dims = h.shape[1] * h.shape[2]
         mag = config.neftune_alpha / math.sqrt(dims)
         h = h + torch.empty_like(h).uniform_(-mag, mag)
@@ -505,10 +529,13 @@ class RewardModel(nn.Module):
         # Store config for serialization
         self.base_config = getattr(base_model, "config", None)
 
-        # Reuse embeddings + layers from the base model
-        self.tok_embeddings = base_model.tok_embeddings
-        self.layers = base_model.layers
-        self.norm = base_model.norm
+        # COPY (not share) the base transformer: these submodules are the
+        # policy's own Parameters. Sharing them by reference means freezing
+        # the reward head's base below (requires_grad = False) freezes the
+        # LIVE policy too, and training the reward model mutates the policy.
+        self.tok_embeddings = copy.deepcopy(base_model.tok_embeddings)
+        self.layers = copy.deepcopy(base_model.layers)
+        self.norm = copy.deepcopy(base_model.norm)
 
         # Copy RoPE frequencies if present
         if hasattr(base_model, "freqs_cis") and base_model.freqs_cis is not None:
@@ -524,7 +551,7 @@ class RewardModel(nn.Module):
         config = getattr(base_model, "config", None)
         self._use_rope = getattr(config, "use_rope", True)
         if not self._use_rope and hasattr(base_model, "pos"):
-            self.pos = base_model.pos
+            self.pos = copy.deepcopy(base_model.pos)
 
         # Determine hidden dim
         dim = getattr(config, "dim", 512)
@@ -799,9 +826,12 @@ class ProcessRewardModel(nn.Module):
         super().__init__()
 
         self.base_config = getattr(base_model, "config", None)
-        self.tok_embeddings = base_model.tok_embeddings
-        self.layers = base_model.layers
-        self.norm = base_model.norm
+        # COPY (not share): these are the policy's own Parameters; sharing
+        # them by reference would freeze/mutate the live policy when this
+        # reward model is frozen or trained.
+        self.tok_embeddings = copy.deepcopy(base_model.tok_embeddings)
+        self.layers = copy.deepcopy(base_model.layers)
+        self.norm = copy.deepcopy(base_model.norm)
 
         if hasattr(base_model, "freqs_cis") and base_model.freqs_cis is not None:
             self.register_buffer("freqs_cis", base_model.freqs_cis.clone())
@@ -814,7 +844,7 @@ class ProcessRewardModel(nn.Module):
         config = getattr(base_model, "config", None)
         self._use_rope = getattr(config, "use_rope", True)
         if not self._use_rope and hasattr(base_model, "pos"):
-            self.pos = base_model.pos
+            self.pos = copy.deepcopy(base_model.pos)
 
         dim = getattr(config, "dim", 512)
 
@@ -1165,19 +1195,18 @@ class RLHFTrainer:
     def load_checkpoint(self, path: Path) -> None:
         """Load RLHF checkpoint. Pending state is applied in train().
 
-        Restores model weights immediately. Optimizer, value head,
-        and replay buffer states are stashed as ``_pending_*``
-        attributes and applied after those objects are created
-        inside ``train()``.
+        Model weights, optimizer, value head, and replay buffer are all
+        stashed as ``_pending_*`` and applied inside ``train()``. The
+        model state is deferred deliberately: the checkpoint was saved
+        AFTER ``_setup_reference()`` wrapped the model with LoRA, so its
+        keys are PEFT-prefixed and only load once the wrap is back in
+        place (loading into the raw model would key-mismatch).
         """
         from enigma_engine.core.model_registry import safe_load_weights
 
         checkpoint = safe_load_weights(path, map_location=self.device)
 
-        state_dict = checkpoint.get("model_state_dict")
-        if state_dict:
-            self.model.load_state_dict(state_dict)
-
+        self._pending_model_state = checkpoint.get("model_state_dict")
         self._pending_optimizer_state = checkpoint.get("optimizer_state_dict")
         self._pending_value_head_state = checkpoint.get("value_head_state_dict")
         self._pending_replay_state = checkpoint.get("replay_buffer")
@@ -1311,6 +1340,12 @@ class RLHFTrainer:
         # Set up reference policy (LoRA or CPU offload)
         self._setup_reference()
 
+        # Apply the deferred model state now that the LoRA wrap (if any) is
+        # back in place, so PEFT-prefixed checkpoint keys line up.
+        if getattr(self, "_pending_model_state", None):
+            _load_state_or_fail(self.model, self._pending_model_state, "RLHF")
+            self._pending_model_state = None
+
         # Value head for advantage estimation
         model_config = getattr(self.model, "config", None)
         dim = getattr(model_config, "dim", 512)
@@ -1435,9 +1470,13 @@ class RLHFTrainer:
                 per_token_rewards = torch.zeros(resp_len, device=self.device)
                 per_token_rewards[-1] = reward_scalar
 
-                # Collect old log-probs and values (no grad) — single combined pass
+                # Collect old log-probs and values (no grad) — single combined
+                # pass. apply_neftune=False: this is the rollout behavior
+                # policy's actual log-probs, not a training-noise forward.
                 with torch.no_grad(), torch.amp.autocast("cuda", dtype=amp_dt, enabled=use_amp):
-                    old_logps, hidden, _ = _get_logps_hidden_entropy(self.model, full_ids, prompt_len)
+                    old_logps, hidden, _ = _get_logps_hidden_entropy(
+                        self.model, full_ids, prompt_len, apply_neftune=False
+                    )
                     old_values = value_head(hidden).squeeze(0)  # (resp_len,)
 
                     ref_logps = self._get_ref_logps(full_ids, prompt_len)
@@ -1779,19 +1818,18 @@ class SelfPlayTrainer:
     def load_checkpoint(self, path: Path) -> None:
         """Load self-play checkpoint. Pending state is applied in train().
 
-        Restores student weights immediately. Optimizer, value head,
-        and replay buffer states are stashed as ``_pending_*``
-        attributes and applied after those objects are created
-        inside ``train()``.
+        Student weights, optimizer, value head, and replay buffer are all
+        stashed as ``_pending_*`` and applied inside ``train()``. The
+        student state is deferred deliberately: the checkpoint was saved
+        AFTER ``_setup_reference()`` wrapped the student with LoRA, so its
+        keys are PEFT-prefixed and only load once the wrap is back in
+        place (loading into the raw student would key-mismatch).
         """
         from enigma_engine.core.model_registry import safe_load_weights
 
         checkpoint = safe_load_weights(path, map_location=self.device)
 
-        state_dict = checkpoint.get("model_state_dict")
-        if state_dict:
-            self.student.load_state_dict(state_dict)
-
+        self._pending_model_state = checkpoint.get("model_state_dict")
         self._pending_optimizer_state = checkpoint.get("optimizer_state_dict")
         self._pending_value_head_state = checkpoint.get("value_head_state_dict")
         self._pending_replay_state = checkpoint.get("replay_buffer")
@@ -1932,6 +1970,12 @@ class SelfPlayTrainer:
         # Set up reference policy (LoRA or CPU offload)
         self._setup_reference()
 
+        # Apply the deferred student state now that the LoRA wrap (if any)
+        # is back in place, so PEFT-prefixed checkpoint keys line up.
+        if getattr(self, "_pending_model_state", None):
+            _load_state_or_fail(self.student, self._pending_model_state, "self-play")
+            self._pending_model_state = None
+
         # Value head for advantage estimation
         model_config = getattr(self.student, "config", None)
         dim = getattr(model_config, "dim", 512)
@@ -2042,9 +2086,13 @@ class SelfPlayTrainer:
                 per_token_rewards = torch.zeros(resp_len, device=self.device)
                 per_token_rewards[-1] = reward_scalar
 
-                # Collect old log-probs and values — single combined pass
+                # Collect old log-probs and values — single combined pass.
+                # apply_neftune=False: the rollout behavior policy's actual
+                # log-probs, not a training-noise forward.
                 with torch.no_grad(), torch.amp.autocast("cuda", dtype=amp_dt, enabled=use_amp):
-                    old_logps, hidden, _ = _get_logps_hidden_entropy(self.student, full_ids, prompt_len)
+                    old_logps, hidden, _ = _get_logps_hidden_entropy(
+                        self.student, full_ids, prompt_len, apply_neftune=False
+                    )
                     old_values = value_head(hidden).squeeze(0)
                     ref_logps = self._get_ref_logps(full_ids, prompt_len)
 
@@ -2373,6 +2421,7 @@ class GRPOTrainer:
                 break
 
             epoch_reward = 0.0
+            n_scored = 0
             n_updates = 0
             random.shuffle(prompts)
 
@@ -2388,6 +2437,7 @@ class GRPOTrainer:
                 # Generate a group of N responses
                 group_gens: list[torch.Tensor] = []
                 group_rewards: list[float] = []
+                group_old_logps: list[torch.Tensor] = []
 
                 self.model.eval()
                 for _ in range(cfg.group_size):
@@ -2405,10 +2455,17 @@ class GRPOTrainer:
                     if resp_ids.shape[1] < 1:
                         continue
 
+                    # Rollout-policy log-probs, captured now for the PPO
+                    # ratio denominator (the behavior policy that generated
+                    # this response), NOT the frozen reference.
+                    with torch.no_grad():
+                        old_logps = _get_response_logps(self.model, gen_ids, prompt_len)
+
                     resp_text = self.tokenizer.decode(resp_ids[0].tolist())
                     r = self.reward_fn(prompt, resp_text)
                     group_gens.append(gen_ids)
                     group_rewards.append(r)
+                    group_old_logps.append(old_logps)
 
                 self.model.train()
 
@@ -2428,10 +2485,11 @@ class GRPOTrainer:
                     advantages = r_tensor.tolist()
 
                 epoch_reward += sum(group_rewards) / len(group_rewards)
+                n_scored += 1
 
                 # PPO-style update for each response in the group
                 for ppo_epoch in range(cfg.ppo_epochs):
-                    for gen_ids, adv in zip(group_gens, advantages):
+                    for gen_ids, adv, old_logps in zip(group_gens, advantages, group_old_logps):
                         full_ids = gen_ids
                         resp_len = full_ids.shape[1] - prompt_len
                         if resp_len < 1:
@@ -2449,7 +2507,7 @@ class GRPOTrainer:
                             log_probs = F.log_softmax(resp_logits, dim=-1)
                             token_logps = log_probs.gather(2, resp_targets.unsqueeze(-1)).squeeze(-1)
 
-                            # Reference log-probs
+                            # Reference log-probs (for the KL penalty only)
                             with torch.no_grad():
                                 ref_logits = ref_model(full_ids)
                                 if hasattr(ref_logits, "logits"):
@@ -2458,8 +2516,10 @@ class GRPOTrainer:
                                 ref_log_probs = F.log_softmax(ref_resp, dim=-1)
                                 ref_token_logps = ref_log_probs.gather(2, resp_targets.unsqueeze(-1)).squeeze(-1)
 
-                            # Log-ratio for clipping
-                            log_ratio = (token_logps - ref_token_logps).clamp(-20, 20)
+                            # PPO ratio against the ROLLOUT policy: new / old,
+                            # so drift from the frozen reference cannot clip
+                            # the gradient to zero and stall learning.
+                            log_ratio = (token_logps - old_logps).clamp(-20, 20)
                             ratio = log_ratio.exp()
 
                             adv_t = torch.tensor(adv, dtype=torch.float32, device=self.device)
@@ -2525,7 +2585,9 @@ class GRPOTrainer:
                         )
                     self._update_adaptive_kl(abs(obs_kl))
 
-            avg_r = epoch_reward / max(len(prompts), 1)
+            # Average over prompts that actually scored (produced a group
+            # of >= 2 responses), not every prompt including skipped ones.
+            avg_r = epoch_reward / max(n_scored, 1)
             avg_rewards.append(avg_r)
             epochs_done = epoch + 1
 
@@ -2683,6 +2745,7 @@ class ReMaxTrainer:
                 break
 
             epoch_reward = 0.0
+            n_scored = 0
             n_updates = 0
             random.shuffle(prompts)
 
@@ -2695,8 +2758,9 @@ class ReMaxTrainer:
                 prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
                 prompt_len = len(prompt_ids)
 
-                # Generate N responses
-                responses: list[tuple[torch.Tensor, float]] = []
+                # Generate N responses, capturing each one's rollout-policy
+                # log-probs for the PPO ratio denominator.
+                responses: list[tuple[torch.Tensor, float, torch.Tensor]] = []
 
                 self.model.eval()
                 for _ in range(cfg.n_responses):
@@ -2714,9 +2778,12 @@ class ReMaxTrainer:
                     if resp_ids.shape[1] < 1:
                         continue
 
+                    with torch.no_grad():
+                        old_logps = _get_response_logps(self.model, gen_ids, prompt_len)
+
                     resp_text = self.tokenizer.decode(resp_ids[0].tolist())
                     r = self.reward_fn(prompt, resp_text)
-                    responses.append((gen_ids, r))
+                    responses.append((gen_ids, r, old_logps))
 
                 self.model.train()
 
@@ -2724,12 +2791,13 @@ class ReMaxTrainer:
                     continue
 
                 # Mean reward baseline
-                rewards = [r for _, r in responses]
+                rewards = [r for _, r, _ in responses]
                 mean_reward = sum(rewards) / len(rewards)
                 epoch_reward += mean_reward
+                n_scored += 1
 
                 # REINFORCE with mean-reward baseline and clipped surrogate
-                for gen_ids, reward in responses:
+                for gen_ids, reward, old_logps in responses:
                     advantage = reward - mean_reward
                     full_ids = gen_ids
                     resp_len = full_ids.shape[1] - prompt_len
@@ -2739,10 +2807,13 @@ class ReMaxTrainer:
                     with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
                         # Current policy log-probs + entropy — single combined pass
                         new_logps, _, entropy = _get_logps_hidden_entropy(self.model, full_ids, prompt_len)
-                        # Old log-probs (from generation — frozen ref approx)
+                        # Reference log-probs for the KL penalty only
                         with torch.no_grad():
-                            old_logps = _get_response_logps(ref_model, full_ids, prompt_len)
+                            ref_logps = _get_response_logps(ref_model, full_ids, prompt_len)
 
+                        # PPO ratio against the ROLLOUT policy (new / old), so
+                        # sequential updates within the epoch cannot clip the
+                        # gradient to zero once the policy drifts from ref.
                         log_ratio = (new_logps - old_logps).clamp(-20, 20)
                         ratio = torch.exp(log_ratio)
 
@@ -2763,7 +2834,7 @@ class ReMaxTrainer:
                         entropy_bonus = entropy.mean()
 
                         # KL penalty: KL(policy||ref) ≈ mean(log π - log π_ref)
-                        kl = (new_logps - old_logps).mean()
+                        kl = (new_logps - ref_logps).mean()
                         kl_loss = self._kl_coeff * kl
 
                         loss = policy_loss - cfg.entropy_coeff * entropy_bonus + kl_loss
@@ -2784,8 +2855,8 @@ class ReMaxTrainer:
 
                     self._update_adaptive_kl(kl.item())
 
-            n_prompts = max(1, len(prompts))
-            avg_r = epoch_reward / n_prompts
+            # Average over prompts that actually scored (>= 2 responses)
+            avg_r = epoch_reward / max(n_scored, 1)
             avg_rewards.append(avg_r)
             epochs_done = epoch + 1
 

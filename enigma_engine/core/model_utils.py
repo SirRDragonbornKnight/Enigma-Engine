@@ -248,16 +248,32 @@ def recommend_model_size(hardware: Optional[dict[str, Any]] = None) -> str:
     """
     Recommend optimal model size based on hardware.
 
+    Delegates to hardware_detection.recommend_model_size, which sizes by
+    VRAM/RAM tiers. A dict from detect_hardware() is rebuilt into a
+    HardwareProfile; None auto-detects.
+
     Args:
         hardware: Hardware profile dict (from detect_hardware). If None, auto-detects.
 
     Returns:
         Recommended preset name (e.g., "pi_5", "small", "medium")
     """
-    if hardware is None:
-        hardware = detect_hardware()
+    import dataclasses
 
-    return hardware.get("recommended_model_size", "small")
+    from . import hardware_detection as hw
+
+    if hardware is None:
+        return hw.recommend_model_size()
+    hw_dict = dict(hardware)
+    # The documented dict shape (and this module's own fallback) uses the
+    # alias keys; the profile's sizing fields must see their values.
+    if "ram_gb" not in hw_dict and "total_ram_gb" in hw_dict:
+        hw_dict["ram_gb"] = hw_dict["total_ram_gb"]
+    if "gpu_available" not in hw_dict and "has_cuda" in hw_dict:
+        hw_dict["gpu_available"] = hw_dict["has_cuda"]
+    known = {f.name for f in dataclasses.fields(hw.HardwareProfile)}
+    profile = hw.HardwareProfile(**{k: v for k, v in hw_dict.items() if k in known})
+    return hw.recommend_model_size(profile)
 
 
 def estimate_memory_usage(size: str, quantization: str = "none") -> dict[str, float]:
@@ -276,11 +292,12 @@ def estimate_memory_usage(size: str, quantization: str = "none") -> dict[str, fl
 
         use_half = quantization in ("dynamic", "int8", "int4")
         result = _estimate(size, use_half=use_half)
-        # Apply quantization scaling to model_memory
+        # Scaling from the fp16 base (2 bytes/param): int8 = 1 byte/param,
+        # int4 = 0.5 bytes/param.
         if quantization == "int4":
-            result["model_memory"] *= 0.5
+            result["model_memory"] *= 0.25
         elif quantization == "int8":
-            result["model_memory"] *= 0.5 if use_half else 0.25
+            result["model_memory"] *= 0.5
         result["total"] = result["model_memory"] + result["kv_cache"]
         return {
             "model_size_mb": result["model_memory"] * 1024,

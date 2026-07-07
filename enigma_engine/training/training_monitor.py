@@ -125,6 +125,9 @@ class TrainingMonitor:
 
         # Thread safety lock (Suggestion #8A)
         self._lock = threading.Lock()
+        # Separate lock for the history file's read-modify-write, so two
+        # concurrent run recordings cannot drop each other's entry
+        self._history_lock = threading.Lock()
 
         # Live state (TM-B)
         # Cap at 100k entries to prevent unbounded memory growth on long runs
@@ -501,13 +504,12 @@ class TrainingMonitor:
 
     def _append_to_history(self, run: TrainingRun) -> None:
         """Append a run to the history file."""
-        runs = self._load_history()
-        runs.append(run)
-
-        data = [r.to_dict() for r in runs]
         from enigma_engine.core.safe_save import atomic_write_json
 
-        atomic_write_json(self.history_path, data)
+        with self._history_lock:
+            runs = self._load_history()
+            runs.append(run)
+            atomic_write_json(self.history_path, [r.to_dict() for r in runs])
 
     def _load_history(self) -> list[TrainingRun]:
         """Load history from disk."""

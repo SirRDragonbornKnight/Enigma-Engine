@@ -39,6 +39,9 @@ SOURCE_DIRS = [
     ("C4", BASE_DIR / "c4"),
     ("Wayback", BASE_DIR / "wayback"),
     ("Fandom", BASE_DIR / "fandom"),
+    ("DCLM", BASE_DIR / "dclm"),
+    ("FineMath", BASE_DIR / "finemath"),
+    ("The Stack", BASE_DIR / "the_stack"),
 ]
 SE_DIR = BASE_DIR / "stackexchange"
 

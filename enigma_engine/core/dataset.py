@@ -379,10 +379,11 @@ def _iter_directory(
     for i, f in enumerate(files):
         try:
             file_size = f.stat().st_size
-        except OSError:
+        except OSError as exc:
+            logger.warning("Skipping unreadable file %s: %s", f, exc)
             continue
         if file_size > MAX_FILE_SIZE:
-            logger.warning("Skipping %s (%d MB) — exceeds MAX_FILE_SIZE", f, file_size // 1_000_000)
+            logger.warning("Skipping %s (%d MB) -- exceeds MAX_FILE_SIZE", f, file_size // 1_000_000)
             continue
 
         suffix = f.suffix.lower()

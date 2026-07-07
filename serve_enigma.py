@@ -77,6 +77,12 @@ _p.add_argument(
 ARGS, _ = _p.parse_known_args()
 
 print(f"Loading Enigma from {ARGS.model} ...", flush=True)
+if not Path(ARGS.model).exists():
+    raise SystemExit(
+        f"checkpoint not found: {ARGS.model}\n"
+        "Pass --model <path to an Enigma .pth checkpoint> (the default only "
+        "exists inside a repo checkout with trained models)"
+    )
 _ck = torch.load(ARGS.model, map_location="cpu", weights_only=False)  # our own checkpoint
 if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
     raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
@@ -868,7 +874,13 @@ def memory_clear():
     return {"ok": True, "cleared": MEMORY.clear()}
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Run the server. Console-script entry point (pyproject [project.scripts])
+    and the __main__ path share this."""
     print(f"Enigma OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     print(f"In Odysseus:  /setup local http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     uvicorn.run(app, host=ARGS.host, port=ARGS.port, log_level="warning")
+
+
+if __name__ == "__main__":
+    main()

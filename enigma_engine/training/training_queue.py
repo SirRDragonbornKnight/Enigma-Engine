@@ -273,8 +273,12 @@ class TrainingQueue:
             self._running = True
             self._paused = False
             self._stop_requested = False
-        self._thread = threading.Thread(target=self._run_loop, name="TrainingQueue", daemon=True)
-        self._thread.start()
+            # Assigned under the lock: a loop thread from an earlier
+            # start() compares itself against this and exits when
+            # superseded, so two loops never process jobs concurrently.
+            self._thread = threading.Thread(target=self._run_loop, name="TrainingQueue", daemon=True)
+            thread = self._thread
+        thread.start()
         logger.info("Training queue started")
 
     def pause(self) -> None:
@@ -304,56 +308,64 @@ class TrainingQueue:
 
     def _run_loop(self) -> None:
         """Main queue processing loop (runs in background thread)."""
+        me = threading.current_thread()
         try:
             while True:
                 with self._lock:
-                    if not self._running or self._stop_requested:
+                    # `self._thread is not me` = a later start() superseded
+                    # this loop; it must exit even though _running is True.
+                    if not self._running or self._stop_requested or self._thread is not me:
                         break
                     paused = self._paused
                 if paused:
                     time.sleep(0.5)
                     continue
 
-                # Find next pending job
-                job = self._next_pending()
+                # Claim next pending job
+                job = self._claim_next_pending()
                 if job is None:
                     # No more pending jobs — queue complete
                     break
 
                 self._execute_job(job)
 
+            owns_queue = False
             with self._lock:
-                self._running = False
-            self._current_job = None
+                if self._thread is me:
+                    self._running = False
+                    self._current_job = None
+                    owns_queue = True
 
-            if self.on_queue_complete:
+            if owns_queue and self.on_queue_complete:
                 try:
                     self.on_queue_complete()
                 except Exception as exc:
                     logger.debug("Queue complete callback error: %s", exc)
 
-            logger.info("Training queue finished")
+            if owns_queue:
+                logger.info("Training queue finished")
         except Exception as exc:
             import traceback
 
             logger.error("Training queue loop error: %s\n%s", exc, traceback.format_exc())
-            self._running = False
+            with self._lock:
+                if self._thread is me:
+                    self._running = False
 
-    def _next_pending(self) -> TrainingJob | None:
-        """Get the next pending job."""
+    def _claim_next_pending(self) -> TrainingJob | None:
+        """Find AND claim the next pending job under one lock acquisition,
+        so two loop threads can never both pick up the same job."""
         with self._lock:
             for job in self._jobs:
                 if job.status == "pending":
+                    job.status = "running"
+                    job.started_at = datetime.now().isoformat()
+                    self._current_job = job
                     return job
         return None
 
     def _execute_job(self, job: TrainingJob) -> None:
-        """Execute a single training job."""
-        with self._lock:
-            job.status = "running"
-            job.started_at = datetime.now().isoformat()
-            self._current_job = job
-
+        """Execute a job already claimed by _claim_next_pending."""
         logger.info("Queue: starting job #%d (%s)", job.job_id, job.mode)
         self._save_state()
 
@@ -396,7 +408,10 @@ class TrainingQueue:
                     logger.debug("Job failed callback error: %s", cb_exc)
 
         with self._lock:
-            self._current_job = None
+            # Only clear our own claim: after a stop()/start() supersession
+            # a new loop thread may already hold a different current job.
+            if self._current_job is job:
+                self._current_job = None
         self._save_state()
 
     # ---- Persistence ----
@@ -428,8 +443,7 @@ class TrainingQueue:
             return False
         try:
             data = json.loads(self.save_path.read_text(encoding="utf-8"))
-            self._next_id = int(data.get("next_id", 1))
-            self._jobs = []
+            jobs: list[TrainingJob] = []
             for jd in data.get("jobs", []):
                 job = TrainingJob.from_dict(jd)
                 # Reset interrupted running jobs to pending
@@ -437,8 +451,12 @@ class TrainingQueue:
                     job.status = "pending"
                     job.progress = 0
                     job.message = "Resuming after interruption"
-                self._jobs.append(job)
-            logger.info("Queue loaded: %d jobs (%d pending)", len(self._jobs), self.pending_count)
+                jobs.append(job)
+            # Swap under the lock: a running loop thread reads _jobs
+            with self._lock:
+                self._next_id = int(data.get("next_id", 1))
+                self._jobs = jobs
+            logger.info("Queue loaded: %d jobs (%d pending)", len(jobs), self.pending_count)
             return True
         except Exception as exc:
             logger.error("Queue load error: %s", exc)
@@ -465,12 +483,13 @@ class TrainingQueue:
             lines.append(f"  Current: #{j.job_id} {j.mode} ({j.progress}% - {j.message})")
 
         for job in jobs_snapshot:
+            # ASCII only: summary() prints to the Windows cp1252 console
             icon = {
-                "pending": "○",
-                "running": "●",
-                "completed": "✓",
-                "failed": "✗",
-                "cancelled": "—",
+                "pending": "o",
+                "running": "*",
+                "completed": "+",
+                "failed": "x",
+                "cancelled": "-",
             }.get(job.status, "?")
             loss_str = f" loss={job.best_loss:.4f}" if job.best_loss < float("inf") else ""
             lines.append(f"  {icon} #{job.job_id} {job.mode} [{job.status}]{loss_str}")
@@ -625,12 +644,13 @@ class OvernightPlan:
                 status = r.get("status", "?")
                 loss = r.get("best_loss", float("inf"))
                 loss_str = f" loss={loss:.4f}" if loss < float("inf") else ""
-                icon = "✓" if status == "completed" else "✗"
+                # ASCII only: the plan summary prints to the cp1252 console
+                icon = "+" if status == "completed" else "x"
                 lines.append(f"  {icon} {job['mode']} ({job.get('epochs', '?')} epochs){loss_str}")
             elif i == self.current_job_idx and self.status == "running":
-                lines.append(f"  ● {job['mode']} ({job.get('epochs', '?')} epochs) [RUNNING]")
+                lines.append(f"  * {job['mode']} ({job.get('epochs', '?')} epochs) [RUNNING]")
             else:
-                lines.append(f"  ○ {job['mode']} ({job.get('epochs', '?')} epochs)")
+                lines.append(f"  o {job['mode']} ({job.get('epochs', '?')} epochs)")
 
         return "\n".join(lines)
 

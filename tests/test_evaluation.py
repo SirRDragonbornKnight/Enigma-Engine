@@ -2,6 +2,44 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+import torch
+
+from enigma_engine.core.chat_format import IM_END, TOOL_CALL, TOOL_CALL_END, attach_chat_tokens
+
+
+@pytest.fixture(scope="module")
+def chat_tok():
+    from enigma_engine.core.tokenizer import get_tokenizer
+
+    tok = get_tokenizer("bpe")
+    attach_chat_tokens(tok)
+    return tok
+
+
+class _StubGenModel:
+    """Model stand-in: generate() appends canned ids to the prompt and
+    records the prompt it was given."""
+
+    def __init__(self, gen_ids: list[int]):
+        self._gen = gen_ids
+        self.training = False
+        self.seen_prompt_ids: list[int] | None = None
+
+    def eval(self):
+        self.training = False
+
+    def train(self):
+        self.training = True
+
+    def generate(self, x, **kwargs):
+        self.seen_prompt_ids = x[0].tolist()
+        return torch.cat([x, torch.tensor([self._gen], dtype=torch.long, device=x.device)], dim=1)
+
+
+def _tool_call_ids(tok, payload: str) -> list[int]:
+    return [TOOL_CALL] + tok.encode(payload, add_special_tokens=False) + [TOOL_CALL_END, IM_END]
+
 
 class TestTrainingEvaluation:
     """Test before/after training evaluation."""
@@ -36,7 +74,7 @@ class TestTrainingEvaluation:
         """evaluate_tool_usage returns dict with success metrics."""
         from enigma_engine.training.training_evaluation import evaluate_tool_usage
 
-        result = evaluate_tool_usage(None, None, None, [], device="cpu")
+        result = evaluate_tool_usage(None, None, [], device="cpu")
         assert isinstance(result, dict)
         assert "success_rate" in result
         assert "total_tests" in result
@@ -45,57 +83,65 @@ class TestTrainingEvaluation:
 
 
 class TestToolUsageLiveFormat:
-    """evaluate_tool_usage grades the live <|tool_call|>{json}<|/tool_call|> format."""
+    """evaluate_tool_usage renders the live chat pathway and grades the
+    <|tool_call|>{json}<|/tool_call|> ids."""
 
-    def test_matching_tool_name_passes(self):
+    def test_matching_tool_name_passes(self, chat_tok):
         """A live tool call whose name matches expected_tool counts as success."""
         from enigma_engine.training.training_evaluation import evaluate_tool_usage
 
-        engine = MagicMock()
-        engine.generate.return_value = (
-            '<|tool_call|>{"name": "calculate", "arguments": {"expression": "7 * 8"}}<|/tool_call|>'
+        model = _StubGenModel(
+            _tool_call_ids(chat_tok, '{"name": "calculate", "arguments": {"expression": "7 * 8"}}')
         )
-        model = MagicMock()
-        model.training = False
         cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
-        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        result = evaluate_tool_usage(model, chat_tok, cases, device="cpu")
         assert result["successes"] == 1
         assert result["success_rate"] == 1.0
 
-    def test_name_match_is_case_insensitive(self):
+    def test_prompt_is_rendered_with_tool_offer(self, chat_tok):
+        """The graded pathway is the served one: chat-rendered prompt with the
+        tools system block, not the bare test-case text."""
+        from enigma_engine.core.chat_format import IM_START
+        from enigma_engine.training.training_evaluation import evaluate_tool_usage
+
+        model = _StubGenModel(_tool_call_ids(chat_tok, '{"name": "calculate", "arguments": {}}'))
+        cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
+        evaluate_tool_usage(model, chat_tok, cases, device="cpu")
+        assert model.seen_prompt_ids is not None
+        assert IM_START in model.seen_prompt_ids
+        text = chat_tok.decode(model.seen_prompt_ids, skip_special_tokens=True)
+        assert "Available tools:" in text
+        assert "What is 7 times 8?" in text
+
+    def test_name_match_is_case_insensitive(self, chat_tok):
         """Tool-name matching ignores case."""
         from enigma_engine.training.training_evaluation import evaluate_tool_usage
 
-        engine = MagicMock()
-        engine.generate.return_value = '<|tool_call|>{"name": "Get_Weather", "arguments": {"city": "Tokyo"}}<|/tool_call|>'
-        model = MagicMock()
-        model.training = False
+        model = _StubGenModel(
+            _tool_call_ids(chat_tok, '{"name": "Get_Weather", "arguments": {"city": "Tokyo"}}')
+        )
         cases = [{"prompt": "Weather in Tokyo?", "expected_tool": "get_weather"}]
-        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        result = evaluate_tool_usage(model, chat_tok, cases, device="cpu")
         assert result["successes"] == 1
 
-    def test_wrong_tool_name_fails(self):
+    def test_wrong_tool_name_fails(self, chat_tok):
         """A live tool call with a different name is not a success."""
         from enigma_engine.training.training_evaluation import evaluate_tool_usage
 
-        engine = MagicMock()
-        engine.generate.return_value = '<|tool_call|>{"name": "get_weather", "arguments": {"city": "Tokyo"}}<|/tool_call|>'
-        model = MagicMock()
-        model.training = False
+        model = _StubGenModel(
+            _tool_call_ids(chat_tok, '{"name": "get_weather", "arguments": {"city": "Tokyo"}}')
+        )
         cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
-        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        result = evaluate_tool_usage(model, chat_tok, cases, device="cpu")
         assert result["successes"] == 0
 
-    def test_legacy_cmd_format_not_counted(self):
-        """The retired [CMD]...[/CMD] format no longer scores as a tool call."""
+    def test_plain_text_reply_not_counted(self, chat_tok):
+        """Text mentioning a tool without the tool-call ids is not a call."""
         from enigma_engine.training.training_evaluation import evaluate_tool_usage
 
-        engine = MagicMock()
-        engine.generate.return_value = "[CMD]calculate[/CMD]"
-        model = MagicMock()
-        model.training = False
+        model = _StubGenModel(chat_tok.encode("[CMD]calculate[/CMD]", add_special_tokens=False) + [IM_END])
         cases = [{"prompt": "What is 7 times 8?", "expected_tool": "calculate"}]
-        result = evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        result = evaluate_tool_usage(model, chat_tok, cases, device="cpu")
         assert result["successes"] == 0
 
     def test_default_tool_cases_use_live_tool_names(self):
@@ -145,18 +191,16 @@ class TestEvalModelModeRestore:
         evaluate_model(model, tok, ["hello world"], device="cpu")
         assert not model.training, "model should remain in eval mode"
 
-    def test_evaluate_tool_usage_restores_train_mode(self):
+    def test_evaluate_tool_usage_restores_train_mode(self, chat_tok):
         """evaluate_tool_usage restores model.train() after running."""
         from enigma_engine.training.training_evaluation import evaluate_tool_usage
 
-        model, _ = self._make_model_and_tokenizer()
+        model = _StubGenModel(_tool_call_ids(chat_tok, '{"name": "calculate", "arguments": {}}'))
         model.train()
         assert model.training
 
-        engine = MagicMock()
-        engine.generate.return_value = '<|tool_call|>{"name": "calculate", "arguments": {"expression": "7 * 8"}}<|/tool_call|>'
         cases = [{"prompt": "test", "expected_tool": "calculate"}]
-        evaluate_tool_usage(model, None, engine, cases, device="cpu")
+        evaluate_tool_usage(model, chat_tok, cases, device="cpu")
         assert model.training, "model should be back in training mode"
 
     def test_run_golden_eval_restores_train_mode(self, tmp_path):

@@ -418,6 +418,7 @@ def _rewrite_combined_text(jsonl_path: Path, txt_path: Path) -> int:
     if not jsonl_path.exists():
         return 0
     written = 0
+    seen: set[str] = set()
     txt_path.parent.mkdir(parents=True, exist_ok=True)
     with open(txt_path, "w", encoding="utf-8") as out:
         first = True
@@ -433,6 +434,12 @@ def _rewrite_combined_text(jsonl_path: Path, txt_path: Path) -> int:
             completion = (row.get("completion") or "").strip()
             if not prompt or not completion:
                 continue
+            # First row per prompt wins -- same rule the resume skip uses,
+            # so .jsonl files that accumulated duplicates stay clean here.
+            key = _prompt_key(prompt)
+            if key in seen:
+                continue
+            seen.add(key)
             if not first:
                 out.write("\n")
             out.write(f"User: {prompt}\n\nAssistant: {completion}\n")
@@ -511,10 +518,11 @@ def collect(
             continue
         completion = (completion or "").strip()
         if not completion:
-            logger.warning("prompt %d/%d returned empty completion — skipped", idx, len(prompts))
+            logger.warning("prompt %d/%d returned empty completion -- skipped", idx, len(prompts))
             failed += 1
             continue
         _append_jsonl(jsonl_path, {"prompt": prompt, "completion": completion})
+        done.add(key)
         ok += 1
         if idx % 10 == 0 or idx == len(prompts):
             elapsed = time.time() - started
@@ -533,7 +541,7 @@ def collect(
 
     written = _rewrite_combined_text(jsonl_path, txt_path)
     logger.info(
-        "done: requested=%d ok=%d failed=%d skipped=%d → %s (%d text blocks)",
+        "done: requested=%d ok=%d failed=%d skipped=%d -> %s (%d text blocks)",
         len(prompts),
         ok,
         failed,
@@ -677,7 +685,7 @@ def magpie_collect(
 
     written = _rewrite_combined_text(jsonl_path, txt_path)
     logger.info(
-        "magpie done: requested=%d ok=%d failed=%d duplicate=%d → %s (%d text blocks)",
+        "magpie done: requested=%d ok=%d failed=%d duplicate=%d -> %s (%d text blocks)",
         n,
         ok,
         failed,
@@ -847,7 +855,7 @@ def main(argv: list[str] | None = None) -> int:
         sleep_between=args.sleep_between,
     )
     if summary["ok"] == 0:
-        logger.error("no successful rows written — check teacher endpoint + model name")
+        logger.error("no successful rows written -- check teacher endpoint + model name")
         return 1
     return 0
 

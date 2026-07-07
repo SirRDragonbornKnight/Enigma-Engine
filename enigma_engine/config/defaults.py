@@ -47,9 +47,6 @@ USAGE:
 ENVIRONMENT VARIABLES:
     FORGE_DATA_DIR, FORGE_MODELS_DIR, FORGE_DEVICE, etc.
     Legacy ENIGMA_* variables are also supported.
-
-WARNING: The blocked_paths and blocked_patterns settings are sacred
-         protections that the AI cannot modify at runtime.
 """
 
 import json
@@ -187,21 +184,6 @@ CONFIG = _LazyConfig(
         "min_p": 0.0,
         "repetition_penalty": 1.1,
         "max_gen": 8192,
-        # Pass 156z9dr (N-14): RAG retrieval backend.  "bm25" uses the
-        # built-in BM25/TF-IDF index (no extra deps).  "dense" uses
-        # sentence-transformers + faiss-cpu for semantic embeddings;
-        # falls back to BM25 with a WARNING if either dep is missing.
-        "rag_backend": "bm25",
-        # =========================================================================
-        # THE MESSENGER'S GATE - Server Defaults
-        # =========================================================================
-        # The API server allows distant travelers to commune with the AI.
-        # These settings control access and security.
-        "api_host": "127.0.0.1",
-        "api_port": 5000,
-        "enable_cors": True,
-        "require_api_key": True,  # Require authentication for API access
-        "enigma_api_key": None,  # Set via env ENIGMA_API_KEY or forge_config.json
         # =========================================================================
         # THE FORGE'S HEART - Hardware Configuration
         # =========================================================================
@@ -209,47 +191,6 @@ CONFIG = _LazyConfig(
         # The precision of calculations affects both speed and quality.
         "device": "auto",  # "auto", "cpu", "cuda", "mps"
         "precision": "auto",  # "auto", "float32", "float16", "bfloat16"
-        # Backend selection for neural network operations
-        # "auto" - Auto-detect (PyTorch if available, CPU fallback)
-        # "torch" - Always use PyTorch
-        "nn_backend": "auto",
-        # =========================================================================
-        # Capability Toggles
-        # =========================================================================
-        # Features that have backing code set to True, others commented out
-        "enable_offloading": False,  # CPU+GPU layer offloading (inference.py supports this)
-        "offload_folder": None,  # Folder for offloaded weights (None = temp)
-        "max_gpu_layers": None,  # Max layers on GPU (None = auto)
-        # =========================================================================
-        # Resource Management
-        # =========================================================================
-        "resource_mode": "performance",  # "minimal", "balanced", "performance"
-        "cpu_threads": 0,  # 0 = auto
-        "memory_limit_mb": 0,  # 0 = no limit
-        "gpu_memory_fraction": 0.85,  # Use 85% of GPU VRAM
-        # =========================================================================
-        # Security Settings
-        # =========================================================================
-        "blocked_paths": [
-            "C:/Windows",
-            "C:/Program Files",
-            "C:/Program Files (x86)",
-            "/etc",
-            "/usr",
-            "/bin",
-            "/sbin",
-        ],
-        "blocked_patterns": [
-            "*.exe",
-            "*.dll",
-            "*.sys",
-            "*.pem",
-            "*.key",
-            "*password*",
-            "*secret*",
-            "*.env",
-            ".git/config",
-        ],
         # Plugin allowlist — only these plugin filenames are loaded.
         # Empty list means ALL discovered plugins are loaded (legacy behavior).
         # Example: ["hello.py", "my_tools.py"]
@@ -258,7 +199,6 @@ CONFIG = _LazyConfig(
         # Logging
         # =========================================================================
         "log_level": "INFO",
-        "log_to_file": False,
     }
 )
 
@@ -381,35 +321,20 @@ def _load_env_config() -> None:
 
     Supported Variables:
         FORGE_DATA_DIR, FORGE_MODELS_DIR, FORGE_MEMORY_DIR,
-        FORGE_DEVICE, FORGE_API_HOST, FORGE_API_PORT,
-        FORGE_LOG_LEVEL, ENIGMA_API_KEY
+        FORGE_DEVICE, FORGE_LOG_LEVEL
     """
     env_mappings = {
         "FORGE_DATA_DIR": "data_dir",
         "FORGE_MODELS_DIR": "models_dir",
         "FORGE_MEMORY_DIR": "memory_dir",
         "FORGE_DEVICE": "device",
-        "FORGE_API_HOST": "api_host",
-        "FORGE_API_PORT": "api_port",
         "FORGE_LOG_LEVEL": "log_level",
-        "ENIGMA_API_KEY": "enigma_api_key",
     }
 
     for env_var, config_key in env_mappings.items():
         if env_var in os.environ:
-            value: Any = os.environ[env_var]
-            # Type conversion with validation for port numbers
-            if config_key == "api_port":
-                try:
-                    value = int(value)
-                    if not (1 <= value <= 65535):
-                        logger.warning(f"Invalid port {value}, using default")
-                        continue
-                except ValueError:
-                    logger.warning(f"Invalid port value {value}, using default")
-                    continue
             # Bypass _LazyConfig proxy — called from inside _init_lock.
-            dict.__setitem__(CONFIG, config_key, value)
+            dict.__setitem__(CONFIG, config_key, os.environ[env_var])
 
 
 # =============================================================================
@@ -492,6 +417,12 @@ def _ensure_initialized() -> None:
         if _initialized:
             return
 
+        # Overrides load FIRST: creating directories from the defaults
+        # would both spawn unwanted default dirs and skip the dirs the
+        # user actually configured.
+        _load_user_config()
+        _load_env_config()
+
         # Use dict.__getitem__ to bypass _LazyConfig proxy —
         # the proxy calls _ensure_initialized() which would deadlock
         # on the non-reentrant _init_lock we already hold.
@@ -501,7 +432,4 @@ def _ensure_initialized() -> None:
                 Path(_raw_get(CONFIG, dir_key)).mkdir(parents=True, exist_ok=True)
             except (OSError, PermissionError) as e:
                 logger.warning(f"Could not create directory {_raw_get(CONFIG, dir_key)}: {e}")
-
-        _load_user_config()
-        _load_env_config()
         _initialized = True

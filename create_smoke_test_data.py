@@ -414,6 +414,10 @@ def build_dpo_jsonl() -> str:
 
 
 def main():
+    # A fresh clone has neither directory yet
+    PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     # Pre-Train data
     pretrain_path = PRETRAIN_DIR / "smoke_test.txt"
     print(f"Generating {pretrain_path} (~{TARGET_PRETRAIN_KB} KB)...")
@@ -438,10 +442,13 @@ def main():
     size_kb = dpo_path.stat().st_size / 1024
     print(f"  Created: {size_kb:.1f} KB ({len(DPO_PAIRS)} pairs)")
 
+    # Paths are anchored at the script's directory, so print them relative
+    # to that anchor: relative_to(cwd) raises when run from anywhere else.
+    root = Path(__file__).parent
     print("\nDone! Files created:")
-    print(f"  Pre-Train:  {pretrain_path.relative_to(Path.cwd())}")
-    print(f"  Basic/Solo: {basic_path.relative_to(Path.cwd())}")
-    print(f"  DPO/RLHF:  {dpo_path.relative_to(Path.cwd())}")
+    print(f"  Pre-Train:  {pretrain_path.relative_to(root)}")
+    print(f"  Basic/Solo: {basic_path.relative_to(root)}")
+    print(f"  DPO/RLHF:  {dpo_path.relative_to(root)}")
     print("\nUsage in FORGE:")
     print("  Pre-Train  -> select 'data/pretrain' directory")
     print("  Basic/Solo -> browse to 'data/smoke_test_basic.txt'")

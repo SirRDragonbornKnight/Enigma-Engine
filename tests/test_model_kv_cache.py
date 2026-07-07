@@ -327,3 +327,33 @@ def test_streaming_cache_shifts_zero_points_with_data():
     # Sinks 0-1 stay; token 2 is evicted; window keeps 3-5 plus the new 6.
     assert vals_k == [0, 1, 3, 4, 5, 6]
     assert vals_v == [0, 1, 3, 4, 5, 6]
+
+
+@torch.no_grad()
+def test_h2o_overflow_shift_moves_scores_with_positions():
+    """A sliding-window overflow shift rolls the score accumulator with
+    the K/V it scores, and the slots the new tokens land in start at zero."""
+    cache = H2OKVCache(
+        heavy_hitter_count=2,
+        recent_window=2,
+        **_cache_kwargs(max_seq_len=8),
+    )
+    k = torch.zeros(1, 8, 2, 8)
+    for t in range(8):
+        k[0, t] = t
+    cache.update(k, k.clone())
+    cache._attn_scores[0] = torch.arange(8, dtype=torch.float32)
+
+    # 2 more tokens overflow: positions shift left by 2
+    k2 = torch.zeros(1, 2, 2, 8)
+    k2[0, 0], k2[0, 1] = 8, 9
+    cache.update(k2, k2.clone())
+
+    # Surviving positions carry their own scores (score t follows token t)
+    assert cache._attn_scores[0, :6].tolist() == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+    # The new tokens' slots accumulated nothing yet
+    assert cache._attn_scores[0, 6:].tolist() == [0.0, 0.0]
+    # And the K/V really did shift (token value == original position)
+    keys, _ = cache.get()
+    assert keys[0, 0, 0, 0].item() == 2.0
+    assert keys[0, 7, 0, 0].item() == 9.0

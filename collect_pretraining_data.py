@@ -399,7 +399,7 @@ def _download_wiki_dump(resume: bool = True) -> bool:
         mode = "ab"
 
     print("  [Wiki Dump] Downloading from dumps.wikimedia.org...")
-    print("  [Wiki Dump] This is ~22 GB — expect 30-90 min depending on connection speed.")
+    print("  [Wiki Dump] This is ~22 GB -- expect 30-90 min depending on connection speed.")
     print("  [Wiki Dump] Safe to Ctrl+C and --resume later.")
 
     try:
@@ -409,6 +409,14 @@ def _download_wiki_dump(resume: bool = True) -> bool:
             print("  [Wiki Dump] Download already complete.")
             return True
         resp.raise_for_status()
+
+        # A server that ignores Range answers 200 with the FULL body;
+        # appending that onto the partial file corrupts the archive (and
+        # the size check would then bless it as complete). Start over.
+        if headers.get("Range") and resp.status_code != 206:
+            print("  [Wiki Dump] Server ignored the resume request -- restarting from zero.")
+            mode = "wb"
+            downloaded = 0
 
         # Get total size from Content-Length or Content-Range
         total = None
@@ -442,7 +450,7 @@ def _download_wiki_dump(resume: bool = True) -> bool:
                             eta_min = remaining_bytes / max(speed * 1e6, 1) / 60
                             print(
                                 f"  [Wiki Dump] {downloaded / 1e9:.1f}/{total / 1e9:.1f} GB "
-                                f"({pct:.0f}%) @ {speed:.0f} MB/s — ~{eta_min:.0f} min left"
+                                f"({pct:.0f}%) @ {speed:.0f} MB/s -- ~{eta_min:.0f} min left"
                             )
                         else:
                             print(f"  [Wiki Dump] {downloaded / 1e9:.1f} GB downloaded @ {speed:.0f} MB/s...")
@@ -1746,6 +1754,13 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
             f"Run with --resume to continue."
         )
     except Exception as e:
+        # Flush the pending batch: records_consumed is saved below, and
+        # consumed-but-unwritten records would be skipped forever on resume.
+        if batch_text:
+            filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
+            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            saved += 1
+            total_bytes += batch_size
         print(f"  [FineWeb-Edu] Error: {e}")
         print("  [FineWeb-Edu] Run with --resume to retry.")
 
@@ -1867,6 +1882,12 @@ def fetch_stackexchange(sites: list[str], min_score: int, progress: dict) -> int
                 continue
             else:
                 resp.raise_for_status()
+                # A server that ignores Range answers 200 with the FULL
+                # body; appending it would corrupt the archive. Start over.
+                if headers.get("Range") and resp.status_code != 206:
+                    print(f"  [StackExchange] {site_name}: server ignored resume -- restarting from zero.")
+                    mode = "wb"
+                    existing_size = 0
                 total_dl = existing_size
                 with open(archive_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=10 * 1024 * 1024):
@@ -1965,6 +1986,17 @@ def fetch_stackexchange(sites: list[str], min_score: int, progress: dict) -> int
 
         except ET.ParseError as e:
             print(f"  [StackExchange] {site_name}: XML parse error: {e}")
+            # A mid-file parse error means only part of the dump was read:
+            # the site is NOT complete. Keep the archive so a rerun can
+            # re-extract instead of freezing the partial data forever.
+            total_saved += saved
+            try:
+                if posts_xml_path.exists():
+                    posts_xml_path.unlink()
+            except OSError:
+                pass
+            print(f"  [StackExchange] {site_name}: {saved} posts saved (INCOMPLETE -- rerun to retry)")
+            continue
 
         total_saved += saved
         completed_sites.add(site_name)
@@ -2731,7 +2763,7 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
             try:
                 future.result()
             except Exception as e:
-                print(f"  [Fandom] {lab}: error — {e}")
+                print(f"  [Fandom] {lab}: error -- {e}")
 
     total = shared["total_saved"]
     if shared["ai_rejected"]:
@@ -2908,6 +2940,13 @@ def _fetch_hf_streaming(
             f"Run with --resume to continue."
         )
     except Exception as e:
+        # Flush the pending batch: records_consumed is saved below, and
+        # consumed-but-unwritten records would be skipped forever on resume.
+        if batch_text:
+            filepath = output_dir / f"{prefix}_{saved:08d}.txt"
+            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            saved += 1
+            total_bytes += batch_size
         print(f"  [{label}] Error: {e}")
         print(f"  [{label}] Run with --resume to retry.")
 
@@ -3061,7 +3100,11 @@ _STACK_PERMISSIVE = {
 
 
 def fetch_the_stack(target_gb: float, progress: dict) -> int:
-    """Download source code from The Stack v2 (bigcode/the-stack-v2).
+    """Download source code from The Stack (bigcode/the-stack).
+
+    v1 is the config that ships file contents inline (`content` +
+    `max_stars_repo_licenses`, the fields this loop reads); v2 publishes
+    only blob ids that need a separate Software Heritage S3 fetch.
 
     Iterates over 16 priority languages (SmolLM3 selection) until the target
     GB is reached. Filters to permissive licenses (MIT/Apache/BSD/ISC/etc.).
@@ -3111,12 +3154,13 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
         print(f"  [The Stack] Language: {lang} | {remaining_gb:.2f} GB remaining")
 
         try:
+            # v1 selects languages by data_dir; its C++ folder is "c++"
+            stack_dir_name = {"cpp": "c++"}.get(lang, lang)
             ds = load_dataset(
-                "bigcode/the-stack-v2",
-                name=lang,
+                "bigcode/the-stack",
+                data_dir=f"data/{stack_dir_name}",
                 split="train",
                 streaming=True,
-                trust_remote_code=True,
             )
         except Exception as e:
             err = str(e)
@@ -3126,7 +3170,7 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
                 print("  [The Stack] Then accept the license at:")
                 print("  [The Stack]   https://huggingface.co/datasets/bigcode/the-stack-v2")
                 break  # auth issue — stop all languages, not just this one
-            print(f"  [The Stack] Could not load '{lang}': {e} — skipping")
+            print(f"  [The Stack] Could not load '{lang}': {e} -- skipping")
             continue
 
         if records_consumed > 0:
@@ -3195,7 +3239,14 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
             )
             return total_saved
         except Exception as e:
-            print(f"  [The Stack/{lang}] Error: {e} — moving to next language")
+            # Flush the pending batch: records_consumed is saved below, and
+            # consumed-but-unwritten records would be skipped forever.
+            if batch_text:
+                filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
+                filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                total_saved += 1
+                total_bytes += batch_size
+            print(f"  [The Stack/{lang}] Error: {e} -- moving to next language")
 
         progress[lang_progress_key] = {"records_consumed": records_consumed}
         save_progress(progress)

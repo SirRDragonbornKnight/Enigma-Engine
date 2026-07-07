@@ -22,6 +22,8 @@ from .safe_save import atomic_torch_save
 logger = logging.getLogger(__name__)
 
 # ── Architecture fields that MUST match between merged models ──────
+# Everything that changes the state dict's keys, shapes, or the meaning
+# of a weight belongs here; a mismatch merges apples with oranges.
 _ARCH_FIELDS = (
     "dim",
     "n_layers",
@@ -30,6 +32,18 @@ _ARCH_FIELDS = (
     "hidden_dim",
     "vocab_size",
     "max_seq_len",
+    "use_swiglu",
+    "use_rope",
+    "use_qk_norm",
+    "use_layer_scale",
+    "use_weight_norm",
+    "use_moe",
+    "use_mixture_of_depths",
+    "kv_share_groups",
+    "n_predict_heads",
+    "early_exit_layer",
+    "vision_hidden_size",
+    "audio_hidden_size",
 )
 
 # Keys to skip during merging (runtime-only / recomputed)
@@ -51,12 +65,26 @@ def _validate_compatible(configs: list[ForgeConfig]) -> None:
 
 
 def _load_checkpoint(path: str | Path, device: str = "cpu"):
-    """Return (state_dict, ForgeConfig) from a checkpoint file."""
+    """Return (state_dict, ForgeConfig) from a checkpoint file.
+
+    Raises:
+        ValueError: If the checkpoint carries no model config. Falling
+            back to defaults would stamp a default architecture
+            (dim=512, vocab=32000) into the merged file, and serve or
+            finetune would later rebuild the wrong model from it.
+    """
     ckpt = safe_load_weights(str(path), map_location=device)
     cfg_dict = ckpt.get("model_config", ckpt.get("config", {}))
     if isinstance(cfg_dict, dict) and "epochs" in cfg_dict:
         cfg_dict = ckpt.get("model_config", {})
-    config = ForgeConfig(**{k: v for k, v in cfg_dict.items() if k in ForgeConfig.__dataclass_fields__})
+    known = {k: v for k, v in cfg_dict.items() if k in ForgeConfig.__dataclass_fields__} if isinstance(cfg_dict, dict) else {}
+    if not known:
+        raise ValueError(
+            f"{path}: checkpoint carries no model config -- merging it would "
+            "stamp a default architecture into the output. Merge .pth files "
+            "saved with their config (model_state_dict + config)."
+        )
+    config = ForgeConfig(**known)
     sd = get_state_dict(ckpt)
     return sd, config
 
@@ -64,6 +92,23 @@ def _load_checkpoint(path: str | Path, device: str = "cpu"):
 def _filter_keys(sd: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Remove non-parameter keys that should not be merged."""
     return {k: v for k, v in sd.items() if k not in _SKIP_KEYS}
+
+
+def _common_keys(sds: Sequence[dict[str, torch.Tensor]]) -> list[str]:
+    """Sorted key intersection; raise if any model carries extra tensors.
+
+    Silently dropping a tensor present in only one model would ship a
+    merged checkpoint missing weights the config still promises.
+    """
+    key_sets = [set(sd) for sd in sds]
+    common = set.intersection(*key_sets)
+    extra = sorted(set.union(*key_sets) - common)
+    if extra:
+        raise ValueError(
+            f"models do not share the same tensors; {len(extra)} key(s) "
+            f"present in only some models (first few: {extra[:5]})"
+        )
+    return sorted(common)
 
 
 # ── SLERP ──────────────────────────────────────────────────────────
@@ -78,12 +123,14 @@ def _slerp_tensor(a: torch.Tensor, b: torch.Tensor, t: float) -> torch.Tensor:
     b_norm = torch.nn.functional.normalize(b_flat, dim=0)
 
     dot = torch.clamp(torch.dot(a_norm, b_norm), -1.0, 1.0)
-    omega = torch.acos(dot)
 
-    # Degenerate case — vectors are (anti-)parallel
-    if omega.abs() < 1e-6:
+    # (Anti-)parallel vectors: no unique geodesic, and sin(omega) -> 0
+    # blows the coefficients up. Fall back to linear interpolation on
+    # BOTH ends of the range (dot -> -1 as much as dot -> +1).
+    if dot.abs() > 0.9995:
         return ((1.0 - t) * a + t * b).to(a.dtype)
 
+    omega = torch.acos(dot)
     sin_omega = torch.sin(omega)
     coeff_a = torch.sin((1.0 - t) * omega) / sin_omega
     coeff_b = torch.sin(t * omega) / sin_omega
@@ -124,7 +171,7 @@ def slerp_merge(
     sd_a = _filter_keys(sd_a)
     sd_b = _filter_keys(sd_b)
 
-    keys = sorted(set(sd_a) & set(sd_b))
+    keys = _common_keys([sd_a, sd_b])
     merged = {}
     total = len(keys)
 
@@ -201,7 +248,7 @@ def ties_merge(
         all_cfg.append(cfg)
     _validate_compatible(all_cfg)
 
-    keys = sorted(set(sd_base) & set.intersection(*(set(sd) for sd in all_sd)))
+    keys = _common_keys([sd_base, *all_sd])
     merged = {}
     total = len(keys)
 
@@ -222,10 +269,11 @@ def ties_merge(
             mask = flat.abs() >= threshold
             trimmed.append((flat * mask.float()).reshape(delta.shape))
 
-        # Step 3: Elect sign — majority vote on sign per element
-        stacked = torch.stack(trimmed)
-        sign_votes = torch.sign(stacked).sum(dim=0)
-        elected_sign = torch.sign(sign_votes)
+        # Step 3: Elect sign — magnitude-weighted vote per element (the
+        # TIES election sums the trimmed VALUES, so large deltas outvote
+        # many small opposing ones), scaled by each model's weight.
+        weighted_stack = torch.stack([w * d for w, d in zip(weights, trimmed)])
+        elected_sign = torch.sign(weighted_stack.sum(dim=0))
 
         # Step 4: Disjoint merge — average matching-sign values
         weighted_sum = torch.zeros_like(base_tensor)
@@ -292,7 +340,7 @@ def linear_merge(
     sd_a = _filter_keys(sd_a)
     sd_b = _filter_keys(sd_b)
 
-    keys = sorted(set(sd_a) & set(sd_b))
+    keys = _common_keys([sd_a, sd_b])
     merged = {}
     total = len(keys)
 

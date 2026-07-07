@@ -33,38 +33,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Live tool-call markers wrapping the JSON payload, taken from the
-# canonical chat renderer so the wire format cannot drift from here.
-from enigma_engine.core.chat_format import CHAT_TOKENS, TOOL_CALL, TOOL_CALL_END
-
-_MARKER_BY_ID = {token_id: text for text, token_id in CHAT_TOKENS.items()}
-TOOL_CALL_OPEN = _MARKER_BY_ID[TOOL_CALL]
-TOOL_CALL_CLOSE = _MARKER_BY_ID[TOOL_CALL_END]
-
-
-def _parsed_tool_name(response: str) -> str | None:
-    """Return the tool name from the first live tool call in ``response``.
-
-    A tool call is ``<|tool_call|>{json}<|/tool_call|>`` with a JSON
-    payload carrying a ``"name"`` field. Returns None when no well-formed
-    call is present.
-    """
-    if not response:
-        return None
-    start = response.find(TOOL_CALL_OPEN)
-    if start < 0:
-        return None
-    start += len(TOOL_CALL_OPEN)
-    end = response.find(TOOL_CALL_CLOSE, start)
-    payload = response[start:end] if end >= 0 else response[start:]
-    try:
-        obj = json.loads(payload.strip())
-    except (ValueError, TypeError):
-        return None
-    name = obj.get("name") if isinstance(obj, dict) else None
-    return name if isinstance(name, str) else None
-
-
 def evaluate_model(
     model: nn.Module,
     tokenizer: Any,
@@ -171,21 +139,28 @@ def evaluate_model(
 def evaluate_tool_usage(
     model: nn.Module,
     tokenizer: Any,
-    engine: Any,
     test_cases: list[dict[str, Any]],
     device: str = "cuda",
+    tools: list[dict[str, Any]] | None = None,
+    max_new_tokens: int = 200,
 ) -> dict[str, Any]:
-    """Evaluate model's tool usage accuracy.
+    """Evaluate model's tool usage accuracy on the live serving pathway.
+
+    Each prompt is rendered through the canonical chat template with the
+    tool offer in the system message (the exact preamble serve_enigma
+    uses) and a generation prompt appended; the generated ids are parsed
+    at ID level. The model only emits ``<|tool_call|>`` inside this
+    rendered format, so grading any other pathway scores a working model
+    at zero.
 
     Args:
-        model: The model to evaluate
-        tokenizer: Tokenizer for encoding/decoding
-        engine: Object whose ``generate(prompt, ...)`` applies the live
-            chat template and tool offer before sampling. The model emits
-            ``<|tool_call|>`` only inside the rendered chat format, so a
-            bare-completion engine scores every case as a miss.
+        model: The model to evaluate (must expose ``generate(input_ids)``)
+        tokenizer: Tokenizer with the chat tokens attached
         test_cases: List of dicts with "prompt" and "expected_tool" keys
         device: Device to run evaluation on
+        tools: OpenAI-style tool specs to offer. Defaults to minimal specs
+            derived from the distinct expected_tool names in test_cases.
+        max_new_tokens: Generation budget per case
 
     Returns:
         Dict with:
@@ -194,6 +169,10 @@ def evaluate_tool_usage(
             - successes: int
             - failures: int
     """
+    import torch
+
+    from enigma_engine.core.chat_format import IM_END, parse_assistant_ids, render_chat, render_tools_system
+
     if not test_cases:
         return {
             "success_rate": 0.0,
@@ -201,6 +180,25 @@ def evaluate_tool_usage(
             "successes": 0,
             "failures": 0,
         }
+
+    if tools is None:
+        names = sorted({tc.get("expected_tool", "") for tc in test_cases if tc.get("expected_tool")})
+        tools = [{"name": n, "description": n, "parameters": {}} for n in names]
+    # The exact system shape the SFT data leads with (serve_enigma builds
+    # the same one): preamble + "Available tools:" block.
+    system = (
+        "You are Enigma. You can use tools when they are needed; "
+        "answer directly when they are not.\n" + render_tools_system(tools)
+    )
+    eos = getattr(tokenizer, "eos_token_id", 2)
+
+    # Run on the model's own device: a mismatched `device` argument would
+    # fail every case inside the per-case guard and read as a 0% tool
+    # score instead of an error.
+    try:
+        device = str(next(model.parameters()).device)
+    except (AttributeError, StopIteration, TypeError):
+        pass
 
     was_training = model.training
     model.eval()
@@ -220,15 +218,24 @@ def evaluate_tool_usage(
                         "so this case cannot score"
                     )
 
-                # Generate response
-                response = engine.generate(
-                    prompt,
-                    max_tokens=200,
-                    temperature=0.0,  # Deterministic for evaluation
+                msgs = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ]
+                prompt_ids = render_chat(tokenizer, msgs, add_generation_prompt=True)
+                x = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+                # top_k=1 = greedy: deterministic without a zero temperature
+                out = model.generate(
+                    x,
+                    max_new_tokens=max_new_tokens,
+                    temperature=1.0,
+                    top_k=1,
+                    repetition_penalty=1.0,
+                    stop_tokens=[eos, IM_END],
                 )
-
-                # Parse the live tool-call payload and match the tool name
-                called = _parsed_tool_name(response)
+                gen_ids = out[0].tolist()[len(prompt_ids) :]
+                parsed = parse_assistant_ids(tokenizer, gen_ids)
+                called = next((c.get("name") for c in parsed["tool_calls"] if c.get("name")), None)
                 if called is not None and expected_tool and called.lower() == expected_tool.lower():
                     successes += 1
 
@@ -315,7 +322,6 @@ def run_golden_eval(
     Returns:
         Dict with pass_rate, passed, total, and per-case results.
     """
-    import json
     import torch
 
     golden_path = Path(golden_path)

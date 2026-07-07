@@ -15,7 +15,10 @@ from pathlib import Path
 from typing import Callable
 
 
-_ARITH_EXPR_RE = re.compile(r"(-?\d+(?:\.\d+)?(?:\s*[+\-*/]\s*-?\d+(?:\.\d+)?)+)")
+# Spans of arithmetic characters (digits, operators, parens). A pure
+# regex cannot balance parentheses, so candidates are validated by
+# _safe_eval_arithmetic (which parses with ast and DOES handle parens).
+_ARITH_SPAN_RE = re.compile(r"[-(]*\s*\d[\d.\s+\-*/()]*")
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?")
 _CODE_BLOCK_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
@@ -78,6 +81,28 @@ def _safe_eval_arithmetic(expr: str) -> float | None:
         return None
 
 
+def _infer_arith_result(prompt: str) -> float | None:
+    """Evaluate the arithmetic expression a prompt asks about, or None.
+
+    Handles parentheses ("(2+3)*4" -> 20). Each candidate span is trimmed
+    from the end until it parses, so trailing text and unmatched close
+    parens are tolerated; a span must contain a binary operator to count.
+    """
+    for match in _ARITH_SPAN_RE.finditer(prompt):
+        # Cap the span: real arithmetic prompts are short, and the
+        # end-trim loop below is quadratic in the candidate length.
+        candidate = match.group(0).strip()[:128]
+        while candidate:
+            # A binary operator must sit between operands, not just a
+            # leading unary sign.
+            if any(op in candidate[1:] for op in "+-*/"):
+                value = _safe_eval_arithmetic(candidate)
+                if value is not None:
+                    return value
+            candidate = candidate[:-1].strip()
+    return None
+
+
 def _extract_last_number(text: str) -> float | None:
     matches = _NUMBER_RE.findall(text)
     if not matches:
@@ -118,11 +143,10 @@ def _math_correct(
                 return abs(pred_num - gt_num) <= tolerance
         return answer_text.strip().lower() == str(ground_truth).strip().lower()
 
-    expr_match = _ARITH_EXPR_RE.search(prompt)
-    if not expr_match:
+    expected = _infer_arith_result(prompt)
+    if expected is None:
         return None
-    expected = _safe_eval_arithmetic(expr_match.group(1))
-    if expected is None or pred_num is None:
+    if pred_num is None:
         return False
     return abs(pred_num - expected) <= tolerance
 

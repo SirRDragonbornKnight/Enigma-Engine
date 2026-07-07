@@ -42,3 +42,15 @@ def test_reasoning_reward_matches_grpo2_contract_example():
         )
         == 0.0
     )
+
+
+def test_math_reward_infers_parenthesised_ground_truth():
+    """Inferred-truth math must honor parentheses: (2+3)*4 = 20, not the
+    bare 2+3 = 5 the old regex matched (which inverted the reward)."""
+    from enigma_engine.core.reward_functions import math_reward
+
+    assert math_reward("What is (2+3)*4?", "<answer>20</answer>") == 1.0
+    assert math_reward("What is (2+3)*4?", "<answer>5</answer>") == 0.0
+    assert math_reward("Compute 2*(3+4).", "The answer is 14") == 1.0
+    # No arithmetic to infer -> not scorable -> 0.0
+    assert math_reward("What is the capital of France?", "Paris") == 0.0

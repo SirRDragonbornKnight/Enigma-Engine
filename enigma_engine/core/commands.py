@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -20,8 +21,10 @@ logger = logging.getLogger(__name__)
 
 # Shell metacharacters that must never appear in command arguments.
 # These could be used for injection if an AI-generated argument
-# reaches a subprocess or shell eval.
-SHELL_METACHARACTERS = frozenset(";|&`{}*?<>()[]")
+# reaches a subprocess or shell eval. Parentheses are NOT stripped:
+# they are ordinary path characters on Windows ("Program Files (x86)")
+# and cannot chain commands from inside an argument.
+SHELL_METACHARACTERS = frozenset(";|&`{}*?<>[]")
 
 
 def sanitize_args(args: list[str]) -> list[str]:
@@ -45,7 +48,7 @@ def sanitize_args(args: list[str]) -> list[str]:
                 )
                 continue
             logger.warning(
-                "Sanitized command arg: %r → %r (removed shell metacharacters)",
+                "Sanitized command arg: %r -> %r (removed shell metacharacters)",
                 arg,
                 stripped,
             )
@@ -119,7 +122,14 @@ class CommandRegistry:
             cmd_name, _, raw_code = command_str.partition(" ")
             args = [raw_code] if raw_code.strip() else []
         else:
-            parts = command_str.split()
+            # Quote-aware split so paths with spaces survive as one arg
+            # ("C:\Program Files (x86)\thing"); posix=False keeps
+            # backslashes intact, surrounding quotes are stripped after.
+            try:
+                parts = shlex.split(command_str, posix=False)
+            except ValueError:
+                parts = command_str.split()
+            parts = [p[1:-1] if len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'" else p for p in parts]
             cmd_name = parts[0]
             args = sanitize_args(parts[1:]) if len(parts) > 1 else []
 
@@ -200,17 +210,20 @@ _registry_lock = threading.Lock()
 
 
 def get_registry() -> CommandRegistry:
-    """Get the global command registry."""
+    """Get the global command registry (commands come from plugins).
+
+    Built whole-or-not-at-all: the global is assigned only after loading
+    succeeds, so a failure raises on EVERY call instead of the first call
+    raising and later calls silently seeing an empty registry.
+    """
     global _registry
     if _registry is None:
         with _registry_lock:
             if _registry is None:
-                _registry = CommandRegistry()
-                from .builtin_commands import register_builtin_commands
-
-                register_builtin_commands(_registry)
+                registry = CommandRegistry()
                 # Load user plugins from plugins/ directory
                 from .plugin_loader import load_all_plugins
 
-                load_all_plugins(_registry)
+                load_all_plugins(registry)
+                _registry = registry
     return _registry

@@ -517,43 +517,57 @@ def combine_all(output_dir: Path) -> Path:
     combined_path = output_dir / "combined_finetune.jsonl"
     all_pairs = []
 
+    skipped_foreign = 0
     for jsonl_file in sorted(output_dir.glob("*.jsonl")):
         if jsonl_file.name == "combined_finetune.jsonl":
             continue
         with open(jsonl_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    try:
-                        all_pairs.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Only string prompt/completion rows combine; other shapes
+                # that share the directory (DPO triples, null/typed values)
+                # are skipped, not a crash at the end of a long run.
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("prompt"), str)
+                    or not isinstance(row.get("completion"), str)
+                ):
+                    skipped_foreign += 1
+                    continue
+                all_pairs.append(row)
+
+    if skipped_foreign:
+        logger.warning("Combine: skipped %d row(s) without prompt/completion (foreign shapes)", skipped_foreign)
 
     all_pairs = _dedup_pairs(all_pairs)
     _write_jsonl(all_pairs, combined_path)
 
-    # D-11 wiring (Pass 156i8): also emit canonical-chat-format text so
-    # the existing SFT training path (plain-text reader) can consume the
-    # collected fine-tune data with zero training-side change.
+    # Also emit canonical-chat-format text so the SFT training path
+    # (plain-text reader) can consume the collected fine-tune data with
+    # zero training-side change.
     text_path = combined_path.with_suffix(".txt")
     text_count = _write_combined_text(all_pairs, text_path)
 
     size_mb = combined_path.stat().st_size / (1024 * 1024)
     text_size_mb = text_path.stat().st_size / (1024 * 1024)
-    logger.info(f"Combined: {len(all_pairs):,} pairs, {size_mb:.1f} MB → {combined_path}")
-    # D-11d (Pass 156l): file-present-zero-yield must be loud, not silent.
-    # If we have collected pairs but every one had empty prompt/completion,
-    # the .txt file is 0 bytes and the SFT path will silently train on
-    # nothing. Mirror the file-present-zero-yield WARNING pattern from
-    # Pass 156i6 anchor loader.
+    logger.info(f"Combined: {len(all_pairs):,} pairs, {size_mb:.1f} MB -> {combined_path}")
+    # File-present-zero-yield must be loud, not silent: if every pair had
+    # an empty prompt/completion the .txt is 0 bytes and the SFT path
+    # would silently train on nothing.
     if text_count == 0 and len(all_pairs) > 0:
         logger.warning(
-            "All %d combined pairs had empty prompt or completion — text file is 0 bytes (%s). Check fetcher output.",
+            "All %d combined pairs had empty prompt or completion -- text file is 0 bytes (%s). Check fetcher output.",
             len(all_pairs),
             text_path,
         )
     else:
-        logger.info(f"Combined text: {text_count:,} blocks, {text_size_mb:.1f} MB → {text_path}")
+        logger.info(f"Combined text: {text_count:,} blocks, {text_size_mb:.1f} MB -> {text_path}")
     return combined_path
 
 
@@ -654,7 +668,7 @@ def main():
         if pairs:
             path = output_dir / "oasst1.jsonl"
             _write_jsonl(pairs, path)
-            logger.info(f"Saved {len(pairs):,} pairs → {path}")
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("OASST1", len(pairs)))
 
     if args.dolly or args.all:
@@ -662,7 +676,7 @@ def main():
         if pairs:
             path = output_dir / "dolly_15k.jsonl"
             _write_jsonl(pairs, path)
-            logger.info(f"Saved {len(pairs):,} pairs → {path}")
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("Dolly 15k", len(pairs)))
 
     if args.slimorca is not None or args.all:
@@ -671,7 +685,7 @@ def main():
         if pairs:
             path = output_dir / "slimorca.jsonl"
             _write_jsonl(pairs, path)
-            logger.info(f"Saved {len(pairs):,} pairs → {path}")
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("SlimOrca", len(pairs)))
 
     if args.openthoughts3 is not None or args.all:
@@ -680,7 +694,7 @@ def main():
         if pairs:
             path = output_dir / "openthoughts3.jsonl"
             _write_jsonl(pairs, path)
-            logger.info(f"Saved {len(pairs):,} pairs → {path}")
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("OpenThoughts3", len(pairs)))
 
     if args.smoltalk2 is not None or args.all:
@@ -693,7 +707,7 @@ def main():
         if pairs:
             path = output_dir / "smoltalk2.jsonl"
             _write_jsonl(pairs, path)
-            logger.info(f"Saved {len(pairs):,} pairs → {path}")
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("SmolTalk2", len(pairs)))
 
     if collected:

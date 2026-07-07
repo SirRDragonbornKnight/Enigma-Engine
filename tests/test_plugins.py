@@ -539,3 +539,72 @@ class TestModTools:
         ]
         result = format_tools_for_prompt(mods_data)
         assert "AVAILABLE" in result
+
+
+class TestCommandSurface:
+    """The command registry and arg handling serve real Windows inputs."""
+
+    def test_get_registry_builds_and_is_singleton(self):
+        """get_registry returns a working registry (commands come from
+        plugins) and hands back the same instance on repeat calls."""
+        import enigma_engine.core.commands as commands_mod
+
+        # reset the module singleton for a clean probe
+        commands_mod._registry = None
+        try:
+            reg = commands_mod.get_registry()
+            assert reg is commands_mod.get_registry()
+            assert isinstance(reg.list_commands(), list)
+        finally:
+            commands_mod._registry = None
+
+    def test_execute_keeps_quoted_paths_whole(self):
+        """A double-quoted Windows path with spaces and (x86) arrives at
+        the handler as ONE untouched argument."""
+        from enigma_engine.core.commands import CommandRegistry, CommandResult
+
+        reg = CommandRegistry()
+        seen: list[list[str]] = []
+
+        def handler(args, ctx):
+            seen.append(args)
+            return CommandResult(True, "ok")
+
+        reg.register("files.open", handler, "open a file", "files.open <path>")
+        result = reg.execute('files.open "C:\\Program Files (x86)\\My App\tool.txt"')
+        assert result.success
+        assert seen == [["C:\\Program Files (x86)\\My App\tool.txt"]]
+
+    def test_sanitize_args_keeps_parentheses(self):
+        """Parens are path characters, not injection vectors; chaining
+        metacharacters still get stripped."""
+        from enigma_engine.core.commands import sanitize_args
+
+        assert sanitize_args(["(x86)"]) == ["(x86)"]
+        assert sanitize_args(["a;b|c"]) == ["abc"]
+
+    def test_mod_command_falsy_reply_is_a_response(self):
+        """A mod replying "" (falsy) responded; only None is silence."""
+        from enigma_engine.core.commands import CommandRegistry
+        from enigma_engine.core.mod_tools import register_mod_commands
+
+        class Router:
+            def send_to_mod(self, mod_id, message):
+                return ""
+
+        import json as _json
+        from pathlib import Path as _Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            mod_dir = _Path(td) / "echo"
+            mod_dir.mkdir()
+            (mod_dir / "mod.json").write_text(
+                _json.dumps({"id": "echo", "name": "Echo", "commands": [{"name": "ping"}]}),
+                encoding="utf-8",
+            )
+            reg = CommandRegistry()
+            n = register_mod_commands(reg, _Path(td), router=Router())
+            assert n == 1
+            result = reg.execute("echo.ping")
+            assert result.success, result.message

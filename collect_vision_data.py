@@ -273,7 +273,7 @@ def main() -> None:
         out = output_dir / "llava_pretrain.jsonl"
         _write_jsonl(pairs, out)
         elapsed = time.monotonic() - start
-        logger.info(f"Saved {len(pairs):,} pairs → {out} ({elapsed:.1f}s)")
+        logger.info(f"Saved {len(pairs):,} pairs -> {out} ({elapsed:.1f}s)")
     else:
         logger.warning("No pairs collected.")
 
