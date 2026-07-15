@@ -102,7 +102,24 @@ _p.add_argument(
     action="store_true",
     help="enable the imagination organ: the imagine built-in tool + /v1/images/generations (local Stable Diffusion)",
 )
+_p.add_argument(
+    "--allow-downloads",
+    action="store_true",
+    help="permit a one-time organ weight download from HuggingFace; WITHOUT this flag the server is fully offline",
+)
 ARGS, _ = _p.parse_known_args()
+
+# PRIVACY: she is local, fully. Her own weights never touch the network; the
+# organ libraries (transformers/diffusers/faster-whisper) would by default
+# phone HuggingFace at LOAD time for update checks and telemetry even when
+# the weights are already cached on disk. Offline is therefore the DEFAULT:
+# organs load from cache only. --allow-downloads exists solely for the
+# one-time first fetch of an organ's weights, on purpose, out loud.
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+if not ARGS.allow_downloads:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 print(f"Loading Enigma from {ARGS.model} ...", flush=True)
 if not Path(ARGS.model).exists():
