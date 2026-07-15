@@ -106,11 +106,39 @@ def gen_dpo_pairs(seed: int = 11) -> list[dict]:
     return uniq
 
 
+def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = 3) -> list[dict]:
+    """User /fix corrections from teach_enigma.py -- her own wrong answer vs
+    the user's correction. Few and personally important, so they ride x3
+    (the TEACHINGS_REPEAT logic). Same probe holdout + exact-triple dedup as
+    the generated pairs; malformed lines are skipped LOUDLY."""
+    if not path.exists():
+        return []
+    eval_qs = _eval_probe_questions()
+    seen, uniq = set(), []
+    for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            p = json.loads(line)
+            key = (p["prompt"], p["chosen"], p["rejected"])
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            print(f"{path.name}:{ln}: SKIPPED ({exc})")
+            continue
+        if p["prompt"].strip().lower() in eval_qs or key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    return uniq * repeat
+
+
 def main() -> None:
     pairs = gen_dpo_pairs()
+    taught = load_teach_pairs()
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8")
-    print(f"dpo_pairs.jsonl: {len(pairs)} preference pairs")
+    OUT.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs + taught) + "\n", encoding="utf-8")
+    n_user = len(taught) // 3 if taught else 0
+    print(f"dpo_pairs.jsonl: {len(pairs) + len(taught)} preference pairs ({len(pairs)} generated, {n_user} user-taught x3)")
 
 
 if __name__ == "__main__":

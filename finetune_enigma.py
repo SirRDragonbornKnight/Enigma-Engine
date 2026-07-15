@@ -240,7 +240,26 @@ def main() -> None:
     rng = random.Random(args.seed)
     rng.shuffle(examples)
     n_val = min(int(len(examples) * args.val_frac), 512) if len(examples) >= 20 else 0
-    val_examples, train_examples = examples[:n_val], examples[n_val:]
+    # Oversampled records are exact duplicate lines in the mix, so a naive
+    # head-split puts copies of the same conversation on both sides and val
+    # loss partly measures training-set recall (audit 2026-07-15). Fill val
+    # with records whose ids appear exactly ONCE; every duplicated record
+    # trains. Falls back toward the old behavior only if uniques run short.
+    if n_val:
+        seen_ids: dict = {}
+        for ex in examples:
+            k = tuple(ex[0])
+            seen_ids[k] = seen_ids.get(k, 0) + 1
+        val_examples, train_examples = [], []
+        for ex in examples:
+            if len(val_examples) < n_val and seen_ids[tuple(ex[0])] == 1:
+                val_examples.append(ex)
+            else:
+                train_examples.append(ex)
+        if len(val_examples) < n_val:
+            print(f"  WARN: only {len(val_examples)} unique records for val (wanted {n_val})", flush=True)
+    else:
+        val_examples, train_examples = examples[:n_val], examples[n_val:]
     X, Y = pack_blocks(train_examples, args.block, seed=args.seed)
     if n_val:
         VX, VY = pack_blocks(val_examples, args.block, seed=args.seed)
