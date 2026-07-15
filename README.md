@@ -7,7 +7,7 @@ codebases linked only by a local message bus. Keep them straight:
 | | What it is | Lives in |
 |---|---|---|
 | **Enigma** — the engine | A **from-scratch decoder-only LLM**: its own architecture, BPE tokenizer (base vocab 4718), and weights. NOT a wrapper around another model. Pipeline: **pretrain -> SFT -> serve**. | THIS repo: `enigma_engine/` + the root pipeline scripts (`pretrain_enigma.py`, `make_sft_data.py`, `finetune_enigma.py`, `serve_enigma.py`) |
-| **Enigma Avatar** — the overlay | An **Electron desktop overlay** that floats a rigged 3D model (any `.glb`/`.gltf`/`.vrm`/`.fbx`) and animates it with **pure procedural motion** + spring physics + lip-sync. An optional *body* an LLM can drive. | **its own repo:** `C:\Users\SirKn\Enigma Avatar\` |
+| **Enigma Avatar** — the overlay | A **Unity 6 desktop avatar** (ground-up rebuild) that renders a rigged 3D model an LLM can drive — an optional *body*. The original Electron overlay is maintenance-only at `C:\Users\SirKn\Enigma Avatar window\`. | **its own repo:** `C:\Users\SirKn\Enigma Avatar\` |
 
 A **third location lives OUTSIDE this repo** and belongs to the avatar:
 
@@ -27,8 +27,8 @@ avatar, and run the avatar against any LLM.
 
 - **The LLM** — [`CLAUDE.md`](CLAUDE.md) is the authoritative guide: setup, the
   `pretrain -> SFT -> serve` pipeline, checkpointing, and guardrails.
-- **The avatar** — its own repo at `C:\Users\SirKn\Enigma Avatar\` (`STATUS.md` = what works + how
-  to launch it; `TODO.md` = backlog / audit log; `CLAUDE.md` = its working rules).
+- **The avatar** — its own repo at `C:\Users\SirKn\Enigma Avatar\` (`CLAUDE.md` = its working
+  rules + how to launch it; `TODO.md` = backlog / audit log).
 - **Project state** — `CLEANUP_TRACKER.md`, `CODE_REVIEW.md`, `KNOWN_ISSUES.md`, `SUGGESTIONS.md`.
 
 ## A note on older docs ("Modkit")

@@ -1091,7 +1091,8 @@ def main() -> None:
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     print(
         f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
-        f"{len(mem_read)} memory-read x{MEMREAD_REPEAT}; "
+        f"{len(mem_read)} memory-read x{MEMREAD_REPEAT}, "
+        f"{len(img_read)} image-read x{IMGREAD_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_gen_leak} dropped as eval-probe leaks; "

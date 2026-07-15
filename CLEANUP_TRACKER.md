@@ -4,20 +4,25 @@ This tracker describes the tree as it stands today; earlier eras (`gui/`,
 `web/`, `services/`, `api/`, the Qwen-era `engine_*`/`inference`/`rag`
 modules) live in git history. Current truth:
 
-## Package state — `enigma_engine/`, 44 files / ~30.7k LOC
-<!-- updated 2026-07-13: the multimodal restore re-added vision_encoder/audio_encoder/gguf/reasoning (~3.5k LOC) -->
+## Package state — `enigma_engine/`, 49 files / ~32k LOC
+<!-- updated 2026-07-15: organs added (tts/asr/eyes/imagegen); 07-13 restore re-added vision_encoder/audio_encoder/gguf/reasoning (~3.5k LOC) -->
 
 
 - **LIVE — her core (~7.5k LOC):** `model.py`, `model_components.py`,
   `model_presets.py`, `model_utils.py`, `safe_save.py`, `tokenizer.py`,
   `bpe_tokenizer.py`, `advanced_tokenizer.py`, `kv_cache.py`, `nf4_linear.py`,
-  `model_registry.py`, and since 06-11 `chat_format.py` (the instruct-pass
-  format — ONE template for train+serve) and `memory_store.py` (runtime
-  memory, BM25/JSONL). Edits here require the bit-identical fingerprint
+  `model_registry.py`, `calculator.py`, and since 06-11 `chat_format.py` (the
+  instruct-pass format — ONE template for train+serve) and `memory_store.py`
+  (runtime memory, BM25/JSONL). Edits here require the bit-identical fingerprint
   regime (`_verify_ckpt.py`) — the live checkpoint lineage depends on this
   code.
+- **LIVE — organs (2026-07-14, served behind flags):** `tts.py` (--voice),
+  `asr.py` (--ears), `eyes.py` (--eyes), `imagegen.py` (--image-gen).
+- **RESTORED 2026-07-13 (training-side, projectors untrained):**
+  `vision_encoder.py`, `audio_encoder.py`, `gguf.py` (export), `reasoning.py`.
 - **DORMANT BY RULING (2026-06-11, ~13k LOC):** `training/` package +
-  `core/rl_training.py` + `core/lora_utils.py` + `router.py`. Evidence: zero
+  `core/rl_training.py` + `core/lora_utils.py` (`router.py` since REMOVED
+  with modkit). Evidence: zero
   HuggingFace imports outside lazy-optional paths in `lora_utils`; the Trainer
   targets the custom `Enigma` class. It is the in-house SFT/LoRA/RLHF arsenal
   — the moat's training arm — and is test-covered (~80 tests). **KEEP** until
@@ -58,5 +63,5 @@ modules) live in git history. Current truth:
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **364 passed** (06-11) — any cleanup that drops a test
-   must say so explicitly.
+4. Suite baseline: **431 passed** (2026-07-15; was 364 at the 06-11 reset) —
+   any cleanup that drops a test must say so explicitly.

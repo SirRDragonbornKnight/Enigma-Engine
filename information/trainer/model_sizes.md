@@ -1,81 +1,53 @@
 # Model Sizes
 
-How the model size system works in Enigma Engine.
+How the architecture presets work in Enigma Engine.
 
 ---
 
-## Creating a Model (GUI)
+## Picking a Size (CLI)
 
-In the **MODELS** tab, type a number in the **Memory (GB)** field
-and click CREATE. The engine auto-picks the largest architecture
-preset that fits your memory budget.
-
-| Memory (GB) | Auto-picks | ~Params | Train VRAM |
-|-------------|-----------|---------|-----------|
-| 0.5 | tiny | ~5M | ~0.5 GB |
-| 1 | small | ~27M | ~1 GB |
-| 4 | base | ~120M | ~3 GB |
-| 8 | large | ~200M | ~6 GB |
-| 12+ | xl | ~600M | ~12 GB |
-
-The Memory field auto-detects your GPU VRAM (or system RAM).
-You can change the number before clicking CREATE.
-
----
-
-## CLI Model Size
-
-From the command line, use `--model-size` with a preset name:
+Pretraining takes a preset name via `--size`:
 
 ```
-python run.py --train data/training.txt --model-size large
+python pretrain_enigma.py --size large
 ```
 
-Available CLI presets: `pi_zero`, `nano`, `tiny`, `small`,
-`medium`, `large`.
+The production Enigma (182M params, the model behind
+`models/enigma_dpo/model.pth`) was pretrained with the `large` preset.
+SFT and DPO inherit the architecture from the checkpoint passed via
+`--init`, so size is only chosen at pretrain time.
 
 ---
 
-## Available Presets (internal)
+## Available Presets
 
-These are the architecture presets the engine selects from
-automatically. You don't need to pick these — the Memory (GB)
-input handles it.
+Defined in `enigma_engine/core/model_presets.py` (`MODEL_PRESETS`).
+Parameter counts are approximate and depend on vocab size.
 
-| Preset | Parameters | Best For |
-|--------|-----------|----------|
-| pi_zero | ~500K | Testing, Raspberry Pi Zero |
-| nano | ~1M | Microcontrollers, basic tasks |
-| tiny | ~5M | Edge devices, simple chat |
-| small | ~27M | Entry GPU, learning |
-| medium | ~85M | Mid-range GPU |
-| large | ~200M | RTX 3080+ |
-| xl | ~600M | RTX 4090/5090 |
-| xxl | ~1.5B | Multi-GPU |
-| huge | ~3B | Server GPU |
-| giant | ~7B | Multi-node datacenter |
-| colossal | ~13B | Distributed cloud |
-| titan | ~30B | Full datacenter |
-| omega | ~70B+ | Research frontier |
+| Preset | ~Params | Hardware note (from the preset descriptions) |
+|--------|---------|----------------------------------------------|
+| pi_zero | ~500K | Raspberry Pi Zero 2W -- needs <1 GB RAM |
+| nano | ~1M | Microcontrollers -- needs <1 GB |
+| tiny | ~5M | Edge devices -- needs <1 GB |
+| small | ~27M | Entry GPU -- needs ~1 GB VRAM |
+| medium | ~85M | Mid-range GPU -- needs ~2.5 GB VRAM |
+| base | ~120M | Mid-range GPU -- needs ~3 GB VRAM |
+| large | ~182M (the production Enigma) | Good GPU -- needs ~6 GB VRAM |
+| xl | ~600M | RTX 4090 / 16 GB+ GPU -- needs ~12 GB VRAM |
+| xxl | ~1.5B | RTX 4090 / 32 GB+ GPU -- needs ~34 GB VRAM |
+| huge | ~3B | Multi-GPU / 48 GB+ -- needs ~50 GB VRAM |
+| giant | ~7B | Multi-GPU / A100 -- needs ~77 GB VRAM |
+| colossal | ~13B | Multi-node -- needs ~153 GB VRAM |
+| titan | ~30B | Datacenter -- needs ~280 GB VRAM |
+| omega | ~70B+ | Large cluster -- needs ~904 GB VRAM |
 
----
-
-## How It Works
-
-1. You type a Memory (GB) value (e.g. `16`)
-2. The engine estimates training VRAM for each preset
-3. It picks the largest preset that fits your budget
-4. The model is created and shown on the MODELS tab
+RoPE head dimensions are always even (required for rotary embeddings).
 
 ---
 
-## Hardware Requirements
+## Rules of Thumb
 
-| Size | Minimum VRAM |
-|------|-------------|
-| Under 100M | CPU or any GPU |
-| 100M - 500M | 4 GB VRAM |
-| 500M - 2B | 8 GB VRAM |
-| 2B - 7B | 16 GB VRAM |
-| 7B - 13B | 24 GB+ VRAM |
-| 13B+ | Multi-GPU / 48 GB+ |
+- Training needs roughly 3-4x the VRAM of inference at the same size.
+- Bigger models learn more but train slower; at local scale, data
+  quality and token count matter as much as parameter count.
+- Use `--sanity` to confirm a preset fits in memory before a long run.

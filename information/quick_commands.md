@@ -1,75 +1,51 @@
 # Quick Commands Reference
 
-These are the commands you can run from a terminal or cmd window.
-All commands should be run from the Enigma Engine folder.
+Run everything from the Enigma Engine folder (venv activated).
 
 ---
 
-## Launch Commands
+## Serve
 
 | Command | What It Does |
 |---------|-------------|
-| `python run.py` | Show system info and test imports |
-| `python run.py --gui` | Launch the desktop GUI |
-| `python run.py --gui --model models/my.pth` | Launch GUI with a model pre-loaded |
-| `python run.py --serve` | Start the API server (default port from config) |
-| `python run.py --serve --port 8080` | Start API server on a specific port |
-| `python run.py --serve --host 0.0.0.0` | Start API server on all network interfaces |
-| `python run.py --serve --api-key YOUR_KEY` | Start API server with authentication |
-| `python run.py --chat` | Simple CLI chat (requires a loaded model) |
-| `python run.py --chat --model models/my.pth` | Chat with a specific model |
-| `python run.py --chat --profile creative_writer` | Chat using a specific AI profile |
-| `python run.py --chat --temperature 0.7` | Chat with custom temperature |
-| `python run.py --help` | Show all available options |
+| `python serve_enigma.py --model models/enigma_dpo/model.pth` | OpenAI-compatible /v1 server on port 8000, serving the checkpoint of record |
+| `enigma ...` | Same thing (console script installed by `pip install -e .`) |
+| `python serve_enigma.py` | Without `--model`, serves the default `models/enigma_pretrain_large/latest.pth` |
+| `python serve_enigma.py --port 8123` | Serve on a specific port |
+| `python serve_enigma.py --host 0.0.0.0` | Listen on all interfaces |
+| `python serve_enigma.py --max-context 1024` | Set the context window (tokens) |
+| `python serve_enigma.py --memory-dir data/memory` | Enable the memory store (JSONL + BM25) + /v1/memory API |
+| `python serve_enigma.py --voice` | Voice organ: `speak` tool + /v1/audio/speech (pyttsx3/SAPI) |
+| `python serve_enigma.py --ears` | Ears organ: /v1/audio/transcriptions (faster-whisper) |
+| `python serve_enigma.py --eyes` | Eyes organ: image messages captioned into context + /v1/images/describe (BLIP) |
+| `python serve_enigma.py --image-gen` | Imagination organ: `imagine` tool + /v1/images/generations (Stable Diffusion) |
+
+Organ flags combine freely, e.g. `python serve_enigma.py --voice --ears --eyes --memory-dir data/memory`.
 
 ---
 
-## Training Commands
+## Training Pipeline (pretrain -> SFT -> DPO)
 
 | Command | What It Does |
 |---------|-------------|
-| `python run.py --train data/training.txt` | Train model on a text file |
-| `python run.py --train data/qa.jsonl` | Train model on JSONL data |
-| `python run.py --train data/training.txt --epochs 20` | Train with custom epoch count |
-| `python run.py --train data/training.txt --batch-size 8` | Train with custom batch size |
-| `python run.py --train data/training.txt --lr 0.0003` | Train with custom learning rate |
-| `python run.py --train data/training.txt --model-size large` | Train a large model |
-| `python run.py --train data/training.txt --seed 42` | Train with a fixed random seed |
-| `python run.py --train --resume models/checkpoints/best_model.pt` | Resume training from checkpoint |
-
-### Model Size Presets (CLI `--model-size`)
-
-In the **GUI**, type a GB number in the Memory field instead — the engine auto-picks the best preset.
-
-| Size | Parameters | VRAM Needed |
-|------|-----------|-------------|
-| pi_zero | ~500K | <1 GB |
-| nano | ~1M | <1 GB |
-| tiny | ~5M | ~1 GB |
-| small | ~27M | ~2 GB |
-| medium | ~85M | ~4 GB |
-| large | ~200M | ~6 GB |
+| `python pretrain_enigma.py` | Pretrain from scratch on `data/pretrain/tokens.bin` |
+| `python pretrain_enigma.py --sanity` | One forward/backward step, then exit (smoke test) |
+| `python make_sft_data.py` | Build SFT data -> `data/sft/{tool_calls,identity,mix}.jsonl` |
+| `python finetune_enigma.py --data data/sft/mix.jsonl --out models/enigma_sft` | SFT the pretrained model into an instruct/tool model |
+| `python make_dpo_data.py` | Build DPO preference pairs -> `data/sft/dpo_pairs.jsonl` |
+| `python dpo_enigma.py --init models/enigma_sft/model.pth --out models/enigma_dpo` | DPO alignment pass (default lr 5e-7 is the adopted setting) |
+| `python sample_enigma.py --ckpt models/enigma_pretrain_large/model.pth` | Sample raw text from a checkpoint |
 
 ---
 
-## Tokenizer Commands
+## Evaluation
+
+Serve the candidate on its own port with an isolated memory dir, then run the harness:
 
 | Command | What It Does |
 |---------|-------------|
-| `python run.py --train-tokenizer data/training.txt` | Train a BPE tokenizer on text |
-| `python run.py --train-tokenizer data/ --utf8-bytes` | Train byte-level BPE tokenizer |
-| `python run.py --train-tokenizer data/training.txt --vocab-size 16000` | Custom vocabulary size |
-| `python run.py --analyze-tokenizer` | Analyze the trained tokenizer |
-
----
-
-## Benchmark & Evaluation
-
-| Command | What It Does |
-|---------|-------------|
-| `python run.py --benchmark` | Run coherence benchmark on default model |
-| `python run.py --benchmark --model models/my.pth` | Benchmark a specific model |
-| `python run.py --golden-eval prompts.json` | Run golden prompt regression eval |
+| `python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth --memory-dir data/memory_eval` | Serve the model under test |
+| `python eval_behavior.py --base-url http://127.0.0.1:8123` | Behavior eval against the running server (in another shell) |
 
 ---
 
@@ -77,10 +53,15 @@ In the **GUI**, type a GB number in the Memory field instead — the engine auto
 
 | Command | What It Does |
 |---------|-------------|
-| `python collect_pretraining_data.py --stats` | Show collected data summary |
-| `python collect_pretraining_data.py --all-sources` | Download from all sources |
-| `python collect_pretraining_data.py --books-only` | Download only Gutenberg books |
-| `python collect_pretraining_data.py --resume` | Resume an interrupted download |
+| `python collect_pretraining_data.py --stats` | Show collected pretraining data summary |
+| `python collect_pretraining_data.py --all-sources` | Download pretraining text (Wikipedia, Gutenberg, FineWeb-Edu, ...) |
+| `python collect_finetuning_data.py --all` | Download instruction datasets (OASST1, Dolly, SlimOrca, ...) |
+| `python collect_distill_data.py` | Collect responses from an external OpenAI-compatible teacher as a fine-tune corpus |
+| `python collect_search_data.py` | Emit the synthetic `<search>` tag training corpus |
+| `python collect_vision_data.py` | Download image-caption pairs for vision SFT |
+| `python pretokenize_data.py` | Tokenize `data/pretrain/` sources into `data/pretrain/tokens.bin` |
+
+Each script documents its sources and flags in its docstring (`--help`).
 
 ---
 
@@ -95,20 +76,8 @@ In the **GUI**, type a GB number in the Memory field instead — the engine auto
 
 ---
 
-## Batch File
-
-Double-click `Launch Enigma.bat` to start the GUI without opening
-a terminal first. It activates the venv automatically.
-
----
-
 ## Tips
 
-- If this is a fresh install, just run `python run.py` first.
-  It will create the virtual environment and install dependencies
-  automatically.
-- Use `--model-size` to pick how big a model to train. Bigger
-  models need more GPU memory but learn better.
-- Training can be stopped at any time. The best checkpoint is
-  saved automatically.
-- The API server is compatible with OpenAI-format requests.
+- The server speaks the OpenAI API -- any OpenAI client library or UI works.
+- Training scripts checkpoint atomically; interrupt and `--resume` freely.
+- `--sanity` on pretrain/SFT/DPO scripts runs one step then exits -- use it before long runs.

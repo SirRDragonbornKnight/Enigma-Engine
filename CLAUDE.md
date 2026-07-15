@@ -131,7 +131,8 @@ minors from the review remain open — see the file.
 2026-07-14 training-path fixes: `make_sft_data.py` no longer explodes a string-valued
 `questions`/`answers` field into per-character records; the Trainer online-DPO `random.sample`
 no longer sizes `k` off the unfiltered list (was a crash). Bottleneck stays SFT DATA at scale
-(tool corpus ~29, identity 360, broad recall ~50%).
+(tool corpus 543 generated records incl. speak/imagine, identity 360, broad recall ~50% — the
+recall fix is growing `data/finetune/combined_finetune.jsonl`, the only general-knowledge feed).
 Reading rules: `CODE_REVIEW.md` is a closed-bug LEDGER — its present-tense entries are history,
 not current state. (Removed 2026-07-14 as dead cruft: `FORGE_TEST_GUIDE.md`, `ENIGMA_QUANTIZE_PLAN.md`,
 `AA code maker.md` (all Qwen-8B/Forge-GUI era), and `information/commands_reference.md` (documented the

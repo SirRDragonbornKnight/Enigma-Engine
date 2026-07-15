@@ -1,66 +1,71 @@
 # Getting Started
 
-Welcome to Enigma Engine — a fully local AI system.
+Enigma is a from-scratch 182M decoder-only LLM -- her own architecture,
+her own BPE tokenizer (base vocab 4718), her own weights. Everything runs
+locally. This page gets you from a fresh checkout to chatting with her.
 
 ---
 
-## Quick Start
-
-1. **Load a model** — Go to ROUTER page, select a model for the CHAT route
-2. **Start chatting** — Go to CORE page, type a message, press SEND
-3. **Customize** — Change generation parameters on the CONFIG page
-4. **Train** — Use the FORGE page to train your own models
-
----
-
-## GUI Pages
-
-| Page | What It Does |
-|------|-------------|
-| CORE | Chat with the AI. History sidebar, system prompt editor |
-| CMD | Terminal. Run system commands or engine commands |
-| MODELS | Create and delete model files |
-| ROUTER | Assign models to routes (chat, training, mods) |
-| FORGE | Train models and tokenizers |
-| CONFIG | Generation parameters and directory paths |
-| DOCS | Documentation browser, file editor, profile management |
-
----
-
-## CLI Usage
+## Install
 
 ```bash
-python run.py                                         # Show system info
-python run.py --gui                                    # Launch desktop GUI
-python run.py --serve                                  # Start API server on port 5000
-python run.py --serve --port 9090                      # API server on custom port
-python run.py --chat --model PATH                      # CLI chat with a model
-python run.py --train data/training.txt --epochs 10    # Train model
-python run.py --train-tokenizer data/training.txt      # Train BPE tokenizer
-python run.py --help                                   # Show all options
+pip install -e ".[server,huggingface]"
+```
+
+The `server` extra pulls torch + FastAPI/uvicorn (required to serve).
+Other extras enable organs: `voice`, `ears`, `eyes`, `imagegen`
+(see `pyproject.toml`).
+
+---
+
+## Serve
+
+```bash
+python serve_enigma.py --model models/enigma_dpo/model.pth
+```
+
+(or just `enigma ...` -- the console script installed by pip.)
+
+This starts an OpenAI-compatible API at `http://127.0.0.1:8000/v1`.
+`models/enigma_dpo/model.pth` is the checkpoint of record; without
+`--model`, the flag defaults to the raw pretrain checkpoint
+`models/enigma_pretrain_large/latest.pth`.
+
+| Flag | What it does |
+|------|-------------|
+| `--model PATH` | Enigma checkpoint (.pth) to serve |
+| `--host` / `--port` | Bind address (default 127.0.0.1:8000) |
+| `--max-context N` | Context window in tokens (default 1024) |
+| `--memory-dir DIR` | Enable the memory store (JSONL + BM25); memories are injected into her context |
+| `--voice` | Voice organ: `speak` tool + `/v1/audio/speech` (local pyttsx3/SAPI TTS) |
+| `--ears` | Ears organ: `/v1/audio/transcriptions` (local faster-whisper) |
+| `--eyes` | Eyes organ: image messages captioned into her context + `/v1/images/describe` (local BLIP) |
+| `--image-gen` | Imagination organ: `imagine` tool + `/v1/images/generations` (local Stable Diffusion) |
+
+## Chat
+
+Any OpenAI client works -- point it at the server:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")
+r = client.chat.completions.create(model="enigma", messages=[{"role": "user", "content": "Hi!"}])
+print(r.choices[0].message.content)
 ```
 
 ---
 
-## Directory Structure
+## Where things live
 
-| Folder | Contents |
-|--------|----------|
-| models/ | AI model files (.gguf, .pth, etc.) |
-| data/ | Training data, settings, sessions |
-| profiles/ | AI personality profiles (JSON) |
-| mods/ | Plugin mods (each in its own folder) |
-| information/ | Documentation and reference files |
-| outputs/ | Generated content (images, code, etc.) |
-| memory/ | Persistent memory storage |
+| Path | Contents |
+|------|----------|
+| `models/` | Checkpoints (`enigma_dpo/model.pth` is the served one) |
+| `data/` | Training data (`pretrain/`, `sft/`), memory stores |
+| `enigma_engine/` | The package: model, tokenizer, chat format, organs |
+| `~/.enigma_engine/images/` | PNGs from the `imagine` tool |
 
----
+## Train your own
 
-## Tips
-
-- **Route prompts** — edit per-route AI prompts from DOCS page (PROMPTS category)
-- **Profiles** change the AI personality and generation settings
-- **System prompt** shapes how the AI responds (edit in CORE sidebar or DOCS page)
-- **KV-cache** is cleared on NEW chat to prevent hallucinations
-- **Mods** are plugins that extend the AI (image generation, etc.)
-- All text in the GUI is selectable and copyable
+The full pipeline (pretrain -> SFT -> DPO -> eval) is in
+[training_guide.md](training_guide.md); the command list is in
+[quick_commands.md](quick_commands.md).
