@@ -924,15 +924,32 @@ class LoraTrainer:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         if self.offload_config.cpu_offload and ACCELERATE_AVAILABLE:
-            # Use accelerate for smart device placement
+            # Use accelerate for smart device placement. cpu= must reflect
+            # whether we truly have no GPU -- NOT offload_optimizer. Mapping
+            # offload_optimizer onto cpu=True forces the ENTIRE run (model +
+            # data) onto the CPU, which then crashes because the batch loop
+            # below moves inputs to 'cuda' (device mismatch), and is not what
+            # "offload optimizer states" means anyway.
+            if self.offload_config.offload_optimizer and device == "cuda":
+                # Plain AdamW + a bare Accelerator cannot offload optimizer
+                # states to CPU (that needs a DeepSpeed/FSDP plugin). Fail
+                # honestly: the flag is a no-op on this path rather than a
+                # silent CPU-only fallback.
+                logger.warning(
+                    "offload_optimizer is set but optimizer-state offload is not "
+                    "implemented on this path (plain AdamW); training on GPU without it."
+                )
             accelerator = Accelerator(
                 gradient_accumulation_steps=self.gradient_accumulation_steps,
-                cpu=self.offload_config.offload_optimizer,
+                cpu=(device == "cpu"),
             )
             self.model, optimizer = accelerator.prepare(
                 self.model,
                 self._get_optimizer(),
             )
+            # accelerate owns device placement now; follow the device it chose
+            # so the batch tensors below land where the model actually is.
+            device = str(accelerator.device)
         else:
             self.model = self.model.to(device)
             optimizer = self._get_optimizer()

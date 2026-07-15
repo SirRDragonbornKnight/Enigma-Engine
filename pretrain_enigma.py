@@ -377,7 +377,19 @@ def main() -> None:
         )
     }
 
-    out = Path(args.out) if args.out else ROOT / "models" / f"enigma_pretrain_{args.size}"
+    if args.out:
+        out = Path(args.out)
+    elif ck is not None and not warm_start:
+        # A resume writes back to the directory it resumed FROM, not the
+        # size-derived default. Otherwise a bare `--resume <dir>/latest.pth`
+        # of a non-default lineage (e.g. the block-2048 warm-start run in
+        # models/enigma_pretrain_2048) resolves out to enigma_pretrain_base
+        # and silently rotates a DIFFERENT lineage's checkpoints. rp is the
+        # resolved checkpoint path (post prev.pth fallback); its parent is the
+        # run's own directory.
+        out = rp.parent
+    else:
+        out = ROOT / "models" / f"enigma_pretrain_{args.size}"
     out.mkdir(parents=True, exist_ok=True)
 
     start_step = 0

@@ -11,8 +11,8 @@ Sources (all require `pip install datasets`):
 
 Output format:
   JSONL with {"image": "<absolute-path>", "text": "<caption>"} per line.
-  Compatible with `enigma_engine.gui.scanners.scan_vision_data` JSONL
-  strategy and with `Trainer.train_vision()`'s expected input shape.
+  Matches `Trainer.train_vision()`'s expected input shape (the Modkit-era
+  gui.scanners consumer was deleted 2026-06).
 
 Usage:
   # 1. Download images.zip from the dataset card and extract somewhere:

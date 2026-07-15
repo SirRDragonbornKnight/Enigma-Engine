@@ -37,15 +37,6 @@ if ($existing) {
   exit 0
 }
 
-# --- guard: the source base must exist to warm-start from ---
-$src = Join-Path $repo 'models\enigma_pretrain_large\model.pth'
-if (-not (Test-Path $src)) {
-  Write-Host ("Base checkpoint not found: {0}" -f $src) -ForegroundColor Red
-  Write-Host "Cannot warm-start (was the model moved?)." -ForegroundColor Red
-  Start-Sleep 10
-  exit 1
-}
-
 # --- resolve the interpreter (PATH first, then the known install; no hardcoded user) ---
 $py = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $py) { $py = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe' }
@@ -55,11 +46,38 @@ if (-not (Test-Path $py)) {
   exit 1
 }
 
-# --- the length-extension run math (see DECISIONS block above) ---
-$trainArgs = '--init-from models/enigma_pretrain_large/model.pth --out models/enigma_pretrain_2048 --block 2048 --micro-batch 6 --grad-accum 16 --tokens 10e9 --lr 3e-4 --warmup 300 --weight-decay 0.1 --grad-clip 1.0 --optimizer adamw --schedule wsd --wsd-decay-frac 0.1 --dropout 0.0 --no-diff-attn --no-grad-ckpt --no-compile --archive-every 25000'
+# --- RESUME vs FRESH -----------------------------------------------------------
+# If the 2048 run has already written a checkpoint, this is a re-run after a
+# pause: RESUME it (step/lr/schedule restored from the checkpoint) rather than
+# warm-starting from step 0 again -- a fresh --init-from would rotate the
+# partially-trained checkpoints away and destroy days of progress. Only warm-
+# start a brand-new run when no 2048 checkpoint exists yet.
+$out2048 = Join-Path $repo 'models\enigma_pretrain_2048'
+$hasCkpt = (Test-Path (Join-Path $out2048 'latest.pth')) -or (Test-Path (Join-Path $out2048 'prev.pth'))
+
+if ($hasCkpt) {
+  # Resume: NO --init-from (mutually exclusive with --resume). --out is explicit
+  # so checkpoints keep landing in the 2048 dir. The run math is restored from
+  # the checkpoint's recorded schedule; only operational knobs are passed here.
+  $trainArgs = '--resume models/enigma_pretrain_2048/latest.pth --out models/enigma_pretrain_2048 --no-grad-ckpt --no-compile --archive-every 25000'
+  $mode = 'Resuming the paused block-2048 run'
+} else {
+  # Fresh warm-start: the finished base must exist to copy weights from.
+  $src = Join-Path $repo 'models\enigma_pretrain_large\model.pth'
+  if (-not (Test-Path $src)) {
+    Write-Host ("Base checkpoint not found: {0}" -f $src) -ForegroundColor Red
+    Write-Host "Cannot warm-start (was the model moved?)." -ForegroundColor Red
+    Start-Sleep 10
+    exit 1
+  }
+  # --- the length-extension run math (see DECISIONS block above) ---
+  $trainArgs = '--init-from models/enigma_pretrain_large/model.pth --out models/enigma_pretrain_2048 --block 2048 --micro-batch 6 --grad-accum 16 --tokens 10e9 --lr 3e-4 --warmup 300 --weight-decay 0.1 --grad-clip 1.0 --optimizer adamw --schedule wsd --wsd-decay-frac 0.1 --dropout 0.0 --no-diff-attn --no-grad-ckpt --no-compile --archive-every 25000'
+  $mode = 'Starting Phase 4 length extension (block 2048, fresh warm-start)'
+}
+
 $inner = "/c `"$py`" -u pretrain_enigma.py $trainArgs >> train_2048.log 2>&1"
 
-Write-Host "Starting Phase 4 length extension (block 2048, detached)..." -ForegroundColor Cyan
+Write-Host ("{0} (detached)..." -f $mode) -ForegroundColor Cyan
 Start-Process -FilePath 'cmd.exe' -ArgumentList $inner -WorkingDirectory $repo -WindowStyle Hidden
 
 Start-Sleep 8

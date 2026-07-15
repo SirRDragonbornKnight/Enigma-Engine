@@ -148,7 +148,7 @@ def _parse_magpie_completion(raw: str, template: dict[str, str]) -> tuple[str, s
     assistant_end = template["assistant_end"]
     if user_end not in raw:
         raise RuntimeError(
-            f"magpie parse failed: user→assistant marker not found "
+            f"magpie parse failed: user->assistant marker not found "
             f"(model may not be chat-tuned for this template, or temperature "
             f"caused early stop). First 200 chars: {raw[:200]!r}"
         )
@@ -743,7 +743,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help='Custom raw-prefix string for --template custom (e.g. "<|im_start|>user\\n")',
     )
-    p.add_argument("--magpie-user-end", default=None, help="Custom user→assistant marker for --template custom")
+    p.add_argument("--magpie-user-end", default=None, help="Custom user->assistant marker for --template custom")
     p.add_argument(
         "--magpie-assistant-end",
         default=None,

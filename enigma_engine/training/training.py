@@ -3901,6 +3901,22 @@ class Trainer:
         per_token = log_probs.gather(2, targets.clamp(min=0).unsqueeze(-1)).squeeze(-1)
         return (per_token * mask).sum(dim=-1)
 
+    def _encoded_prompt_len(self, prompt: str) -> int:
+        """Length of the prompt prefix as it appears inside a combined
+        ``prompt + completion`` encoding.
+
+        ``tokenizer.encode`` appends a trailing EOS to the prompt-only text,
+        but that EOS is NOT present in the combined encoding (its EOS lands
+        after the completion). Counting the prompt-only length directly
+        therefore over-counts by one and masks the FIRST completion token out
+        of every preference gradient. Drop the trailing EOS so the returned
+        length marks the true completion boundary.
+        """
+        prompt_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: ")
+        if prompt_ids and prompt_ids[-1] == self.tokenizer.eos_token_id:
+            return len(prompt_ids) - 1
+        return len(prompt_ids)
+
     def _encode_dpo_pair(
         self,
         item: dict,
@@ -3919,14 +3935,13 @@ class Trainer:
         if not (prompt and chosen and rejected):
             return False
 
-        prompt_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: ")
         chosen_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: {chosen}")
         rejected_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: {rejected}")
 
         chosen_ids = chosen_ids[:max_len_dpo]
         rejected_ids = rejected_ids[:max_len_dpo]
 
-        prompt_len = len(prompt_ids)
+        prompt_len = self._encoded_prompt_len(prompt)
         if len(chosen_ids) <= prompt_len or len(rejected_ids) <= prompt_len:
             return False
 
@@ -4231,9 +4246,8 @@ class Trainer:
                         and epoch + 1 < self.config.epochs
                         and self.state.step % dpo_online_interval == 0
                     ):
-                        sample_prompts = random.sample(
-                            [d["prompt"] for d in preference_data if d.get("prompt")], k=min(4, len(preference_data))
-                        )
+                        _online_prompts = [d["prompt"] for d in preference_data if d.get("prompt")]
+                        sample_prompts = random.sample(_online_prompts, k=min(4, len(_online_prompts)))
                         new_items = self._generate_online_dpo_pairs(
                             sample_prompts, reward_fn, n_samples=dpo_online_samples
                         )
@@ -4339,7 +4353,6 @@ class Trainer:
             if not (prompt and chosen and rejected):
                 continue
 
-            prompt_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: ")
             chosen_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: {chosen}")
             rejected_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: {rejected}")
 
@@ -4349,7 +4362,7 @@ class Trainer:
             rejected_ids = rejected_ids[:max_len_s]
 
             # Skip pairs that are too short after truncation
-            prompt_len = len(prompt_ids)
+            prompt_len = self._encoded_prompt_len(prompt)
             if len(chosen_ids) <= prompt_len or len(rejected_ids) <= prompt_len:
                 continue
 
@@ -4531,12 +4544,11 @@ class Trainer:
             response = item.get("response", "")
             if not (prompt and response):
                 return None
-            prompt_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: ")
             full_ids = self.tokenizer.encode(f"User: {prompt}\nAssistant: {response}")
             max_len_k = getattr(self.model, "config", None)
             max_len_k = getattr(max_len_k, "max_seq_len", 512) if max_len_k else 512
             full_ids = full_ids[:max_len_k]
-            prompt_len = len(prompt_ids)
+            prompt_len = self._encoded_prompt_len(prompt)
             labels = [-100] * min(prompt_len, len(full_ids)) + full_ids[prompt_len:]
             mask = [1] * len(full_ids)
             return (
@@ -4719,11 +4731,10 @@ class Trainer:
 
             chosen_text = f"User: {prompt}\nAssistant: {chosen}"
             rejected_text = f"User: {prompt}\nAssistant: {rejected}"
-            prompt_text = f"User: {prompt}\nAssistant: "
 
             chosen_ids = self.tokenizer.encode(chosen_text)
             rejected_ids = self.tokenizer.encode(rejected_text)
-            prompt_len = len(self.tokenizer.encode(prompt_text))
+            prompt_len = self._encoded_prompt_len(prompt)
 
             max_len = getattr(
                 self.model, "max_seq_len", getattr(getattr(self.model, "config", None), "max_seq_len", 2048)

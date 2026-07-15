@@ -268,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tag",
         default="seed",
-        help="Output filename suffix (default: 'seed' → synthetic_search_seed.{jsonl,txt}).",
+        help="Output filename suffix (default: 'seed' -> synthetic_search_seed.{jsonl,txt}).",
     )
     parser.add_argument(
         "--positive-only",

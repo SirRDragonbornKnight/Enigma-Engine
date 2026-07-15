@@ -703,6 +703,13 @@ def gen_teaching_examples(path: Path = TEACHINGS) -> list[dict]:
             continue
         qs = rec.get("questions") or ([rec["q"]] if rec.get("q") else [])
         ans = rec.get("answers") or ([rec["a"]] if rec.get("a") else [])
+        # A bare string is a single Q/A, NOT an iterable of chars: iterating a
+        # str would explode "Hi?" into per-character records (each char is also
+        # a str, so the isinstance filter below can't catch it).
+        if isinstance(qs, str):
+            qs = [qs]
+        if isinstance(ans, str):
+            ans = [ans]
         qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()]
         ans = [a.strip() for a in ans if isinstance(a, str) and a.strip()]
         if not qs or not ans:
