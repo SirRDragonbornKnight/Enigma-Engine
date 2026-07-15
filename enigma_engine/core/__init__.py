@@ -1,10 +1,8 @@
-# core package — Modkit's Forge core
-"""Modkit core: the Forge (model architecture + training support), tokenizers,
-and the mod-command registry.
+# core package — Enigma core
+"""Enigma core: model architecture, training support, and tokenizers.
 
-Model *inference/serving* lives outside Modkit now — trained models are run by
-Odysseus + an external runner (Ollama / llama.cpp / vLLM). This package is the
-factory, not the engine.
+This is the Forge (build + train). Serving is `serve_enigma.py` at the repo
+root (an OpenAI-compatible FastAPI server that loads the checkpoint directly).
 """
 
 # Hardware detection
@@ -25,20 +23,6 @@ try:
     from .bpe_tokenizer import BPETokenizer
 except ImportError:
     BPETokenizer = None
-
-# Command registry (used by the mod system / mod_tools)
-try:
-    from .commands import (
-        CommandRegistry,
-        CommandResult,
-        get_registry,
-        parse_commands,
-    )
-except ImportError:
-    CommandRegistry = None
-    CommandResult = None
-    get_registry = None
-    parse_commands = None
 
 # Model — lazy so importing the package doesn't pull in torch at startup.
 _lazy_cache = {}
@@ -71,10 +55,6 @@ __all__ = [
     "SimpleTokenizer",
     "get_tokenizer",
     "BPETokenizer",
-    "CommandRegistry",
-    "CommandResult",
-    "get_registry",
-    "parse_commands",
     "Enigma",
     "ForgeConfig",
     "create_model",

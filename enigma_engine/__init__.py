@@ -1,10 +1,7 @@
-"""Modkit — the AI's capability backend (the Forge + mods).
+"""Enigma Engine — a from-scratch decoder-only LLM (the Forge).
 
-This package forges and manages models and capabilities; the models are *run* by
-Odysseus + an external runner (Ollama / llama.cpp / vLLM), not here.
-
-(The import package is still named ``enigma_engine`` for now — the package-level
-rename to ``modkit`` is a deliberate follow-up to avoid churning every import.)
+This package builds, trains, and tokenizes models. Serving is `serve_enigma.py`
+at the repo root (an OpenAI-compatible FastAPI server that loads the checkpoint).
 """
 
 from .config import CONFIG

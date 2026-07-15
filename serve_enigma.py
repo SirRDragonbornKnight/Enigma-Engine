@@ -153,7 +153,7 @@ print(
     flush=True,
 )
 
-app = FastAPI(title="Modkit · Enigma (from-scratch)")
+app = FastAPI(title="Enigma (from-scratch)")
 
 # One model, one KV-cache — generation must be serialized across requests.
 _GEN_LOCK = threading.Lock()
@@ -707,7 +707,7 @@ def _chat_instruct(req: ChatReq):
 
 @app.get("/v1/models")
 def list_models():
-    return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "modkit"}]}
+    return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "enigma"}]}
 
 
 @app.post("/v1/chat/completions")

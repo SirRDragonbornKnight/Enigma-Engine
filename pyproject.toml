@@ -3,9 +3,9 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "modkit"
+name = "enigma-engine"
 version = "2.0.0"
-description = "Modkit — the AI's capability backend: forge your own local models (Enigma) + mods an AI front-end (Odysseus) controls via MCP"
+description = "Enigma Engine - a from-scratch decoder-only LLM (own architecture, BPE tokenizer, and weights). Pipeline: pretrain -> SFT -> serve."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -192,8 +192,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "B", "PLW"]  # relax security + bugbear in tests
-"plugins/*" = ["F401"]          # unused imports OK in plugin examples
-"mods/*" = ["S"]               # relax security in mod templates
 # (Enigma Avatar moved to its own repo 2026-06-28 — its ruff config lives there now.)
 
 # --- Bandit (security scanner) ---
