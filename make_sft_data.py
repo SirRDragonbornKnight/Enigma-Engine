@@ -42,6 +42,7 @@ except Exception:
 
 from enigma_engine.core.chat_format import TOOL_SYNTAX  # ONE syntax, train == serve
 from identity_paraphrases import gen_identity_paraphrases
+from knowledge_corpus import gen_knowledge_examples
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "data" / "sft"
@@ -992,6 +993,28 @@ def _is_ai_boilerplate(rec: dict) -> bool:
     return bool(_AI_BOILERPLATE.search(_assistant_text(rec)))
 
 
+# QA gate 3 (2026-07-15, user-ordered clarity pass): the general corpus is
+# bulk-pulled and carries profanity, dead links, raw HTML, and source-data
+# loops. She learns to TALK from these records -- the 07-15 eval put corpus
+# profanity verbatim in her mouth. Clarity beats volume at 182M.
+_LOW_QUALITY = re.compile(
+    "|".join(
+        [
+            r"\b(?:fuck\w*|shit\w*|bitch\w*|asshole\w*|cunt\w*|goddamn\w*|motherfuck\w*|dumbass\w*)\b",
+            r"https?://",  # she cannot browse; trained URLs decode as made-up links
+            r"</?(?:div|span|p|a|br|td|tr|table|html|body|script|img)\b",  # raw HTML
+            r"�",  # encoding damage
+            r"\b(\w+)(?:\s+\1\b){4,}",  # same word five-plus times in a row: source loops
+        ]
+    ),
+    re.I,
+)
+
+
+def _is_low_quality(rec: dict) -> bool:
+    return bool(_LOW_QUALITY.search(_assistant_text(rec)))
+
+
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1045,6 +1068,10 @@ def main() -> None:
     # Image-READING records (use the eyes organ's '[image: ...]' markers).
     img_read = [r for r in gen_image_read_examples() if _norm_q(r) not in eval_qs]
 
+    # Clean world-knowledge QA (knowledge_corpus.py) -- the counterweight to
+    # the noisy general corpus: curated facts in short plain sentences.
+    knowledge = [r for r in gen_knowledge_examples() if _norm_q(r) not in eval_qs]
+
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
     # x20 weight, but now the model sees many surfaces per fact).
@@ -1053,6 +1080,7 @@ def main() -> None:
     TEACHINGS_REPEAT = 8
     MEMREAD_REPEAT = 5
     IMGREAD_REPEAT = 5
+    KNOWLEDGE_REPEAT = 2  # curated facts ride light -- reinforce, don't crowd general chat
     mix = [
         json.dumps(r, ensure_ascii=False)
         for r in tools * TOOLS_REPEAT
@@ -1060,10 +1088,12 @@ def main() -> None:
         + teach * TEACHINGS_REPEAT
         + mem_read * MEMREAD_REPEAT
         + img_read * IMGREAD_REPEAT
+        + knowledge * KNOWLEDGE_REPEAT
     ]
     n_general = 0
     n_boiler = 0
     n_foreign = 0
+    n_lowq = 0
     n_gen_leak = 0
     if GENERAL.exists():
         with open(GENERAL, encoding="utf-8") as f:
@@ -1081,6 +1111,9 @@ def main() -> None:
                 if _FOREIGN_IDENTITY.search(_assistant_text(rec)):  # QA gate 2: no foreign self-identity
                     n_foreign += 1
                     continue
+                if _is_low_quality(rec):  # QA gate 3: profanity/HTML/URLs/loops
+                    n_lowq += 1
+                    continue
                 if _norm_q(rec) in eval_qs:  # eval-leak guard covers GENERAL too
                     n_gen_leak += 1
                     continue
@@ -1092,9 +1125,11 @@ def main() -> None:
     print(
         f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
         f"{len(mem_read)} memory-read x{MEMREAD_REPEAT}, "
-        f"{len(img_read)} image-read x{IMGREAD_REPEAT}; "
+        f"{len(img_read)} image-read x{IMGREAD_REPEAT}, "
+        f"{len(knowledge)} knowledge x{KNOWLEDGE_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
+        f"{n_lowq} dropped as low-quality (profanity/HTML/URLs/loops); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
