@@ -112,6 +112,22 @@ TOOLS = [
         ],
     ),
     (
+        # The server-side voice organ (core/tts.py, --voice). Distinct from
+        # avatar_say: speak plays through THIS machine's speakers; avatar_say
+        # is fulfilled by the avatar client.
+        "speak",
+        "Speak text out loud through the computer speakers.",
+        {"text": "string"},
+        [
+            ("Say 'hello world' out loud.", {"text": "Hello world!"}, "speaking", "Said it out loud."),
+            ("Tell everyone lunch is here.", {"text": "Lunch is here, everyone!"}, "speaking", "Called it out -- lunch is here."),
+            ("Read that back to me out loud: backup finished.", {"text": "Backup finished."}, "speaking", "Read it out: backup finished."),
+            ("Say something encouraging, out loud.", {"text": "You've got this -- keep going!"}, "speaking", "Spoken. You've got this."),
+            ("Announce the meeting starts in five minutes.", {"text": "The meeting starts in five minutes."}, "speaking", "Announced -- five minutes to the meeting."),
+            ("Use your voice to count down from three.", {"text": "Three... two... one."}, "speaking", "Counted it down out loud."),
+        ],
+    ),
+    (
         "see_screen",
         "Read the text currently visible on the user's screen.",
         {},

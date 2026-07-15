@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import re
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -30,7 +32,7 @@ from pathlib import Path
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
@@ -43,6 +45,7 @@ from enigma_engine.core.chat_format import (
     render_tools_system,
 )
 from enigma_engine.core.calculator import CalcError, evaluate, format_result
+from enigma_engine.core.tts import Speaker, TTSError
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.tokenizer import get_tokenizer
@@ -73,6 +76,11 @@ _p.add_argument(
     "--memory-dir",
     default=None,
     help="enable the local memory store (JSONL + BM25); relevant memories are injected into her system context",
+)
+_p.add_argument(
+    "--voice",
+    action="store_true",
+    help="enable the voice organ: the speak built-in tool + /v1/audio/speech (local pyttsx3/SAPI)",
 )
 ARGS, _ = _p.parse_known_args()
 
@@ -144,12 +152,22 @@ if ARGS.memory_dir:
 
     MEMORY = MemoryStore(ARGS.memory_dir)
 
+# Voice organ: constructed eagerly so a broken backend surfaces at startup,
+# not mid-conversation. She still serves text if the voice fails to come up.
+SPEAKER = None
+if ARGS.voice:
+    try:
+        SPEAKER = Speaker()
+    except TTSError as exc:
+        print(f"  WARN: voice disabled -- {exc}", flush=True)
+
 _n_params = sum(p.numel() for p in model.parameters())
 print(
     f"Enigma loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
     + (f", checkpoint step {STEP:,}" if STEP is not None else "")
     + (f" | INSTRUCT ({META.get('chat_format')})" if INSTRUCT else " | base (transcript bridge)")
-    + (f" | memory: {len(MEMORY)} entries" if MEMORY is not None else ""),
+    + (f" | memory: {len(MEMORY)} entries" if MEMORY is not None else "")
+    + (" | voice: on" if SPEAKER is not None else ""),
     flush=True,
 )
 
@@ -393,7 +411,15 @@ _REMEMBER_TOOL = {
         "parameters": {"text": "string"},
     },
 }
-_BUILTIN_NAMES = {"calculate", "remember"}
+_SPEAK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "speak",
+        "description": "Speak text out loud through the computer speakers.",
+        "parameters": {"text": "string"},
+    },
+}
+_BUILTIN_NAMES = {"calculate", "remember", "speak"}
 _MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
 
 # The calculate tool is offered ONLY when the ask looks arithmetic. Injecting
@@ -438,6 +464,23 @@ def _looks_memorable(text: str) -> bool:
     return bool(text) and MEMORY is not None and bool(_MEMORABLE.search(text))
 
 
+# speak is offered only on an explicit say-it-out-loud ask, same rationale as
+# the other gates. Shapes mirror the avatar_say SFT cases (say X / announce /
+# read back / tell the room) plus "out loud"/"aloud" anywhere. Offering is
+# cheap; she decides whether to call.
+_SPEAKABLE = re.compile(
+    r"\b(out loud|aloud|announce|use your voice|speak up|"
+    r"say (it|this|that|something|hello|hi|good)|"
+    r"tell (the room|everyone|everybody)|"
+    r"read (it|this|that|.{0,30}) (back )?to me)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_speakable(text: str) -> bool:
+    return bool(text) and SPEAKER is not None and bool(_SPEAKABLE.search(text))
+
+
 def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
     """The built-ins to offer for this request. calculate rides along in
     client tool-mode (a tool prompt exists anyway; math grammar is distinctive
@@ -450,6 +493,8 @@ def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
         tools.append(_CALC_TOOL)
     if _looks_memorable(user_text):  # checks MEMORY is enabled too
         tools.append(_REMEMBER_TOOL)
+    if _looks_speakable(user_text):  # checks SPEAKER is enabled too
+        tools.append(_SPEAK_TOOL)
     return tools
 
 
@@ -476,6 +521,17 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             return "error: nothing to remember"
         rec = MEMORY.remember(text, source="chat")
         return f"updated: {rec['text']}" if rec.get("superseded") else f"saved: {rec['text']}"
+    if name == "speak":
+        if SPEAKER is None:
+            return "error: voice disabled (start serve with --voice)"
+        text = str(arguments.get("text", "")).strip()
+        if not text:
+            return "error: nothing to say"
+        try:
+            SPEAKER.speak(text)  # fire-and-forget; playback runs while she writes her final turn
+        except TTSError as exc:
+            return f"error: {exc}"
+        return "speaking"
     return f"error: unknown tool {name!r}"
 
 
@@ -872,6 +928,41 @@ def memory_clear():
     if MEMORY is None:
         return {"error": "memory disabled — start with --memory-dir"}
     return {"ok": True, "cleared": MEMORY.clear()}
+
+
+class SpeechReq(BaseModel):
+    """OpenAI audio.speech shape (subset): synthesize input, return WAV bytes.
+    This is the organ's service face -- the avatar requests audio it plays
+    itself (lip-sync later); the speak TOOL plays on this machine instead."""
+
+    model: str = MODEL_ID
+    input: str
+    voice: str | None = None  # one system voice for now; reject others honestly
+
+
+@app.post("/v1/audio/speech")
+def audio_speech(req: SpeechReq):
+    if SPEAKER is None:
+        return {"error": "voice disabled — start with --voice"}
+    if req.voice is not None:
+        return {"error": "voice selection not supported yet — one system voice"}
+    fd, tmp = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        SPEAKER.save_wav(req.input, tmp)
+        wav = Path(tmp).read_bytes()
+    except TTSError as exc:
+        return {"error": str(exc)}
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return Response(content=wav, media_type="audio/wav")
+
+
+@app.get("/v1/audio/voices")
+def audio_voices():
+    if SPEAKER is None:
+        return {"error": "voice disabled — start with --voice"}
+    return {"voices": SPEAKER.voices}
 
 
 def main() -> None:

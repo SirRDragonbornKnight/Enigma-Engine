@@ -26,6 +26,12 @@ were REMOVED 2026-07-13 (never loaded by `serve_enigma.py`; superseded). Pip dis
 `modkit` -> `enigma-engine`. Capabilities that are genuinely separate models (image gen, TTS, ASR,
 search) return as hub/tool services, NOT in-repo mods.
 
+**Voice organ (first organ, live 2026-07-14):** `core/tts.py` (pyttsx3/SAPI, one engine per JOB —
+say-then-save on one engine deadlocks, see module docstring) behind `serve_enigma.py --voice`:
+the intent-gated `speak` built-in tool + `/v1/audio/speech` (WAV bytes) + `/v1/audio/voices`.
+Verified end-to-end against the served `enigma_dpo`: "Say hello out loud." -> speak call -> audio.
+`speak` = this machine's speakers (server-side); `avatar_say` stays a CLIENT tool for the avatar.
+
 **Enigma Avatar** (the desktop overlay an LLM can drive) was split into a **separate sibling
 repo** at `C:\Users\SirKn\Enigma Avatar\` on 2026-06-28 (full history preserved) and is now a
 **Unity 6 rebuild** — the Electron+three.js predecessor lives at `C:\Users\SirKn\Enigma Avatar
