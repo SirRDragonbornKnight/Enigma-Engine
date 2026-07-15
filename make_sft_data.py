@@ -1080,7 +1080,11 @@ def main() -> None:
     TEACHINGS_REPEAT = 8
     MEMREAD_REPEAT = 5
     IMGREAD_REPEAT = 5
-    KNOWLEDGE_REPEAT = 2  # curated facts ride light -- reinforce, don't crowd general chat
+    # x2 was too light to generalize across phrasings (measured 2026-07-15 on
+    # the adopted v5: "largest planet" -> Jupiter but "biggest planet" ->
+    # Saturn at greedy). Identity generalizes at x8; facts get the same class
+    # of weight.
+    KNOWLEDGE_REPEAT = 5
     mix = [
         json.dumps(r, ensure_ascii=False)
         for r in tools * TOOLS_REPEAT
