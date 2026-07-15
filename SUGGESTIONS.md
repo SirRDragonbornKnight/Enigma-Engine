@@ -10,9 +10,11 @@
 - **Odysseus** (separate repo, `C:\Users\SirKn\odysseus`) = the app/UI: chat,
   MCP client, image gen + editor, TTS/STT, OCR, browser, 40+ agent tools,
   model serving, deep research. We do not build UI in this repo.
-- **Modkit** (this repo) = the capability backend: model forging + serving +
-  mods, exposed over MCP (`modkit_mcp.py`, in-process server — codegen,
-  see_screen, voice, avatar_* over the local WS bus).
+- **This repo** = the from-scratch LLM: model forging (pretrain/SFT/DPO) + serving.
+  (SUPERSEDED 2026-07-13: the old "Modkit" capability-backend framing — `mods/`, MCP
+  `modkit_mcp.py`, in-repo codegen/see_screen/voice — was REMOVED. Capabilities now
+  return as organ/hub services exposed to Enigma as tools, not in-repo mods. The pip
+  distribution is `enigma-engine`.)
 - **Enigma** (the heart) = the from-scratch transformer
   (`enigma_engine/core/model.py`, 182M `large` preset), pretrained on the
   own-built 56.6B-token corpus via `pretrain_enigma.py`.
@@ -36,7 +38,7 @@
 3. **Hands — infrastructure BUILT 2026-06-11; the pass itself runs after
    pretraining completes.** `enigma_engine/core/chat_format.py` owns the
    format: chat tokens 4718–4723 in the padded free rows (+ the tokenizer's
-   native `<think>`=4/5), ONE ChatML-shaped template shared by training and
+   native `<think>`=10/11), ONE ChatML-shaped template shared by training and
    serving, ID-level tool-call parsing. `finetune_enigma.py` is the bespoke
    SFT trainer (assistant-only loss masking, chat-row re-init, shares the
    pretrain arsenal — Muon/WSD work here too). `make_sft_data.py` builds the
@@ -52,7 +54,7 @@
    stays compact until a length-extension anneal.
 5. **Values/identity corpus.** Constitutive alignment: hand-curated examples,
    scaling the proven identity-lock approach. The seed exists
-   (`data/sft/identity.jsonl`: 122 from-scratch-true anchors; the old
+   (`data/sft/identity.jsonl`: 360 from-scratch-true anchors; the old
    Qwen-era claims are false for this model). The curation pass is the user's
    authorship. The WHY lives in the vision memory (Jarvis-class companion
    that provably won't turn evil).

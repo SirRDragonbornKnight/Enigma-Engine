@@ -1,4 +1,4 @@
-# Known Issues — current as of 2026-07-06
+# Known Issues — current as of 2026-07-13
 
 _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
 `CLEANUP_TRACKER.md` (file state)._
@@ -82,3 +82,29 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
     (~50%), raw arithmetic (bypassed via the server-side `calculate` tool).
     Current SFT data state lives in `ROADMAP.md` (Phase 1 DONE, Phase 2
     exit criteria met 26/29).
+11. **Modkit-refactor module deletions RESTORED 2026-07-13 (audit).** The
+    refactor (`0bd9167e`) deleted modules while their callers survived; an
+    import-integrity sweep found SIX dangling imports. Restored verbatim from
+    `0bd9167e^`: `core/vision_encoder.py` (935 lines, ViT + screen/camera
+    capture), `core/audio_encoder.py` (673 lines, Conformer + from-scratch
+    mel pipeline), `core/gguf.py` (1,487 lines — `Enigma.export_to_gguf()`
+    was a hard crash; the vendored llama-server route in #6 depends on it),
+    `core/reasoning.py` (397 lines — SFT data carrying a "thinking" field
+    crashed training; the surrounding try only caught JSONDecodeError).
+    Verified: imports clean, ruff clean, full suite green, smoke forward ran
+    both modalities through `forward_multimodal` (finite logits).
+    LEFT ALONE, deliberately: `core/sentiment.py` (+ its dep
+    `core/model_context.py`, ~940 lines combined — would revive the emotional-state
+    subsystem; user call). Its rl_training caller degrades gracefully (guarded), so it
+    stays allowlisted in `tests/test_import_integrity.py`, which gates the suite against
+    this failure mode recurring. (`core/inference.py`, deleted in the pivot `0eab02a3`,
+    was dropped from the allowlist 2026-07-13: its only consumer was the Modkit-era
+    `mods/codegen`, removed with the rest of modkit — nothing imports it now.)
+    STILL ABSENT (honest gap): inference-side multimodal wiring — no
+    image/audio placeholder in `chat_format.py`, no image/audio input in
+    `serve_enigma.py`, `generate()`/KV-cache never calls
+    `forward_multimodal`. The projections are untrained: `vision_hidden_size`
+    / `audio_hidden_size` remain `None` in every shipped checkpoint; stage-1
+    projector training (see `collect_vision_data.py`) is the next step.
+    Vision has a data collector; audio has NONE (`collect_audio_data.py`
+    does not exist) — gap to fill before the audio mode is trainable.

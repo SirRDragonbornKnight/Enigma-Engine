@@ -4,7 +4,9 @@ This tracker describes the tree as it stands today; earlier eras (`gui/`,
 `web/`, `services/`, `api/`, the Qwen-era `engine_*`/`inference`/`rag`
 modules) live in git history. Current truth:
 
-## Package state — `enigma_engine/`, 39 files / ~23.8k LOC
+## Package state — `enigma_engine/`, 44 files / ~30.7k LOC
+<!-- updated 2026-07-13: the multimodal restore re-added vision_encoder/audio_encoder/gguf/reasoning (~3.5k LOC) -->
+
 
 - **LIVE — her core (~7.5k LOC):** `model.py`, `model_components.py`,
   `model_presets.py`, `model_utils.py`, `safe_save.py`, `tokenizer.py`,
@@ -24,8 +26,8 @@ modules) live in git history. Current truth:
   runtime imports it today.
 - **TEST-COVERED SUPPORT:** `dataset.py`, `curated_dataset.py`,
   `progressive_growing.py`, `weight_mapping.py`, `adaptive_trainer.py`,
-  `commands.py`, `plugin_loader.py`, `mod_tools.py`, `hardware_detection.py`,
-  `config/`.
+  `hardware_detection.py`, `config/`.
+  (`commands.py`, `plugin_loader.py`, `mod_tools.py` REMOVED 2026-07-13 with the modkit subsystem.)
 - **In git history only (idea-source, not code):** `core/personality_data.py`'s
   distillation prompts are an idea-source for the values corpus — retrieve
   from git when needed.
