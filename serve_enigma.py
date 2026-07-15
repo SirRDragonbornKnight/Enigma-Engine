@@ -241,9 +241,13 @@ class Msg(BaseModel):
 class ChatReq(BaseModel):
     model: str = MODEL_ID
     messages: list[Msg]
-    temperature: float = 0.8
+    # Clarity defaults for a 182M model (2026-07-15): 0.8/no-min_p read as
+    # rambling; 0.3 + min_p keeps her coherent while staying non-greedy.
+    temperature: float = 0.3
     top_p: float = 0.9
-    min_p: float = 0.0  # 0 = off; prunes tokens below min_p * max_prob
+    min_p: float = 0.05  # 0 = off; prunes tokens below min_p * max_prob
+    top_k: int = 50  # 0 = off
+    repetition_penalty: float = 1.1  # applied to HER tokens only, never the prompt
     max_tokens: int = 256
     stream: bool = False
     tools: list[dict] | None = None  # OpenAI tool specs (instruct mode)
@@ -252,9 +256,11 @@ class ChatReq(BaseModel):
 class CompletionReq(BaseModel):
     model: str = MODEL_ID
     prompt: str
-    temperature: float = 0.8
+    temperature: float = 0.8  # raw continuation keeps the exploratory default
     top_p: float = 0.9
     min_p: float = 0.0  # 0 = off; prunes tokens below min_p * max_prob
+    top_k: int = 50  # 0 = off
+    repetition_penalty: float = 1.1  # applied to generated tokens only
     max_tokens: int = 256
     stream: bool = False
 
@@ -287,7 +293,14 @@ _GEN_DONE = object()
 
 
 def _stream_ids_locked(
-    x: torch.Tensor, max_tokens: int, temperature: float, top_p: float, min_p: float, stop_tokens: list[int]
+    x: torch.Tensor,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    min_p: float,
+    stop_tokens: list[int],
+    top_k: int = 50,
+    repetition_penalty: float = 1.1,
 ):
     """Yield token ids from the model without holding _GEN_LOCK across
     consumer waits. A worker thread owns the lock for the whole generation
@@ -306,6 +319,8 @@ def _stream_ids_locked(
                     max_new_tokens=max_tokens,
                     temperature=temperature,
                     top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
                     stop_tokens=stop_tokens,
                     min_p=min_p,
                 ):
@@ -340,6 +355,8 @@ def _generate_text(
     top_p: float,
     stop_texts: tuple[str, ...] = (),
     min_p: float = 0.0,
+    top_k: int = 50,
+    repetition_penalty: float = 1.1,
     stats: dict | None = None,
 ):
     """Yield text deltas from her KV-cached streaming path.
@@ -385,7 +402,9 @@ def _generate_text(
     emitted = 0
     saw_eos = False
     out_ids: list[int] = []
-    for tid in _stream_ids_locked(x, max_tokens, temperature, top_p, min_p, [EOS_ID]):
+    for tid in _stream_ids_locked(
+        x, max_tokens, temperature, top_p, min_p, [EOS_ID], top_k=top_k, repetition_penalty=repetition_penalty
+    ):
         if tid == EOS_ID:
             saw_eos = True
             break
@@ -417,7 +436,14 @@ def _generate_text(
 
 
 def _gen_ids(
-    ids: list[int], max_tokens: int, temperature: float, top_p: float, min_p: float, stop_ids: tuple[int, ...]
+    ids: list[int],
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    min_p: float,
+    stop_ids: tuple[int, ...],
+    top_k: int = 50,
+    repetition_penalty: float = 1.1,
 ):
     """ID-level generation for instruct mode: render_chat already built the
     exact prompt (BOS included, no trailing EOS — the whole encode() EOS
@@ -427,7 +453,9 @@ def _gen_ids(
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     temperature = max(float(temperature), 1e-3)
-    for tid in _stream_ids_locked(x, max_tokens, temperature, top_p, min_p, list(stop_ids)):
+    for tid in _stream_ids_locked(
+        x, max_tokens, temperature, top_p, min_p, list(stop_ids), top_k=top_k, repetition_penalty=repetition_penalty
+    ):
         if tid in stop_ids:
             break
         yield tid
@@ -711,7 +739,10 @@ def _chat_instruct(req: ChatReq):
             raw_all: list[str] = []
             for hop in range(_MAX_TOOL_HOPS + 1):
                 prompt_ids, hop_max = _hop(cur_msgs)
-                gen = _gen_ids(prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END))
+                gen = _gen_ids(
+                    prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END),
+                    top_k=req.top_k, repetition_penalty=req.repetition_penalty,
+                )
                 all_ids: list[int] = []
                 content_ids: list[int] = []
                 emitted = 0
@@ -816,7 +847,12 @@ def _chat_instruct(req: ChatReq):
     raw_all: list[str] = []
     for hop in range(_MAX_TOOL_HOPS + 1):
         prompt_ids, last_max = _hop(cur_msgs)
-        out_ids = list(_gen_ids(prompt_ids, last_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END)))
+        out_ids = list(
+            _gen_ids(
+                prompt_ids, last_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END),
+                top_k=req.top_k, repetition_penalty=req.repetition_penalty,
+            )
+        )
         out = parse_assistant_ids(tokenizer, out_ids)
         n_prompt += len(prompt_ids)
         n_out += len(out_ids)
@@ -879,7 +915,10 @@ def chat(req: ChatReq):
     created = int(time.time())
     cid = f"chatcmpl-{created}"
     stats: dict = {}
-    gen = _generate_text(prompt, req.max_tokens, req.temperature, req.top_p, _STOP_TEXTS, min_p=req.min_p, stats=stats)
+    gen = _generate_text(
+        prompt, req.max_tokens, req.temperature, req.top_p, _STOP_TEXTS,
+        min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty, stats=stats,
+    )
 
     if req.stream:
 
@@ -936,7 +975,10 @@ def completions(req: CompletionReq):
     created = int(time.time())
     cid = f"cmpl-{created}"
     stats: dict = {}
-    gen = _generate_text(req.prompt, req.max_tokens, req.temperature, req.top_p, min_p=req.min_p, stats=stats)
+    gen = _generate_text(
+        req.prompt, req.max_tokens, req.temperature, req.top_p,
+        min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty, stats=stats,
+    )
 
     if req.stream:
 

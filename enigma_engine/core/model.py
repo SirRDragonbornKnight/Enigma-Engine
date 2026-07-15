@@ -804,13 +804,18 @@ class Enigma(nn.Module):
         stop_tokens = stop_tokens or [2]
 
         generated = input_ids
+        # Repetition penalty must see only HER tokens: penalizing prompt
+        # tokens suppresses exactly the vocabulary the system prompt primes
+        # her to answer with ("Enigma", "local", ...) -- measured as
+        # incoherence at 182M (ultrareview #9 scope fix, 2026-07-15).
+        prompt_len = input_ids.shape[1]
         logits = self.forward(input_ids, use_cache=True)
         final_logits = logits  # Track for return_logits option
 
         for _ in range(max_new_tokens):
             next_token = sample_next_token(
                 logits[:, -1, :],
-                generated,
+                generated[:, prompt_len:],
                 temperature,
                 top_k,
                 top_p,
@@ -894,12 +899,14 @@ class Enigma(nn.Module):
         stop_tokens = stop_tokens or [2]
 
         generated = input_ids
+        # Same penalty-scope rule as generate(): only HER tokens, not the prompt.
+        prompt_len = input_ids.shape[1]
         logits = self.forward(input_ids, use_cache=True)
 
         for _ in range(max_new_tokens):
             next_token = sample_next_token(
                 logits[:, -1, :],
-                generated,
+                generated[:, prompt_len:],
                 temperature,
                 top_k,
                 top_p,
