@@ -19,6 +19,7 @@ parsing lives in git history and returns with the instruct pass).
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import queue
@@ -27,11 +28,12 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -44,7 +46,10 @@ from enigma_engine.core.chat_format import (
     render_chat,
     render_tools_system,
 )
+from enigma_engine.core.asr import ASRError, Ears
 from enigma_engine.core.calculator import CalcError, evaluate, format_result
+from enigma_engine.core.eyes import Eyes, EyesError, flatten_image_content
+from enigma_engine.core.imagegen import ImageGenError, Painter
 from enigma_engine.core.tts import Speaker, TTSError
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
@@ -81,6 +86,21 @@ _p.add_argument(
     "--voice",
     action="store_true",
     help="enable the voice organ: the speak built-in tool + /v1/audio/speech (local pyttsx3/SAPI)",
+)
+_p.add_argument(
+    "--ears",
+    action="store_true",
+    help="enable the ears organ: /v1/audio/transcriptions (local faster-whisper)",
+)
+_p.add_argument(
+    "--eyes",
+    action="store_true",
+    help="enable the eyes organ: image messages are captioned into her context + /v1/images/describe (local BLIP)",
+)
+_p.add_argument(
+    "--image-gen",
+    action="store_true",
+    help="enable the imagination organ: the imagine built-in tool + /v1/images/generations (local Stable Diffusion)",
 )
 ARGS, _ = _p.parse_known_args()
 
@@ -152,8 +172,8 @@ if ARGS.memory_dir:
 
     MEMORY = MemoryStore(ARGS.memory_dir)
 
-# Voice organ: constructed eagerly so a broken backend surfaces at startup,
-# not mid-conversation. She still serves text if the voice fails to come up.
+# Organs: constructed eagerly so a broken backend surfaces at startup, not
+# mid-conversation. She still serves text if an organ fails to come up.
 SPEAKER = None
 if ARGS.voice:
     try:
@@ -161,13 +181,41 @@ if ARGS.voice:
     except TTSError as exc:
         print(f"  WARN: voice disabled -- {exc}", flush=True)
 
+EARS = None
+if ARGS.ears:
+    try:
+        EARS = Ears()
+    except ASRError as exc:
+        print(f"  WARN: ears disabled -- {exc}", flush=True)
+
+EYES = None
+if ARGS.eyes:
+    try:
+        EYES = Eyes()
+    except EyesError as exc:
+        print(f"  WARN: eyes disabled -- {exc}", flush=True)
+
+PAINTER = None
+if ARGS.image_gen:
+    try:
+        PAINTER = Painter()
+    except ImageGenError as exc:
+        print(f"  WARN: image-gen disabled -- {exc}", flush=True)
+
+# Where the imagine tool and /v1/images/generations drop their PNGs: the
+# engine's data home, not the repo checkout.
+IMAGES_DIR = Path.home() / ".enigma_engine" / "images"
+
 _n_params = sum(p.numel() for p in model.parameters())
 print(
     f"Enigma loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
     + (f", checkpoint step {STEP:,}" if STEP is not None else "")
     + (f" | INSTRUCT ({META.get('chat_format')})" if INSTRUCT else " | base (transcript bridge)")
     + (f" | memory: {len(MEMORY)} entries" if MEMORY is not None else "")
-    + (" | voice: on" if SPEAKER is not None else ""),
+    + (" | voice: on" if SPEAKER is not None else "")
+    + (" | ears: on" if EARS is not None else "")
+    + (" | eyes: on" if EYES is not None else "")
+    + (" | image-gen: on" if PAINTER is not None else ""),
     flush=True,
 )
 
@@ -183,7 +231,10 @@ _STOP_TEXTS = ("\nUser:", "\nEnigma:")
 
 class Msg(BaseModel):
     role: str
-    content: str | None = None
+    # str is the native shape; a list is the OpenAI multimodal content form,
+    # flattened to str (eyes organ captions the images) before anything
+    # downstream -- gates, memory retrieval, the renderer -- touches it.
+    content: str | list | None = None
     tool_calls: list[dict] | None = None  # assistant history (instruct mode)
 
 
@@ -419,7 +470,15 @@ _SPEAK_TOOL = {
         "parameters": {"text": "string"},
     },
 }
-_BUILTIN_NAMES = {"calculate", "remember", "speak"}
+_IMAGINE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "imagine",
+        "description": "Generate an image from a text description and save it as a file.",
+        "parameters": {"prompt": "string"},
+    },
+}
+_BUILTIN_NAMES = {"calculate", "remember", "speak", "imagine"}
 _MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
 
 # The calculate tool is offered ONLY when the ask looks arithmetic. Injecting
@@ -481,6 +540,21 @@ def _looks_speakable(text: str) -> bool:
     return bool(text) and SPEAKER is not None and bool(_SPEAKABLE.search(text))
 
 
+# imagine is offered on a make-me-a-picture ask: a creation verb within reach
+# of an image noun, or the "image/picture of" idiom. Same philosophy as the
+# other gates -- offering is cheap; she decides whether to call.
+_IMAGINABLE = re.compile(
+    r"\b(draw|paint|sketch|render|generate|create|make|imagine)\b[^.?!]{0,50}"
+    r"\b(image|picture|photo|drawing|painting|art|illustration|logo|icon|wallpaper|scene)\b"
+    r"|\b(image|picture|photo|drawing|painting) of\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_imaginable(text: str) -> bool:
+    return bool(text) and PAINTER is not None and bool(_IMAGINABLE.search(text))
+
+
 def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
     """The built-ins to offer for this request. calculate rides along in
     client tool-mode (a tool prompt exists anyway; math grammar is distinctive
@@ -495,6 +569,8 @@ def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
         tools.append(_REMEMBER_TOOL)
     if _looks_speakable(user_text):  # checks SPEAKER is enabled too
         tools.append(_SPEAK_TOOL)
+    if _looks_imaginable(user_text):  # checks PAINTER is enabled too
+        tools.append(_IMAGINE_TOOL)
     return tools
 
 
@@ -532,6 +608,17 @@ def _execute_builtin(name: str, arguments: dict) -> str:
         except TTSError as exc:
             return f"error: {exc}"
         return "speaking"
+    if name == "imagine":
+        if PAINTER is None:
+            return "error: image generation disabled (start serve with --image-gen)"
+        prompt = str(arguments.get("prompt", "")).strip()
+        if not prompt:
+            return "error: empty prompt"
+        try:
+            path = PAINTER.generate(prompt, IMAGES_DIR / f"imagine_{uuid.uuid4().hex[:8]}.png")
+        except ImageGenError as exc:
+            return f"error: {exc}"
+        return f"image saved to {path}"
     return f"error: unknown tool {name!r}"
 
 
@@ -776,6 +863,11 @@ def chat(req: ChatReq):
     bad = sorted({m.role for m in req.messages if m.role not in ROLES})
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown chat role(s) {bad}; need one of {list(ROLES)}")
+    # Eyes organ: caption multimodal content into plain text BEFORE the tool
+    # gates, memory retrieval, or either render path sees the messages.
+    for m in req.messages:
+        if isinstance(m.content, list):
+            m.content = flatten_image_content(m.content, EYES.describe if EYES is not None else None)
     if INSTRUCT:
         return _chat_instruct(req)
     messages = list(req.messages)
@@ -963,6 +1055,65 @@ def audio_voices():
     if SPEAKER is None:
         return {"error": "voice disabled — start with --voice"}
     return {"voices": SPEAKER.voices}
+
+
+@app.post("/v1/audio/transcriptions")
+def audio_transcriptions(file: UploadFile = File(...)):
+    """OpenAI audio.transcriptions shape (subset): upload audio, get text.
+    The ears organ -- clients (push-to-talk, the avatar) send what they hear
+    and feed the text back into chat."""
+    if EARS is None:
+        return {"error": "ears disabled — start with --ears"}
+    suffix = Path(file.filename or "audio.wav").suffix or ".wav"
+    fd, tmp = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    try:
+        Path(tmp).write_bytes(file.file.read())
+        return EARS.transcribe(tmp)
+    except ASRError as exc:
+        return {"error": str(exc)}
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+@app.post("/v1/images/describe")
+def images_describe(file: UploadFile = File(...)):
+    """The eyes organ's direct face: upload an image, get her caption.
+    (In chat, OpenAI-style image messages are captioned automatically.)"""
+    if EYES is None:
+        return {"error": "eyes disabled — start with --eyes"}
+    try:
+        return {"description": EYES.describe(file.file.read())}
+    except EyesError as exc:
+        return {"error": str(exc)}
+
+
+class ImageGenReq(BaseModel):
+    """OpenAI images.generations shape (subset)."""
+
+    model: str = MODEL_ID
+    prompt: str
+    n: int = 1
+    size: str = "512x512"
+
+
+@app.post("/v1/images/generations")
+def images_generations(req: ImageGenReq):
+    if PAINTER is None:
+        return {"error": "image generation disabled — start with --image-gen"}
+    try:
+        width, height = (int(x) for x in req.size.lower().split("x"))
+    except ValueError:
+        return {"error": f"bad size {req.size!r}; use WIDTHxHEIGHT like 512x512"}
+    data = []
+    for _ in range(max(1, min(int(req.n), 4))):  # bound n: VRAM is shared with the LLM
+        out = IMAGES_DIR / f"gen_{uuid.uuid4().hex[:8]}.png"
+        try:
+            path = PAINTER.generate(req.prompt, out, width=width, height=height)
+        except ImageGenError as exc:
+            return {"error": str(exc)}
+        data.append({"b64_json": base64.b64encode(path.read_bytes()).decode("ascii")})
+    return {"created": int(time.time()), "data": data}
 
 
 def main() -> None:

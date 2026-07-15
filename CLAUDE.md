@@ -26,11 +26,21 @@ were REMOVED 2026-07-13 (never loaded by `serve_enigma.py`; superseded). Pip dis
 `modkit` -> `enigma-engine`. Capabilities that are genuinely separate models (image gen, TTS, ASR,
 search) return as hub/tool services, NOT in-repo mods.
 
-**Voice organ (first organ, live 2026-07-14):** `core/tts.py` (pyttsx3/SAPI, one engine per JOB —
-say-then-save on one engine deadlocks, see module docstring) behind `serve_enigma.py --voice`:
-the intent-gated `speak` built-in tool + `/v1/audio/speech` (WAV bytes) + `/v1/audio/voices`.
-Verified end-to-end against the served `enigma_dpo`: "Say hello out loud." -> speak call -> audio.
-`speak` = this machine's speakers (server-side); `avatar_say` stays a CLIENT tool for the avatar.
+**Organs (live 2026-07-14):** capabilities as local services behind serve flags; each is a
+`core/` primitive with an injectable factory (tests never download models or touch hardware),
+loaded eagerly at startup (a broken organ WARNs and text serving continues).
+- `--voice` -> `core/tts.py` (pyttsx3/SAPI; one engine per JOB — say-then-save on one engine
+  deadlocks, see module docstring): intent-gated `speak` built-in + `/v1/audio/speech` (WAV) +
+  `/v1/audio/voices`. `speak` = server speakers; `avatar_say` stays a CLIENT tool.
+- `--ears` -> `core/asr.py` (faster-whisper, cuda->cpu fallback): `/v1/audio/transcriptions`.
+- `--eyes` -> `core/eyes.py` (BLIP captioner): OpenAI image_url content in chat is captioned to
+  `[image: ...]` text before gates/memory/render (`flatten_image_content`, data: URLs only,
+  honest markers when it can't see) + `/v1/images/describe`. This is the TODAY path; native
+  projectors (multimodal block above) stay the later in-model road.
+- `--image-gen` -> `core/imagegen.py` (diffusers sd-turbo, 1-step): intent-gated `imagine`
+  built-in (PNGs land in `~/.enigma_engine/images/`) + `/v1/images/generations` (b64_json).
+Verified end-to-end vs served `enigma_dpo`: "Say hello out loud." -> speak call -> SAPI audio;
+voice->wav->ears and imagine->png->eyes loops pass on real weights.
 
 **Enigma Avatar** (the desktop overlay an LLM can drive) was split into a **separate sibling
 repo** at `C:\Users\SirKn\Enigma Avatar\` on 2026-06-28 (full history preserved) and is now a

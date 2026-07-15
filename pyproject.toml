@@ -58,6 +58,19 @@ voice = [
     "SpeechRecognition>=3.8.0",
     "sounddevice>=0.4.0",
 ]
+ears = [
+    "faster-whisper>=1.0.0",
+]
+eyes = [
+    "transformers>=4.20.0",
+    "Pillow>=9.0.0",
+]
+imagegen = [
+    "diffusers>=0.27.0",
+    "transformers>=4.20.0",
+    "accelerate>=0.28.0",
+    "Pillow>=9.0.0",
+]
 vision = [
     "Pillow>=9.0.0",
     "opencv-python>=4.5.0",

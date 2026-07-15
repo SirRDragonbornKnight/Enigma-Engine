@@ -128,6 +128,21 @@ TOOLS = [
         ],
     ),
     (
+        # The imagination organ (core/imagegen.py, --image-gen). She writes
+        # the prompt; Stable Diffusion paints; serve returns the saved path.
+        "imagine",
+        "Generate an image from a text description and save it as a file.",
+        {"prompt": "string"},
+        [
+            ("Draw me a picture of a lighthouse at sunset.", {"prompt": "a lighthouse at sunset, warm light, ocean waves"}, "image saved to images/imagine_1a2b.png", "Painted it -- a lighthouse at sunset. Saved to images/imagine_1a2b.png."),
+            ("Make an image of a cat wearing a wizard hat.", {"prompt": "a cat wearing a wizard hat, portrait"}, "image saved to images/imagine_3c4d.png", "One wizard cat, done. It's at images/imagine_3c4d.png."),
+            ("Can you generate a picture of a cozy cabin in the snow?", {"prompt": "a cozy log cabin in falling snow, warm windows, evening"}, "image saved to images/imagine_5e6f.png", "Made it -- cozy cabin, snow coming down. Saved as images/imagine_5e6f.png."),
+            ("Create some art of a robot playing guitar.", {"prompt": "a robot playing an electric guitar on stage, concert lighting"}, "image saved to images/imagine_7g8h.png", "Rocked it out onto canvas -- saved to images/imagine_7g8h.png."),
+            ("Sketch a simple logo for a bakery called Crumb.", {"prompt": "minimal bakery logo, bread loaf icon, the word Crumb"}, "image saved to images/imagine_9i0j.png", "Sketched a Crumb logo -- it's saved at images/imagine_9i0j.png."),
+            ("Paint a picture of mountains reflected in a lake.", {"prompt": "mountains reflected in a still alpine lake, morning mist"}, "image saved to images/imagine_k1l2.png", "Painted -- mountains on glass-still water. Saved to images/imagine_k1l2.png."),
+        ],
+    ),
+    (
         "see_screen",
         "Read the text currently visible on the user's screen.",
         {},
@@ -696,6 +711,81 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
     return out
 
 
+def gen_image_read_examples(seed: int = 77) -> list[dict]:
+    """Teach her to USE the eyes organ's inline image markers. serve's
+    flatten_image_content rewrites an image message into '[image: <caption>]'
+    text (order preserved: caption before or after the user's words). Verified
+    2026-07-14: untrained, she loops on the marker shape instead of answering.
+    Answers REPHRASE the caption naturally -- never parrot it verbatim -- and
+    the honest markers (eyes disabled / remote URL) get honest replies."""
+    rng = random.Random(seed)
+    # (caption, [(question, answer)])
+    scenes = [
+        ("a red apple on a wooden table", [
+            ("What do you see in this image?", "An apple -- red, sitting on a wooden table."),
+            ("What's in this picture?", "A red apple on a wooden table."),
+        ]),
+        ("a dog running through tall grass", [
+            ("What am I looking at?", "A dog tearing through tall grass -- mid-run."),
+            ("Describe this photo.", "A dog running through a grassy field."),
+        ]),
+        ("a city skyline at night with lights", [
+            ("What does this show?", "A city skyline at night, all lit up."),
+            ("Can you describe this image?", "Nighttime skyline -- buildings glowing with lights."),
+        ]),
+        ("a bowl of soup with vegetables on a table", [
+            ("What's this a picture of?", "A bowl of vegetable soup on a table. Looks warm."),
+            ("What do you see here?", "Soup -- a bowlful with vegetables in it."),
+        ]),
+        ("a man riding a bicycle down a street", [
+            ("What is happening in this image?", "Someone's biking down a street."),
+            ("Tell me what you see.", "A man riding a bicycle along a street."),
+        ]),
+        ("a snowy mountain under a blue sky", [
+            ("Where does this look like?", "A snowy mountain under a clear blue sky -- somewhere cold and bright."),
+            ("What's in this photo?", "A snow-covered mountain against blue sky."),
+        ]),
+        ("an orange cat sleeping on a couch", [
+            ("What do you see in this image?", "An orange cat, fast asleep on a couch."),
+            ("What's this?", "A sleeping orange cat on a couch."),
+        ]),
+        ("two children playing with a ball in a park", [
+            ("Describe the picture.", "Two kids playing ball in a park."),
+            ("What can you see?", "Two children in a park, playing with a ball."),
+        ]),
+    ]
+    out: list[dict] = []
+    for caption, qas in scenes:
+        for i, (q, a) in enumerate(qas):
+            # Both part orders occur in the wild: text-then-image and image-then-text.
+            user = f"{q}\n[image: {caption}]" if i % 2 == 0 else f"[image: {caption}]\n{q}"
+            out.append({
+                "messages": [
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": a},
+                ],
+                "category": "image_read",
+            })
+    # Honest markers: she must say she can't see, not invent a scene.
+    for marker, q, a in [
+        ("[image ignored -- eyes disabled (start serve with --eyes)]", "What do you see in this image?",
+         "I can't see it -- my eyes aren't enabled right now. Start serve with --eyes and show me again."),
+        ("[image ignored -- only data: URLs are supported]", "What's in this picture?",
+         "That image didn't reach me -- I can only see images sent directly, not remote links."),
+        ("[image error: could not read image]", "Describe this photo.",
+         "Something went wrong reading that image -- I couldn't see it. Try sending it again?"),
+    ]:
+        out.append({
+            "messages": [
+                {"role": "user", "content": f"{q}\n{marker}"},
+                {"role": "assistant", "content": a},
+            ],
+            "category": "image_read",
+        })
+    rng.shuffle(out)
+    return out
+
+
 def gen_teaching_examples(path: Path = TEACHINGS) -> list[dict]:
     """User-authored facts from teachings.jsonl -> training records (the
     'explain something and she learns it' channel). One JSON object per line;
@@ -952,6 +1042,9 @@ def main() -> None:
     # Memory-READING records (use the injected 'Things you remember:' block).
     mem_read = [r for r in gen_memory_read_examples() if _norm_q(r) not in eval_qs]
 
+    # Image-READING records (use the eyes organ's '[image: ...]' markers).
+    img_read = [r for r in gen_image_read_examples() if _norm_q(r) not in eval_qs]
+
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
     # x20 weight, but now the model sees many surfaces per fact).
@@ -959,12 +1052,14 @@ def main() -> None:
     TOOLS_REPEAT = 5
     TEACHINGS_REPEAT = 8
     MEMREAD_REPEAT = 5
+    IMGREAD_REPEAT = 5
     mix = [
         json.dumps(r, ensure_ascii=False)
         for r in tools * TOOLS_REPEAT
         + ident * IDENTITY_REPEAT
         + teach * TEACHINGS_REPEAT
         + mem_read * MEMREAD_REPEAT
+        + img_read * IMGREAD_REPEAT
     ]
     n_general = 0
     n_boiler = 0
