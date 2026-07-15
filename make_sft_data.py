@@ -994,13 +994,13 @@ def _is_ai_boilerplate(rec: dict) -> bool:
 
 
 # QA gate 3 (2026-07-15, user-ordered clarity pass): the general corpus is
-# bulk-pulled and carries profanity, dead links, raw HTML, and source-data
-# loops. She learns to TALK from these records -- the 07-15 eval put corpus
-# profanity verbatim in her mouth. Clarity beats volume at 182M.
+# bulk-pulled and carries dead links, raw HTML, encoding damage, and
+# source-data loops. She learns to TALK from these records. Junk classes
+# ONLY -- profanity is NOT filtered (user ruling 2026-07-15: she may use
+# any type of language; the enemy is incoherence, not propriety).
 _LOW_QUALITY = re.compile(
     "|".join(
         [
-            r"\b(?:fuck\w*|shit\w*|bitch\w*|asshole\w*|cunt\w*|goddamn\w*|motherfuck\w*|dumbass\w*)\b",
             r"https?://",  # she cannot browse; trained URLs decode as made-up links
             r"</?(?:div|span|p|a|br|td|tr|table|html|body|script|img)\b",  # raw HTML
             r"�",  # encoding damage
