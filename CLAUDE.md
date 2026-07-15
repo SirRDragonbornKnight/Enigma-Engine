@@ -17,9 +17,12 @@ Perception is HALF-BUILT; text-only ships today:
 - NOT wired / NOT trained (verified): the shipped `enigma_dpo` checkpoint has NO projection weights
   and `use_vision`/`use_audio` are off; `chat_format.py` has NO image/audio tokens; `serve_enigma.py`
   has NO multimodal path; `collect_audio_data.py` does NOT exist (vision has a collector).
-- To finish seeing/hearing: enable config flags -> paired image/audio<->text data -> train projectors
-  -> add image/audio tokens to `chat_format` -> wire `serve`. (Encoder trains FROZEN; only the
-  projector updates, and it lives in `self.model` so it IS saved.) Restore history: `KNOWN_ISSUES.md` #11.
+- To finish seeing/hearing: the corrected plan is ROADMAP **Phase 4.5** (distill-then-align;
+  audit 2026-07-15). GOTCHA: `train_vision`/`train_audio` train the encoders FULLY (an older
+  claim here said frozen — wrong), but the trained encoder weights are **never saved** (the
+  checkpoint holds only `self.model`, so the in-model projector survives and the encoder
+  evaporates) and serve has no encoder load path. Fix persistence BEFORE any encoder GPU time.
+  Restore history: `KNOWN_ISSUES.md` #11.
 
 The Modkit-era `mods/` + `plugins/` subsystem and its `commands`/`mod_tools`/`plugin_loader` registry
 were REMOVED 2026-07-13 (never loaded by `serve_enigma.py`; superseded). Pip distribution renamed

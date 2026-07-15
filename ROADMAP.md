@@ -28,6 +28,46 @@ Muppet.
   anchors), converse long (block 1024).
 - **The bottleneck is no longer code — it is data.**
 
+## Update 2026-07-15 — user rulings + methods audit (4-reviewer pass)
+
+**User rulings, binding on all future work:**
+- **Privacy is absolute.** serve is offline-by-default (`HF_HUB_OFFLINE` etc.;
+  `--allow-downloads` exists solely for an explicit first weight fetch).
+  Nothing she hears or says leaves this machine. Ever.
+- **Her abilities must become HER OWN.** Borrowed organ backbones
+  (BLIP/whisper/sd-turbo/SAPI) are SCAFFOLDING; every organ has a transplant
+  path to own-trained weights — see Phase 4.5.
+- **No language censorship.** Data gates drop structural junk only, never words.
+- **Clarity over character.** Understandable sentences are the bar; "Enigma"
+  is a personality, not an excuse for word salad.
+- **She is taught by chatting.** `teach_enigma.py` corrections are the primary
+  values/facts channel (x8 in every bake).
+
+**Methods-audit verdicts (2026-07-15):**
+- KEEP (validated): restart-from-pretrain each SFT cycle; oversample weights;
+  regex tool gates; clarity sampling defaults (one min_p-only A/B queued).
+- FIX instruments: SFT val split is contaminated by oversample duplicates
+  (dedup before split — val loss reads optimistic today); DPO "100% val" is 8
+  template-sharing pairs (group val by prompt); 29 eval probes gate on ~4 per
+  category (target ~90 with paraphrase twins).
+- FIX fatal (code): `train_vision`/`train_audio` never SAVE the trained
+  encoders (checkpoint holds only the LM) and serve cannot load them — a
+  successful native-eye run evaporates on exit. Encoders train FULLY (the old
+  "trains frozen" doc line was wrong).
+- DATA: OpenThoughts3 (1,000 recs) is 100% dead weight — median completion
+  ~14.5k tokens vs block 1024, every record silently dropped at build. Dolly
+  (73% of general) trains extract-from-context, not recall. Rebuild the diet
+  around SmolTalk2 / Everyday-Conversations / No-Robots + TriviaQA/NQ short
+  answers; target 60-100k SHORT records. Facts want many-format exposure
+  (statement/QA/cloze) in CONTINUED PRETRAINING — SFT surfaces knowledge, it
+  cannot install it (the Jupiter/Saturn phrasing-brittleness receipt).
+- TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4);
+  merge `teach_pairs.jsonl` into DPO behind the probe filter.
+- ORGAN UPGRADES (interim, still borrowed, all pip-only): TTS -> Kokoro-82M;
+  ASR -> whisper large-v3-turbo (verify CTranslate2 on sm_120 first); eyes ->
+  SmolVLM2 with question-conditioned VQA (captioning throws the user's
+  question away); image gen -> sdxl-turbo (a string change in Painter).
+
 ## Update 2026-07-06 (measured, `eval_behavior.py` held-out scorecard)
 
 - **Phase 1 DONE, Phase 2 EXIT CRITERIA MET**: 26/29 (90%) — identity 83%,
@@ -104,6 +144,40 @@ masking, then re-SFT.
   tokens hold 86.5% of all corpus tokens (~49B) — 5x the <10B the recipe needs.
   Median doc 958 tokens, p90 3,741. The long-doc prerequisite is MET; what
   remains is the training work (theta raise + doc-masked continuation + re-SFT).
+
+## Phase 4.5 — Owned organs: the transplant arc (user-ordered 2026-07-15; ~1-2 weeks of 5090 time)
+
+Goal: every sense runs on HER weights; borrowed backbones retire one at a
+time. Teachers may be used OFFLINE during training (distillation) — the
+weights that result are hers, on her machine, forever.
+
+1. **Persistence first (hours, blocks everything):** save/load encoder
+   state_dicts alongside checkpoints; wire serve to load them. Today a
+   trained eye evaporates on process exit (audit 2026-07-15).
+2. **Vision data:** `collect_vision_data.py` full LLaVA-Pretrain 558k
+   (~14 GB, one manual images.zip download).
+3. **Her eyes:** distill DINOv2-S patch features into her own ViT-medium
+   (~25M, cosine loss, ~1-2 GPU-days). Contrastive-from-scratch is NOT
+   viable solo (needs 10M+ pairs); distillation is the honest shortcut that
+   still ends in owned weights.
+4. **Align:** `train_vision` over the 558k pairs (encoder unfrozen, LM
+   frozen; add real batching first — the current loop is batch-1), optional
+   final pass unfreezing the last 2-4 LM layers.
+5. **Wire and retire:** image begin/end tokens (ids 4724+ reserved, 12
+   free), serve ingestion, delete the BLIP path. Her eyes are hers.
+6. **Her ears (same shape, ~3 days):** write `collect_audio_data.py`
+   (LibriSpeech-clean-100), distill the whisper encoder into her
+   AudioEncoder, `train_audio`, wire, retire whisper.
+7. **Her voice (later):** train a small TTS on a chosen voice — in-house
+   project; Kokoro is scaffolding until then.
+8. **Her imagination (much later):** an own-trained image generator is
+   possible but will trail Stable Diffusion for a long time; SD stays the
+   tool she WIELDS until the trade is worth making.
+
+**Video:** 196 tokens/frame means 3-4 frames max at block 1024 — organ-level
+video (sample frames -> describe -> summarize) is buildable any time; NATIVE
+video needs the Phase 4 length extension first. Real-time game vision
+(FNAF) = native eyes + Phase 4 + the training sim.
 
 ## Phase 5 — Embodiment (the point of it all; mostly glue)
 
