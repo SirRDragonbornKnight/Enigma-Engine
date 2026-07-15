@@ -80,6 +80,21 @@ def _post(base_url: str, payload: dict) -> dict:
         return json.loads(r.read().decode())
 
 
+def _clear_memory(base_url: str) -> None:
+    """Facts taught by a PREVIOUS eval run persist in the --memory-dir store,
+    so a memory probe could pass on a stale fact this model never saved
+    (ultrareview #30). Clear before probing. Best-effort: a serve without
+    --memory-dir has no store, and the memory category then fails honestly."""
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/v1/memory", method="DELETE")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = json.loads(r.read().decode())
+        if body.get("ok"):
+            print(f"memory store cleared ({body.get('cleared', '?')} stale entries)")
+    except Exception as exc:
+        print(f"WARN: could not clear memory store: {exc}")
+
+
 def _wait_for_server(base_url: str, timeout_s: int = 120) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -106,6 +121,7 @@ def run(base_url: str, temperature: float, max_tokens: int) -> int:
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
         return 2
+    _clear_memory(base_url)
 
     cases = [json.loads(line) for line in PROBES.read_text(encoding="utf-8").splitlines() if line.strip()]
     by_cat: dict[str, list[bool]] = {}

@@ -362,6 +362,14 @@ def run_golden_eval(
                     else:
                         token_ids = [tokenizer.token_to_id(c) for c in prompt]
 
+                    # encode() brackets [BOS]...[EOS]; generating from a
+                    # "finished" sequence makes step one emit EOS -> empty
+                    # response -> false regression (ultrareview #12).
+                    token_ids = list(token_ids)
+                    eos_id = getattr(tokenizer, "eos_token_id", None)
+                    while eos_id is not None and token_ids and token_ids[-1] == eos_id:
+                        token_ids.pop()
+
                     # Greedy generate
                     generated = list(token_ids)
                     for _ in range(max_gen):

@@ -85,7 +85,10 @@ def main() -> None:
     ap.add_argument("--init", required=True, help="instruct checkpoint to start from (policy AND frozen reference)")
     ap.add_argument("--out", default="models/enigma_dpo")
     ap.add_argument("--beta", type=float, default=0.1)
-    ap.add_argument("--lr", type=float, default=2e-6)
+    # 5e-7 x1 is the ADOPTED setting (models/enigma_dpo). The old default
+    # 2e-6 over-optimized and damaged her (ROADMAP Phase 6, measured
+    # 2026-07-06) -- the default should be the setting we trust.
+    ap.add_argument("--lr", type=float, default=5e-7)
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--micro-batch", type=int, default=4, help="preference PAIRS per step")
     ap.add_argument("--block", type=int, default=1024)
