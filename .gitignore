@@ -145,6 +145,9 @@ data/*
 # User-authored teachings hold PERSONAL facts -- never push them to GitHub.
 # The committed template is teachings.example.jsonl.
 /teachings.jsonl
+# teach_enigma.py /fix corrections ({prompt, chosen, rejected} pairs) --
+# same personal-content rule as teachings.
+/teach_pairs.jsonl
 
 # Keep models structure
 models/*

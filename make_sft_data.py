@@ -1129,7 +1129,7 @@ def main() -> None:
         f"{len(knowledge)} knowledge x{KNOWLEDGE_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
-        f"{n_lowq} dropped as low-quality (profanity/HTML/URLs/loops); "
+        f"{n_lowq} dropped as low-quality (HTML/URLs/encoding/loops); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
