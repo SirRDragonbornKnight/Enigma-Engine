@@ -79,6 +79,27 @@ def _batchify(rows, device):
     return x.to(device), m.to(device)
 
 
+def group_split(pairs, val_frac: float, seed: int, val_cap: int = 64):
+    """Split (prompt, chosen_row, rejected_row) records into train/val with
+    ALL records sharing a prompt on the same side. A flat shuffle leaked:
+    the generated pairs put the same (prompt, chosen) against several
+    rejected variants, and user-taught pairs ride x3 as exact duplicates, so
+    twins landed on both sides and the end-of-run "preference accuracy"
+    partly measured training-set recall (audit 2026-07-15). Returns
+    (train_rows, val_rows) as (chosen, rejected) tuples."""
+    rng = random.Random(seed)
+    by_prompt: dict[str, list[tuple]] = {}
+    for prompt, c, r in pairs:
+        by_prompt.setdefault(prompt, []).append((c, r))
+    groups = list(by_prompt.values())
+    rng.shuffle(groups)
+    n_val_target = min(int(len(pairs) * val_frac), val_cap)
+    train_rows, val_rows = [], []
+    for g in groups:
+        (val_rows if len(val_rows) < n_val_target else train_rows).extend(g)
+    return train_rows, val_rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", default="data/sft/dpo_pairs.jsonl")
@@ -138,14 +159,18 @@ def main() -> None:
         if c is None or r is None:
             n_skip += 1
             continue
-        pairs.append((c, r))
+        pairs.append((p["prompt"], c, r))
     if not pairs:
         raise SystemExit("no usable preference pairs")
     rng = random.Random(args.seed)
-    rng.shuffle(pairs)
-    n_val = min(int(len(pairs) * args.val_frac), 64)
-    val_pairs, train_pairs = pairs[:n_val], pairs[n_val:]
-    print(f"dpo: {len(train_pairs)} train / {n_val} val pairs ({n_skip} skipped as block-unfit)", flush=True)
+    train_pairs, val_pairs = group_split(pairs, args.val_frac, args.seed)
+    n_val = len(val_pairs)
+    n_prompts = len({prompt for prompt, _, _ in pairs})
+    print(
+        f"dpo: {len(train_pairs)} train / {n_val} val pairs, split by prompt "
+        f"({n_prompts} prompt groups; {n_skip} skipped as block-unfit)",
+        flush=True,
+    )
 
     use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
     amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
