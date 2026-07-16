@@ -129,6 +129,13 @@ def main() -> None:
         default=True,
         help="torch.compile the model (~1.5-2x; --no-compile for eager / if Triton is absent)",
     )
+    ap.add_argument(
+        "--tokens-bin",
+        default=None,
+        help="alternate ETOK corpus for continued-pretrain passes (sidecar "
+        "meta is <name>.json beside it). Default: the live run's "
+        "data/pretrain/tokens.bin -- unchanged.",
+    )
     ap.add_argument("--sanity", action="store_true", help="one fwd/bwd step then exit")
     ap.add_argument(
         "--throttle-ms",
@@ -137,6 +144,13 @@ def main() -> None:
         help="sleep N ms after each micro-batch to yield the GPU (e.g. while gaming); 0 = full speed",
     )
     args = ap.parse_args()
+
+    # --tokens-bin points every corpus read below at an alternate ETOK file
+    # (facts continued-pretrain, Phase 4.5 data). The live default is untouched.
+    global TOKENS_BIN, TOKENS_META
+    if args.tokens_bin:
+        TOKENS_BIN = Path(args.tokens_bin)
+        TOKENS_META = TOKENS_BIN.with_suffix(".json")
 
     if not TOKENS_BIN.exists():
         raise SystemExit(f"missing corpus: {TOKENS_BIN}")

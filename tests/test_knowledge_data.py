@@ -4,7 +4,7 @@ drop exactly the junk classes it names."""
 
 from __future__ import annotations
 
-from knowledge_corpus import KNOWLEDGE, gen_knowledge_examples
+from knowledge_corpus import KNOWLEDGE, gen_knowledge_examples, gen_knowledge_pretrain_text
 from make_sft_data import _eval_probe_questions, _is_low_quality, _norm_q
 
 
@@ -29,6 +29,49 @@ def test_every_intent_has_multiple_surfaces():
     for questions, answers in KNOWLEDGE:
         assert len(questions) >= 2, questions
         assert len(answers) >= 2, questions
+
+
+def test_pretrain_text_is_deterministic():
+    # Byte-identical across calls -- the corpus is versioned training data.
+    assert gen_knowledge_pretrain_text() == gen_knowledge_pretrain_text()
+    assert gen_knowledge_pretrain_text(seed=123) == gen_knowledge_pretrain_text(seed=123)
+
+
+def test_pretrain_text_dodges_eval_probes():
+    probes = _eval_probe_questions()
+    assert probes  # the probes file must exist, or this test proves nothing
+    for line in gen_knowledge_pretrain_text():
+        low = line.lower()
+        assert low not in probes, line
+        # The generator dodges harder than equality: no probe string may
+        # ride INSIDE a line either (QA lines embed question text).
+        assert all(p not in low for p in probes), line
+
+
+def test_pretrain_text_lines_are_clean():
+    lines = gen_knowledge_pretrain_text()
+    assert lines
+    for line in lines:
+        assert line and line == line.strip()
+        assert "\n" not in line and "\r" not in line
+        assert line.isascii(), line
+
+
+def test_pretrain_text_count_bounds():
+    n = len(gen_knowledge_pretrain_text())
+    assert 600 <= n <= 1100, n
+    assert n >= 4 * len(KNOWLEDGE), n  # several textual forms per fact
+
+
+def test_pretrain_text_covers_jupiter_in_multiple_forms():
+    # The audit's brittleness case ("largest planet" -> Jupiter but "biggest
+    # planet" -> Saturn): the fact must surface as a QA line, a key-term-final
+    # cloze, and plain prose -- at least three distinct textual forms.
+    lines = [line for line in gen_knowledge_pretrain_text() if "jupiter" in line.lower()]
+    qa = [line for line in lines if line.startswith("Q: ")]
+    cloze = [line for line in lines if line.endswith("is Jupiter.")]
+    prose = [line for line in lines if line not in qa and line not in cloze]
+    assert qa and cloze and prose, lines
 
 
 def test_low_quality_gate_drops_junk():

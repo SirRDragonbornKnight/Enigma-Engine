@@ -21,12 +21,16 @@ Authoring rules:
 - Eval probes are phrased DIFFERENTLY here on purpose; make_sft_data's
   _norm_q guard drops exact probe matches as a backstop.
 
-Data only -- gen_knowledge_examples() renders Q x rotating-A per intent.
+Two renderers ride this data: gen_knowledge_examples() (Q x rotating-A chat
+records for the SFT mix) and gen_knowledge_pretrain_text() (plain-text lines
+for continued pretraining -- many textual forms per fact).
 """
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 # (question phrasings, answer variants). Answers vary in wording, never in fact.
 KNOWLEDGE: list[tuple[list[str], list[str]]] = [
@@ -759,9 +763,202 @@ def gen_knowledge_examples(seed: int = 55) -> list[dict]:
     return uniq
 
 
+# ---------------------------------------------------------------------------
+# Continued-pretraining renderer (methods audit 2026-07-15). SFT QA alone left
+# facts brittle across phrasings ("largest planet" -> Jupiter but "biggest
+# planet" -> Saturn); the fix is MANY-FORMAT plain-text exposure. Each intent
+# surfaces as declarative prose, a Q/A line, key-term-FINAL cloze(s) (next-token
+# prediction trains the fact -> term mapping), and a fact-in-context line. ALL
+# wording derives from KNOWLEDGE -- no new facts enter here, so the word-numbers
+# convention and the TRUE-facts guarantee carry over unchanged.
+
+_EVAL_PROBES = Path(__file__).resolve().parent / "data" / "eval" / "behavior_probes.jsonl"
+
+# Leading answer fragments that are a clause, hedge, or bare yes/no -- never a
+# key TERM. Any of these tokens in a candidate fragment disqualifies it.
+_KEY_STOP_TOKENS = frozenset({
+    "is", "are", "was", "were", "has", "have", "had", "hold", "holds",
+    "handle", "handles", "say", "says", "make", "makes", "come", "comes",
+    "turn", "turns", "spins", "orbits", "rises", "pulls", "runs", "walk",
+    "walks", "controls", "filter", "filters", "evaporates", "lasts", "fields",
+    "wins", "in", "not", "yes", "no", "it", "it's", "they", "they're",
+    "that", "that's", "this", "we",
+})
+
+# Answer openers that wrap the key term -- strip before extracting it.
+_KEY_PREFIXES = ("That's ", "It's ", "We live on ")
+
+# Sentence-level breaks (never a comma) and fragment-level breaks.
+_SENTENCE_SEPS = (" -- ", ". ", "; ", ": ")
+_FRAGMENT_SEPS = (" -- ", ": ", ". ", "; ", ", ")
+
+# First words safe to lowercase when the key term lands mid-sentence
+# ("...is twenty-four hours."); everything else is treated as a proper noun.
+_MID_LOWER_FIRST = frozenset({
+    "a", "an", "the", "about", "roughly", "mostly", "every", "once", "with",
+    "zero", "one", "two", "five", "six", "seven", "eight", "ten", "twelve",
+    "fifty", "sixty", "twenty-four", "twenty-six", "sixty-four",
+    "eighty-eight", "moving", "molten", "nuclear", "fat", "green", "pink",
+    "temperature", "volume", "oxygen", "nitrogen", "hydrogen", "sodium",
+    "atoms", "cells", "photosynthesis", "diamond", "gravity", "electricity",
+})
+
+# Yes/no and why questions make "The answer to ... is <term>." read wrong.
+_CLOZE_Q_SKIP = ("is ", "are ", "do ", "does ", "can ", "why ", "name ")
+
+# Subjects that are stand-ins, not terms -- never invert around them.
+_INVERT_X_STOP = frozenset({"it", "that", "this", "there", "he", "she"})
+
+# Fact-in-context leads: colon-terminated so ANY curated answer (including
+# two-sentence ones) follows grammatically as a single natural line.
+_CONTEXT_LEADS = (
+    "Here is a fact worth keeping straight: ",
+    "One piece of common knowledge: ",
+    "A fact that comes up all the time: ",
+    "Worth knowing, and easy to remember: ",
+    "As any reference book will confirm: ",
+    "File this one under general knowledge: ",
+)
+
+
+def _probe_strings() -> list[str]:
+    """Lowercased eval-probe questions (and memory teach lines). Generated
+    text must never carry one verbatim -- same dodge discipline as the
+    KNOWLEDGE phrasings themselves and make_sft_data's _norm_q backstop."""
+    if not _EVAL_PROBES.exists():
+        return []
+    probes: list[str] = []
+    for line in _EVAL_PROBES.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        probes.append(rec["q"].strip().lower())
+        for fact in rec.get("teach", []):
+            probes.append(fact.strip().lower())
+    return probes
+
+
+def _first_segment(text: str) -> str:
+    """Text up to the first sentence-level break (commas do not count)."""
+    cut = len(text)
+    for sep in _SENTENCE_SEPS:
+        i = text.find(sep)
+        if i != -1 and i < cut:
+            cut = i
+    return text[:cut].rstrip(".")
+
+
+def _lead_fragment(text: str) -> tuple[str, str]:
+    """Leading fragment before the earliest separator, plus that separator."""
+    cut, used = len(text), ""
+    for sep in _FRAGMENT_SEPS:
+        i = text.find(sep)
+        if i != -1 and i < cut:
+            cut, used = i, sep
+    return text[:cut].rstrip("."), used
+
+
+def _key_term(answers: list[str]) -> str:
+    """The intent's answer TERM ("Jupiter", "twenty-four hours"), extracted
+    from the leading fragment of the first answer that yields a clean one.
+    Returns "" when every answer opens with a clause -- those intents simply
+    skip the cloze form (the other forms still cover them)."""
+    for a in answers:
+        text = a
+        for pre in _KEY_PREFIXES:
+            if text.startswith(pre):
+                text = text[len(pre):]
+                break
+        frag, sep = _lead_fragment(text)
+        if sep == ", " and " and " in _first_segment(text):
+            continue  # enumeration ("Spring, summer, ... and winter") -- frag is a partial list
+        words = frag.split()
+        if not 1 <= len(words) <= 4:
+            continue
+        if any(w.strip(".,").lower() in _KEY_STOP_TOKENS for w in words):
+            continue
+        return frag
+    return ""
+
+
+def _mid_case(term: str) -> str:
+    """Case a key term for mid-sentence use: common first words lowercase,
+    proper nouns keep their capital."""
+    if term.split()[0].lower() in _MID_LOWER_FIRST:
+        return term[0].lower() + term[1:]
+    return term
+
+
+def _cloze_question(questions: list[str]) -> str:
+    """First question that reads naturally inside 'The answer to "..." is'."""
+    for q in questions:
+        if not q.lower().startswith(_CLOZE_Q_SKIP):
+            return q
+    return ""
+
+
+def gen_knowledge_pretrain_text(seed: int = 77) -> list[str]:
+    """Emit plain-text lines (NOT chat records) for continued pretraining.
+
+    Per intent: declarative statements (the curated answers as standalone
+    prose), one Q/A line per question phrasing, key-term-final cloze(s), and
+    fact-in-context lines. Deduped, probe-dodged by substring, shuffled with
+    the seed. Deterministic given the seed and the probes file."""
+    rng = random.Random(seed)
+    probes = _probe_strings()
+    lines: list[str] = []
+    for idx, (questions, answers) in enumerate(KNOWLEDGE):
+        # Declarative prose: the answers verbatim (one-word answers like
+        # "Rome." carry no signal alone -- their full-sentence twin runs).
+        for a in answers:
+            if len(a.split()) >= 4:
+                lines.append(a)
+        # Q/A line per question phrasing, answers rotating.
+        for i, q in enumerate(questions):
+            lines.append(f"Q: {q} A: {answers[i % len(answers)]}")
+        # Cloze, generic: quote a question, land the key term LAST.
+        key = _key_term(answers)
+        q = _cloze_question(questions)
+        if key and q:
+            lines.append(f'The answer to "{q}" is {_mid_case(key)}.')
+        # Cloze, inverted: "Mercury is the smallest planet ..." becomes
+        # "The smallest planet ... is Mercury." -- key term LAST, gated hard
+        # so only clean single-subject "X is Y" sentences flip.
+        for a in answers:
+            seg = _first_segment(a)
+            if seg.count(" is ") != 1:
+                continue
+            x, y = seg.split(" is ")
+            if (len(x.split()) == 1 and x.lower() not in _INVERT_X_STOP
+                    and len(y.split()) >= 3 and "," not in y
+                    and y.lower().startswith(("the ", "a ", "an "))):
+                lines.append(f"{y[0].upper()}{y[1:]} is {_mid_case(x)}.")
+        # Fact-in-context: the fact inside a longer natural line.
+        for j in range(2):
+            lead = _CONTEXT_LEADS[(idx + j) % len(_CONTEXT_LEADS)]
+            lines.append(lead + answers[(idx + j) % len(answers)])
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for line in lines:
+        if line in seen:
+            continue
+        low = line.lower()
+        if any(p in low for p in probes):
+            continue
+        seen.add(line)
+        uniq.append(line)
+    rng.shuffle(uniq)
+    return uniq
+
+
 if __name__ == "__main__":
     ex = gen_knowledge_examples()
     print(f"{len(ex)} knowledge records from {len(KNOWLEDGE)} facts")
     for r in ex[:5]:
         print("Q:", r["messages"][0]["content"])
         print("A:", r["messages"][1]["content"])
+    txt = gen_knowledge_pretrain_text()
+    print(f"{len(txt)} pretrain text lines from {len(KNOWLEDGE)} facts")
+    for line in txt[:5]:
+        print(" ", line)
