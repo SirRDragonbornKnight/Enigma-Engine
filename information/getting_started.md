@@ -41,6 +41,7 @@ This starts an OpenAI-compatible API at `http://127.0.0.1:8000/v1`.
 | `--ears` | Ears organ: `/v1/audio/transcriptions` (local faster-whisper) |
 | `--eyes` | Eyes organ: image messages captioned into her context + `/v1/images/describe` (local BLIP) |
 | `--image-gen` | Imagination organ: `imagine` tool + `/v1/images/generations` (local Stable Diffusion) |
+| `--allow-downloads` | Permit the ONE-TIME organ weight download from HuggingFace. Without it the server is fully offline (organs load from local cache only) -- first-ever use of an organ on a machine needs this flag once |
 
 ## Chat
 

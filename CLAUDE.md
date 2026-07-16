@@ -5,8 +5,8 @@ Harness-enforced rules (permissions, hooks, model) belong in `.claude/settings.j
 
 ## What this is
 This repo is **Enigma** — a **from-scratch** decoder-only LLM (its own architecture, BPE tokenizer base
-vocab 4718, and weights; NOT a wrapper). Python. Pipeline is **pretrain → SFT → serve**; train + serve
-share one chat renderer (`enigma_engine/core/chat_format.py`) so the prompt format can't drift.
+vocab 4718, and weights; NOT a wrapper). Python. Pipeline is **pretrain → SFT → DPO → serve**; train +
+serve share one chat renderer (`enigma_engine/core/chat_format.py`) so the prompt format can't drift.
 
 **Multimodal state (measured 2026-07-14):** Enigma is a TEXT decoder that will PERCEIVE
 (image/audio INPUT) in-model. GENERATION (image/video/speech-audio) is a separate model family —
@@ -134,8 +134,9 @@ minors from the review remain open — see the file.
 2026-07-14 training-path fixes: `make_sft_data.py` no longer explodes a string-valued
 `questions`/`answers` field into per-character records; the Trainer online-DPO `random.sample`
 no longer sizes `k` off the unfiltered list (was a crash). Bottleneck stays SFT DATA at scale
-(tool corpus 543 generated records incl. speak/imagine, identity 360, broad recall ~50% — the
-recall fix is growing `data/finetune/combined_finetune.jsonl`, the only general-knowledge feed).
+(tool corpus 543 generated records incl. speak/imagine, identity 386, broad recall ~50% — the
+recall fixes are growing `data/finetune/combined_finetune.jsonl` and the curated
+`knowledge_corpus.py` facts, which ride the mix at x5).
 Reading rules: `CODE_REVIEW.md` is a closed-bug LEDGER — its present-tense entries are history,
 not current state. (Removed 2026-07-14 as dead cruft: `FORGE_TEST_GUIDE.md`, `ENIGMA_QUANTIZE_PLAN.md`,
 `AA code maker.md` (all Qwen-8B/Forge-GUI era), and `information/commands_reference.md` (documented the

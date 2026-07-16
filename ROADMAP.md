@@ -47,9 +47,13 @@ Muppet.
 - KEEP (validated): restart-from-pretrain each SFT cycle; oversample weights;
   regex tool gates; clarity sampling defaults (one min_p-only A/B queued).
 - FIX instruments: SFT val split is contaminated by oversample duplicates
-  (dedup before split — val loss reads optimistic today); DPO "100% val" is 8
-  template-sharing pairs (group val by prompt); 29 eval probes gate on ~4 per
-  category (target ~90 with paraphrase twins).
+  (dedup before split — FIXED `47f557ae`); DPO "100% val" is 8
+  template-sharing pairs (group val by prompt — FIXED `fd2776d1`); 29 eval
+  probes gate on ~4 per category (target ~90 with paraphrase twins — still
+  open). Second-pass audit 2026-07-15: the grader itself matched keywords as
+  substrings ("own" passed on "known") and one perfect trained answer failed
+  its probe — both FIXED `bacc7473` (word-boundary grading + probe keys);
+  v5 re-measured 27/29, all categories PASS on the honest instrument.
 - FIX fatal (code): `train_vision`/`train_audio` never SAVE the trained
   encoders (checkpoint holds only the LM) and serve cannot load them — a
   successful native-eye run evaporates on exit. Encoders train FULLY (the old
@@ -61,8 +65,10 @@ Muppet.
   answers; target 60-100k SHORT records. Facts want many-format exposure
   (statement/QA/cloze) in CONTINUED PRETRAINING — SFT surfaces knowledge, it
   cannot install it (the Jupiter/Saturn phrasing-brittleness receipt).
-- TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4);
-  merge `teach_pairs.jsonl` into DPO behind the probe filter.
+- TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4 —
+  still open); merge `teach_pairs.jsonl` into DPO behind the probe filter
+  (DONE `47f557ae`). Second-pass audit: /undo left records baked on disk and
+  a second /fix rejected the user's own correction — both FIXED `deb7c182`.
 - ORGAN UPGRADES (interim, still borrowed, all pip-only): TTS -> Kokoro-82M;
   ASR -> whisper large-v3-turbo (verify CTranslate2 on sm_120 first); eyes ->
   SmolVLM2 with question-conditioned VQA (captioning throws the user's

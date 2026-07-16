@@ -19,6 +19,7 @@ Run everything from the Enigma Engine folder (venv activated).
 | `python serve_enigma.py --ears` | Ears organ: /v1/audio/transcriptions (faster-whisper) |
 | `python serve_enigma.py --eyes` | Eyes organ: image messages captioned into context + /v1/images/describe (BLIP) |
 | `python serve_enigma.py --image-gen` | Imagination organ: `imagine` tool + /v1/images/generations (Stable Diffusion) |
+| `python serve_enigma.py --eyes --allow-downloads` | First-ever use of an organ on a machine: permit the one-time weight download. Without the flag the server is fully offline (cache only) |
 
 Organ flags combine freely, e.g. `python serve_enigma.py --voice --ears --eyes --memory-dir data/memory`.
 
@@ -56,9 +57,9 @@ Serve the candidate on its own port with an isolated memory dir, then run the ha
 | `python collect_pretraining_data.py --stats` | Show collected pretraining data summary |
 | `python collect_pretraining_data.py --all-sources` | Download pretraining text (Wikipedia, Gutenberg, FineWeb-Edu, ...) |
 | `python collect_finetuning_data.py --all` | Download instruction datasets (OASST1, Dolly, SlimOrca, ...) |
-| `python collect_distill_data.py` | Collect responses from an external OpenAI-compatible teacher as a fine-tune corpus |
+| `python collect_distill_data.py --model <teacher>` | Collect responses from an external OpenAI-compatible teacher as a fine-tune corpus (`--model` is required) |
 | `python collect_search_data.py` | Emit the synthetic `<search>` tag training corpus |
-| `python collect_vision_data.py` | Download image-caption pairs for vision SFT |
+| `python collect_vision_data.py --llava-pretrain 100000 --images-dir <extracted images.zip>` | Download image-caption pairs for vision SFT (bare invocation just prints help) |
 | `python pretokenize_data.py` | Tokenize `data/pretrain/` sources into `data/pretrain/tokens.bin` |
 
 Each script documents its sources and flags in its docstring (`--help`).

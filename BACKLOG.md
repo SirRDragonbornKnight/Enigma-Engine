@@ -8,20 +8,27 @@
 
 ---
 
-## 0. In flight right now (this session, UNCOMMITTED + UNTESTED)
+## 0. Instrument arc (2026-07-15) — landed except the probe expansion
 
-- [~] **SFT val-split dedup** (`finetune_enigma.py`) — val was drawing from the
-  same oversampled duplicate lines as train, so val loss read optimistic. Now
-  fills val from records whose ids appear exactly once. NEEDS: suite run, then commit.
-- [~] **Merge `teach_pairs.jsonl` into DPO** (`make_dpo_data.py`) — user `/fix`
-  corrections now fold into preference data (x3, behind the probe holdout).
-  NEEDS: suite run, then commit.
-- [ ] **DPO val grouping by prompt** (`dpo_enigma.py`) — "100% val accuracy" is 8
-  template-sharing pairs; group the split by prompt so val measures
-  generalization. NOT STARTED.
+- [x] **SFT val-split dedup** (`finetune_enigma.py`) — val fills only from
+  records whose ids appear exactly once; duplicates all train (`47f557ae`).
+- [x] **Merge `teach_pairs.jsonl` into DPO** (`make_dpo_data.py`) — user `/fix`
+  corrections fold into preference data x3, behind the probe holdout (`47f557ae`).
+- [x] **DPO val grouping by prompt** (`dpo_enigma.py`) — `group_split` deals
+  whole prompt-buckets to val; no (prompt, chosen) twin or x3-taught duplicate
+  straddles the sides (`fd2776d1`).
+- [x] **Eval grader word-boundary matching** (`eval_behavior.py` + probes) —
+  substring grading passed wrong answers ("own" on "known", "no" on "nothing")
+  AND a perfect trained hosting answer failed probe 4's key list; fixed both
+  directions, locked by `tests/test_eval_grading.py` (`bacc7473`). v5
+  re-measured on the honest instrument: 27/29, all categories PASS.
+- [x] **`/undo` really undoes** (`teach_enigma.py`) — retracts the persisted
+  records by truncating to pre-append offsets; a second `/fix` replaces the
+  first instead of rejecting the user's own correction (`deb7c182`).
 - [ ] **Eval probes 29 -> ~90** (`data/eval/behavior_probes.jsonl`) — categories
-  gate on ~4 probes; one flaky answer swings 25 pts. Agent authoring this
-  DIED on Fable credits; re-run under a model with budget. NOT DONE.
+  gate on ~4 probes; one flaky answer swings 25 pts (this run's identity miss,
+  "Sum yourself up for a stranger.", is exactly that margin). Agent authoring
+  this DIED on Fable credits; re-run under a model with budget. NOT DONE.
 
 ---
 
@@ -31,12 +38,20 @@
   `train_audio` train the encoders but never SAVE them (checkpoint holds only
   the LM); serve has no load path. A week of native-eye training would
   evaporate on exit. Fix BEFORE any encoder GPU time. `training.py` `_save_checkpoint`.
+  Worse (audit 2026-07-15 second pass): `train_vision` builds a LOCAL AdamW
+  while `_save_checkpoint` saves `self.optimizer` — the saved optimizer state
+  is the wrong optimizer too.
 - [x] Repetition-penalty scope — was penalizing the prompt, suppressing her own
   primed vocabulary (ultrareview #9). Fixed + regression-tested (`b75ed617`).
 - [x] Eval memory-store clear (#30) + golden-eval EOS strip (#12) — fixed (`fe5359a7`).
 - [ ] Packing without doc-boundary attention masking — conversations attend
   across packed neighbors. Small effect at 182M/1024; INVESTIGATE only if
   context-bleed shows in chat.
+- [ ] Instruct serve omits the trained "You are Enigma..." preamble when the
+  client supplies its own system message (tools block joins without it) — a
+  train/serve shape she never saw; may weaken tool-calling under custom
+  system prompts. LOW CONFIDENCE (audit 2026-07-15); verify against the SFT
+  corpus before changing `_with_context`.
 
 ## 2. Ultrareview backlog — verified-open correctness majors
 
@@ -129,15 +144,18 @@
 
 ## 7. Housekeeping / dormant code (low priority, low risk)
 
-- [ ] `adaptive_trainer.py` — orphaned (registered but dispatch rejects it).
-  Keep or delete — user call.
+- [ ] `enigma_engine/core/adaptive_trainer.py` — orphaned (registered but
+  dispatch rejects it). Keep or delete — user call.
 - [ ] Unused deps `SpeechRecognition` + `sounddevice` (nothing imports them).
 - [ ] `data/sft/math.jsonl` — orphan file, neither written nor read.
-- [ ] `rl_training.py:1873` — guarded caller of the deleted `sentiment` module.
-- [ ] Config naming: loader looks for `~/.enigma_engine/config.json` but
-  everything else uses `forge_config.json`; that file never existed.
-- [ ] **Scratch checkpoints ~17 GB** — `models/enigma_{sft,dpo}_v{2,3,4,5}`.
-  v5 is adopted + backed up; v2-v4 are prune-safe on your word.
+- [ ] `enigma_engine/core/rl_training.py:1873` — guarded caller of the deleted
+  `sentiment` module.
+- [ ] Config naming: the loader searches `forge_config.json` (exists, repo
+  root, and is found) plus a never-created `~/.enigma_engine/config.json` —
+  naming inconsistency only, nothing broken.
+- [ ] **Scratch checkpoints ~35 GB** (byte-measured; each sft_v* 6.56 GB, each
+  dpo_v* 2.19 GB) — `models/enigma_{sft,dpo}_v{2,3,4,5}`. v5 is adopted +
+  backed up; v2-v4 (~26 GB) are prune-safe on your word.
 - [ ] `teachings.jsonl` still the untouched example template — YOUR channel to
   author (values / personal facts); bakes in at x8.
 
