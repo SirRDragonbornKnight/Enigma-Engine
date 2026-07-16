@@ -119,21 +119,42 @@ def paraphrase_question(q: str) -> list[str]:
 
 _WH_STATEMENT = re.compile(r"^\s*(?:what|who|where)\b.*?\b(is|are|was|were)\b\s+(.+?)\s*\??\s*$", re.IGNORECASE)
 
+# The question is the USER's voice but the twin is baked as the ASSISTANT's
+# statement, so person must flip or the fact attaches to the wrong speaker
+# ('Who are you?' must twin to 'I am Enigma.', never 'You are Enigma.' --
+# audit 2026-07-16 found the unflipped form baked into teachings).
+_PERSON_FLIP = {
+    "you": "i", "your": "my", "yours": "mine", "yourself": "myself",
+    "i": "you", "my": "your", "mine": "yours", "me": "you", "myself": "yourself",
+}
+_SUBJECT_PRONOUNS = {"you", "i", "he", "she", "it", "we", "they"}
+_VERB_AGREE = {("i", "are"): "am", ("i", "were"): "was", ("you", "am"): "are", ("you", "was"): "were"}
+
 
 def statement_twin(question: str, answer: str) -> str | None:
     """Best-effort declarative restatement of a simple 'what/who/where is X'
     Q/A so the fact is also exposed as a STATEMENT, not only as a question.
-    Returns None for behavioral/identity corrections, which have no safe
-    generic statement transform (auto-augment 2026-07-16)."""
+    Person flips into the assistant's voice, and an inverted pronoun subject
+    un-inverts ('Where were you born?' -> 'I was born ...', not the garbled
+    'You born were ...'). Returns None for behavioral/how/why corrections,
+    which have no safe generic statement transform (auto-augment 2026-07-16)."""
     m = _WH_STATEMENT.match(question)
     if not m:
         return None
-    verb, subject = m.group(1).lower(), m.group(2).strip().rstrip("?.").strip()
+    verb = m.group(1).lower()
+    words = m.group(2).strip().rstrip("?.").strip().split()
     ans = answer.strip().rstrip(".").strip()
-    if not subject or not ans:
+    if not words or not ans:
         return None
-    subject = subject[0].upper() + subject[1:]
-    return f"{subject} {verb} {ans}."
+    if words[0].lower() in _SUBJECT_PRONOUNS and len(words) > 1:
+        # Subject-aux inversion: the trailing predicate belongs AFTER the verb.
+        subject, predicate = [_PERSON_FLIP.get(words[0].lower(), words[0])], words[1:]
+    else:
+        subject, predicate = [_PERSON_FLIP.get(w.lower(), w) for w in words], []
+    verb = _VERB_AGREE.get((subject[0].lower(), verb), verb)
+    statement = " ".join(subject + [verb] + predicate + [ans]) + "."
+    statement = re.sub(r"\bi\b", "I", statement)
+    return statement[0].upper() + statement[1:]
 
 
 def augment_teaching(question: str, answer: str) -> tuple[list[str], list[str]]:
@@ -164,8 +185,11 @@ def review_augmentation(questions: list[str], answers: list[str]):
     print("  [Enter]=save  e=edit phrasings  s=save just the one  x=cancel")
     try:
         choice = input("  > ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        choice = ""
+    except EOFError:
+        choice = ""  # piped stdin ran dry: auto-accept, same as non-tty
+    except KeyboardInterrupt:
+        print()
+        return None  # Ctrl+C aborts here like everywhere else in the tool
     if choice == "x":
         return None
     if choice == "s":
@@ -176,8 +200,11 @@ def review_augmentation(questions: list[str], answers: list[str]):
         while True:
             try:
                 ln = input("    Q: ").strip()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 break
+            except KeyboardInterrupt:
+                print()
+                return None
             if not ln:
                 break
             edited.append(ln)
@@ -318,22 +345,28 @@ def main() -> None:
                 else:
                     question, _ = fixed
                     ex = exchanges[-1]
-                    if ex["writes"]:
-                        # Re-fixing (or fixing a /good'd answer): the earlier
-                        # save would contradict this one -- replace it.
-                        retract(ex["writes"])
-                        n_taught -= ex["taught"]
-                        ex["writes"], ex["taught"] = [], 0
-                        print("(replacing what was previously saved for this exchange)")
                     # Auto-augment into several phrasings + a statement twin,
-                    # then let the user vet them before anything is written.
+                    # then let the user vet them BEFORE anything is written OR
+                    # unwritten -- a cancelled re-fix must leave the earlier
+                    # save intact (audit 2026-07-16: retract ran pre-review,
+                    # so 'x' silently destroyed the previous record).
                     questions, answers = augment_teaching(question, correction)
                     reviewed = review_augmentation(questions, answers)
                     if reviewed is None:
                         # History already continues from the correction; the
                         # user just chose not to bake it.
-                        print("not saved -- conversation still continues from your version.")
+                        if ex["writes"]:
+                            print("not saved -- keeping what was previously saved for this exchange.")
+                        else:
+                            print("not saved -- conversation still continues from your version.")
                     else:
+                        if ex["writes"]:
+                            # Re-fixing (or fixing a /good'd answer): the earlier
+                            # save would contradict this one -- replace it.
+                            retract(ex["writes"])
+                            n_taught -= ex["taught"]
+                            ex["writes"], ex["taught"] = [], 0
+                            print("(replaced what was previously saved for this exchange)")
                         q_list, a_list = reviewed
                         ex["writes"].append((TEACHINGS, save_teaching(q_list, a_list)))
                         ex["writes"].append((TEACH_PAIRS, save_pair(question, correction, ex["original"])))

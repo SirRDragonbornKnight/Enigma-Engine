@@ -101,16 +101,29 @@ def test_augment_expands_a_fix_into_diverse_phrasings():
     assert qs[0] == "What is my dog's name?"
     assert len(qs) >= 3
     assert len({q.lower() for q in qs}) == len(qs)
-    # 'what is X' gets a declarative statement twin on the answer side.
-    assert "My dog's name is Rex." in ans
+    # 'what is X' gets a declarative statement twin on the answer side,
+    # spoken in the ASSISTANT's voice (the user's 'my' flips to 'your').
+    assert "Your dog's name is Rex." in ans
 
 
 def test_statement_twin_only_for_simple_wh_is_questions():
     assert statement_twin("What is the capital of France?", "Paris") == "The capital of France is Paris."
-    assert statement_twin("Who are you?", "Enigma.") == "You are Enigma."
     # behavioral / how / why corrections have no safe generic statement form
     assert statement_twin("Stop repeating yourself.", "Okay.") is None
     assert statement_twin("How do I reset it?", "Hold the button.") is None
+
+
+def test_statement_twin_speaks_in_the_assistant_voice():
+    # audit 2026-07-16: the unflipped twin taught her to call the USER Enigma.
+    assert statement_twin("Who are you?", "Enigma.") == "I am Enigma."
+    assert statement_twin("What is your name?", "Enigma.") == "My name is Enigma."
+    assert statement_twin("What is my dog's name?", "Rex.") == "Your dog's name is Rex."
+
+
+def test_statement_twin_uninverts_a_pronoun_subject():
+    # audit 2026-07-16: 'Where were you born?' twinned to 'You born were ...'.
+    assert statement_twin("Where were you born?", "In the forge.") == "I was born In the forge."
+    assert statement_twin("What is it called?", "The forge.") == "It is called The forge."
 
 
 def test_paraphrases_stay_grammatical_and_deduped():
@@ -127,6 +140,37 @@ def test_save_teaching_accepts_phrasing_lists_and_round_trips(tmp_path):
     # per-character explosion of the strings.
     assert len(recs) >= 3
     assert all(len(r["messages"][0]["content"]) > 1 for r in recs)
+
+
+def test_review_ctrl_c_cancels_instead_of_saving(monkeypatch):
+    # audit 2026-07-16: Ctrl+C at the review prompt fell through to
+    # accept-and-write -- the abort gesture committed the records.
+    import sys as _sys
+
+    from teach_enigma import review_augmentation
+
+    monkeypatch.setattr(_sys.stdin, "isatty", lambda: True)
+
+    def _interrupt(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", _interrupt)
+    assert review_augmentation(["Q?"], ["A."]) is None
+
+
+def test_review_eof_still_auto_accepts(monkeypatch):
+    # Piped/scripted teaching (stdin runs dry) must keep auto-accepting.
+    import sys as _sys
+
+    from teach_enigma import review_augmentation
+
+    monkeypatch.setattr(_sys.stdin, "isatty", lambda: True)
+
+    def _eof(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _eof)
+    assert review_augmentation(["Q?"], ["A."]) == (["Q?"], ["A."])
 
 
 def test_retract_does_not_pad_a_hand_shrunk_file(tmp_path):
