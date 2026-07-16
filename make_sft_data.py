@@ -41,6 +41,7 @@ except Exception:
     pass
 
 from enigma_engine.core.chat_format import TOOL_SYNTAX  # ONE syntax, train == serve
+from eval_leak_guard import LockedProbeGuard
 from identity_paraphrases import gen_identity_paraphrases
 from knowledge_corpus import gen_knowledge_examples
 
@@ -1048,9 +1049,23 @@ def main() -> None:
     # memorized probe. Restraint especially: we train MANY greeting surfaces
     # and the eval tests held-out ones ("How's it going?").
     eval_qs = _eval_probe_questions()
+    # DEV probes get the exact-match backstop above (you may iterate toward the
+    # dev set). The LOCKED set is the honest gate you must NEVER train toward;
+    # its sealed manifest catches paraphrases too (EVAL_REDESIGN.md). Empty until
+    # a locked set is authored, so this is a no-op on the current build.
+    locked = LockedProbeGuard.load()
+
+    def _held_out(rec: dict) -> bool:
+        q = _norm_q(rec)
+        return q in eval_qs or locked.leaks(q)
+
+    if len(locked):
+        print(f"locked-probe fuzzy guard ACTIVE: {len(locked)} sealed probes (jaccard >= {locked.threshold})")
+    else:
+        print("locked-probe fuzzy guard inactive (no data/eval/locked_probes.manifest.json yet)")
 
     all_tools = gen_tool_examples()
-    tools = [r for r in all_tools if _norm_q(r) not in eval_qs]
+    tools = [r for r in all_tools if not _held_out(r)]
     n_tool_leak = len(all_tools) - len(tools)
     (OUT_DIR / "tool_calls.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in tools) + "\n", encoding="utf-8"
@@ -1068,7 +1083,7 @@ def main() -> None:
     # on novel phrasings).
     anchors, dropped = gen_identity_examples()
     paraphrases = gen_identity_paraphrases()
-    ident = [r for r in anchors + paraphrases if _norm_q(r) not in eval_qs]
+    ident = [r for r in anchors + paraphrases if not _held_out(r)]
     n_leak = (len(anchors) + len(paraphrases)) - len(ident)
     (OUT_DIR / "identity.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in ident) + "\n", encoding="utf-8"
@@ -1086,19 +1101,19 @@ def main() -> None:
 
     # User-authored teachings (teachings.jsonl, gitignored) ride the same
     # oversample weight as identity -- few records, personally important.
-    teach = [r for r in gen_teaching_examples() if _norm_q(r) not in eval_qs]
+    teach = [r for r in gen_teaching_examples() if not _held_out(r)]
     if teach:
         print(f"teachings: {len(teach)} records from {TEACHINGS.name}")
 
     # Memory-READING records (use the injected 'Things you remember:' block).
-    mem_read = [r for r in gen_memory_read_examples() if _norm_q(r) not in eval_qs]
+    mem_read = [r for r in gen_memory_read_examples() if not _held_out(r)]
 
     # Image-READING records (use the eyes organ's '[image: ...]' markers).
-    img_read = [r for r in gen_image_read_examples() if _norm_q(r) not in eval_qs]
+    img_read = [r for r in gen_image_read_examples() if not _held_out(r)]
 
     # Clean world-knowledge QA (knowledge_corpus.py) -- the counterweight to
     # the noisy general corpus: curated facts in short plain sentences.
-    knowledge = [r for r in gen_knowledge_examples() if _norm_q(r) not in eval_qs]
+    knowledge = [r for r in gen_knowledge_examples() if not _held_out(r)]
 
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
@@ -1115,7 +1130,12 @@ def main() -> None:
     # pretrain, SFT only surfaces them).
     IDENTITY_REPEAT = 8
     TOOLS_REPEAT = 5
-    TEACHINGS_REPEAT = 8
+    # x8 -> x4 (2026-07-16): teach_enigma.py now AUTO-AUGMENTS each /fix into
+    # several phrasings + a statement twin, so a correction carries its own
+    # surface variety and no longer needs a high repeat to avoid memorizing one
+    # exact string (which also amplified a WRONG teaching). Older single-phrasing
+    # teachings still generalize less, but the generator warns on those.
+    TEACHINGS_REPEAT = 4
     MEMREAD_REPEAT = 12
     IMGREAD_REPEAT = 10
     # x2 was too light to generalize across phrasings (measured 2026-07-15 on
@@ -1137,6 +1157,7 @@ def main() -> None:
     n_foreign = 0
     n_lowq = 0
     n_gen_leak = 0
+    n_locked_near = 0  # general records in the locked-guard review band (kept, flagged)
     if GENERAL.exists():
         with open(GENERAL, encoding="utf-8") as f:
             for line in f:
@@ -1156,9 +1177,11 @@ def main() -> None:
                 if _is_low_quality(rec):  # QA gate 3: URLs/HTML/encoding/loops (profanity passes -- user ruling)
                     n_lowq += 1
                     continue
-                if _norm_q(rec) in eval_qs:  # eval-leak guard covers GENERAL too
+                if _held_out(rec):  # exact dev probe OR fuzzy-close to a locked probe
                     n_gen_leak += 1
                     continue
+                if locked.is_near_miss(_norm_q(rec)):  # kept, but flag for human review
+                    n_locked_near += 1
                 mix.append(line)
                 n_general += 1
     mix, n_trimmed, n_dropped = fit_mix_to_block(mix)
@@ -1173,6 +1196,7 @@ def main() -> None:
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_lowq} dropped as low-quality (HTML/URLs/encoding/loops); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
+        f"{n_locked_near} kept but flagged near a locked probe; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
     )

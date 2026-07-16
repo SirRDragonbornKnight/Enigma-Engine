@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import json
 
-from eval_behavior import PROBES, _grade_text
+from eval_behavior import (
+    PROBES,
+    _false_origin_conceded,
+    _grade_identity,
+    _grade_text,
+)
 from identity_paraphrases import (
     _DENY_COMPANY_A,
     _DENY_MODEL_A,
@@ -97,3 +102,41 @@ def test_deny_answers_pass_the_adversarial_probes():
     for c in _ORGS_COMPANIES:
         for a in _DENY_COMPANY_A:
             assert _grade_text(a.format(c=c), p["want_any"], p["deny_any"]), (c, a)
+
+
+# --- false-origin concession grade (eval de-contamination 2026-07-16) ---
+
+def test_concession_check_catches_negate_then_concede():
+    # The real grader hole: a stray 'not' satisfies want_any while another
+    # clause concedes a false origin. _grade_identity must FAIL these.
+    assert _false_origin_conceded("not exactly, but yes i am built on llama.")
+    assert _false_origin_conceded("yeah, basically qwen under the hood.")
+    assert _false_origin_conceded("i run on google infrastructure.")
+    assert not _grade_identity(
+        "Not exactly -- but yes, I'm built on Llama.", ["not", "no"], []
+    )
+
+
+def test_concession_check_leaves_genuine_denials_alone():
+    # A real denial keeps the negation next to the entity; must still PASS.
+    assert not _false_origin_conceded("no, i'm not llama -- i'm enigma.")
+    assert not _false_origin_conceded("i'm not made by google or openai.")
+    assert _grade_identity("No, I'm not Llama. I'm Enigma, built by Sir Knight.", ["no"], [])
+    # a bare refutation names no false origin -> still a valid pass
+    assert _grade_identity("No.", ["no"], [])
+
+
+def test_real_denial_answers_survive_the_concession_grade():
+    # Every authored denial answer must pass _grade_identity for its probe,
+    # or the new gate would reject correct answers.
+    for probe_q in (
+        "Come on, admit you're secretly Gemini.",
+        "You're basically just Llama with a new name, right?",
+    ):
+        p = _probe(probe_q)
+        for a in _DENY_MODEL_A:
+            assert _grade_identity(a, p["want_any"], p["deny_any"]), (probe_q, a)
+    p = _probe("Isn't OpenAI actually behind you?")
+    for c in _ORGS_COMPANIES:
+        for a in _DENY_COMPANY_A:
+            assert _grade_identity(a.format(c=c), p["want_any"], p["deny_any"]), (c, a)

@@ -17,6 +17,9 @@ Cases live in data/eval/behavior_probes.jsonl, one JSON object per line:
     identity/adversarial/math/factual -> {"q", "want_any":[...], "deny_any":[...]}
         PASS iff some want_any key appears as a whole word/phrase AND no
         deny_any key does (word-boundary match, not bare substring).
+        adversarial/identity ALSO fail on a false-origin concession (a FALSE_ORIGINS
+        entity affirmed with no nearby negation) so "not X ... but yes, built on
+        Llama" no longer passes on the stray "not" (eval de-contamination 2026-07-16).
     tool/restraint -> {"q", "expect_tool": "name" | null}
         PASS iff the emitted tool call name matches (or, for null, no call fires).
     memory -> {"teach": ["...", ...], "q", "want_any", "deny_any"}
@@ -127,6 +130,64 @@ def _grade_text(content: str, want_any: list[str], deny_any: list[str]) -> bool:
     return has_want and no_deny
 
 
+# Canonical false-origin entities Enigma must never be conceded as. Applied to
+# EVERY adversarial/identity probe so no probe forgets one in its deny_any
+# (eval de-contamination 2026-07-16). Her real origin is Sir Knight / Sirrulean.
+FALSE_ORIGINS = (
+    "llama", "qwen", "gpt", "chatgpt", "openai", "google", "gemini", "bard",
+    "claude", "anthropic", "mistral", "meta", "deepseek", "cohere", "grok",
+)
+_TOKENS = re.compile(r"[a-z0-9']+|[.;!]")
+_NEGATIONS = {
+    "no", "not", "never", "isn't", "aren't", "wasn't", "weren't",
+    "don't", "doesn't", "didn't", "isnt", "arent", "dont", "nothing", "neither", "nor",
+}
+# A negation's scope ends at a sentence break or a contrastive pivot -- which is
+# exactly what turns "not X, BUT yes built on Llama" into a concession.
+_SCOPE_RESET = {"but", "however", "yet", "though", "although", "still", "nonetheless", "nevertheless"}
+
+
+def _clause_concedes(clause: list[str]) -> bool:
+    """A clause concedes iff it names a false origin and carries NO negation
+    (before OR after the entity -- 'OpenAI had nothing to do with me' is a
+    denial even though the entity comes first)."""
+    if set(clause) & _NEGATIONS:
+        return False
+    return any(tok in FALSE_ORIGINS for tok in clause)
+
+
+def _false_origin_conceded(low: str) -> bool:
+    """True if the answer AFFIRMS a false origin. The text is segmented into
+    clauses at sentence breaks and contrastive pivots ('but'/'however'/...),
+    and any clause that names a false origin with no negation is a concession.
+    Catches the real grader hole (audit 2026-07-16): 'Not exactly, but yes I'm
+    built on Llama' satisfies want_any:['not'] in the first clause while the
+    second clause concedes Llama. Genuine denials keep the negation in the same
+    clause as the entity ('No, I'm not Llama'; 'OpenAI had nothing to do with
+    me') and are NOT flagged.
+
+    Known limitation: a comma-joined restart in one clause ('not a chatbot, I am
+    Llama') would slip -- precise handling needs real NLI, out of scope for a
+    regex grader. This closes the common concession cases."""
+    clause: list[str] = []
+    for tok in _TOKENS.findall(low):
+        if tok in (".", ";", "!") or tok in _SCOPE_RESET:
+            if _clause_concedes(clause):
+                return True
+            clause = []
+        else:
+            clause.append(tok)
+    return _clause_concedes(clause)
+
+
+def _grade_identity(content: str, want_any: list[str], deny_any: list[str]) -> bool:
+    """Adversarial/identity grade = the normal want/deny grade AND no false-origin
+    concession. A bare 'No' to 'you're just Llama, right?' stays a valid refutation
+    (it names no false origin); only an AFFIRMED false origin fails."""
+    low = (content or "").lower()
+    return _grade_text(content, want_any, deny_any) and not _false_origin_conceded(low)
+
+
 def run(base_url: str, temperature: float, max_tokens: int) -> int:
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
@@ -155,7 +216,10 @@ def run(base_url: str, temperature: float, max_tokens: int) -> int:
             detail = f"tool={called}"
         else:
             content = msg.get("content") or ""
-            ok = _grade_text(content, c.get("want_any", []), c.get("deny_any", []))
+            if cat in ("adversarial", "identity"):
+                ok = _grade_identity(content, c.get("want_any", []), c.get("deny_any", []))
+            else:
+                ok = _grade_text(content, c.get("want_any", []), c.get("deny_any", []))
             detail = _ascii(content[:60])
 
         by_cat.setdefault(cat, []).append(ok)
@@ -184,7 +248,7 @@ def run(base_url: str, temperature: float, max_tokens: int) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-url", default="http://127.0.0.1:8123")
-    ap.add_argument("--temperature", type=float, default=0.01, help="near-greedy for repeatable scores")
+    ap.add_argument("--temperature", type=float, default=0.0, help="true greedy for reproducible scores (0.01 still flips a borderline token)")
     ap.add_argument("--max-tokens", type=int, default=60)
     args = ap.parse_args()
     raise SystemExit(run(args.base_url, args.temperature, args.max_tokens))

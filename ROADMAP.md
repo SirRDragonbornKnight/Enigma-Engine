@@ -74,8 +74,9 @@ Muppet.
   comments), v8 (coverage-widened) trained with eval pending. v5 stays the
   ADOPTED serve checkpoint until a candidate clears the gates.
 - TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4 —
-  still open); merge `teach_pairs.jsonl` into DPO behind the probe filter
-  (DONE `47f557ae`). Second-pass audit: /undo left records baked on disk and
+  DONE 2026-07-16, `teach_enigma.py` augment_teaching + confirm-before-bake
+  review; TEACHINGS_REPEAT 8->4); merge `teach_pairs.jsonl` into DPO behind the
+  probe filter (DONE `47f557ae`). Second-pass audit: /undo left records baked on disk and
   a second /fix rejected the user's own correction — both FIXED `deb7c182`.
 - ORGAN UPGRADES (interim, still borrowed, all pip-only): TTS -> Kokoro-82M;
   ASR -> whisper large-v3-turbo (verify CTranslate2 on sm_120 first); eyes ->

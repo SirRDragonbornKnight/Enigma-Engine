@@ -33,6 +33,30 @@
 
 ---
 
+## 0.5 Eval trust -- de-contamination (2026-07-16 realism audit; see EVAL_REDESIGN.md)
+
+> The behavior gate is partly self-measuring: `knowledge_corpus.py:21` authors
+> probe twins on purpose and the leak guard is exact-match only, so
+> factual/identity/adversarial/restraint scores conflate recall with
+> generalization (math/memory/tool are clean). Full design + status in
+> `EVAL_REDESIGN.md`. Tokenizer ceiling spec in `TOKENIZER_V2_SPEC.md`.
+
+- [x] **Grader concession fix** (`eval_behavior.py`) -- adversarial/identity fail
+  on an AFFIRMED false origin (`_false_origin_conceded`/`_grade_identity`); true
+  greedy default (temp 0). Tests in `tests/test_eval_grading.py`.
+- [x] **Locked-probe guard machinery** (`eval_leak_guard.py`) -- sealed
+  hashed-shingle manifest + fuzzy Jaccard guard, wired into `make_sft_data`
+  (`_held_out`), no-op until a manifest exists. Tests in
+  `tests/test_eval_leak_guard.py`. Known limit: verb-swap paraphrases land in
+  the 0.5-0.6 review band (flagged, not dropped).
+- [ ] **Author the locked probe set** (~60-90, BLIND to the training corpus),
+  then `python eval_leak_guard.py seal data/eval/locked_probes.jsonl`. Needs a
+  human by design (the separation-of-powers rule).
+- [ ] Widen thin eval categories to >=15 probes; re-measure v5/v8 on the locked
+  set for the honest baseline.
+- [ ] (Optional) second-grader agreement pass; semantic-embedding leak guard to
+  close the verb-swap gap.
+
 ## 1. Correctness / measurement instruments (high leverage, small)
 
 - [x] Encoder **persistence bug** — FIXED `f9ec5184`: `_save_checkpoint` takes
@@ -40,22 +64,25 @@
   optimizer that actually stepped, `_load_encoder_checkpoint` resumes and
   REFUSES text-only checkpoints; 6 tests. Residual open: serve-side
   native-encoder load path (Phase 4.5 step 5).
-- [ ] **`--tokens-bin` is not resume-locked** (`pretrain_enigma.py`; final
-  audit 2026-07-16 M1) — the checkpoint schedule does not record the corpus
-  path, so `--resume` without re-passing the flag silently finishes a facts
-  run on the default 56.6B corpus. Record tokens_bin in the schedule and
-  restore it on resume.
-- [ ] **`group_split` can empty train / overshoot val** (`dpo_enigma.py`;
-  final audit M2) — a single-prompt dataset (small teach_pairs.jsonl) puts
-  everything in val and crashes `_batchify([])`; a giant first group blows
-  past val_cap. Guard: never let train go empty; deal groups smallest-first
-  or split oversized groups.
-- [ ] **Facts-corpus val contract** (`make_facts_pretrain_data.py`; final
-  audit M3) — pretrain's val window (n//100 = 600k at the 60M default) is
-  larger than the 500k pure-replay tail, and a fact doc can spill past
-  mixed_end; [val] reads ~0.4% fact tokens. Fix: `val_reserve =
-  max(arg, target // 100)`, stop fact docs at mixed_end - max_doc_len, and
-  put `--val-general-end 0` in the documented command.
+- [x] **`--tokens-bin` resume-locked** (`pretrain_enigma.py`; final audit
+  2026-07-16 M1) — FIXED 2026-07-16: `tokens_bin` is now recorded in the
+  checkpoint schedule, and corpus resolution moved to AFTER the resume/schedule
+  restore, so a bare `--resume` recovers the run's own corpus instead of
+  silently finishing a facts run on the default 56.6B corpus. An explicit
+  `--tokens-bin` still wins; checkpoints written before this fix predate the
+  key and must re-pass the flag. (`test_pretrain_warmstart.py` still green.)
+- [x] **`group_split` can't empty train / overshoot val** (`dpo_enigma.py`;
+  final audit M2) — FIXED 2026-07-16: fewer than two prompt groups (small
+  teach_pairs.jsonl) train the whole set with val empty; otherwise deal
+  SMALLEST groups to val and never assign the largest group to val, so a giant
+  group can neither empty train (`_batchify([])`) nor overshoot val_cap.
+  Regression tests in `tests/test_dpo_split.py`.
+- [x] **Facts-corpus val contract** (`make_facts_pretrain_data.py`; final
+  audit M3) — FIXED 2026-07-16: `val_reserve = max(arg, target // 100)` so the
+  pure-replay tail always covers pretrain's n//100 [val] window; a fence stops
+  any fact doc from crossing `mixed_end` into that tail; documented command now
+  passes `--val-general-end 0`. Regression tests in
+  `tests/test_facts_pretrain_data.py`.
 - [x] Repetition-penalty scope — was penalizing the prompt, suppressing her own
   primed vocabulary (ultrareview #9). Fixed + regression-tested (`b75ed617`).
 - [x] Eval memory-store clear (#30) + golden-eval EOS strip (#12) — fixed (`fe5359a7`).
@@ -104,20 +131,25 @@
   factual 13/20 -> 19/20 on v6. Val-contract nit open in section 1.
 - [x] **knowledge_corpus format mixing** — `gen_knowledge_pretrain_text`: 914
   lines as declarative / QA / key-term-final cloze / in-context (`701434be`).
-- [ ] **ADOPT v8?** — measured 2026-07-16: **v8 = 79/90 (88%), ALL SEVEN
-  CATEGORIES PASS** — the first checkpoint to clear the full 90-probe gate
-  (identity 15/18, adversarial 11/12, tool 12/12, restraint 10/12, math 7/8,
-  memory 7/8, factual 17/20). Lineage: v5 70/90 FAIL -> v6 76/90 FAIL
-  (diet dilution) -> v7 72/90 FAIL (repetition != coverage) -> v8 PASS
-  (coverage-widened memory/identity + moderate fractions, on the facts
-  continued-pretrain base). `models/enigma_dpo` still serves v5 — adoption
-  is the user's call: copy `models/enigma_dpo_v8/model.pth` over
-  `models/enigma_dpo/model.pth` (back up v5 first). Note: v8's memory score
-  includes the corrected October probe; v6/v7 were measured under the old
-  March key.
-- [ ] **Teach-loop auto-augment** — single-phrasing corrections at x8 memorize
-  strings (and amplify a WRONG teaching). Auto-expand each `/fix` into 3+
-  paraphrases + a statement twin; drop to ~x4; add a confirm-before-bake step.
+- [x] **v8 ADOPTED 2026-07-16** — measured **79/90 (88%), ALL SEVEN CATEGORIES
+  PASS** — the first checkpoint to clear the full 90-probe gate (identity 15/18,
+  adversarial 11/12, tool 12/12, restraint 10/12, math 7/8, memory 7/8, factual
+  17/20). Lineage: v5 70/90 FAIL -> v6 76/90 FAIL (diet dilution) -> v7 72/90
+  FAIL (repetition != coverage) -> v8 PASS (coverage-widened memory/identity +
+  moderate fractions, on the facts continued-pretrain base). `models/enigma_dpo/
+  model.pth` now holds v8 (SHA256 `A11DB8F0...`); receipted backup at `Enigma
+  Backups\enigma_dpo_v8_adopted\` (model+config+vocab .sha256). v5's backup at
+  `enigma_dpo_v5_adopted\` is untouched (revert target). Restart serve to load
+  v8. Note: v8's memory score includes the corrected October probe; v6/v7 were
+  measured under the old March key.
+- [x] **Teach-loop auto-augment** — DONE 2026-07-16 (`teach_enigma.py`): each
+  `/fix` now `augment_teaching`s the correction into >=3 deduped question
+  phrasings + a declarative statement twin (only for simple `what/who/where is
+  X`; behavioral corrections get none), then `review_augmentation` shows them
+  for accept / edit / skip / cancel before ANY write (confirm-before-bake).
+  Non-interactive stdin auto-accepts so scripted teaching still works. Bake
+  weight `TEACHINGS_REPEAT` 8 -> 4 (`make_sft_data.py`) now corrections carry
+  their own variety. Regression tests in `tests/test_teach_tool.py`.
 - [x] Low-quality gate (URLs/HTML/encoding/loops; profanity NOT filtered per
   ruling) — done (`d0dd527e`).
 - [x] Knowledge weight x2 -> x5 — done (`43870254`).
@@ -187,9 +219,12 @@
   (--no-robots/--everyday/--triviaqa/--nq-open/--smoltalk2-cap); CLAUDE.md
   pipeline line should mention the optional facts hop (final audit
   2026-07-16, findings 18-20).
-- [ ] Teach tool nits (final audit m3/m4): /good after /fix double-writes the
-  same teaching; truncate-after-external-edit can NUL-pad a hand-edited
-  jsonl. Both edge-case; fix alongside the auto-augment work.
+- [x] Teach tool nits (final audit m3/m4) — DONE 2026-07-16 alongside the
+  auto-augment work: `/good` now refuses when the exchange already has a saved
+  teaching (no double-write; `/undo` first to change it); `retract` only ever
+  SHRINKS a file (guards against NUL-padding a hand-edited jsonl when the
+  recorded offset is past the current end). Regression test for the shrink
+  guard in `tests/test_teach_tool.py`.
 - [ ] Memory-read data nit (final audit m9): contradictory color facts can
   co-occur in one distractor block (green vs orange) — de-conflict attribute
   domains when widening further.

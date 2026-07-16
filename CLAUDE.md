@@ -77,9 +77,11 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
 - Checkpoints rotate `latest.pth` → `prev.pth` atomically with a finite-loss guard; resume rebuilds
   config from the checkpoint and hard-fails on any arch/optimizer mismatch.
 - Pretraining **DONE 2026-07-03**: full 287,882 steps / 56.6B tokens, val ppl 3.5 (`models/enigma_pretrain_large/model.pth`, SHA256-backed). Lineage is immutable; forward plan is `ROADMAP.md`. Bottleneck is now SFT data, not compute.
-- SFT+DPO **ADOPTED 2026-07-06**: all three launchers (`Start-Enigma.ps1`/`.bat`, `Launch Enigma.bat`)
-  serve `models/enigma_dpo/model.pth`; revert target is `models/enigma_sft`. Backed up with SHA256
-  receipts at `Enigma Backups\enigma_dpo_adopted\` (2026-07-13).
+- SFT+DPO **ADOPTED**: all three launchers (`Start-Enigma.ps1`/`.bat`, `Launch Enigma.bat`)
+  serve `models/enigma_dpo/model.pth`. Current adopted weights = **v8** (2026-07-16, SHA256
+  `A11DB8F0...`, 79/90 on the 90-probe gate — first to pass all 7 categories); receipted backup
+  at `Enigma Backups\enigma_dpo_v8_adopted\`. Revert targets: v5 at `enigma_dpo_v5_adopted\`,
+  older v1 at `enigma_dpo_adopted\`, or `models/enigma_sft`. Backups hold model+config+vocab .sha256.
 - From-scratch ethos: prefer fresh, correct code; engines should fail honestly ("feature absent")
   rather than guess.
 
