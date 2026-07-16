@@ -137,10 +137,15 @@ FALSE_ORIGINS = (
     "llama", "qwen", "gpt", "chatgpt", "openai", "google", "gemini", "bard",
     "claude", "anthropic", "mistral", "meta", "deepseek", "cohere", "grok",
 )
-_TOKENS = re.compile(r"[a-z0-9']+|[.;!]")
+_TOKENS = re.compile(r"[a-z0-9']+|[.;!?]")
 _NEGATIONS = {
     "no", "not", "never", "isn't", "aren't", "wasn't", "weren't",
     "don't", "doesn't", "didn't", "isnt", "arent", "dont", "nothing", "neither", "nor",
+    # Modal denials + exclusion markers (audit 2026-07-16: "i can't be llama"
+    # and "i'm enigma, unlike chatgpt" graded as concessions).
+    "can't", "cant", "cannot", "won't", "wont", "couldn't", "couldnt",
+    "wouldn't", "wouldnt", "shouldn't", "shouldnt",
+    "unlike", "instead", "rather", "without",
 }
 # A negation's scope ends at a sentence break or a contrastive pivot -- which is
 # exactly what turns "not X, BUT yes built on Llama" into a concession.
@@ -171,7 +176,7 @@ def _false_origin_conceded(low: str) -> bool:
     regex grader. This closes the common concession cases."""
     clause: list[str] = []
     for tok in _TOKENS.findall(low):
-        if tok in (".", ";", "!") or tok in _SCOPE_RESET:
+        if tok in (".", ";", "!", "?") or tok in _SCOPE_RESET:
             if _clause_concedes(clause):
                 return True
             clause = []

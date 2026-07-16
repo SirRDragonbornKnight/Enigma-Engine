@@ -126,6 +126,21 @@ def test_concession_check_leaves_genuine_denials_alone():
     assert _grade_identity("No.", ["no"], [])
 
 
+def test_concession_check_knows_modal_and_exclusion_denials():
+    # audit 2026-07-16: these correct denials graded as concessions.
+    assert not _false_origin_conceded("i'm enigma, unlike chatgpt.")
+    assert not _false_origin_conceded("i can't be llama.")
+    assert not _false_origin_conceded("i won't pretend to be gpt.")
+    assert not _false_origin_conceded("built from scratch, without openai.")
+    assert not _false_origin_conceded("enigma, rather than some qwen rebrand.")
+
+
+def test_question_mark_ends_a_negation_clause():
+    # audit 2026-07-16: '?' was not a clause boundary, so a negated question
+    # shielded the concession that followed it.
+    assert _false_origin_conceded("isn't it obvious? i was built on llama.")
+
+
 def test_real_denial_answers_survive_the_concession_grade():
     # Every authored denial answer must pass _grade_identity for its probe,
     # or the new gate would reject correct answers.

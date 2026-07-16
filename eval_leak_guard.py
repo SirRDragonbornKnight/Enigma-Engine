@@ -120,7 +120,7 @@ class LockedProbeGuard:
 def _cli_seal(src: str) -> int:
     src_path = Path(src)
     if not src_path.exists():
-        print(f"ASCII: locked probe file not found: {src_path}")
+        print(f"ERROR: locked probe file not found: {src_path}")
         return 1
     texts = []
     for line in src_path.read_text(encoding="utf-8").splitlines():
