@@ -34,7 +34,7 @@ from pathlib import Path
 import torch
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
@@ -202,6 +202,12 @@ if ARGS.voice:
         SPEAKER = Speaker()
     except TTSError as exc:
         print(f"  WARN: voice disabled -- {exc}", flush=True)
+
+# Runtime mute (the chat page's mute button, POST /v1/audio/mute): silences
+# the server-side speak TOOL without restarting serve. The /v1/audio/speech
+# endpoint stays live -- it returns bytes for a client to play, and clients
+# that respect mute (the chat page does) simply stop asking.
+MUTED = False
 
 EARS = None
 if ARGS.ears:
@@ -671,6 +677,8 @@ def _execute_builtin(name: str, arguments: dict) -> str:
     if name == "speak":
         if SPEAKER is None:
             return "error: voice disabled (start serve with --voice)"
+        if MUTED:
+            return "muted: voice is muted right now, so nothing was said out loud"
         text = str(arguments.get("text", "")).strip()
         if not text:
             return "error: nothing to say"
@@ -933,6 +941,152 @@ def _chat_instruct(req: ChatReq):
     }
 
 
+# Built-in chat page (GET /): self-contained HTML+JS, no external assets
+# (the server is offline by default and stays that way). Talks to the same
+# /v1 API as any client; spoken replies are fetched from /v1/audio/speech
+# and played IN THE BROWSER, so the mute button silences instantly and the
+# volume mixes like any app (fine while gaming). Mute also flips the server
+# flag so the speak TOOL stays quiet.
+_CHAT_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Enigma</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#101418; --panel:#1a2129; --me:#2b4a6f; --her:#232d38;
+          --text:#dde5ec; --dim:#8899aa; --accent:#5aa9e6; --warn:#e6a55a; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background:var(--bg); color:var(--text); font:16px/1.45 system-ui,sans-serif;
+         display:flex; flex-direction:column; height:100vh; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid #000; }
+  header h1 { font-size:18px; font-weight:600; flex:1; }
+  #voice-state { color:var(--dim); font-size:13px; }
+  #mute { background:var(--accent); color:#08121c; border:0; border-radius:8px;
+          padding:8px 18px; font-size:15px; font-weight:700; cursor:pointer; }
+  #mute.muted { background:var(--warn); }
+  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:72%; padding:9px 13px; border-radius:12px; white-space:pre-wrap;
+         overflow-wrap:break-word; }
+  .me { background:var(--me); align-self:flex-end; border-bottom-right-radius:4px; }
+  .her { background:var(--her); align-self:flex-start; border-bottom-left-radius:4px; }
+  .sys { color:var(--dim); font-size:13px; align-self:center; }
+  form { display:flex; gap:8px; padding:12px 16px; background:var(--panel); }
+  #box { flex:1; background:var(--bg); color:var(--text); border:1px solid #333c46;
+         border-radius:8px; padding:10px 12px; font-size:16px; outline:none; }
+  #box:focus { border-color:var(--accent); }
+  #send { background:var(--accent); color:#08121c; border:0; border-radius:8px;
+          padding:0 22px; font-size:15px; font-weight:700; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+</style></head><body>
+<header>
+  <h1>Enigma</h1>
+  <span id="voice-state">voice: checking...</span>
+  <button id="mute" type="button">Mute</button>
+</header>
+<div id="log"></div>
+<form id="f"><input id="box" autocomplete="off" placeholder="Say something to her..." autofocus>
+<button id="send" type="submit">Send</button></form>
+<script>
+"use strict";
+var history_ = [];
+var muted = localStorage.getItem("enigma_muted") === "1";
+var voiceReady = false;
+var currentAudio = null;
+var log = document.getElementById("log");
+var box = document.getElementById("box");
+var send = document.getElementById("send");
+var muteBtn = document.getElementById("mute");
+var voiceState = document.getElementById("voice-state");
+
+function add(cls, text) {
+  var d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+function stopAudio() {
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+}
+function paintMute() {
+  muteBtn.textContent = muted ? "Muted" : "Mute";
+  muteBtn.className = muted ? "muted" : "";
+  if (voiceReady) voiceState.textContent = muted ? "voice: muted" : "voice: on";
+}
+function pushMute() {
+  fetch("/v1/audio/mute", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ muted: muted }) }).catch(function () {});
+}
+muteBtn.onclick = function () {
+  muted = !muted;
+  localStorage.setItem("enigma_muted", muted ? "1" : "0");
+  if (muted) stopAudio();
+  paintMute();
+  pushMute();
+};
+function speak(text) {
+  if (!voiceReady || muted || !text) return;
+  fetch("/v1/audio/speech", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input: text }) })
+    .then(function (r) { if (!r.ok) throw new Error(); return r.blob(); })
+    .then(function (b) {
+      if (muted) return;
+      stopAudio();
+      currentAudio = new Audio(URL.createObjectURL(b));
+      currentAudio.play().catch(function () {});
+    }).catch(function () {});
+}
+document.getElementById("f").onsubmit = function (ev) {
+  ev.preventDefault();
+  var text = box.value.trim();
+  if (!text || send.disabled) return;
+  box.value = "";
+  add("me", text);
+  history_.push({ role: "user", content: text });
+  send.disabled = true;
+  var thinking = add("sys", "...");
+  fetch("/v1/chat/completions", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "enigma", messages: history_ }) })
+    .then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t.slice(0, 200)); });
+      return r.json();
+    })
+    .then(function (data) {
+      thinking.remove();
+      var msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+      var reply = msg.content || "[no text reply]";
+      add("her", reply);
+      history_.push({ role: "assistant", content: reply });
+      speak(reply);
+    })
+    .catch(function (e) {
+      thinking.remove();
+      add("sys", "error: " + e.message);
+    })
+    .then(function () { send.disabled = false; box.focus(); });
+};
+fetch("/v1/audio/voices")
+  .then(function (r) { if (!r.ok) throw new Error(); voiceReady = true; })
+  .catch(function () { voiceReady = false; })
+  .then(function () {
+    voiceState.textContent = voiceReady
+      ? (muted ? "voice: muted" : "voice: on")
+      : "voice: off (start with --voice)";
+    if (voiceReady) pushMute();
+  });
+paintMute();
+</script></body></html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+def chat_page():
+    return _CHAT_PAGE
+
+
 @app.get("/v1/models")
 def list_models():
     return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "enigma"}]}
@@ -1166,6 +1320,24 @@ def audio_voices():
     if SPEAKER is None:
         raise _organ_off("voice disabled — start with --voice")
     return {"voices": SPEAKER.voices}
+
+
+class MuteReq(BaseModel):
+    muted: bool
+
+
+@app.get("/v1/audio/mute")
+def get_mute():
+    return {"muted": MUTED}
+
+
+@app.post("/v1/audio/mute")
+def set_mute(req: MuteReq):
+    """The chat page's mute button. Gates the server-side speak TOOL; the
+    page itself also stops playing /v1/audio/speech replies while muted."""
+    global MUTED
+    MUTED = bool(req.muted)
+    return {"muted": MUTED}
 
 
 @app.post("/v1/audio/transcriptions")
