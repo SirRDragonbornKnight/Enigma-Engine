@@ -9,7 +9,16 @@ from __future__ import annotations
 import json
 
 from make_sft_data import gen_teaching_examples
-from teach_enigma import fix_last, last_exchange, retract, save_pair, save_teaching
+from teach_enigma import (
+    augment_teaching,
+    fix_last,
+    last_exchange,
+    paraphrase_question,
+    retract,
+    save_pair,
+    save_teaching,
+    statement_twin,
+)
 
 
 def test_saved_teaching_round_trips_through_the_generator(tmp_path):
@@ -83,3 +92,47 @@ def test_retract_truncates_to_earliest_size_per_file(tmp_path):
 def test_retract_is_safe_on_empty_ledger_and_missing_files(tmp_path):
     assert retract([]) == 0
     retract([(tmp_path / "never_written.jsonl", 0)])  # must not raise
+
+
+def test_augment_expands_a_fix_into_diverse_phrasings():
+    # A single /fix must produce >=3 DEDUPED question phrasings so the bake
+    # teaches the fact, not one exact string (teach-loop auto-augment).
+    qs, ans = augment_teaching("What is my dog's name?", "Rex.")
+    assert qs[0] == "What is my dog's name?"
+    assert len(qs) >= 3
+    assert len({q.lower() for q in qs}) == len(qs)
+    # 'what is X' gets a declarative statement twin on the answer side.
+    assert "My dog's name is Rex." in ans
+
+
+def test_statement_twin_only_for_simple_wh_is_questions():
+    assert statement_twin("What is the capital of France?", "Paris") == "The capital of France is Paris."
+    assert statement_twin("Who are you?", "Enigma.") == "You are Enigma."
+    # behavioral / how / why corrections have no safe generic statement form
+    assert statement_twin("Stop repeating yourself.", "Okay.") is None
+    assert statement_twin("How do I reset it?", "Hold the button.") is None
+
+
+def test_paraphrases_stay_grammatical_and_deduped():
+    ps = paraphrase_question("What is X?")
+    assert "Remind me, what is X?" in ps  # leading capital lowered after the prefix
+    assert len(ps) == len(set(ps))
+
+
+def test_save_teaching_accepts_phrasing_lists_and_round_trips(tmp_path):
+    path = tmp_path / "teachings.jsonl"
+    save_teaching(["Q1?", "Q2?"], ["A1.", "A2."], path=path)
+    recs = gen_teaching_examples(path=path)
+    # crossing 2 questions x rotating answers yields several records, and NO
+    # per-character explosion of the strings.
+    assert len(recs) >= 3
+    assert all(len(r["messages"][0]["content"]) > 1 for r in recs)
+
+
+def test_retract_does_not_pad_a_hand_shrunk_file(tmp_path):
+    path = tmp_path / "teachings.jsonl"
+    save_teaching("Q1?", "A1.", path=path)
+    stale_offset = save_teaching("Q2?", "A2.", path=path)  # > any tiny hand-edit
+    path.write_bytes(b"x\n")  # external edit shrinks the file below the offset
+    retract([(path, stale_offset)])
+    assert path.read_bytes() == b"x\n"  # left intact, NOT NUL-padded to stale_offset

@@ -16,13 +16,20 @@ say it, correct her in place:
     /help                              show the commands
     /quit                              leave
 
+On /fix the tool AUTO-AUGMENTS your correction into several question
+phrasings (plus a declarative statement twin when the question is a simple
+'what/who/where is X'), shows them, and lets you accept / edit / skip before
+anything is saved. Diverse phrasings teach the FACT; a single phrasing at
+bake weight just memorizes the string (measured 2026-07-05), so the bake
+oversample dropped x8 -> x4 once corrections carry their own variety.
+
 Where it goes: teachings ride teachings.jsonl (make_sft_data oversamples
-them x8 at the next bake -- your corrections are her strongest training
-signal). /fix also appends {prompt, chosen, rejected} to teach_pairs.jsonl:
-her wrong answer becomes DPO evidence (make_dpo_data merges the file
-automatically). A second /fix on the same exchange REPLACES the first --
-the retracted records are truncated from disk, and the preference pair
-always rejects her original reply, never your earlier correction.
+them at the next bake -- your corrections are her strongest training signal).
+/fix also appends {prompt, chosen, rejected} to teach_pairs.jsonl: her wrong
+answer becomes DPO evidence (make_dpo_data merges the file automatically). A
+second /fix on the same exchange REPLACES the first -- the retracted records
+are truncated from disk, and the preference pair always rejects her original
+reply, never your earlier correction.
 
 The conversation continues AS IF she had said the corrected thing (/fix
 rewrites history), so one bad answer doesn't poison the rest of the chat.
@@ -32,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -70,12 +78,112 @@ def _append_jsonl(path: Path, record: dict) -> int:
     return size_before
 
 
-def save_teaching(question: str, answer: str, path: Path = TEACHINGS) -> int:
+def save_teaching(questions, answers, path: Path = TEACHINGS) -> int:
     """One correction -> one teachings.jsonl line in the questions/answers
-    shape gen_teaching_examples reads. One phrasing is a flashcard; the
-    generator warns about thin records, and that is fine -- a real correction
-    now beats a perfect one never. Returns the pre-append size for retract."""
-    return _append_jsonl(path, {"questions": [question], "answers": [answer]})
+    shape gen_teaching_examples reads. ``questions``/``answers`` may be single
+    strings (a /good keeper) or lists (an auto-augmented /fix): the generator
+    crosses phrasings against rotating answers, so several phrasings teach the
+    FACT rather than one exact string at bake weight (audit 2026-07-05).
+    Returns the pre-append size for retract."""
+    if isinstance(questions, str):
+        questions = [questions]
+    if isinstance(answers, str):
+        answers = [answers]
+    return _append_jsonl(path, {"questions": list(questions), "answers": list(answers)})
+
+
+def _lower_first(s: str) -> str:
+    """Lowercase a leading capital so a wrapper prefix reads grammatically
+    ('...what is X?'), but leave acronyms and the pronoun 'I' alone."""
+    if len(s) >= 2 and s[0].isupper() and s[1].islower() and not s.startswith("I "):
+        return s[0].lower() + s[1:]
+    return s
+
+
+def paraphrase_question(q: str) -> list[str]:
+    """Light, meaning-preserving reframings of a question so one correction
+    teaches the fact, not one exact token string (a single phrasing at bake
+    weight memorizes the string -- measured 2026-07-05). Wrapper prefixes stay
+    grammatical for any question; the user edits them at the confirm step."""
+    q = q.strip()
+    lc = _lower_first(q)
+    cands = [q, f"Remind me, {lc}", f"Just to be sure, {lc}", f"Quick question -- {q}"]
+    seen, out = set(), []
+    for c in cands:
+        key = c.lower()
+        if c and key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+_WH_STATEMENT = re.compile(r"^\s*(?:what|who|where)\b.*?\b(is|are|was|were)\b\s+(.+?)\s*\??\s*$", re.IGNORECASE)
+
+
+def statement_twin(question: str, answer: str) -> str | None:
+    """Best-effort declarative restatement of a simple 'what/who/where is X'
+    Q/A so the fact is also exposed as a STATEMENT, not only as a question.
+    Returns None for behavioral/identity corrections, which have no safe
+    generic statement transform (auto-augment 2026-07-16)."""
+    m = _WH_STATEMENT.match(question)
+    if not m:
+        return None
+    verb, subject = m.group(1).lower(), m.group(2).strip().rstrip("?.").strip()
+    ans = answer.strip().rstrip(".").strip()
+    if not subject or not ans:
+        return None
+    subject = subject[0].upper() + subject[1:]
+    return f"{subject} {verb} {ans}."
+
+
+def augment_teaching(question: str, answer: str) -> tuple[list[str], list[str]]:
+    """Expand one correction into several question phrasings + (when derivable)
+    a declarative statement twin, so /fix teaches the fact at a lower bake
+    weight instead of memorizing a single string (ROADMAP teach-loop
+    auto-augment)."""
+    questions = paraphrase_question(question)
+    answers = [answer.strip()]
+    twin = statement_twin(question, answer)
+    if twin and twin.lower() != answer.strip().lower():
+        answers.append(twin)
+    return questions, answers
+
+
+def review_augmentation(questions: list[str], answers: list[str]):
+    """Show the auto-generated phrasings and let the user accept / edit / skip
+    BEFORE anything is written (confirm-before-bake, 2026-07-16). Returns the
+    (questions, answers) to save, or None to save nothing. Non-interactive
+    stdin (piped/scripted teaching) auto-accepts -- no prompt to block on."""
+    if not sys.stdin.isatty():
+        return questions, answers
+    print("  will bake these phrasings (each -> your corrected answer):")
+    for qq in questions:
+        print(f"    Q: {qq}")
+    for aa in answers:
+        print(f"    A: {aa}")
+    print("  [Enter]=save  e=edit phrasings  s=save just the one  x=cancel")
+    try:
+        choice = input("  > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        choice = ""
+    if choice == "x":
+        return None
+    if choice == "s":
+        return [questions[0]], [answers[0]]
+    if choice == "e":
+        print("  type one question phrasing per line; blank line to finish:")
+        edited = []
+        while True:
+            try:
+                ln = input("    Q: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not ln:
+                break
+            edited.append(ln)
+        if edited:
+            questions = edited
+    return questions, answers
 
 
 def save_pair(prompt: str, chosen: str, rejected: str, path: Path = TEACH_PAIRS) -> int:
@@ -98,7 +206,13 @@ def retract(writes: list[tuple[Path, int]]) -> int:
     for path, size in earliest.items():
         try:
             with open(path, "r+b") as f:
-                f.truncate(size)
+                cur = f.seek(0, 2)  # current size
+                # Only ever SHRINK. If the file was hand-edited smaller between
+                # the append and now, truncating to the larger recorded offset
+                # would PAD it with NUL bytes and corrupt the jsonl (final audit
+                # 2026-07-16 m4). A smaller file can't hold our record anyway.
+                if size < cur:
+                    f.truncate(size)
         except FileNotFoundError:
             pass
     return len(writes)
@@ -121,8 +235,9 @@ def last_exchange(history: list[dict]) -> tuple[str, str] | None:
 
 
 _HELP = """commands:
-  /fix <better answer>   correct her last reply (saves teaching + preference pair;
-                         a second /fix on the same exchange replaces the first)
+  /fix <better answer>   correct her last reply (auto-augments into several
+                         phrasings you can accept/edit/skip, then saves a
+                         teaching + preference pair; a second /fix replaces the first)
   /good                  save her last reply as a keeper
   /undo                  forget the last exchange (retracts its saved records)
   /new                   fresh conversation
@@ -182,6 +297,11 @@ def main() -> None:
                 pair = last_exchange(history)
                 if pair is None or not exchanges:
                     print("nothing to keep yet -- chat first.")
+                elif exchanges[-1]["writes"]:
+                    # A /fix (or an earlier /good) already saved for this
+                    # exchange; a second write would duplicate it (final audit
+                    # 2026-07-16 m3). /undo first to change what's saved.
+                    print("already saved a teaching for this exchange -- /undo first to change it.")
                 else:
                     exchanges[-1]["writes"].append((TEACHINGS, save_teaching(*pair)))
                     exchanges[-1]["taught"] += 1
@@ -205,11 +325,21 @@ def main() -> None:
                         n_taught -= ex["taught"]
                         ex["writes"], ex["taught"] = [], 0
                         print("(replacing what was previously saved for this exchange)")
-                    ex["writes"].append((TEACHINGS, save_teaching(question, correction)))
-                    ex["writes"].append((TEACH_PAIRS, save_pair(question, correction, ex["original"])))
-                    ex["taught"] += 1
-                    n_taught += 1
-                    print("fixed and saved. the conversation continues from your version.")
+                    # Auto-augment into several phrasings + a statement twin,
+                    # then let the user vet them before anything is written.
+                    questions, answers = augment_teaching(question, correction)
+                    reviewed = review_augmentation(questions, answers)
+                    if reviewed is None:
+                        # History already continues from the correction; the
+                        # user just chose not to bake it.
+                        print("not saved -- conversation still continues from your version.")
+                    else:
+                        q_list, a_list = reviewed
+                        ex["writes"].append((TEACHINGS, save_teaching(q_list, a_list)))
+                        ex["writes"].append((TEACH_PAIRS, save_pair(question, correction, ex["original"])))
+                        ex["taught"] += 1
+                        n_taught += 1
+                        print(f"fixed and saved ({len(q_list)} phrasing(s)). the conversation continues from your version.")
             else:
                 print(f"unknown command {cmd} -- /help lists them.")
             continue
