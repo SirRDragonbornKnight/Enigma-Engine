@@ -197,6 +197,7 @@ def run_training(config: TrainingJobConfig | dict[str, Any], ctx: DispatchContex
             data=vision_data,
             val_data=val_data,
             unfreeze_text_layers=job.vision.unfreeze_text_layers,
+            resume_from=job.resume_from,
         )
 
     if job.mode == "audio":
@@ -214,6 +215,7 @@ def run_training(config: TrainingJobConfig | dict[str, Any], ctx: DispatchContex
             data=audio_data,
             val_data=val_data,
             unfreeze_text_layers=job.audio.unfreeze_text_layers,
+            resume_from=job.resume_from,
         )
 
     if job.mode == "lora":

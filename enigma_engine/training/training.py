@@ -3533,20 +3533,51 @@ class Trainer:
             return "model"
         return name
 
-    def _save_checkpoint(self, path: Path) -> None:
+    def _save_checkpoint(
+        self,
+        path: Path,
+        *,
+        encoder: "nn.Module | None" = None,
+        encoder_key: str | None = None,
+        optimizer: "torch.optim.Optimizer | None" = None,
+        scheduler: Any = None,
+        scaler: Any = None,
+    ) -> None:
         """Save model checkpoint with full training state.
 
         Saves model weights, optimizer, scheduler, scaler, and step
         counters so training can resume exactly where it left off.
+
+        train_vision/train_audio train a separately-passed encoder with
+        a LOCAL optimizer/scheduler/scaler (their trainable set differs
+        from train()'s). They must pass those here via the keyword args
+        so the checkpoint captures what actually trained; otherwise the
+        encoder weights are never written anywhere and the saved
+        optimizer state belongs to the untouched self.optimizer.
+        Text-only runs leave the defaults and the checkpoint format is
+        unchanged.
+
+        Args:
+            path: Destination .pt file.
+            encoder: Encoder module being trained alongside the model
+                (vision/audio runs only). Requires *encoder_key*.
+            encoder_key: Checkpoint key for the encoder state dict,
+                e.g. "vision_encoder_state_dict".
+            optimizer: Optimizer to save instead of self.optimizer.
+            scheduler: Scheduler to save instead of self.scheduler.
+            scaler: AMP scaler to save instead of self.scaler.
         """
         try:
+            _opt = optimizer if optimizer is not None else self.optimizer
+            _sched = scheduler if scheduler is not None else self.scheduler
+            _scaler = scaler if scaler is not None else self.scaler
             # torch.compile wraps the model in OptimizedModule, which prefixes
             # every state-dict key with '_orig_mod.'. Save the RAW module so
             # checkpoints stay loadable by serve/gui/uncompiled trainers.
             _raw_model = getattr(self.model, "_orig_mod", self.model)
             checkpoint = {
                 "model_state_dict": _raw_model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
+                "optimizer_state_dict": _opt.state_dict(),
                 "training_state": {
                     "epoch": self.state.epoch,
                     "step": self.state.step,
@@ -3559,12 +3590,19 @@ class Trainer:
                 },
                 "training_config": self.config.to_dict(),
             }
+            if encoder is not None:
+                if not encoder_key:
+                    raise ValueError("encoder_key is required when saving an encoder")
+                checkpoint[encoder_key] = getattr(encoder, "_orig_mod", encoder).state_dict()
             # Save scheduler state for exact resume
-            if self.scheduler is not None:
-                checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
-            # Save AMP scaler state
-            if self.scaler is not None:
-                checkpoint["scaler_state_dict"] = self.scaler.state_dict()
+            if _sched is not None:
+                checkpoint["scheduler_state_dict"] = _sched.state_dict()
+            # Save AMP scaler state. A disabled GradScaler (vision/audio
+            # runs pass their local one) serializes to {} which
+            # load_state_dict refuses - skip it, matching the text path
+            # where self.scaler is None when scaling is off.
+            if _scaler is not None and _scaler.state_dict():
+                checkpoint["scaler_state_dict"] = _scaler.state_dict()
 
             # Save EMA state for resume
             if self.ema is not None:
@@ -3778,6 +3816,75 @@ class Trainer:
         except Exception as e:
             logger.error(f"Failed to load checkpoint: {e}")
             raise
+
+    def _load_encoder_checkpoint(
+        self,
+        path: Path,
+        *,
+        encoder: nn.Module,
+        encoder_key: str,
+        optimizer: "torch.optim.Optimizer",
+        scheduler: Any,
+        scaler: Any,
+    ) -> None:
+        """Restore a vision/audio training checkpoint (encoder + local optimizer).
+
+        train_vision/train_audio build their optimizer/scheduler/scaler
+        locally because they train a different parameter set than
+        train(), so load_checkpoint - which targets self.optimizer -
+        cannot resume them. This loads the model weights, the encoder
+        weights saved under *encoder_key*, the local training objects'
+        state, and the step counters.
+
+        Raises:
+            ValueError: If the checkpoint lacks *encoder_key* - resuming
+                an encoder run from a text-only checkpoint would silently
+                restart the encoder from scratch.
+        """
+        from enigma_engine.core.model_registry import safe_load_weights
+
+        checkpoint = safe_load_weights(path, map_location=self.device)
+
+        enc_state = checkpoint.get(encoder_key)
+        if enc_state is None:
+            raise ValueError(
+                f"Checkpoint {path} has no '{encoder_key}' entry - it was not "
+                f"saved by an encoder training run, so the encoder cannot be resumed from it"
+            )
+
+        model_state = checkpoint.get("model_state_dict")
+        if model_state is None:
+            raise ValueError(f"Checkpoint {path} has no 'model_state_dict' entry")
+        model_state = {k.removeprefix("_orig_mod."): v for k, v in model_state.items()}
+        _raw_model = getattr(self.model, "_orig_mod", self.model)
+        _raw_model.load_state_dict(model_state)
+
+        getattr(encoder, "_orig_mod", encoder).load_state_dict(enc_state)
+
+        opt_state = checkpoint.get("optimizer_state_dict")
+        if opt_state:
+            optimizer.load_state_dict(opt_state)
+
+        sched_state = checkpoint.get("scheduler_state_dict")
+        if sched_state is not None:
+            scheduler.load_state_dict(sched_state)
+
+        # Absent when the scaler was disabled at save time; a disabled
+        # scaler's load_state_dict is a no-op, so this stays symmetric.
+        scaler_state = checkpoint.get("scaler_state_dict")
+        if scaler_state:
+            scaler.load_state_dict(scaler_state)
+
+        state = checkpoint.get("training_state", {})
+        self.state.epoch = state.get("epoch", 0)
+        self.state.step = state.get("step", 0)
+        self.state.epoch_start_step = state.get("epoch_start_step", -1)
+        self.state.best_loss = state.get("best_loss", float("inf"))
+        self.state.total_tokens = state.get("total_tokens", 0)
+        self.state.training_losses = state.get("training_losses", [])
+        self.state.validation_losses = state.get("validation_losses", [])
+
+        logger.info(f"Loaded encoder checkpoint: {path}")
 
     # -----------------------------------------------------------------
     # DPO — Direct Preference Optimization
@@ -4879,6 +4986,7 @@ class Trainer:
         data: list[dict[str, Any]],
         unfreeze_text_layers: int = 0,
         val_data: list[dict[str, Any]] | None = None,
+        resume_from: str | Path | None = None,
     ) -> "TrainingState":
         """
         Train the vision encoder and projection layer on image-text pairs.
@@ -4904,6 +5012,13 @@ class Trainer:
                 early-stopping decisions instead of the training avg.
                 V-6: closes the "overfitting on small datasets is
                 invisible" gap noted in the F/Code-6 audit.
+            resume_from: Path to a checkpoint saved by a previous
+                train_vision run. Restores model weights, the trained
+                vision encoder weights, the local optimizer/scheduler/
+                scaler state, and epoch/step counters. The checkpoint
+                must contain "vision_encoder_state_dict" (text-only
+                checkpoints are refused - the encoder would silently
+                restart from scratch).
 
         Returns:
             TrainingState with loss history.
@@ -4996,6 +5111,29 @@ class Trainer:
             optimizer, T_max=decay_steps, eta_min=(self.config.learning_rate * self.config.min_lr_ratio)
         )
         scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup])
+
+        # Resume AFTER the local optimizer/scheduler exist - their saved
+        # state loads into them here, not into self.optimizer (which
+        # never steps during vision training).
+        if resume_from is not None:
+            ckpt_path = Path(resume_from)
+            if ckpt_path.exists():
+                self._load_encoder_checkpoint(
+                    ckpt_path,
+                    encoder=vision_encoder,
+                    encoder_key="vision_encoder_state_dict",
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
+                logger.info(
+                    "Resuming vision training: epoch=%d, step=%d, best_loss=%.4f",
+                    self.state.epoch,
+                    self.state.step,
+                    self.state.best_loss,
+                )
+            else:
+                logger.warning("Checkpoint not found: %s - training from scratch", ckpt_path)
 
         image_size = getattr(getattr(vision_encoder, "config", None), "image_size", 224)
         use_imagenet = getattr(getattr(vision_encoder, "config", None), "use_pretrained", False)
@@ -5163,7 +5301,9 @@ class Trainer:
                 return None
             return sum(losses) / len(losses)
 
-        for epoch in range(self.config.epochs):
+        # When resuming, start from the saved epoch (mirrors train())
+        start_epoch = self.state.epoch
+        for epoch in range(start_epoch, self.config.epochs):
             if self._should_stop():
                 logger.info("Vision training stopped by user request")
                 break
@@ -5378,7 +5518,14 @@ class Trainer:
             if tracked_loss < self.state.best_loss:
                 self.state.best_loss = tracked_loss
                 self._epochs_without_improvement = 0
-                self._save_checkpoint(checkpoint_dir / f"{self._checkpoint_stem}_vision_best.pt")
+                self._save_checkpoint(
+                    checkpoint_dir / f"{self._checkpoint_stem}_vision_best.pt",
+                    encoder=vision_encoder,
+                    encoder_key="vision_encoder_state_dict",
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
             else:
                 self._epochs_without_improvement += 1
                 if (
@@ -5392,7 +5539,14 @@ class Trainer:
             if self.config.save_every > 0 and (epoch + 1) % self.config.save_every == 0:
                 stem = self._checkpoint_stem
                 v_num = (epoch + 1) // self.config.save_every
-                self._save_checkpoint(checkpoint_dir / f"{stem}_vision{v_num}.pt")
+                self._save_checkpoint(
+                    checkpoint_dir / f"{stem}_vision{v_num}.pt",
+                    encoder=vision_encoder,
+                    encoder_key="vision_encoder_state_dict",
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
                 self._cleanup_periodic_checkpoints(checkpoint_dir, f"{stem}_vision", keep=3)
 
         # ── Cleanup ─────────────────────────────────────────────────────
@@ -5512,6 +5666,7 @@ class Trainer:
         data: list[dict[str, Any]],
         unfreeze_text_layers: int = 0,
         val_data: list[dict[str, Any]] | None = None,
+        resume_from: str | Path | None = None,
     ) -> "TrainingState":
         """
         Train the audio encoder and projection layer on audio-text pairs.
@@ -5537,6 +5692,13 @@ class Trainer:
                 early-stopping decisions instead of the training avg.
                 Pass 156z9ec: mirrors V-6 vision val_data — closes the
                 "overfitting on small audio datasets is invisible" gap.
+            resume_from: Path to a checkpoint saved by a previous
+                train_audio run. Restores model weights, the trained
+                audio encoder weights, the local optimizer/scheduler/
+                scaler state, and epoch/step counters. The checkpoint
+                must contain "audio_encoder_state_dict" (text-only
+                checkpoints are refused - the encoder would silently
+                restart from scratch).
 
         Returns:
             TrainingState with loss history.
@@ -5617,6 +5779,29 @@ class Trainer:
             optimizer, T_max=decay_steps, eta_min=(self.config.learning_rate * self.config.min_lr_ratio)
         )
         scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup])
+
+        # Resume AFTER the local optimizer/scheduler exist - their saved
+        # state loads into them here, not into self.optimizer (which
+        # never steps during audio training).
+        if resume_from is not None:
+            ckpt_path = Path(resume_from)
+            if ckpt_path.exists():
+                self._load_encoder_checkpoint(
+                    ckpt_path,
+                    encoder=audio_encoder,
+                    encoder_key="audio_encoder_state_dict",
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
+                logger.info(
+                    "Resuming audio training: epoch=%d, step=%d, best_loss=%.4f",
+                    self.state.epoch,
+                    self.state.step,
+                    self.state.best_loss,
+                )
+            else:
+                logger.warning("Checkpoint not found: %s - training from scratch", ckpt_path)
 
         # -- Preprocess data --
         audio_config = getattr(audio_encoder, "config", None)
@@ -5743,7 +5928,9 @@ class Trainer:
                 return None
             return sum(losses) / len(losses)
 
-        for epoch in range(self.config.epochs):
+        # When resuming, start from the saved epoch (mirrors train())
+        start_epoch = self.state.epoch
+        for epoch in range(start_epoch, self.config.epochs):
             if self._should_stop():
                 logger.info("Audio training stopped by user request")
                 break
@@ -5868,7 +6055,14 @@ class Trainer:
             if tracked_loss < self.state.best_loss:
                 self.state.best_loss = tracked_loss
                 self._epochs_without_improvement = 0
-                self._save_checkpoint(checkpoint_dir / f"{self._checkpoint_stem}_audio_best.pt")
+                self._save_checkpoint(
+                    checkpoint_dir / f"{self._checkpoint_stem}_audio_best.pt",
+                    encoder=audio_encoder,
+                    encoder_key="audio_encoder_state_dict",
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
             else:
                 self._epochs_without_improvement += 1
                 if (
@@ -5881,7 +6075,14 @@ class Trainer:
             if self.config.save_every > 0 and (epoch + 1) % self.config.save_every == 0:
                 stem = self._checkpoint_stem
                 a_num = (epoch + 1) // self.config.save_every
-                self._save_checkpoint(checkpoint_dir / f"{stem}_audio{a_num}.pt")
+                self._save_checkpoint(
+                    checkpoint_dir / f"{stem}_audio{a_num}.pt",
+                    encoder=audio_encoder,
+                    encoder_key="audio_encoder_state_dict",
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
                 self._cleanup_periodic_checkpoints(checkpoint_dir, f"{stem}_audio", keep=3)
 
         # -- Cleanup --

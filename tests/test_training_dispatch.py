@@ -230,10 +230,12 @@ def test_run_training_vision_accepts_train_val_payload(
             data,
             unfreeze_text_layers,
             val_data=None,
+            resume_from=None,
         ):
             captured["data"] = data
             captured["val_data"] = val_data
             captured["unfreeze"] = unfreeze_text_layers
+            captured["resume_from"] = resume_from
             return {"ok": True}
 
     monkeypatch.setattr("enigma_engine.training.dispatch.Trainer", FakeTrainer)
@@ -258,6 +260,7 @@ def test_run_training_vision_accepts_train_val_payload(
     assert captured["data"] == [{"image": "a.png", "text": "x"}]
     assert captured["val_data"] == [{"image": "b.png", "text": "y"}]
     assert captured["unfreeze"] == 2
+    assert captured["resume_from"] is None
 
 
 def test_training_job_config_vision_rejects_non_list_val() -> None:
