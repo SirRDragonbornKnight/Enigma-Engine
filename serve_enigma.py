@@ -120,6 +120,11 @@ os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 if not ARGS.allow_downloads:
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+else:
+    # The flag must WIN: a shell exporting HF_HUB_OFFLINE=1 would otherwise
+    # silently block the one fetch the operator just asked for out loud.
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    os.environ["TRANSFORMERS_OFFLINE"] = "0"
 
 print(f"Loading Enigma from {ARGS.model} ...", flush=True)
 if not Path(ARGS.model).exists():
@@ -414,7 +419,9 @@ def _generate_text(
     stats["completion_tokens"] = 0
     stats["finish"] = "stop"
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
-    temperature = max(float(temperature), 1e-3)  # sampling requires > 0
+    # 0 (or below) means GREEDY -- the model argmaxes. Positive-but-tiny is
+    # clamped: dividing logits by ~1e-9 overflows fp32.
+    temperature = 0.0 if float(temperature) <= 0 else max(float(temperature), 1e-3)
     hold = max((len(s) for s in stop_texts), default=1) - 1
     emitted = 0
     saw_eos = False
@@ -469,13 +476,32 @@ def _gen_ids(
     # sized max_tokens against len(ids), but never let a bad caller overflow).
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
-    temperature = max(float(temperature), 1e-3)
+    # 0 (or below) means GREEDY; positive-but-tiny is clamped (fp32 overflow).
+    temperature = 0.0 if float(temperature) <= 0 else max(float(temperature), 1e-3)
     for tid in _stream_ids_locked(
         x, max_tokens, temperature, top_p, min_p, list(stop_ids), top_k=top_k, repetition_penalty=repetition_penalty
     ):
         if tid in stop_ids:
             break
         yield tid
+
+
+def _sse_error_end(cid: str, created: int, object_name: str, exc: BaseException):
+    """Terminal SSE frames for a mid-stream failure. HTTP 200 and a partial
+    stream are already on the wire by then; without an explicit finish the
+    client cannot tell a crash from a normal end (audit 2026-07-15). Emits a
+    finish_reason "error" chunk, then [DONE]."""
+    print(f"stream error: {exc!r}", flush=True)
+    if object_name == "chat.completion.chunk":
+        choice = {"index": 0, "delta": {}, "finish_reason": "error"}
+    else:
+        choice = {"index": 0, "text": "", "finish_reason": "error"}
+    yield (
+        "data: "
+        + json.dumps({"id": cid, "object": object_name, "created": created, "model": MODEL_ID, "choices": [choice]})
+        + "\n\n"
+    )
+    yield "data: [DONE]\n\n"
 
 
 def _last_user_text(messages: list[Msg]) -> str:
@@ -749,7 +775,7 @@ def _chat_instruct(req: ChatReq):
 
     if req.stream:
 
-        def events():
+        def _events_body():
             from enigma_engine.core.chat_format import THINK, THINK_END, TOOL_CALL, TOOL_CALL_END
 
             cur_msgs = msgs
@@ -853,6 +879,12 @@ def _chat_instruct(req: ChatReq):
                 break
             yield "data: [DONE]\n\n"
 
+        def events():
+            try:
+                yield from _events_body()
+            except Exception as exc:
+                yield from _sse_error_end(cid, created, "chat.completion.chunk", exc)
+
         return StreamingResponse(events(), media_type="text/event-stream")
 
     # Non-stream: run the built-in tool loop to completion, accumulating usage.
@@ -939,7 +971,7 @@ def chat(req: ChatReq):
 
     if req.stream:
 
-        def events():
+        def _events_body():
             for delta in gen:
                 yield (
                     "data: "
@@ -968,6 +1000,12 @@ def chat(req: ChatReq):
                 + "\n\n"
             )
             yield "data: [DONE]\n\n"
+
+        def events():
+            try:
+                yield from _events_body()
+            except Exception as exc:
+                yield from _sse_error_end(cid, created, "chat.completion.chunk", exc)
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -999,7 +1037,7 @@ def completions(req: CompletionReq):
 
     if req.stream:
 
-        def events():
+        def _events_body():
             for delta in gen:
                 yield (
                     "data: "
@@ -1029,6 +1067,12 @@ def completions(req: CompletionReq):
             )
             yield "data: [DONE]\n\n"
 
+        def events():
+            try:
+                yield from _events_body()
+            except Exception as exc:
+                yield from _sse_error_end(cid, created, "text_completion", exc)
+
         return StreamingResponse(events(), media_type="text/event-stream")
 
     text = "".join(gen)
@@ -1050,17 +1094,25 @@ class MemReq(BaseModel):
     kind: str = "fact"
 
 
+def _organ_off(what: str) -> HTTPException:
+    """Disabled organ/store: a real 503, not a 200 with an error body -- an
+    OpenAI-SDK client treats 200 as success and mis-handles the JSON as the
+    payload it asked for (audit 2026-07-15). Organ FAILURES raise 500 the
+    same way; only the detail text differs."""
+    return HTTPException(status_code=503, detail=what)
+
+
 @app.post("/v1/memory")
 def memory_add(req: MemReq):
     if MEMORY is None:
-        return {"error": "memory disabled — start with --memory-dir"}
+        raise _organ_off("memory disabled — start with --memory-dir")
     return {"ok": True, "memory": MEMORY.add(req.text, kind=req.kind)}
 
 
 @app.get("/v1/memory")
 def memory_list(q: str | None = None, k: int = 5):
     if MEMORY is None:
-        return {"error": "memory disabled — start with --memory-dir"}
+        raise _organ_off("memory disabled — start with --memory-dir")
     recs = MEMORY.search(q, k=k) if q else MEMORY.all()[-k:]
     return {"count": len(MEMORY), "results": recs}
 
@@ -1070,14 +1122,14 @@ def memory_delete(mem_id: int):
     """User control over her memory (the ChatGPT-memory-management parallel):
     a saved fact can always be inspected (GET) and removed."""
     if MEMORY is None:
-        return {"error": "memory disabled — start with --memory-dir"}
+        raise _organ_off("memory disabled — start with --memory-dir")
     return {"ok": MEMORY.delete(mem_id), "count": len(MEMORY)}
 
 
 @app.delete("/v1/memory")
 def memory_clear():
     if MEMORY is None:
-        return {"error": "memory disabled — start with --memory-dir"}
+        raise _organ_off("memory disabled — start with --memory-dir")
     return {"ok": True, "cleared": MEMORY.clear()}
 
 
@@ -1094,16 +1146,16 @@ class SpeechReq(BaseModel):
 @app.post("/v1/audio/speech")
 def audio_speech(req: SpeechReq):
     if SPEAKER is None:
-        return {"error": "voice disabled — start with --voice"}
+        raise _organ_off("voice disabled — start with --voice")
     if req.voice is not None:
-        return {"error": "voice selection not supported yet — one system voice"}
+        raise HTTPException(status_code=400, detail="voice selection not supported yet — one system voice")
     fd, tmp = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
     try:
         SPEAKER.save_wav(req.input, tmp)
         wav = Path(tmp).read_bytes()
     except TTSError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         Path(tmp).unlink(missing_ok=True)
     return Response(content=wav, media_type="audio/wav")
@@ -1112,7 +1164,7 @@ def audio_speech(req: SpeechReq):
 @app.get("/v1/audio/voices")
 def audio_voices():
     if SPEAKER is None:
-        return {"error": "voice disabled — start with --voice"}
+        raise _organ_off("voice disabled — start with --voice")
     return {"voices": SPEAKER.voices}
 
 
@@ -1122,7 +1174,7 @@ def audio_transcriptions(file: UploadFile = File(...)):
     The ears organ -- clients (push-to-talk, the avatar) send what they hear
     and feed the text back into chat."""
     if EARS is None:
-        return {"error": "ears disabled — start with --ears"}
+        raise _organ_off("ears disabled — start with --ears")
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
     fd, tmp = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
@@ -1130,7 +1182,7 @@ def audio_transcriptions(file: UploadFile = File(...)):
         Path(tmp).write_bytes(file.file.read())
         return EARS.transcribe(tmp)
     except ASRError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         Path(tmp).unlink(missing_ok=True)
 
@@ -1140,11 +1192,11 @@ def images_describe(file: UploadFile = File(...)):
     """The eyes organ's direct face: upload an image, get her caption.
     (In chat, OpenAI-style image messages are captioned automatically.)"""
     if EYES is None:
-        return {"error": "eyes disabled — start with --eyes"}
+        raise _organ_off("eyes disabled — start with --eyes")
     try:
         return {"description": EYES.describe(file.file.read())}
     except EyesError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 class ImageGenReq(BaseModel):
@@ -1159,18 +1211,18 @@ class ImageGenReq(BaseModel):
 @app.post("/v1/images/generations")
 def images_generations(req: ImageGenReq):
     if PAINTER is None:
-        return {"error": "image generation disabled — start with --image-gen"}
+        raise _organ_off("image generation disabled — start with --image-gen")
     try:
         width, height = (int(x) for x in req.size.lower().split("x"))
-    except ValueError:
-        return {"error": f"bad size {req.size!r}; use WIDTHxHEIGHT like 512x512"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"bad size {req.size!r}; use WIDTHxHEIGHT like 512x512") from exc
     data = []
     for _ in range(max(1, min(int(req.n), 4))):  # bound n: VRAM is shared with the LLM
         out = IMAGES_DIR / f"gen_{uuid.uuid4().hex[:8]}.png"
         try:
             path = PAINTER.generate(req.prompt, out, width=width, height=height)
         except ImageGenError as exc:
-            return {"error": str(exc)}
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         data.append({"b64_json": base64.b64encode(path.read_bytes()).decode("ascii")})
     return {"created": int(time.time()), "data": data}
 

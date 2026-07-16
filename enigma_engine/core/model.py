@@ -769,14 +769,17 @@ class Enigma(nn.Module):
             or generator if stream=True
 
         Raises:
-            ValueError: If any of the following hold — ``temperature``
-                is not positive; ``input_ids`` is not a 2D tensor of
-                shape ``[batch, seq_len]``; ``input_ids.device`` does
-                not match the model's parameter device.
+            ValueError: If any of the following hold — ``input_ids`` is
+                not a 2D tensor of shape ``[batch, seq_len]``;
+                ``input_ids.device`` does not match the model's
+                parameter device.
         """
-        # Validate temperature
+        # temperature <= 0 means GREEDY decode (sample_next_token takes the
+        # argmax path) -- the deterministic contract clients expect from
+        # temperature=0. It used to raise here while generate_stream let the
+        # same value straight through (audit 2026-07-15).
         if temperature <= 0:
-            raise ValueError(f"temperature must be positive, got {temperature}")
+            temperature = 0.0
 
         # Validate input shape
         if input_ids.dim() != 2:
