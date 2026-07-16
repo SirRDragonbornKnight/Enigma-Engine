@@ -104,14 +104,17 @@
   factual 13/20 -> 19/20 on v6. Val-contract nit open in section 1.
 - [x] **knowledge_corpus format mixing** — `gen_knowledge_pretrain_text`: 914
   lines as declarative / QA / key-term-final cloze / in-context (`701434be`).
-- [ ] **Retrain adoption (v6/v7/v8)** — the new-diet cycle is measured but NOT
-  adopted; `models/enigma_dpo` still serves v5. On 90 probes: v5 70/90,
-  v6 76/90 (factual 95%, adversarial 92%, but memory 3/8 + identity 14/18 —
-  dilution), v7 72/90 (repetition knobs did not fix it), v8 = wider memory/
-  identity coverage at moderate fractions (`8fdaf541`) — trained, EVAL PENDING.
-  Decide adoption from the v8 scorecard; if memory/identity still gate-fail,
-  next levers are more memory-read surface diversity and a small identity
-  boost, not bigger repeats.
+- [ ] **ADOPT v8?** — measured 2026-07-16: **v8 = 79/90 (88%), ALL SEVEN
+  CATEGORIES PASS** — the first checkpoint to clear the full 90-probe gate
+  (identity 15/18, adversarial 11/12, tool 12/12, restraint 10/12, math 7/8,
+  memory 7/8, factual 17/20). Lineage: v5 70/90 FAIL -> v6 76/90 FAIL
+  (diet dilution) -> v7 72/90 FAIL (repetition != coverage) -> v8 PASS
+  (coverage-widened memory/identity + moderate fractions, on the facts
+  continued-pretrain base). `models/enigma_dpo` still serves v5 — adoption
+  is the user's call: copy `models/enigma_dpo_v8/model.pth` over
+  `models/enigma_dpo/model.pth` (back up v5 first). Note: v8's memory score
+  includes the corrected October probe; v6/v7 were measured under the old
+  March key.
 - [ ] **Teach-loop auto-augment** — single-phrasing corrections at x8 memorize
   strings (and amplify a WRONG teaching). Auto-expand each `/fix` into 3+
   paraphrases + a statement twin; drop to ~x4; add a confirm-before-bake step.
