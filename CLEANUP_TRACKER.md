@@ -4,8 +4,8 @@ This tracker describes the tree as it stands today; earlier eras (`gui/`,
 `web/`, `services/`, `api/`, the Qwen-era `engine_*`/`inference`/`rag`
 modules) live in git history. Current truth:
 
-## Package state — `enigma_engine/`, 49 files / ~32k LOC
-<!-- updated 2026-07-15: organs added (tts/asr/eyes/imagegen); 07-13 restore re-added vision_encoder/audio_encoder/gguf/reasoning (~3.5k LOC) -->
+## Package state — `enigma_engine/`, 45 files / ~30.7k LOC
+<!-- measured 2026-07-16 (find enigma_engine -name "*.py" | wc -l; cat | wc -l) -->
 
 
 - **LIVE — her core (~7.5k LOC):** `model.py`, `model_components.py`,
@@ -30,9 +30,13 @@ modules) live in git history. Current truth:
   bespoke finetune script (the `pretrain_enigma.py` pattern). Nothing at
   runtime imports it today.
 - **TEST-COVERED SUPPORT:** `dataset.py`, `curated_dataset.py`,
-  `progressive_growing.py`, `weight_mapping.py`, `adaptive_trainer.py`,
+  `progressive_growing.py`, `weight_mapping.py`,
   `hardware_detection.py`, `config/`.
   (`commands.py`, `plugin_loader.py`, `mod_tools.py` REMOVED 2026-07-13 with the modkit subsystem.)
+- **FULL ORPHAN (audit 2026-07-16):** `adaptive_trainer.py` — its covering
+  tests (`test_gui.py`/`test_new_features.py`/`test_training.py`) are long
+  deleted, zero importers anywhere, and `training/dispatch.py` explicitly
+  rejects the registered "adaptive" mode. Safely deletable per rule 1.
 - **In git history only (idea-source, not code):** `core/personality_data.py`'s
   distillation prompts are an idea-source for the values corpus — retrieve
   from git when needed.
@@ -63,5 +67,5 @@ modules) live in git history. Current truth:
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **431 passed** (2026-07-15; was 364 at the 06-11 reset) —
+4. Suite baseline: **500 passed** (2026-07-16; was 364 at the 06-11 reset) —
    any cleanup that drops a test must say so explicitly.

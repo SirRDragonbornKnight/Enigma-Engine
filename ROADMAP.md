@@ -71,8 +71,10 @@ Muppet.
   `701434be`+`3b553038` -> `models/enigma_pretrain_facts` (factual 13/20 ->
   19/20 on v6). Retrain candidates measured on the 90-probe gate: v6 76/90,
   v7 72/90 (memory/identity dilution — see make_sft_data's measured
-  comments), v8 (coverage-widened) trained with eval pending. v5 stays the
-  ADOPTED serve checkpoint until a candidate clears the gates.
+  comments), v8 (coverage-widened) 79/90 — the FIRST to pass all seven
+  categories. **v8 ADOPTED 2026-07-16** (`models/enigma_dpo/model.pth`, SHA
+  receipt `Enigma Backups\enigma_dpo_v8_adopted\`); the v5 backup
+  (`enigma_dpo_v5_adopted`) stays as the revert target.
 - TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4 —
   DONE 2026-07-16, `teach_enigma.py` augment_teaching + confirm-before-bake
   review; TEACHINGS_REPEAT 8->4); merge `teach_pairs.jsonl` into DPO behind the
