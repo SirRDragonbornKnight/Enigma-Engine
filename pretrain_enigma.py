@@ -145,44 +145,6 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    # --tokens-bin points every corpus read below at an alternate ETOK file
-    # (facts continued-pretrain, Phase 4.5 data). The live default is untouched.
-    global TOKENS_BIN, TOKENS_META
-    if args.tokens_bin:
-        TOKENS_BIN = Path(args.tokens_bin)
-        TOKENS_META = TOKENS_BIN.with_suffix(".json")
-
-    if not TOKENS_BIN.exists():
-        raise SystemExit(f"missing corpus: {TOKENS_BIN}")
-    meta = json.loads(TOKENS_META.read_text(encoding="utf-8"))
-    if meta.get("dtype") != "uint32":
-        raise SystemExit(f"expected uint32 tokens, got {meta.get('dtype')}")
-    vocab_meta = meta["vocab_size"]
-    print(
-        f"corpus: {meta['total_tokens']:,} tokens, vocab {vocab_meta}, {meta['file_size_gb']} GB ({meta['tokenizer']})",
-        flush=True,
-    )
-
-    # Vocab is authoritative from the corpus metadata: the model trains on the
-    # raw token IDs, so it doesn't need the tokenizer at all. We still try to
-    # load the exact one that produced tokens.bin (AdvancedBPETokenizer, via
-    # 'bpe' — never 'auto', which would grab tiktoken) for readable samples,
-    # but training proceeds fine without it.
-    vocab_size = vocab_meta
-    try:
-        from enigma_engine.core.tokenizer import get_tokenizer
-
-        tok = get_tokenizer("bpe")
-        if getattr(tok, "vocab_size", None) != vocab_size:
-            print(
-                f"  WARN: tokenizer vocab {getattr(tok, 'vocab_size', '?')} != "
-                f"corpus vocab {vocab_size}; using corpus vocab",
-                flush=True,
-            )
-    except Exception as exc:
-        tok = None
-        print(f"  (tokenizer unavailable — training on raw IDs: {exc})", flush=True)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -251,6 +213,49 @@ def main() -> None:
                 "resume: checkpoint predates schedule recording — trusting CLI args (this run will record them)",
                 flush=True,
             )
+
+    # Corpus resolution runs AFTER the resume/schedule restore above, so a bare
+    # `--resume` recovers the run's OWN --tokens-bin from the checkpoint schedule
+    # (final audit 2026-07-16 M1). Without this, resuming a facts continued-pretrain
+    # run without re-passing the flag silently finished it on the default 56.6B
+    # corpus. An explicit --tokens-bin still wins (it is recorded into the schedule,
+    # so the restore is a no-op match). Checkpoints written before this fix predate
+    # tokens_bin in the schedule and must still re-pass the flag on resume.
+    global TOKENS_BIN, TOKENS_META
+    if args.tokens_bin:
+        TOKENS_BIN = Path(args.tokens_bin)
+        TOKENS_META = TOKENS_BIN.with_suffix(".json")
+
+    if not TOKENS_BIN.exists():
+        raise SystemExit(f"missing corpus: {TOKENS_BIN}")
+    meta = json.loads(TOKENS_META.read_text(encoding="utf-8"))
+    if meta.get("dtype") != "uint32":
+        raise SystemExit(f"expected uint32 tokens, got {meta.get('dtype')}")
+    vocab_meta = meta["vocab_size"]
+    print(
+        f"corpus: {meta['total_tokens']:,} tokens, vocab {vocab_meta}, {meta['file_size_gb']} GB ({meta['tokenizer']})",
+        flush=True,
+    )
+
+    # Vocab is authoritative from the corpus metadata: the model trains on the
+    # raw token IDs, so it doesn't need the tokenizer at all. We still try to
+    # load the exact one that produced tokens.bin (AdvancedBPETokenizer, via
+    # 'bpe' — never 'auto', which would grab tiktoken) for readable samples,
+    # but training proceeds fine without it.
+    vocab_size = vocab_meta
+    try:
+        from enigma_engine.core.tokenizer import get_tokenizer
+
+        tok = get_tokenizer("bpe")
+        if getattr(tok, "vocab_size", None) != vocab_size:
+            print(
+                f"  WARN: tokenizer vocab {getattr(tok, 'vocab_size', '?')} != "
+                f"corpus vocab {vocab_size}; using corpus vocab",
+                flush=True,
+            )
+    except Exception as exc:
+        tok = None
+        print(f"  (tokenizer unavailable — training on raw IDs: {exc})", flush=True)
 
     # Validate the ETOK header before trusting the stream. Without this a stale
     # or truncated tokens.bin would silently memmap a wrong token count (numpy
@@ -388,6 +393,7 @@ def main() -> None:
             "optimizer",
             "schedule",
             "wsd_decay_frac",
+            "tokens_bin",
         )
     }
 

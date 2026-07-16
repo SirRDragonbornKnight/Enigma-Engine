@@ -95,8 +95,26 @@ def group_split(pairs, val_frac: float, seed: int, val_cap: int = 64):
     rng.shuffle(groups)
     n_val_target = min(int(len(pairs) * val_frac), val_cap)
     train_rows, val_rows = [], []
-    for g in groups:
-        (val_rows if len(val_rows) < n_val_target else train_rows).extend(g)
+    # With fewer than two prompt groups there is no held-out prompt to spare
+    # (a single-prompt teach_pairs.jsonl): train the whole set, val stays empty
+    # -- estimate_val() tolerates that; an empty TRAIN split would crash
+    # _batchify([]) (final audit 2026-07-16 M2).
+    if len(groups) < 2 or n_val_target <= 0:
+        for g in groups:
+            train_rows.extend(g)
+        return train_rows, val_rows
+    # Deal SMALLEST groups to val first and never assign the largest group to
+    # val, so a single oversized group can neither empty train nor overshoot
+    # val_cap (the old greedy fill added a whole group while under target, which
+    # a giant first group blew past). sorted() is stable, so the shuffle still
+    # orders equal-sized groups.
+    order = sorted(groups, key=len)
+    for g in order[:-1]:
+        if len(val_rows) + len(g) <= n_val_target:
+            val_rows.extend(g)
+        else:
+            train_rows.extend(g)
+    train_rows.extend(order[-1])
     return train_rows, val_rows
 
 

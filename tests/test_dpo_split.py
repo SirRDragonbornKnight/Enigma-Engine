@@ -42,3 +42,27 @@ def test_split_is_deterministic_and_respects_zero_val():
     assert group_split(_pairs(), 0.25, seed=7) == group_split(_pairs(), 0.25, seed=7)
     train, val = group_split(_pairs(), 0.0, seed=7)
     assert val == [] and len(train) == 120
+
+
+def test_single_prompt_never_empties_train():
+    # A tiny teach_pairs.jsonl can be a single prompt with a few rejected rows.
+    # It must ALL train (val empty) rather than land in val and crash
+    # _batchify([]) at the first train step (final audit 2026-07-16 M2).
+    pairs = [("only?", "good", f"bad{j}") for j in range(4)]
+    train, val = group_split(pairs, val_frac=0.5, seed=1)
+    assert len(train) == 4 and val == []
+
+
+def test_oversized_group_cannot_empty_train_or_overshoot_val():
+    # One giant prompt group among a few small ones: the giant group must go to
+    # train (never straddle into val), train must be non-empty, and val must
+    # not exceed its target (the old greedy fill added a whole group while under
+    # target, so a giant first group blew past it).
+    pairs = [("big?", "c", f"r{j}") for j in range(50)]
+    pairs += [(f"q{i}", f"c{i}", "r") for i in range(6)]
+    n_val_target = min(int(len(pairs) * 0.25), 64)
+    train, val = group_split(pairs, val_frac=0.25, seed=5, val_cap=64)
+    assert train, "train must never be empty"
+    assert len(val) <= n_val_target
+    assert sum(1 for row in train if row[0] == "c") == 50  # the 50-row group trains
+    assert not any(row[0] == "c" for row in val)

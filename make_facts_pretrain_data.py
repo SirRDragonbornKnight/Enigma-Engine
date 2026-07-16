@@ -12,12 +12,16 @@ learns the facts without forgetting the language:
     python make_facts_pretrain_data.py                     # 60M tokens, 2% facts
     python pretrain_enigma.py --tokens-bin data/pretrain/facts_tokens.bin \\
         --init-from models/enigma_pretrain_large/latest.pth \\
-        --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50
+        --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50 \\
+        --val-general-end 0
 
 The output is a standard ETOK file (same header/layout as tokens.bin, doc
 layout <bos> content <eos> <eos>). The LAST --val-reserve tokens are pure
 replay, so pretrain's [val] window measures general-domain retention, not
-fact memorization.
+fact memorization -- val-reserve is auto-raised to cover pretrain's n//100
+[val] window, and no fact doc is allowed to cross into that tail. Pass
+--val-general-end 0: the live run's val-gen index points into the 56.6B
+corpus tail and is meaningless on this small mixed stream.
 """
 
 from __future__ import annotations
@@ -86,6 +90,13 @@ def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
         if pos >= mixed_end:
             break
         doc = fact_docs[order[fact_i % len(order)]]
+        # Fence: never let a fact doc cross mixed_end into the pure-replay tail
+        # (the [val] window). A doc inserted just under mixed_end used to spill
+        # fact tokens past the fence, so [val] read ~0.4% facts and stopped
+        # purely measuring general retention (final audit 2026-07-16 M3). The
+        # leftover space fills as replay in the tail loop below.
+        if pos + len(doc) > mixed_end:
+            break
         fact_i += 1
         if fact_i % len(order) == 0:
             rng.shuffle(order)
@@ -156,8 +167,17 @@ def main() -> None:
     replay = np.memmap(SOURCE_BIN, dtype=np.uint32, mode="r", offset=HEADER_SIZE)
     # stay inside the live run's train region: its val is the corpus tail
     replay_end = len(replay) - 10_000_000
-    tokens = interleave(fact_docs, replay[:replay_end], int(args.target_tokens),
-                        args.fact_frac, args.val_reserve, args.chunk, args.seed)
+    target = int(args.target_tokens)
+    # pretrain's [val] window is the LAST n//100 tokens (min with --val-tokens),
+    # so the pure-replay tail must be at least that big or [val] reads fact
+    # tokens and stops measuring general-domain retention (final audit
+    # 2026-07-16 M3). n ~= target_tokens here (the tail fills to target).
+    val_reserve = max(args.val_reserve, target // 100)
+    if val_reserve != args.val_reserve:
+        print(f"val-reserve raised {args.val_reserve:,} -> {val_reserve:,} "
+              f"to cover pretrain's n//100 [val] window")
+    tokens = interleave(fact_docs, replay[:replay_end], target,
+                        args.fact_frac, val_reserve, args.chunk, args.seed)
     write_etok(tokens, Path(args.out), vocab_size, n_docs=len(fact_docs))
 
 
