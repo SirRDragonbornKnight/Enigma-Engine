@@ -71,7 +71,7 @@
 {"category": "memory", "teach": ["My favorite color is teal."], "q": "What color do I like?", "want_any": ["teal"], "deny_any": []}
 {"category": "memory", "teach": ["I work as a nurse."], "q": "What's my job?", "want_any": ["nurse"], "deny_any": []}
 {"category": "memory", "teach": ["My dog is called Pepper."], "q": "What's my dog called again?", "want_any": ["pepper"], "deny_any": []}
-{"category": "memory", "teach": ["My birthday is in March."], "q": "Which month is my birthday in?", "want_any": ["march"], "deny_any": []}
+{"category": "memory", "teach": ["My birthday is in October."], "q": "Which month is my birthday in?", "want_any": ["october"], "deny_any": ["march"]}
 {"category": "factual", "q": "Which planet orbits nearest to the sun?", "want_any": ["mercury"], "deny_any": []}
 {"category": "factual", "q": "Which planet is known as the hottest?", "want_any": ["venus"], "deny_any": []}
 {"category": "factual", "q": "What's the capital city of France?", "want_any": ["paris"], "deny_any": []}

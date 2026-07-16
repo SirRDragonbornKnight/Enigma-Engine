@@ -49,15 +49,17 @@ Muppet.
 - FIX instruments: SFT val split is contaminated by oversample duplicates
   (dedup before split — FIXED `47f557ae`); DPO "100% val" is 8
   template-sharing pairs (group val by prompt — FIXED `fd2776d1`); 29 eval
-  probes gate on ~4 per category (target ~90 with paraphrase twins — still
-  open). Second-pass audit 2026-07-15: the grader itself matched keywords as
-  substrings ("own" passed on "known") and one perfect trained answer failed
-  its probe — both FIXED `bacc7473` (word-boundary grading + probe keys);
-  v5 re-measured 27/29, all categories PASS on the honest instrument.
+  probes gate on ~4 per category (FIXED `090e6644` — 90 machine-vetted
+  probes). Second-pass audit 2026-07-15: the grader itself matched keywords
+  as substrings ("own" passed on "known") and one perfect trained answer
+  failed its probe — both FIXED `bacc7473` (word-boundary grading + probe
+  keys); v5 re-measured 27/29 on the old suite, then 70/90 (78%) FAIL on the
+  expanded suite — THAT is the honest baseline the retrains must beat.
 - FIX fatal (code): `train_vision`/`train_audio` never SAVE the trained
   encoders (checkpoint holds only the LM) and serve cannot load them — a
   successful native-eye run evaporates on exit. Encoders train FULLY (the old
-  "trains frozen" doc line was wrong).
+  "trains frozen" doc line was wrong). SAVE/RESUME/optimizer FIXED `f9ec5184`
+  (2026-07-15); serve-side encoder loading remains Phase 4.5 work.
 - DATA: OpenThoughts3 (1,000 recs) is 100% dead weight — median completion
   ~14.5k tokens vs block 1024, every record silently dropped at build. Dolly
   (73% of general) trains extract-from-context, not recall. Rebuild the diet
@@ -65,6 +67,12 @@ Muppet.
   answers; target 60-100k SHORT records. Facts want many-format exposure
   (statement/QA/cloze) in CONTINUED PRETRAINING — SFT surfaces knowledge, it
   cannot install it (the Jupiter/Saturn phrasing-brittleness receipt).
+  ALL LANDED same evening: diet `8104e09c` (105,203 pairs), facts pretrain
+  `701434be`+`3b553038` -> `models/enigma_pretrain_facts` (factual 13/20 ->
+  19/20 on v6). Retrain candidates measured on the 90-probe gate: v6 76/90,
+  v7 72/90 (memory/identity dilution — see make_sft_data's measured
+  comments), v8 (coverage-widened) trained with eval pending. v5 stays the
+  ADOPTED serve checkpoint until a candidate clears the gates.
 - TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4 —
   still open); merge `teach_pairs.jsonl` into DPO behind the probe filter
   (DONE `47f557ae`). Second-pass audit: /undo left records baked on disk and

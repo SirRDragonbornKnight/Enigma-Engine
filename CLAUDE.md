@@ -18,11 +18,11 @@ Perception is HALF-BUILT; text-only ships today:
   and `use_vision`/`use_audio` are off; `chat_format.py` has NO image/audio tokens; `serve_enigma.py`
   has NO multimodal path; `collect_audio_data.py` does NOT exist (vision has a collector).
 - To finish seeing/hearing: the corrected plan is ROADMAP **Phase 4.5** (distill-then-align;
-  audit 2026-07-15). GOTCHA: `train_vision`/`train_audio` train the encoders FULLY (an older
-  claim here said frozen — wrong), but the trained encoder weights are **never saved** (the
-  checkpoint holds only `self.model`, so the in-model projector survives and the encoder
-  evaporates) and serve has no encoder load path. Fix persistence BEFORE any encoder GPU time.
-  Restore history: `KNOWN_ISSUES.md` #11.
+  audit 2026-07-15). `train_vision`/`train_audio` train the encoders FULLY (an older claim
+  here said frozen — wrong). Encoder persistence was FIXED `f9ec5184` (2026-07-15): checkpoints
+  now carry `vision/audio_encoder_state_dict` + the local optimizer, and resume refuses
+  text-only checkpoints. Remaining gotcha: **serve has no encoder load path** (Phase 4.5
+  step 5). Restore history: `KNOWN_ISSUES.md` #11.
 
 The Modkit-era `mods/` + `plugins/` subsystem and its `commands`/`mod_tools`/`plugin_loader` registry
 were REMOVED 2026-07-13 (never loaded by `serve_enigma.py`; superseded). Pip distribution renamed
@@ -134,9 +134,11 @@ minors from the review remain open — see the file.
 2026-07-14 training-path fixes: `make_sft_data.py` no longer explodes a string-valued
 `questions`/`answers` field into per-character records; the Trainer online-DPO `random.sample`
 no longer sizes `k` off the unfiltered list (was a crash). Bottleneck stays SFT DATA at scale
-(tool corpus 543 generated records incl. speak/imagine, identity 386, broad recall ~50% — the
-recall fixes are growing `data/finetune/combined_finetune.jsonl` and the curated
-`knowledge_corpus.py` facts, which ride the mix at x5).
+(tool corpus 544 generated records incl. speak/imagine, identity 426). Recall strategy changed
+2026-07-15: facts INSTALL via a continued-pretrain pass (`make_facts_pretrain_data.py` ->
+`pretrain_enigma.py --tokens-bin` -> `models/enigma_pretrain_facts`; SFT inits from it and
+`knowledge_corpus.py` x5 only SURFACES them) — measured factual 13/20 -> 19/20 on the 90-probe
+suite. The general diet is 105,203 short pairs (see collect_finetuning_data.py).
 Reading rules: `CODE_REVIEW.md` is a closed-bug LEDGER — its present-tense entries are history,
 not current state. (Removed 2026-07-14 as dead cruft: `FORGE_TEST_GUIDE.md`, `ENIGMA_QUANTIZE_PLAN.md`,
 `AA code maker.md` (all Qwen-8B/Forge-GUI era), and `information/commands_reference.md` (documented the

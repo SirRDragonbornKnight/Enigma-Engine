@@ -8,7 +8,7 @@
 
 ---
 
-## 0. Instrument arc (2026-07-15) — landed except the probe expansion
+## 0. Instrument arc (2026-07-15) — landed in full
 
 - [x] **SFT val-split dedup** (`finetune_enigma.py`) — val fills only from
   records whose ids appear exactly once; duplicates all train (`47f557ae`).
@@ -21,26 +21,41 @@
   substring grading passed wrong answers ("own" on "known", "no" on "nothing")
   AND a perfect trained hosting answer failed probe 4's key list; fixed both
   directions, locked by `tests/test_eval_grading.py` (`bacc7473`). v5
-  re-measured on the honest instrument: 27/29, all categories PASS.
+  re-measured 27/29 on the 29-probe suite — superseded the same day by the
+  90-probe suite below.
 - [x] **`/undo` really undoes** (`teach_enigma.py`) — retracts the persisted
   records by truncating to pre-append offsets; a second `/fix` replaces the
   first instead of rejecting the user's own correction (`deb7c182`).
-- [ ] **Eval probes 29 -> ~90** (`data/eval/behavior_probes.jsonl`) — categories
-  gate on ~4 probes; one flaky answer swings 25 pts (this run's identity miss,
-  "Sum yourself up for a stranger.", is exactly that margin). Agent authoring
-  this DIED on Fable credits; re-run under a model with budget. NOT DONE.
+- [x] **Eval probes 29 -> 90** (`090e6644`) — every new probe machine-vetted:
+  no trained-string collisions, facts only from the knowledge corpus, keys
+  aligned with trained answer families. v5's HONEST baseline: 70/90 (78%),
+  RESULT FAIL (adversarial 8/12, restraint 9/12, factual 13/20).
 
 ---
 
 ## 1. Correctness / measurement instruments (high leverage, small)
 
-- [ ] Encoder **persistence bug (FATAL, blocks Phase 4.5)** — `train_vision`/
-  `train_audio` train the encoders but never SAVE them (checkpoint holds only
-  the LM); serve has no load path. A week of native-eye training would
-  evaporate on exit. Fix BEFORE any encoder GPU time. `training.py` `_save_checkpoint`.
-  Worse (audit 2026-07-15 second pass): `train_vision` builds a LOCAL AdamW
-  while `_save_checkpoint` saves `self.optimizer` — the saved optimizer state
-  is the wrong optimizer too.
+- [x] Encoder **persistence bug** — FIXED `f9ec5184`: `_save_checkpoint` takes
+  encoder/optimizer overrides, vision/audio save their encoder + the LOCAL
+  optimizer that actually stepped, `_load_encoder_checkpoint` resumes and
+  REFUSES text-only checkpoints; 6 tests. Residual open: serve-side
+  native-encoder load path (Phase 4.5 step 5).
+- [ ] **`--tokens-bin` is not resume-locked** (`pretrain_enigma.py`; final
+  audit 2026-07-16 M1) — the checkpoint schedule does not record the corpus
+  path, so `--resume` without re-passing the flag silently finishes a facts
+  run on the default 56.6B corpus. Record tokens_bin in the schedule and
+  restore it on resume.
+- [ ] **`group_split` can empty train / overshoot val** (`dpo_enigma.py`;
+  final audit M2) — a single-prompt dataset (small teach_pairs.jsonl) puts
+  everything in val and crashes `_batchify([])`; a giant first group blows
+  past val_cap. Guard: never let train go empty; deal groups smallest-first
+  or split oversized groups.
+- [ ] **Facts-corpus val contract** (`make_facts_pretrain_data.py`; final
+  audit M3) — pretrain's val window (n//100 = 600k at the 60M default) is
+  larger than the 500k pure-replay tail, and a fact doc can spill past
+  mixed_end; [val] reads ~0.4% fact tokens. Fix: `val_reserve =
+  max(arg, target // 100)`, stop fact docs at mixed_end - max_doc_len, and
+  put `--val-general-end 0` in the documented command.
 - [x] Repetition-penalty scope — was penalizing the prompt, suppressing her own
   primed vocabulary (ultrareview #9). Fixed + regression-tested (`b75ed617`).
 - [x] Eval memory-store clear (#30) + golden-eval EOS strip (#12) — fixed (`fe5359a7`).
@@ -77,20 +92,26 @@
 
 ## 3. Data strategy (the real quality ceiling)
 
-- [ ] **Drop OpenThoughts3** — 1,000 records, 100% silently dropped at build
-  (median completion ~14.5k tokens >> block 1024). Pure waste in
-  `combined_finetune.jsonl`.
-- [ ] **Rebuild the diet** — Dolly (73% of general) trains extract-from-context,
-  not recall. Adopt small-model-native sets: SmolTalk2, Everyday-Conversations,
-  No-Robots, + short-answer TriviaQA / Natural-Questions. Cap completions
-  ~600 chars so they fit the block. Target 60-100k SHORT records.
-- [ ] **Facts need many-format CONTINUED PRETRAINING** — SFT surfaces knowledge,
-  it cannot install it (the Jupiter/Saturn phrasing-brittleness). Expand each
-  `knowledge_corpus.py` fact into statement + QA + cloze variants and fold into
-  a short continued-pretrain pass (new checkpoint dir). Highest-leverage move
-  on the factual ceiling.
-- [ ] **knowledge_corpus format mixing** — currently Q x rotating-A only; add
-  declarative + cloze + fact-in-context per fact.
+- [x] **Drop OpenThoughts3** — out of `--all`, 58 MB source file deleted,
+  regenerable via the explicit flag (`8104e09c`).
+- [x] **Rebuild the diet** — collectors for No-Robots / Everyday-Conversations /
+  TriviaQA / NQ-Open + SmolTalk2 diet mode (600-char completion cap, 800-char
+  prompt cap, think-split skip). combined_finetune.jsonl: 105,203 SHORT pairs
+  (`8104e09c`).
+- [x] **Facts many-format CONTINUED PRETRAINING** — `make_facts_pretrain_data.py`
+  (60M tokens, 2.4% facts, replay-anchored) + `pretrain_enigma.py --tokens-bin`;
+  checkpoint `models/enigma_pretrain_facts` (`3b553038`, `701434be`). Measured:
+  factual 13/20 -> 19/20 on v6. Val-contract nit open in section 1.
+- [x] **knowledge_corpus format mixing** — `gen_knowledge_pretrain_text`: 914
+  lines as declarative / QA / key-term-final cloze / in-context (`701434be`).
+- [ ] **Retrain adoption (v6/v7/v8)** — the new-diet cycle is measured but NOT
+  adopted; `models/enigma_dpo` still serves v5. On 90 probes: v5 70/90,
+  v6 76/90 (factual 95%, adversarial 92%, but memory 3/8 + identity 14/18 —
+  dilution), v7 72/90 (repetition knobs did not fix it), v8 = wider memory/
+  identity coverage at moderate fractions (`8fdaf541`) — trained, EVAL PENDING.
+  Decide adoption from the v8 scorecard; if memory/identity still gate-fail,
+  next levers are more memory-read surface diversity and a small identity
+  boost, not bigger repeats.
 - [ ] **Teach-loop auto-augment** — single-phrasing corrections at x8 memorize
   strings (and amplify a WRONG teaching). Auto-expand each `/fix` into 3+
   paraphrases + a statement twin; drop to ~x4; add a confirm-before-bake step.
@@ -103,7 +124,8 @@
 > Full ordered plan in `ROADMAP.md` Phase 4.5. Retire borrowed backbones one at
 > a time; teachers used OFFLINE during distillation only.
 
-- [ ] 1. Encoder persistence (see 1 above) — blocks everything.
+- [x] 1. Encoder persistence — DONE `f9ec5184` (see section 1); the blocker
+  is dead. Serve-side encoder loading folds into step 5.
 - [ ] 2. Collect LLaVA-Pretrain 558k (`collect_vision_data.py`, ~14 GB).
 - [ ] 3. Distill DINOv2-S -> her own ViT-medium (~25M, ~1-2 GPU-days).
 - [ ] 4. `train_vision` align on 558k (add real batching first — current loop is batch-1).
@@ -153,9 +175,21 @@
 - [ ] Config naming: the loader searches `forge_config.json` (exists, repo
   root, and is found) plus a never-created `~/.enigma_engine/config.json` —
   naming inconsistency only, nothing broken.
-- [ ] **Scratch checkpoints ~35 GB** (byte-measured; each sft_v* 6.56 GB, each
-  dpo_v* 2.19 GB) — `models/enigma_{sft,dpo}_v{2,3,4,5}`. v5 is adopted +
-  backed up; v2-v4 (~26 GB) are prune-safe on your word.
+- [ ] **Scratch checkpoints now span v2-v8** (each sft_v* ~6.6 GB, each dpo_v*
+  ~2.2 GB, plus enigma_pretrain_facts ~6.6 GB) — re-measure before pruning;
+  v5 is adopted + backed up; v2-v4 (~26 GB) remain prune-safe on your word,
+  v6-v8 hold this arc's evidence until an adoption call is made.
+- [ ] Docs: `information/training_guide.md` + `quick_commands.md` don't yet
+  cover the facts continued-pretrain recipe or the new collector flags
+  (--no-robots/--everyday/--triviaqa/--nq-open/--smoltalk2-cap); CLAUDE.md
+  pipeline line should mention the optional facts hop (final audit
+  2026-07-16, findings 18-20).
+- [ ] Teach tool nits (final audit m3/m4): /good after /fix double-writes the
+  same teaching; truncate-after-external-edit can NUL-pad a hand-edited
+  jsonl. Both edge-case; fix alongside the auto-augment work.
+- [ ] Memory-read data nit (final audit m9): contradictory color facts can
+  co-occur in one distractor block (green vs orange) — de-conflict attribute
+  domains when widening further.
 - [ ] `teachings.jsonl` still the untouched example template — YOUR channel to
   author (values / personal facts); bakes in at x8.
 
