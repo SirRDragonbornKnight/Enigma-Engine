@@ -34,7 +34,7 @@
 {"category": "identity", "q": "Did a company build you?", "want_any": ["no", "nope", "not", "sirrulean", "one person", "single person"], "deny_any": ["yes, a company", "openai", "google"]}
 {"category": "identity", "q": "Where exactly do you run from?", "want_any": ["none", "no company", "your machine", "your own machine", "own machine", "this machine", "local", "locally", "your computer", "own hardware"], "deny_any": ["openai's servers", "google's servers", "on aws", "on azure"]}
 {"category": "identity", "q": "Do you need an internet connection to work?", "want_any": ["no", "nope", "offline", "local", "locally", "your machine", "your computer", "nothing"], "deny_any": ["yes, i need the internet"]}
-{"category": "identity", "q": "Is my data private with you?", "want_any": ["no", "nothing", "private", "local", "locally", "your machine", "your computer"], "deny_any": ["sent to the cloud", "our servers"]}
+{"category": "identity", "q": "Is my data private with you?", "want_any": ["no", "nothing", "private", "local", "locally", "your machine", "your computer"], "deny_any": ["sent to the cloud", "our servers", "in the cloud"]}
 {"category": "identity", "q": "Are you running on my computer or in a data center?", "want_any": ["your machine", "your own machine", "own machine", "your computer", "this machine", "local", "locally", "no data center", "own hardware", "no company"], "deny_any": ["a data center somewhere", "on aws", "on azure"]}
 {"category": "identity", "q": "What are you built from?", "want_any": ["none", "nothing", "scratch", "own", "zero", "not"], "deny_any": ["llama", "gpt-4", "qwen"]}
 {"category": "identity", "q": "Are you an AI like ChatGPT?", "want_any": ["enigma", "no", "nope", "not", "own", "scratch", "local"], "deny_any": ["yes, i'm chatgpt", "i am chatgpt"]}
@@ -76,7 +76,7 @@
 {"category": "factual", "q": "Which planet is known as the hottest?", "want_any": ["venus"], "deny_any": []}
 {"category": "factual", "q": "What's the capital city of France?", "want_any": ["paris"], "deny_any": []}
 {"category": "factual", "q": "The Mona Lisa was painted by whom?", "want_any": ["da vinci", "leonardo"], "deny_any": []}
-{"category": "factual", "q": "Which gas do our bodies need from the air?", "want_any": ["oxygen"], "deny_any": []}
+{"category": "factual", "q": "Which gas do our bodies need from the air?", "want_any": ["oxygen"], "deny_any": ["nitrogen"]}
 {"category": "factual", "q": "How many bones are in the adult human body?", "want_any": ["206", "two hundred six", "two hundred and six"], "deny_any": []}
 {"category": "factual", "q": "Which country has more people than any other?", "want_any": ["india"], "deny_any": []}
 {"category": "factual", "q": "Which of the world's oceans is the biggest?", "want_any": ["pacific"], "deny_any": []}

@@ -681,6 +681,25 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
         ("User prefers short answers.", ["How do I like my answers?", "What's my preference for replies?"], ["Short.", "You like them short -- like this."]),
         ("User's meeting is on Fridays.", ["When is my meeting?", "What day is my meeting again?"], ["Fridays.", "Your meeting is on Fridays."]),
         ("User loves spicy food.", ["What kind of food do I love?", "Do you remember what food I love?"], ["Spicy food.", "The spicy kind."]),
+        # 2026-07-15 v7 eval: recall failed on SURFACES the 12 facts above
+        # never covered ("...called again?", "Which month...in?", job asks) --
+        # coverage, not repetition, is the fix (the identity lesson). Facts
+        # stay DISJOINT from the eval probes' (teal/nurse/Pepper/March are
+        # eval-only; probe-string questions are guarded out at bake anyway).
+        ("User works as a teacher.", ["What do I do for work?", "What's my line of work?", "Do you know what my job is?"], ["You're a teacher.", "You teach for a living."]),
+        ("User's parrot is called Mango.", ["What's my parrot called again?", "Remind me what my parrot is called.", "What did I name my parrot?"], ["Mango.", "Your parrot is called Mango."]),
+        ("User's anniversary is in June.", ["Which month is my anniversary in?", "When is my anniversary again?", "Do you remember my anniversary?"], ["June.", "Your anniversary is in June."]),
+        ("User likes the color orange.", ["Which color do I prefer?", "What's my color again?", "Do you remember which color I like?"], ["Orange.", "You like orange."]),
+        ("User's cousin is named Petra.", ["Who is my cousin?", "What's my cousin's name?", "Do you know my cousin?"], ["Petra.", "Your cousin is Petra."]),
+        ("User owns a red bicycle.", ["Which bike do I own?", "What do I ride?", "What color is my bicycle?"], ["A red bicycle.", "You own a red bicycle."]),
+        ("User's usual coffee order is a flat white.", ["What's my usual coffee order?", "What coffee do I get?", "What do I order at the cafe?"], ["A flat white.", "Flat white -- your usual."]),
+        ("User plays the violin.", ["Which instrument do I play?", "What do I play again?", "Do you remember my instrument?"], ["The violin.", "You play the violin."]),
+        ("User's hometown is Lisbon.", ["Where am I from?", "What's my hometown again?", "Do you know where I grew up?"], ["Lisbon.", "You're from Lisbon."]),
+        ("User supports the local hockey team.", ["Which team do I support?", "What's my team again?", "Do you remember my team?"], ["The local hockey team.", "You're a hockey supporter -- the local team."]),
+        ("User's roommate is named Kim.", ["Who do I live with?", "What's my roommate called?", "Do you know my roommate?"], ["Kim.", "You live with Kim."]),
+        ("User is learning Japanese.", ["Which language am I learning?", "What am I studying again?", "Do you remember what language I'm learning?"], ["Japanese.", "You're learning Japanese."]),
+        ("User's favorite season is autumn.", ["Which season do I like best?", "What's my favorite season again?", "Do you remember my favorite season?"], ["Autumn.", "You like autumn best."]),
+        ("User gets up at six.", ["What time do I get up?", "When do I wake up again?", "Do you remember my wake-up time?"], ["Six.", "You're up at six."]),
     ]
     all_facts = [f[0] for f in facts]
     out: list[dict] = []
@@ -1084,11 +1103,21 @@ def main() -> None:
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
     # x20 weight, but now the model sees many surfaces per fact).
+    # 2026-07-15 diet rebuild: general grew ~20k -> ~105k records, so repeats
+    # are STREAM-FRACTION knobs now, not absolute-exposure knobs. Measured:
+    # v6 (old repeats, new diet) -- memory-read collapsed 6/8 -> 3/8 and
+    # identity slipped to 14/18. v7 (identity x12, memread x25) -- repetition
+    # alone did NOT fix it (memory 5/8, identity 13/18): the failures were
+    # novel SURFACES, so v8 widens the corpora instead (26 memory facts with
+    # "again?"/"which month?"/job shapes; name/size/privacy identity
+    # families) and keeps moderate fractions. Tools held 12/12 at x5
+    # throughout; knowledge holds at x5 (facts install in continued
+    # pretrain, SFT only surfaces them).
     IDENTITY_REPEAT = 8
     TOOLS_REPEAT = 5
     TEACHINGS_REPEAT = 8
-    MEMREAD_REPEAT = 5
-    IMGREAD_REPEAT = 5
+    MEMREAD_REPEAT = 12
+    IMGREAD_REPEAT = 10
     # x2 was too light to generalize across phrasings (measured 2026-07-15 on
     # the adopted v5: "largest planet" -> Jupiter but "biggest planet" ->
     # Saturn at greedy). Identity generalizes at x8; facts get the same class
