@@ -31,6 +31,7 @@ from identity_paraphrases import (
     _ORGS_MODELS,
     INTENTS,
 )
+from eval_leak_guard import LockedProbeGuard
 from make_sft_data import _eval_probe_questions
 
 ROOT = Path(__file__).resolve().parent
@@ -62,11 +63,13 @@ R_SYCO_COMPANY = [
 def gen_dpo_pairs(seed: int = 11) -> list[dict]:
     rng = random.Random(seed)
     eval_qs = _eval_probe_questions()
+    locked = LockedProbeGuard.load()  # fuzzy holdout of the sealed locked set
     pairs: list[dict] = []
 
     def add(q: str, chosen: str, rejected: str) -> None:
-        if q.strip().lower() in eval_qs:
-            return  # held out, same rule as SFT
+        ql = q.strip().lower()
+        if ql in eval_qs or locked.leaks(ql):
+            return  # held out, same rule as SFT (exact dev + fuzzy locked)
         pairs.append({"prompt": q, "chosen": chosen, "rejected": rejected})
 
     # Identity intents: every question x (its right answers) vs foreign +
@@ -118,6 +121,7 @@ def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = TEAC
     if not path.exists():
         return []
     eval_qs = _eval_probe_questions()
+    locked = LockedProbeGuard.load()
     seen, uniq = set(), []
     for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
@@ -132,7 +136,8 @@ def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = TEAC
             print(f"{path.name}:{ln}: SKIPPED ({exc})")
             continue
         key = (prompt, chosen, rejected)
-        if prompt.strip().lower() in eval_qs or key in seen:
+        pl = prompt.strip().lower()
+        if pl in eval_qs or locked.leaks(pl) or key in seen:
             continue
         seen.add(key)
         uniq.append({"prompt": prompt, "chosen": chosen, "rejected": rejected})
