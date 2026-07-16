@@ -1,14 +1,15 @@
 """Teach-by-chat tool (teach_enigma.py): saved teachings must be readable by
 gen_teaching_examples verbatim, preference pairs must match the dpo_pairs
-schema, and /fix must rewrite history so the chat continues from the
-corrected answer."""
+schema, /fix must rewrite history so the chat continues from the corrected
+answer, and retract() must remove exactly the retracted records from disk
+(audit 2026-07-15: /undo previously left them baked in at x8 weight)."""
 
 from __future__ import annotations
 
 import json
 
 from make_sft_data import gen_teaching_examples
-from teach_enigma import fix_last, last_exchange, save_pair, save_teaching
+from teach_enigma import fix_last, last_exchange, retract, save_pair, save_teaching
 
 
 def test_saved_teaching_round_trips_through_the_generator(tmp_path):
@@ -52,3 +53,33 @@ def test_last_exchange_reads_the_tail():
     ]
     assert last_exchange(history) == ("Q?", "A.")
     assert last_exchange([]) is None
+
+
+def test_saves_return_pre_append_sizes_and_retract_restores_bytes(tmp_path):
+    path = tmp_path / "teachings.jsonl"
+    size1 = save_teaching("Q1?", "A1.", path=path)
+    snapshot = path.read_bytes()
+    size2 = save_teaching("Q2?", "typo'd answer", path=path)
+    assert (size1, size2) == (0, len(snapshot))
+    assert retract([(path, size2)]) == 1
+    assert path.read_bytes() == snapshot  # only the retracted record is gone
+
+
+def test_retract_truncates_to_earliest_size_per_file(tmp_path):
+    # A re-/fix retracts BOTH the first fix's teaching and its preference
+    # pair, even with several writes to the same file in the ledger.
+    teach = tmp_path / "teachings.jsonl"
+    pairs = tmp_path / "pairs.jsonl"
+    writes = [
+        (teach, save_teaching("Q?", "first correction", path=teach)),
+        (pairs, save_pair("Q?", "first correction", "her original", path=pairs)),
+        (teach, save_teaching("Q?", "second correction", path=teach)),
+    ]
+    assert retract(writes) == 3
+    assert teach.read_bytes() == b""
+    assert pairs.read_bytes() == b""
+
+
+def test_retract_is_safe_on_empty_ledger_and_missing_files(tmp_path):
+    assert retract([]) == 0
+    retract([(tmp_path / "never_written.jsonl", 0)])  # must not raise
