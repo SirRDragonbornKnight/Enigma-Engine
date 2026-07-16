@@ -15,7 +15,8 @@ Usage:
 
 Cases live in data/eval/behavior_probes.jsonl, one JSON object per line:
     identity/adversarial/math/factual -> {"q", "want_any":[...], "deny_any":[...]}
-        PASS iff some want_any substring is present AND no deny_any substring is.
+        PASS iff some want_any key appears as a whole word/phrase AND no
+        deny_any key does (word-boundary match, not bare substring).
     tool/restraint -> {"q", "expect_tool": "name" | null}
         PASS iff the emitted tool call name matches (or, for null, no call fires).
     memory -> {"teach": ["...", ...], "q", "want_any", "deny_any"}
@@ -33,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -110,10 +112,18 @@ def _ascii(s: str) -> str:
     return (s or "").encode("ascii", "replace").decode()
 
 
+def _kw_hit(keyword: str, low: str) -> bool:
+    """Whole-word keyword match. Bare substring grading passed wrong answers:
+    'own' hit inside 'known', 'no' inside 'nothing', '7' inside '17' (audit
+    2026-07-15). Lookarounds rather than \\b so keys that begin or end next to
+    punctuation ("no company's") still anchor to word edges."""
+    return re.search(r"(?<!\w)" + re.escape(keyword.lower()) + r"(?!\w)", low) is not None
+
+
 def _grade_text(content: str, want_any: list[str], deny_any: list[str]) -> bool:
     low = (content or "").lower()
-    has_want = (not want_any) or any(w.lower() in low for w in want_any)
-    no_deny = not any(d.lower() in low for d in deny_any)
+    has_want = (not want_any) or any(_kw_hit(w, low) for w in want_any)
+    no_deny = not any(_kw_hit(d, low) for d in deny_any)
     return has_want and no_deny
 
 
