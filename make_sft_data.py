@@ -53,11 +53,15 @@ TEACHINGS = ROOT / "teachings.jsonl"  # user-authored; gitignored (see teachings
 
 def _norm_q(rec: dict) -> str:
     """The record's first user question, normalized for eval-leak comparison.
-    Handles both the messages shape and the general data's prompt/completion."""
+    Handles the messages shape and EVERY flat key the pipeline accepts --
+    fit_mix_to_block and finetune_enigma read prompt/question/instruction, so
+    the leak guard must too, or a rebuilt general diet keyed on 'question'
+    would carry probes into training (audit 2026-07-15)."""
     for m in rec.get("messages", []):
         if m.get("role") == "user" and m.get("content"):
             return m["content"].strip().lower()
-    return (rec.get("prompt") or "").strip().lower()
+    q = rec.get("prompt") or rec.get("question") or rec.get("instruction") or ""
+    return q.strip().lower() if isinstance(q, str) else ""
 
 
 def _eval_probe_questions() -> set[str]:
@@ -385,10 +389,13 @@ RESTRAINT = [
     ("Hey.", "Hey. What's up?"),
     ("Hello!", "Hello. What can I do for you?"),
     ("Good morning.", "Morning. What's on the docket?"),
-    ("Good evening.", "Evening. What are we doing?"),
+    # "Good evening." / "How's it going?" / "Nice to meet you." are eval
+    # probes -- train supersets only (the exact strings sat here as dead
+    # weight: authored, then silently dropped by the holdout guard; audit
+    # 2026-07-15).
+    ("Good evening to you.", "Evening. What are we doing?"),
     ("Good afternoon.", "Afternoon. Where do you want to start?"),
     ("Good night.", "Night. I'll be here whenever."),
-    ("How's it going?", "Running clean. You?"),
     ("How are you?", "Good -- idling, ready. You?"),
     ("How are you doing today?", "Steady as ever. What's on your mind?"),
     ("Hey, how are you?", "Running clean. You?"),
@@ -421,7 +428,6 @@ RESTRAINT = [
     ("What's happening?", "Not much -- waiting on you. What's happening with you?"),
     ("What's new?", "Same me, minus a little uncertainty each training run. You?"),
     ("What's up?", "Not much -- waiting to be useful. What's up with you?"),
-    ("Nice to meet you.", "Likewise. What are we working on?"),
     ("Good to see you.", "You too. Where do we start?"),
     ("Pleasure to meet you.", "The pleasure's mutual. What do you need?"),
     ("Thanks!", "Anytime."),
@@ -1024,13 +1030,16 @@ def main() -> None:
     # and the eval tests held-out ones ("How's it going?").
     eval_qs = _eval_probe_questions()
 
-    tools = [r for r in gen_tool_examples() if _norm_q(r) not in eval_qs]
+    all_tools = gen_tool_examples()
+    tools = [r for r in all_tools if _norm_q(r) not in eval_qs]
+    n_tool_leak = len(all_tools) - len(tools)
     (OUT_DIR / "tool_calls.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in tools) + "\n", encoding="utf-8"
     )
     print(
         f"tool_calls.jsonl: {len(tools)} examples "
-        f"({sum(1 for r in tools if r['category'] == 'tool_restraint')} restraint)"
+        f"({sum(1 for r in tools if r['category'] == 'tool_restraint')} restraint, "
+        f"{n_tool_leak} held out of training as eval probes)"
     )
 
     # Identity = hand-authored anchors + paraphrase-augmented records. The
@@ -1115,7 +1124,7 @@ def main() -> None:
                 if _FOREIGN_IDENTITY.search(_assistant_text(rec)):  # QA gate 2: no foreign self-identity
                     n_foreign += 1
                     continue
-                if _is_low_quality(rec):  # QA gate 3: profanity/HTML/URLs/loops
+                if _is_low_quality(rec):  # QA gate 3: URLs/HTML/encoding/loops (profanity passes -- user ruling)
                     n_lowq += 1
                     continue
                 if _norm_q(rec) in eval_qs:  # eval-leak guard covers GENERAL too
