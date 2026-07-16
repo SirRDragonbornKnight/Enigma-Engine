@@ -7,13 +7,22 @@ Sources (all require `pip install datasets`):
   - OASST1 (--oasst)        - Open Assistant conversations (~80K turns)
   - Dolly 15k (--dolly)     - Databricks instruction pairs (~15K)
   - SlimOrca (--slimorca N) - Instruction-following from Open-Orca (N = max samples)
-  - OpenThoughts3 (--openthoughts3 N) - Reasoning traces with <think> tags (D-4)
+  - OpenThoughts3 (--openthoughts3 N) - Reasoning traces with <think> tags (D-4).
+      EXCLUDED from --all since 2026-07-15: median completion ~14.5k tokens
+      vs block 1024 -- every record was silently dropped at bake (audit).
   - SmolTalk2 (--smoltalk2 N --smoltalk2-config NAME [--smoltalk2-split NAME]) - SmolLM3 SFT data (D-11)
-  - All sources (--all)     - Download everything
+  - No Robots (--no-robots N)   - ~10K HUMAN-written instruction pairs (small-model-native)
+  - Everyday Conversations (--everyday N) - simple smalltalk aimed at 1-3B models
+  - TriviaQA (--triviaqa N)     - factoid questions with SHORT answers (recall training)
+  - NQ-Open (--nq-open N)       - real search queries with short answers (recall training)
+  - All sources (--all)     - Download everything above except OpenThoughts3
+
+The 2026-07-15 diet: small-model-native SHORT records (completions capped so
+they fit block 1024) + short-answer recall sets as the counterweight to
+Dolly's extract-from-context bias.
 
 Output format:
   JSONL with {"prompt": "...", "completion": "..."} per line.
-  Ready for FORGE → Basic training mode.
 
 Usage:
   python collect_finetuning_data.py --oasst
@@ -382,6 +391,7 @@ def collect_smoltalk2(
     max_samples: int = 100000,
     config: str = "default",
     split: str | None = None,
+    max_completion_chars: int | None = None,
 ) -> list[dict]:
     """Download and format SmolTalk2 SFT data.
 
@@ -432,9 +442,20 @@ def collect_smoltalk2(
 
     pairs: list[dict] = []
     seen = 0
+    # With a completion cap, max_samples counts KEPT pairs (long records
+    # yield nothing); a 10x processing budget bounds runtime on splits that
+    # are mostly long. Without a cap, behavior is unchanged: max_samples
+    # counts processed rows.
+    budget = max_samples if max_completion_chars is None else 10 * max_samples
     for split_name in splits:
-        if seen >= max_samples:
+        if len(pairs) >= max_samples or seen >= budget:
             break
+        if max_completion_chars is not None and "think" in split_name and "no_think" not in split_name:
+            # Think traces cannot fit a chat completion cap; streaming a
+            # 1.2M-row think split would burn the whole budget for ~zero
+            # yield (the OpenThoughts3 lesson, audit 2026-07-15).
+            logger.info(f"  SmolTalk2: skipping think split {split_name!r} (completion cap active)")
+            continue
         try:
             ds = load_dataset(
                 "HuggingFaceTB/smoltalk2",
@@ -452,7 +473,7 @@ def collect_smoltalk2(
             continue
 
         for item in ds:
-            if seen >= max_samples:
+            if len(pairs) >= max_samples or seen >= budget:
                 break
             seen += 1
 
@@ -492,6 +513,15 @@ def collect_smoltalk2(
                 continue
             if len(prompt) < 5 or len(completion) < 10:
                 continue
+            if max_completion_chars is not None and (
+                len(completion) > max_completion_chars or len(prompt) > 800
+            ):
+                # Prompt cap rides the same diet switch: LongAlign-style
+                # splits pair 64k-char contexts with short answers -- the
+                # completion cap alone let 13k of 40k records through with
+                # prompts the 1024 block can only keep as truncated garbage
+                # (measured 2026-07-15).
+                continue
 
             if system and system.lower() not in (
                 "you are an ai assistant.",
@@ -506,6 +536,190 @@ def collect_smoltalk2(
 
     pairs = _dedup_pairs(pairs)
     logger.info(f"SmolTalk2: {len(pairs)} instruction pairs extracted")
+    return pairs
+
+
+# ── No Robots ──────────────────────────────────────────────────────
+
+
+def _first_exchange(
+    messages: list[dict],
+    max_completion_chars: int,
+    max_prompt_chars: int = 800,
+    min_prompt_chars: int = 5,
+) -> dict | None:
+    """First QUALIFYING user->assistant exchange from a ChatML messages
+    list, or None. Walks past leading throwaway exchanges ("Hi" -> canned
+    greeting; measured: Everyday Conversations yielded 4 of 2,260 records
+    when only the literal first pair was considered). Out-of-range records
+    are DROPPED, not truncated -- the diet wants data that is short by
+    nature, not amputated prose."""
+    prompt = ""
+    for turn in messages or []:
+        role = turn.get("role", "")
+        raw = turn.get("content", "")
+        if not isinstance(raw, str):
+            return None
+        content = _clean_text(raw)
+        if role == "user":
+            prompt = content
+        elif role == "assistant" and prompt:
+            if min_prompt_chars <= len(prompt) <= max_prompt_chars and 10 <= len(content) <= max_completion_chars:
+                return {"prompt": prompt, "completion": content}
+            prompt = ""  # this exchange failed the bounds; try the next one
+    return None
+
+
+def collect_no_robots(max_samples: int = 12000, max_completion_chars: int = 600) -> list[dict]:
+    """Download and format No Robots (`HuggingFaceH4/no_robots`).
+
+    ~10K instruction pairs written by HUMANS, not distilled from a big
+    model -- short, direct, none of the synthetic-teacher verbosity that
+    overflows a 1024-token block. Schema: ChatML `messages`."""
+    if not _ensure_datasets():
+        return []
+    from datasets import load_dataset
+
+    logger.info(f"Downloading No Robots (max {max_samples:,}, completions <= {max_completion_chars} chars)...")
+    try:
+        ds = load_dataset("HuggingFaceH4/no_robots", split="train", streaming=True)
+    except Exception as exc:
+        logger.error("Failed to load No Robots: %s", exc)
+        return []
+
+    pairs: list[dict] = []
+    for seen, item in enumerate(ds, 1):
+        if seen > max_samples:
+            break
+        pair = _first_exchange(item.get("messages"), max_completion_chars)
+        if pair:
+            pairs.append(pair)
+    pairs = _dedup_pairs(pairs)
+    logger.info(f"No Robots: {len(pairs)} instruction pairs extracted")
+    return pairs
+
+
+# ── Everyday Conversations ─────────────────────────────────────────
+
+
+def collect_everyday_conversations(max_samples: int = 5000, max_completion_chars: int = 600) -> list[dict]:
+    """Download and format Everyday Conversations
+    (`HuggingFaceTB/everyday-conversations-llama3.1-2k`).
+
+    ~2.2K simple multi-turn chats authored FOR 1-3B models -- smalltalk,
+    everyday topics, short replies. First exchange per conversation only
+    (later turns depend on context this pair format cannot carry)."""
+    if not _ensure_datasets():
+        return []
+    from datasets import load_dataset
+
+    logger.info(f"Downloading Everyday Conversations (max {max_samples:,})...")
+    try:
+        ds = load_dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", split="train_sft", streaming=True)
+    except Exception as exc:
+        logger.error("Failed to load Everyday Conversations: %s", exc)
+        return []
+
+    pairs: list[dict] = []
+    for seen, item in enumerate(ds, 1):
+        if seen > max_samples:
+            break
+        # min_prompt_chars=15 skips the scripted "Hi"/"Hey!" opener pair;
+        # the substantive exchange is the second one in this dataset.
+        pair = _first_exchange(item.get("messages"), max_completion_chars, min_prompt_chars=15)
+        if pair:
+            pairs.append(pair)
+    pairs = _dedup_pairs(pairs)
+    logger.info(f"Everyday Conversations: {len(pairs)} instruction pairs extracted")
+    return pairs
+
+
+# ── TriviaQA (short-answer recall) ─────────────────────────────────
+
+
+def collect_triviaqa(max_samples: int = 25000, max_answer_chars: int = 80) -> list[dict]:
+    """Download and format TriviaQA no-context
+    (`mandarjoshi/trivia_qa`, config `rc.nocontext`).
+
+    Factoid question -> SHORT canonical answer: pure recall training, the
+    counterweight to Dolly's extract-from-context bias (audit 2026-07-15).
+    Long answers and long questions are dropped, not truncated."""
+    if not _ensure_datasets():
+        return []
+    from datasets import load_dataset
+
+    logger.info(f"Downloading TriviaQA rc.nocontext (max {max_samples:,})...")
+    try:
+        ds = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="train", streaming=True)
+    except Exception as exc:
+        logger.error("Failed to load TriviaQA: %s", exc)
+        return []
+
+    pairs: list[dict] = []
+    seen = 0
+    for item in ds:
+        if seen >= max_samples:
+            break
+        seen += 1
+        question = _clean_text(item.get("question") or "")
+        answer = _clean_text((item.get("answer") or {}).get("value") or "")
+        if not question or not answer:
+            continue
+        if len(question) < 10 or len(question) > 300 or len(answer) > max_answer_chars:
+            continue
+        if not answer.endswith("."):
+            answer += "."
+        pairs.append({"prompt": question, "completion": answer})
+        if seen % 10000 == 0:
+            logger.info(f"  TriviaQA: {seen:,} processed, {len(pairs):,} kept...")
+    pairs = _dedup_pairs(pairs)
+    logger.info(f"TriviaQA: {len(pairs)} QA pairs extracted")
+    return pairs
+
+
+# ── NQ-Open (short-answer recall) ──────────────────────────────────
+
+
+def collect_nq_open(max_samples: int = 15000, max_answer_chars: int = 80) -> list[dict]:
+    """Download and format NQ-Open (`google-research-datasets/nq_open`).
+
+    Real search queries with short answers. Questions arrive lowercase
+    with no terminal '?' -- normalized here so the prompt shape matches
+    how a user actually types in chat."""
+    if not _ensure_datasets():
+        return []
+    from datasets import load_dataset
+
+    logger.info(f"Downloading NQ-Open (max {max_samples:,})...")
+    try:
+        ds = load_dataset("google-research-datasets/nq_open", split="train", streaming=True)
+    except Exception as exc:
+        logger.error("Failed to load NQ-Open: %s", exc)
+        return []
+
+    pairs: list[dict] = []
+    seen = 0
+    for item in ds:
+        if seen >= max_samples:
+            break
+        seen += 1
+        question = _clean_text(item.get("question") or "")
+        answers = item.get("answer") or []
+        answer = _clean_text(answers[0]) if answers and isinstance(answers[0], str) else ""
+        if not question or not answer:
+            continue
+        if len(question) < 10 or len(question) > 300 or len(answer) > max_answer_chars:
+            continue
+        question = question[0].upper() + question[1:]
+        if not question.endswith("?"):
+            question += "?"
+        if not answer.endswith("."):
+            answer += "."
+        pairs.append({"prompt": question, "completion": answer})
+        if seen % 10000 == 0:
+            logger.info(f"  NQ-Open: {seen:,} processed, {len(pairs):,} kept...")
+    pairs = _dedup_pairs(pairs)
+    logger.info(f"NQ-Open: {len(pairs)} QA pairs extracted")
     return pairs
 
 
@@ -638,7 +852,46 @@ def main():
         "If omitted, all splits in the config are concatenated "
         "until --smoltalk2 max is reached.",
     )
-    parser.add_argument("--all", action="store_true", help="Download all sources")
+    parser.add_argument(
+        "--smoltalk2-cap",
+        type=int,
+        default=None,
+        help="Drop SmolTalk2 records whose completion exceeds N chars "
+        "(also skips *_think splits). The 2026-07-15 diet uses 600.",
+    )
+    parser.add_argument(
+        "--no-robots",
+        type=int,
+        nargs="?",
+        const=12000,
+        help="Download No Robots human-written pairs (default: 12K samples)",
+    )
+    parser.add_argument(
+        "--everyday",
+        type=int,
+        nargs="?",
+        const=5000,
+        help="Download Everyday Conversations smalltalk (default: 5K samples)",
+    )
+    parser.add_argument(
+        "--triviaqa",
+        type=int,
+        nargs="?",
+        const=25000,
+        help="Download TriviaQA short-answer recall pairs (default: 25K samples)",
+    )
+    parser.add_argument(
+        "--nq-open",
+        type=int,
+        nargs="?",
+        const=15000,
+        help="Download NQ-Open short-answer recall pairs (default: 15K samples)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Download all sources EXCEPT OpenThoughts3 (block-unfit at 1024; audit 2026-07-15)",
+    )
     parser.add_argument("--combine-only", action="store_true", help="Re-combine existing source files")
     parser.add_argument("--stats", action="store_true", help="Show collected data statistics")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_DIR), help="Output directory")
@@ -655,7 +908,10 @@ def main():
         combine_all(output_dir)
         return
 
-    any_source = args.oasst or args.dolly or args.slimorca or args.openthoughts3 or args.smoltalk2 or args.all
+    any_source = (
+        args.oasst or args.dolly or args.slimorca or args.openthoughts3 or args.smoltalk2
+        or args.no_robots or args.everyday or args.triviaqa or args.nq_open or args.all
+    )
     if not any_source:
         parser.print_help()
         return
@@ -688,9 +944,12 @@ def main():
             logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("SlimOrca", len(pairs)))
 
-    if args.openthoughts3 is not None or args.all:
-        max_n = args.openthoughts3 if args.openthoughts3 is not None else 100000
-        pairs = collect_openthoughts3(max_samples=max_n)
+    # OpenThoughts3 is NOT in --all: median completion ~14.5k tokens vs block
+    # 1024 meant 100% of records were silently dropped at bake (audit
+    # 2026-07-15). Explicit --openthoughts3 still works for future longer
+    # blocks.
+    if args.openthoughts3 is not None:
+        pairs = collect_openthoughts3(max_samples=args.openthoughts3)
         if pairs:
             path = output_dir / "openthoughts3.jsonl"
             _write_jsonl(pairs, path)
@@ -703,12 +962,49 @@ def main():
             max_samples=max_n,
             config=args.smoltalk2_config,
             split=args.smoltalk2_split,
+            max_completion_chars=args.smoltalk2_cap,
         )
         if pairs:
             path = output_dir / "smoltalk2.jsonl"
             _write_jsonl(pairs, path)
             logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("SmolTalk2", len(pairs)))
+
+    if args.no_robots is not None or args.all:
+        max_n = args.no_robots if args.no_robots is not None else 12000
+        pairs = collect_no_robots(max_samples=max_n)
+        if pairs:
+            path = output_dir / "no_robots.jsonl"
+            _write_jsonl(pairs, path)
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
+            collected.append(("No Robots", len(pairs)))
+
+    if args.everyday is not None or args.all:
+        max_n = args.everyday if args.everyday is not None else 5000
+        pairs = collect_everyday_conversations(max_samples=max_n)
+        if pairs:
+            path = output_dir / "everyday_conversations.jsonl"
+            _write_jsonl(pairs, path)
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
+            collected.append(("Everyday Conversations", len(pairs)))
+
+    if args.triviaqa is not None or args.all:
+        max_n = args.triviaqa if args.triviaqa is not None else 25000
+        pairs = collect_triviaqa(max_samples=max_n)
+        if pairs:
+            path = output_dir / "triviaqa.jsonl"
+            _write_jsonl(pairs, path)
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
+            collected.append(("TriviaQA", len(pairs)))
+
+    if args.nq_open is not None or args.all:
+        max_n = args.nq_open if args.nq_open is not None else 15000
+        pairs = collect_nq_open(max_samples=max_n)
+        if pairs:
+            path = output_dir / "nq_open.jsonl"
+            _write_jsonl(pairs, path)
+            logger.info(f"Saved {len(pairs):,} pairs -> {path}")
+            collected.append(("NQ-Open", len(pairs)))
 
     if collected:
         combine_all(output_dir)

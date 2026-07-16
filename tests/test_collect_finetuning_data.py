@@ -221,6 +221,160 @@ class TestCollectSmolTalk2:
         assert len(pairs) == 1
 
 
+# ── 2026-07-15 diet: short-record collectors ────────────────────────────────
+
+
+class TestCollectNoRobots:
+    """No Robots (`HuggingFaceH4/no_robots`): human-written ChatML pairs;
+    completions above the cap are DROPPED, not truncated."""
+
+    _SAMPLE_ROW = {
+        "messages": [
+            {"role": "user", "content": "Write a two-line poem about rain."},
+            {"role": "assistant", "content": "Rain taps the glass in gray refrain,\nthe streetlights bloom in every pane."},
+        ],
+        "category": "creative",
+    }
+
+    def test_extracts_pair_and_caps_completion(self, monkeypatch, cf_module):
+        long_row = {
+            "messages": [
+                {"role": "user", "content": "Tell me everything about Rome."},
+                {"role": "assistant", "content": "x" * 2000},
+            ]
+        }
+        _install_fake_datasets(monkeypatch, {"HuggingFaceH4/no_robots": [self._SAMPLE_ROW, long_row]})
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_no_robots(max_samples=10, max_completion_chars=600)
+        assert len(pairs) == 1
+        assert "poem" in pairs[0]["prompt"]
+
+    def test_missing_dataset_returns_empty(self, monkeypatch, cf_module, caplog):
+        _install_fake_datasets(monkeypatch, {})
+        cf = importlib.reload(cf_module)
+        with caplog.at_level("ERROR"):
+            assert cf.collect_no_robots(max_samples=10) == []
+
+
+class TestCollectEverydayConversations:
+    def test_skips_scripted_greeting_opener(self, monkeypatch, cf_module):
+        """The dataset opens every conversation with 'Hi' -> canned greeting;
+        the substantive exchange is the second pair (measured: literal
+        first-pair extraction yielded 4 of 2,260 records)."""
+        row = {
+            "messages": [
+                {"role": "user", "content": "Hey!"},
+                {"role": "assistant", "content": "Hello! How can I help you today?"},
+                {"role": "user", "content": "I'm interested in learning the violin."},
+                {"role": "assistant", "content": "Great choice -- start with a rental and a teacher."},
+            ],
+        }
+        _install_fake_datasets(monkeypatch, {"HuggingFaceTB/everyday-conversations-llama3.1-2k": [row]})
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_everyday_conversations(max_samples=10)
+        assert len(pairs) == 1
+        assert pairs[0]["prompt"].startswith("I'm interested")
+        assert pairs[0]["completion"].startswith("Great choice")
+
+    def test_takes_first_exchange_only(self, monkeypatch, cf_module):
+        row = {
+            "full_topic": "Hobbies",
+            "messages": [
+                {"role": "user", "content": "Do you have any hobby ideas?"},
+                {"role": "assistant", "content": "Drawing is a good start -- cheap and portable."},
+                {"role": "user", "content": "What about the second one?"},
+                {"role": "assistant", "content": "Photography, if you have a phone camera."},
+            ],
+        }
+        _install_fake_datasets(monkeypatch, {"HuggingFaceTB/everyday-conversations-llama3.1-2k": [row]})
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_everyday_conversations(max_samples=10)
+        assert len(pairs) == 1
+        assert pairs[0]["completion"].startswith("Drawing")
+
+
+class TestCollectTriviaQA:
+    _SAMPLE_ROW = {
+        "question": "Which planet is the largest in our solar system?",
+        "answer": {"value": "Jupiter", "aliases": ["Jupiter"]},
+    }
+
+    def test_short_answer_becomes_sentence(self, monkeypatch, cf_module):
+        _install_fake_datasets(monkeypatch, {"mandarjoshi/trivia_qa": [self._SAMPLE_ROW]})
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_triviaqa(max_samples=10)
+        assert pairs == [{"prompt": "Which planet is the largest in our solar system?", "completion": "Jupiter."}]
+
+    def test_long_answers_dropped(self, monkeypatch, cf_module):
+        rows = [
+            {"question": "A long-winded question about history?", "answer": {"value": "y" * 300}},
+            self._SAMPLE_ROW,
+        ]
+        _install_fake_datasets(monkeypatch, {"mandarjoshi/trivia_qa": rows})
+        cf = importlib.reload(cf_module)
+        assert len(cf.collect_triviaqa(max_samples=10)) == 1
+
+
+class TestCollectNQOpen:
+    def test_normalizes_search_query_shape(self, monkeypatch, cf_module):
+        row = {"question": "who wrote the origin of species", "answer": ["Charles Darwin"]}
+        _install_fake_datasets(monkeypatch, {"google-research-datasets/nq_open": [row]})
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_nq_open(max_samples=10)
+        assert pairs == [{"prompt": "Who wrote the origin of species?", "completion": "Charles Darwin."}]
+
+
+class TestSmolTalk2CompletionCap:
+    def test_cap_drops_long_and_skips_think_splits(self, monkeypatch, cf_module):
+        long_row = {
+            "messages": [
+                {"role": "user", "content": "Explain the universe."},
+                {"role": "assistant", "content": "z" * 5000},
+            ]
+        }
+        short_row = {
+            "messages": [
+                {"role": "user", "content": "Explain gravity briefly."},
+                {"role": "assistant", "content": "Gravity pulls masses together; drop a cup and the floor wins."},
+            ]
+        }
+        _install_fake_datasets(
+            monkeypatch,
+            {"HuggingFaceTB/smoltalk2": [long_row, short_row]},
+            splits_by_path={"HuggingFaceTB/smoltalk2": ["big_corpus_think", "magpie_no_think"]},
+        )
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_smoltalk2(max_samples=10, config="SFT", max_completion_chars=600)
+        assert len(pairs) == 1
+        assert pairs[0]["completion"].startswith("Gravity")
+
+    def test_cap_also_drops_giant_prompts(self, monkeypatch, cf_module):
+        """LongAlign-style rows pair a 64k-char context with a short answer;
+        the diet cap must drop them (a 1024 block would keep the prompt only
+        as truncated garbage)."""
+        giant_prompt_row = {
+            "messages": [
+                {"role": "user", "content": "ctx " * 5000 + "Summarize."},
+                {"role": "assistant", "content": "A short summary sentence."},
+            ]
+        }
+        _install_fake_datasets(monkeypatch, {"HuggingFaceTB/smoltalk2": [giant_prompt_row]})
+        cf = importlib.reload(cf_module)
+        assert cf.collect_smoltalk2(max_samples=10, config="SFT", max_completion_chars=600) == []
+
+    def test_no_cap_keeps_old_behavior(self, monkeypatch, cf_module):
+        long_row = {
+            "messages": [
+                {"role": "user", "content": "Explain the universe."},
+                {"role": "assistant", "content": "z" * 5000},
+            ]
+        }
+        _install_fake_datasets(monkeypatch, {"HuggingFaceTB/smoltalk2": [long_row]})
+        cf = importlib.reload(cf_module)
+        pairs = cf.collect_smoltalk2(max_samples=10, config="default")
+        assert len(pairs) == 1  # uncapped: long completions still collected
+
+
 # ── D-11 wiring (Pass 156i8): combined_finetune.txt for SFT consumer ────────
 
 
