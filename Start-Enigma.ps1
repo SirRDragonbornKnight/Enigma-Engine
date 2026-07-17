@@ -5,7 +5,11 @@
 # (data\memory -- the remember tool writes here).
 # ASCII-only output (Windows cp1252 console).
 param(
-    [switch]$Voice  # enable the voice organ (speak tool + /v1/audio/speech)
+    [switch]$Voice,  # enable the voice organ (speak tool + /v1/audio/speech)
+    # Which installed TTS voice she uses (name substring; see /v1/audio/voices).
+    # "zira" = the female SAPI voice on this box; the user dislikes the David
+    # default. Real fix is the Kokoro swap (BACKLOG section 5).
+    [string]$VoiceName = "zira"
 )
 
 $engineDir = "C:\Users\SirKn\Enigma Engine"
@@ -22,7 +26,10 @@ if ($up) {
 # training-ops gotcha). Logs go to serve_enigma.log in the repo.
 $log = Join-Path $engineDir "serve_enigma.log"
 $serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth", "--memory-dir", "data\memory")
-if ($Voice) { $serveArgs += "--voice" }
+if ($Voice) {
+    $serveArgs += "--voice"
+    if ($VoiceName) { $serveArgs += @("--voice-name", $VoiceName) }
+}
 Start-Process -FilePath $python `
     -ArgumentList $serveArgs `
     -WorkingDirectory $engineDir `

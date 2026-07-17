@@ -88,6 +88,11 @@ _p.add_argument(
     help="enable the voice organ: the speak built-in tool + /v1/audio/speech (local pyttsx3/SAPI)",
 )
 _p.add_argument(
+    "--voice-name",
+    default=None,
+    help="pick the TTS voice by name or id substring, e.g. 'zira' (default: system default voice)",
+)
+_p.add_argument(
     "--ears",
     action="store_true",
     help="enable the ears organ: /v1/audio/transcriptions (local faster-whisper)",
@@ -199,7 +204,7 @@ if ARGS.memory_dir:
 SPEAKER = None
 if ARGS.voice:
     try:
-        SPEAKER = Speaker()
+        SPEAKER = Speaker(voice=ARGS.voice_name)
     except TTSError as exc:
         print(f"  WARN: voice disabled -- {exc}", flush=True)
 

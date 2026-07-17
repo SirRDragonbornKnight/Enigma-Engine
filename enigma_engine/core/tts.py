@@ -95,9 +95,26 @@ class Speaker:
             engine.setProperty("voice", self._voice)
         return engine
 
+    def _resolve_voice(self) -> None:
+        """Turn a requested voice (an id, or a case-insensitive name/id
+        substring like "zira") into an installed voice id. Fails honestly
+        when nothing matches."""
+        if self._voice is None or not self.voices:
+            return  # nothing requested, or discovery failed -- pass through
+        want = self._voice.lower()
+        for v in self.voices:
+            if want == v["id"].lower() or want in v["name"].lower() or want in v["id"].lower():
+                self._voice = v["id"]
+                return
+        names = ", ".join(v["name"] for v in self.voices)
+        raise TTSError(f"no installed voice matches '{self._voice}' -- installed: {names}")
+
     def _run(self, init_done: threading.Event, init_error: list[BaseException]) -> None:
         try:
-            probe = self._new_engine()  # validate the backend before accepting jobs
+            # Validate the backend and discover voices BEFORE applying the
+            # requested voice -- _new_engine would setProperty an unresolved
+            # name, and SAPI only accepts real voice ids.
+            probe = self._factory()
             try:
                 self.voices = [
                     {"id": v.id, "name": getattr(v, "name", v.id)}
@@ -105,6 +122,7 @@ class Speaker:
                 ]
             except Exception:
                 self.voices = []  # discovery is best-effort; speaking still works
+            self._resolve_voice()
             del probe  # clear pyttsx3's cache so job 1 gets a fresh engine
         except BaseException as exc:  # surfaced to the constructor
             init_error.append(exc)

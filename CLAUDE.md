@@ -8,6 +8,15 @@ This repo is **Enigma** — a **from-scratch** decoder-only LLM (its own archite
 vocab 4718, and weights; NOT a wrapper). Python. Pipeline is **pretrain → SFT → DPO → serve**; train +
 serve share one chat renderer (`enigma_engine/core/chat_format.py`) so the prompt format can't drift.
 
+**Identity ruling (user, 2026-07-16):** Enigma Engine IS Enigma — one AI, her own model, and the
+machinery that trains and serves HER. The Forge-era framing (a generic engine to spawn different
+AIs off copies of itself) is RETIRED — never describe this repo as a "model factory" or a
+framework; the AI we made is the thing being worked on. The name arc stays visible in history
+(ForgeEngine → EnigmaEngine `7ef9068f`; a Modkit refocus, dissolved 2026-07-13 `5bbb4b44`) and in
+surviving identifiers (`ForgeConfig`, the FORGE trainer, `forge_config.json`,
+`models/enigma_forge_tiny`) — those are identifiers, not identity; renaming them is optional
+cleanup, and the git history STAYS (no rewrites — it is honest archaeology).
+
 **Multimodal state (measured 2026-07-14):** Enigma is a TEXT decoder that will PERCEIVE
 (image/audio INPUT) in-model. GENERATION (image/video/speech-audio) is a separate model family —
 NOT this LLM's job; if wanted in-repo it is a bundled service, not the model painting pixels.
@@ -35,6 +44,9 @@ loaded eagerly at startup (a broken organ WARNs and text serving continues).
 - `--voice` -> `core/tts.py` (pyttsx3/SAPI; one engine per JOB — say-then-save on one engine
   deadlocks, see module docstring): intent-gated `speak` built-in + `/v1/audio/speech` (WAV) +
   `/v1/audio/voices`. `speak` = server speakers; `avatar_say` stays a CLIENT tool.
+  **User dislikes the stock Windows voice (2026-07-16)** — launchers pass `--voice-name zira`
+  as a stopgap (only other installed SAPI voice); the wanted fix is the Kokoro-82M swap
+  (BACKLOG §5, ~330 MB download, needs the user's go-ahead).
 - `--ears` -> `core/asr.py` (faster-whisper, cuda->cpu fallback): `/v1/audio/transcriptions`.
 - `--eyes` -> `core/eyes.py` (BLIP captioner): OpenAI image_url content in chat is captioned to
   `[image: ...]` text before gates/memory/render (`flatten_image_content`, data: URLs only,
@@ -116,6 +128,16 @@ the only coupling is the WebSocket bus protocol.
   subagent audit output. Reports here claimed a "1600-char" line (the real max was 702) and line
   numbers off by ~100, and inflated an ASCII-rule count by conflating comments + on-screen text with
   actual terminal output. Measure, show the receipt. (See also: ground every load-bearing number.)
+- **PS 5.1 `Start-Process -ArgumentList` does NOT quote arguments** — the space in "Enigma
+  Engine" split a `-File` path and the tray silently failed to launch (2026-07-16). Pass one
+  pre-quoted string (backtick-escaped quotes), or launch through the .bat wrappers, which quote
+  correctly.
+- **A process-search can match your own shell** — `Get-CimInstance ... CommandLine -like
+  '*Enigma-Tray*'` matched the diagnostic PowerShell carrying the search string; two "tray pids"
+  were self-matches (2026-07-16). Exclude `$PID` or match on the exact `-File` path.
+- **Launch user-facing long-lived processes DETACHED** (Start-Process), never as harness
+  background tasks — a chat window launched as a background task was tethered to the Claude
+  session and read to the user as a stuck task (2026-07-16).
 - **A refactor that deletes a module must also delete or guard its callers.** The Modkit-era
   "dissolve the monolith" refactor deleted 6 modules (vision/audio encoders, gguf, reasoning,
   sentiment, inference) but kept code importing them — 4 were crash-on-use landmines found only

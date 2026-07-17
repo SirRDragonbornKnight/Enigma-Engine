@@ -54,6 +54,19 @@ def rig():
     speaker.close()
 
 
+def test_voice_name_substring_resolves_to_installed_id():
+    engine = FakeEngine()
+    speaker = Speaker(voice="test", engine_factory=lambda: engine)
+    speaker.speak("hi", wait=True)
+    assert ("set", "voice", "v1") in engine.calls
+    speaker.close()
+
+
+def test_unknown_voice_name_fails_honestly_at_init():
+    with pytest.raises(TTSError, match="no installed voice matches"):
+        Speaker(voice="does-not-exist", engine_factory=FakeEngine)
+
+
 def test_speak_says_then_flushes(rig):
     engine, speaker = rig
     spoken = speaker.speak("hello there", wait=True)
