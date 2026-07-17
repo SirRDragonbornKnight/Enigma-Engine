@@ -203,10 +203,10 @@ if ARGS.voice:
     except TTSError as exc:
         print(f"  WARN: voice disabled -- {exc}", flush=True)
 
-# Runtime mute (the chat page's mute button, POST /v1/audio/mute): silences
-# the server-side speak TOOL without restarting serve. The /v1/audio/speech
-# endpoint stays live -- it returns bytes for a client to play, and clients
-# that respect mute (the chat page does) simply stop asking.
+# Runtime mute (POST /v1/audio/mute -- the chat page's Mute button and the
+# tray icon): silences the server-side speak TOOL, and /v1/audio/speech
+# answers 204 (no audio) so muting from anywhere silences every open window.
+# The server is the single source of truth; the page polls and adopts it.
 MUTED = False
 
 EARS = None
@@ -945,8 +945,9 @@ def _chat_instruct(req: ChatReq):
 # (the server is offline by default and stays that way). Talks to the same
 # /v1 API as any client; spoken replies are fetched from /v1/audio/speech
 # and played IN THE BROWSER, so the mute button silences instantly and the
-# volume mixes like any app (fine while gaming). Mute also flips the server
-# flag so the speak TOOL stays quiet.
+# volume mixes like any app (fine while gaming). Mute state lives on the
+# SERVER (the tray icon can flip it too); the page polls it every 3 seconds
+# and adopts changes, so a tray mute silences an already-open window.
 _CHAT_PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Enigma</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1018,6 +1019,17 @@ function pushMute() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ muted: muted }) }).catch(function () {});
 }
+function syncMute() {
+  fetch("/v1/audio/mute")
+    .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+    .then(function (s) {
+      if (s.muted === muted) return;
+      muted = s.muted;
+      localStorage.setItem("enigma_muted", muted ? "1" : "0");
+      if (muted) stopAudio();
+      paintMute();
+    }).catch(function () {});
+}
 muteBtn.onclick = function () {
   muted = !muted;
   localStorage.setItem("enigma_muted", muted ? "1" : "0");
@@ -1030,9 +1042,12 @@ function speak(text) {
   fetch("/v1/audio/speech", { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: text }) })
-    .then(function (r) { if (!r.ok) throw new Error(); return r.blob(); })
+    .then(function (r) {
+      if (r.status === 204) return null;
+      if (!r.ok) throw new Error();
+      return r.blob(); })
     .then(function (b) {
-      if (muted) return;
+      if (!b || muted) return;
       stopAudio();
       currentAudio = new Audio(URL.createObjectURL(b));
       currentAudio.play().catch(function () {});
@@ -1075,9 +1090,10 @@ fetch("/v1/audio/voices")
     voiceState.textContent = voiceReady
       ? (muted ? "voice: muted" : "voice: on")
       : "voice: off (start with --voice)";
-    if (voiceReady) pushMute();
+    if (voiceReady) syncMute();
   });
 paintMute();
+setInterval(syncMute, 3000);
 </script></body></html>
 """
 
@@ -1303,6 +1319,8 @@ def audio_speech(req: SpeechReq):
         raise _organ_off("voice disabled — start with --voice")
     if req.voice is not None:
         raise HTTPException(status_code=400, detail="voice selection not supported yet — one system voice")
+    if MUTED:
+        return Response(status_code=204)
     fd, tmp = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
     try:
