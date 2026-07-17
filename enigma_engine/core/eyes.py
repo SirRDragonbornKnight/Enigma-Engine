@@ -1,15 +1,19 @@
-"""Image understanding primitive -- the eyes organ.
+"""Image understanding primitive -- her OWN eyes.
 
-A local BLIP captioner (transformers pipeline) gives her working eyes TODAY:
-OpenAI-style image messages are captioned into text she can read, and
-/v1/images/describe captions uploads directly. The native path
-(core/vision_encoder.py + vision_projection, trained projectors) stays the
-later in-model road for real-time vision -- this organ does not replace it.
+Phase 4.5 step 5 ("wire and retire", 2026-07-17): the BLIP scaffold this
+module used to wrap is RETIRED. Captions now come from her own weights end
+to end -- the distilled-and-aligned VisionEncoder + the vision_projection
+trained by align_vision.py + the served frozen text model. Generation runs
+in exactly the align-trained shape: [projected patches][BOS -> caption ->
+EOS], greedy, no KV cache (a ~250-position forward on a 182M model is
+millisecond-scale; recomputing per token keeps this free of cache surgery).
 
 flatten_image_content() is the pure ingestion half: it rewrites ONE message's
 OpenAI multimodal content list into plain text, honestly marking anything the
 server cannot see, so serve stays a thin caller and the logic stays testable.
-Weights download from HuggingFace on first construction (~1 GB).
+The caption enters chat as the "[image: ...]" marker shape the adopted model
+was SFT-trained on -- token-level image injection into templated chat is the
+NEXT training cycle's work (she has no trained image-delimiter tokens yet).
 """
 
 from __future__ import annotations
@@ -19,45 +23,69 @@ import io
 import threading
 from pathlib import Path
 
-DEFAULT_MODEL_ID = "Salesforce/blip-image-captioning-base"
-
 
 class EyesError(Exception):
     """The captioning backend is unavailable or a caption failed."""
 
 
 class Eyes:
-    """One captioner, one image at a time (lock serializes GPU use)."""
+    """One captioner, one image at a time (the shared lock serializes GPU use
+    with text generation -- captioning borrows the served model)."""
 
-    def __init__(self, model_id: str = DEFAULT_MODEL_ID, device=None, captioner_factory=None):
-        self._lock = threading.Lock()
-        self.model_id = model_id
+    def __init__(
+        self,
+        model=None,
+        tokenizer=None,
+        encoder=None,
+        gen_lock: threading.Lock | None = None,
+        max_caption_tokens: int = 48,
+        captioner_factory=None,
+    ):
+        self._lock = gen_lock if gen_lock is not None else threading.Lock()
         if captioner_factory is not None:  # tests inject a fake: PIL.Image -> str
             self._caption = captioner_factory()
             return
-        # Direct BLIP classes, NOT pipeline("image-to-text"): transformers 5.x
-        # removed that pipeline task (measured 2026-07-14); the model classes
-        # are the stable surface.
-        try:
-            from transformers import BlipForConditionalGeneration, BlipProcessor
-        except ImportError as exc:
-            raise EyesError("transformers not installed -- pip install 'enigma-engine[eyes]'") from exc
+        if model is None or tokenizer is None or encoder is None:
+            raise EyesError(
+                "native eyes need the served model + tokenizer + her aligned "
+                "vision encoder (train one with distill_vision_encoder.py then "
+                "align_vision.py)"
+            )
+        if getattr(model, "vision_projection", None) is None:
+            raise EyesError(
+                "the served model has no vision_projection -- serve must open "
+                "the vision port and graft the aligned projection weights"
+            )
         import torch
 
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        try:
-            processor = BlipProcessor.from_pretrained(model_id)
-            model = BlipForConditionalGeneration.from_pretrained(model_id).to(device)
-            model.eval()
-        except Exception as exc:
-            raise EyesError(f"could not load captioner '{model_id}': {exc}") from exc
+        device = next(model.parameters()).device
+        encoder = encoder.to(device).eval()
+        image_size = getattr(getattr(encoder, "config", None), "image_size", 224)
+        eos = getattr(tokenizer, "eos_token_id", 2)
+        bos = getattr(tokenizer, "bos_token_id", 1)
 
         def _caption(img) -> str:
-            inputs = processor(images=img, return_tensors="pt").to(device)
-            with torch.no_grad():
-                out = model.generate(**inputs, max_new_tokens=40)
-            return processor.decode(out[0], skip_special_tokens=True)
+            from enigma_engine.core.vision_encoder import preprocess_image
+
+            # Her native from-scratch normalization ([-1, 1]) -- the SAME
+            # preprocessing distillation and alignment trained under.
+            x = preprocess_image(img, image_size=image_size, imagenet_normalize=False).to(device)
+            autocast = torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16, enabled=(device.type == "cuda")
+            )
+            with torch.no_grad(), autocast:
+                feats = encoder(x)
+                ids = [bos]
+                for _ in range(max_caption_tokens):
+                    logits = model.forward_multimodal(
+                        input_ids=torch.tensor([ids], dtype=torch.long, device=device),
+                        vision_features=feats,
+                    )
+                    nxt = int(logits[0, -1].argmax())
+                    if nxt == eos:
+                        break
+                    ids.append(nxt)
+            return tokenizer.decode(ids[1:], skip_special_tokens=True).strip()
 
         self._caption = _caption
 

@@ -48,7 +48,10 @@ if (-not (Test-Path $python)) {
 # Hidden window: a visible console gets closed by accident (see CLAUDE.md
 # training-ops gotcha). Logs go to serve_enigma.log in the repo.
 $log = Join-Path $engineDir "serve_enigma.log"
-$serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth", "--memory-dir", "data\memory")
+# --eyes = HER OWN vision encoder + projection + this same model (~19M extra,
+# no external captioner, no downloads); serve degrades to text-only with a
+# WARN if the align checkpoint is missing, so passing it is always safe.
+$serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth", "--memory-dir", "data\memory", "--eyes")
 if ($Voice) {
     $serveArgs += "--voice"
     if ($VoiceName) { $serveArgs += @("--voice-name", $VoiceName) }

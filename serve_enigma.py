@@ -103,7 +103,19 @@ _p.add_argument(
 _p.add_argument(
     "--eyes",
     action="store_true",
-    help="enable the eyes organ: image messages are captioned into her context + /v1/images/describe (local BLIP)",
+    help="enable the eyes organ: image messages are captioned into her context + /v1/images/describe "
+    "(HER OWN aligned vision encoder + projection + the served model -- no external captioner)",
+)
+_p.add_argument(
+    "--eyes-model",
+    default=None,
+    help="align checkpoint carrying vision_encoder_state_dict + vision_projection weights "
+    "(default: models/enigma_vision_align/enigma_vision_align_vision_best.pt in the repo)",
+)
+_p.add_argument(
+    "--eyes-preset",
+    default="medium",
+    help="VisionEncoder preset the align checkpoint was trained with (see vision_encoder.VISION_PRESETS)",
 )
 _p.add_argument(
     "--image-gen",
@@ -155,8 +167,56 @@ _ck = torch.load(ARGS.model, map_location="cpu", weights_only=False)  # our own 
 if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
     raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
 CONFIG = ForgeConfig.from_dict(_ck["config"])
+
+# Her own eyes (Phase 4.5 step 5): --eyes opens the model's vision port and
+# grafts the encoder + projection trained by align_vision.py onto the SERVED
+# text weights. The align pass kept every text weight frozen on purpose, so
+# the projection targets exactly this checkpoint's embedding space and text
+# behavior is byte-unchanged. Failure here degrades to text-only (WARN), the
+# organ pattern -- text serving never dies for a missing eye.
+_VISION_ENCODER = None
+_VISION_PROJ_SD = None
+if ARGS.eyes:
+    _eyes_ckpt = Path(ARGS.eyes_model) if ARGS.eyes_model else (
+        Path(__file__).resolve().parent / "models" / "enigma_vision_align" / "enigma_vision_align_vision_best.pt"
+    )
+    try:
+        from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+        if not _eyes_ckpt.exists():
+            raise EyesError(
+                f"align checkpoint not found: {_eyes_ckpt} (run distill_vision_encoder.py then align_vision.py)"
+            )
+        _eck = torch.load(_eyes_ckpt, map_location="cpu", weights_only=False)
+        if "vision_encoder_state_dict" not in _eck:
+            raise EyesError(f"{_eyes_ckpt} carries no vision_encoder_state_dict (not an align checkpoint)")
+        _venc = VisionEncoder(VISION_PRESETS[ARGS.eyes_preset])
+        _venc.load_state_dict(_eck["vision_encoder_state_dict"], strict=True)
+        _VISION_PROJ_SD = {
+            k[len("vision_projection."):]: v
+            for k, v in _eck["model_state_dict"].items()
+            if k.startswith("vision_projection.")
+        }
+        if not _VISION_PROJ_SD:
+            raise EyesError(f"{_eyes_ckpt} carries no vision_projection weights")
+        CONFIG.vision_hidden_size = VISION_PRESETS[ARGS.eyes_preset].dim
+        _VISION_ENCODER = _venc
+        del _eck
+    except (EyesError, KeyError, RuntimeError, OSError) as exc:
+        print(f"  WARN: eyes disabled -- {exc}", flush=True)
+        _VISION_ENCODER = None
+        _VISION_PROJ_SD = None
+
 model = Enigma(CONFIG)
-model.load_state_dict(_ck["model_state_dict"], strict=True)
+if _VISION_ENCODER is not None:
+    # Text weights come from the SERVED checkpoint; only the projection is new.
+    _missing, _unexpected = model.load_state_dict(_ck["model_state_dict"], strict=False)
+    _bad = [k for k in _missing if "vision_projection" not in k]
+    if _bad or _unexpected:
+        raise SystemExit(f"checkpoint mismatch with vision port open: missing={_bad[:5]} unexpected={list(_unexpected)[:5]}")
+    model.vision_projection.load_state_dict(_VISION_PROJ_SD, strict=True)
+else:
+    model.load_state_dict(_ck["model_state_dict"], strict=True)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model.to(DEVICE).eval()
 # Serve was the only fp32 stage in the whole stack (ultrareview #36): every
@@ -229,6 +289,11 @@ if ARGS.memory_dir:
 
     MEMORY = MemoryStore(ARGS.memory_dir)
 
+# One model, one KV-cache -- generation must be serialized across requests.
+# Defined BEFORE the organs: the eyes borrow the served model for caption
+# generation and share this lock.
+_GEN_LOCK = threading.Lock()
+
 # Organs: constructed eagerly so a broken backend surfaces at startup, not
 # mid-conversation. She still serves text if an organ fails to come up.
 SPEAKER = None
@@ -264,9 +329,11 @@ if ARGS.ears:
         print(f"  WARN: ears disabled -- {exc}", flush=True)
 
 EYES = None
-if ARGS.eyes:
+if ARGS.eyes and _VISION_ENCODER is not None:
     try:
-        EYES = Eyes()
+        # Her own eyes: aligned encoder + grafted projection + the served
+        # frozen model, sharing the generation lock.
+        EYES = Eyes(model=model, tokenizer=tokenizer, encoder=_VISION_ENCODER, gen_lock=_GEN_LOCK)
     except EyesError as exc:
         print(f"  WARN: eyes disabled -- {exc}", flush=True)
 
@@ -296,8 +363,6 @@ print(
 
 app = FastAPI(title="Enigma (from-scratch)")
 
-# One model, one KV-cache -- generation must be serialized across requests.
-_GEN_LOCK = threading.Lock()
 
 # Transcript turn markers: a base model will happily continue the whole
 # conversation, so cut her off when she starts writing the next turn.
