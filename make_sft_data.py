@@ -1191,6 +1191,8 @@ def main() -> None:
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     # The review-band records themselves -- a bare count was unactionable
     # (audit 2026-07-16): nothing identified WHICH records to look at.
+    # REGENERATED every run: act on the records (fix the corpus or the
+    # probes); don't annotate this file, your notes would be clobbered.
     review_path = OUT_DIR / "locked_near_misses.jsonl"
     if locked_near_rows:
         review_path.write_text("\n".join(locked_near_rows) + "\n", encoding="utf-8")
@@ -1205,7 +1207,8 @@ def main() -> None:
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_lowq} dropped as low-quality (HTML/URLs/encoding/loops); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
-        f"{n_locked_near} kept but flagged near a locked probe (locked_near_misses.jsonl); "
+        f"{n_locked_near} kept but flagged near a locked probe"
+        f"{' (see locked_near_misses.jsonl)' if n_locked_near else ''}; "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
     )

@@ -10,7 +10,7 @@ Run everything from the Enigma Engine folder (venv activated).
 |---------|-------------|
 | `python serve_enigma.py --model models/enigma_dpo/model.pth` | OpenAI-compatible /v1 server on port 8000, serving the checkpoint of record |
 | `enigma ...` | Same thing (console script installed by `pip install -e .`) |
-| `python serve_enigma.py` | Without `--model`, serves the default `models/enigma_pretrain_large/latest.pth` |
+| `python serve_enigma.py` | Without `--model`, serves the adopted `models/enigma_dpo/model.pth` (default since 2026-07-17) |
 | `python serve_enigma.py --port 8123` | Serve on a specific port |
 | `python serve_enigma.py --host 0.0.0.0` | Listen on all interfaces |
 | `python serve_enigma.py --max-context 1024` | Set the context window (tokens) |

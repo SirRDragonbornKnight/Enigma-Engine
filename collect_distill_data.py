@@ -164,7 +164,7 @@ def _parse_magpie_completion(raw: str, template: dict[str, str]) -> tuple[str, s
     if not answer:
         raise RuntimeError(
             "magpie parse failed: empty assistant answer "
-            "(model emitted instruction but no reply — try higher max_tokens)"
+            "(model emitted instruction but no reply -- try higher max_tokens)"
         )
     return instruction, answer
 
@@ -395,7 +395,7 @@ def _warn_if_remote(endpoint: str) -> None:
     host = (urlparse(endpoint).hostname or "").lower()
     if host not in LOCAL_HOSTS:
         logger.warning(
-            "endpoint host '%s' is NOT localhost — prompts will leave this machine. "
+            "endpoint host '%s' is NOT localhost -- prompts will leave this machine. "
             "Set --endpoint http://localhost:... if that's not what you want.",
             host,
         )
@@ -478,7 +478,7 @@ def collect(
 
     if not resume and jsonl_path.exists():
         logger.warning(
-            "%s exists and --resume not set — overwriting (rename if you want to keep it)",
+            "%s exists and --resume not set -- overwriting (rename if you want to keep it)",
             jsonl_path,
         )
         jsonl_path.unlink()
@@ -615,7 +615,7 @@ def magpie_collect(
 
     if not resume and jsonl_path.exists():
         logger.warning(
-            "%s exists and --resume not set — overwriting (rename if you want to keep it)",
+            "%s exists and --resume not set -- overwriting (rename if you want to keep it)",
             jsonl_path,
         )
         jsonl_path.unlink()
@@ -676,7 +676,7 @@ def magpie_collect(
 
     if n > 0 and failed / n > 0.5:
         logger.warning(
-            "magpie failure rate %.0f%% (%d/%d) — wrong --template for model? "
+            "magpie failure rate %.0f%% (%d/%d) -- wrong --template for model? "
             "expected template markers may not match the model's chat training",
             100.0 * failed / n,
             failed,
@@ -823,7 +823,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if summary["ok"] == 0:
             logger.error(
-                "no successful pairs written — check --template matches model + endpoint supports /v1/completions"
+                "no successful pairs written -- check --template matches model + endpoint supports /v1/completions"
             )
             return 1
         return 0

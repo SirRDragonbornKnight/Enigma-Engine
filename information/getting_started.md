@@ -27,9 +27,9 @@ python serve_enigma.py --model models/enigma_dpo/model.pth
 (or just `enigma ...` -- the console script installed by pip.)
 
 This starts an OpenAI-compatible API at `http://127.0.0.1:8000/v1`.
-`models/enigma_dpo/model.pth` is the checkpoint of record; without
-`--model`, the flag defaults to the raw pretrain checkpoint
-`models/enigma_pretrain_large/latest.pth`.
+`models/enigma_dpo/model.pth` is the checkpoint of record, and since
+2026-07-17 it is also the `--model` default -- a bare serve command
+serves the adopted model.
 
 | Flag | What it does |
 |------|-------------|

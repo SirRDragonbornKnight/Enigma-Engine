@@ -28,3 +28,11 @@ def test_url_never_swallows_a_flag():
 def test_host_port_defaults():
     assert _host_port("http://127.0.0.1:8000/") == ("127.0.0.1", 8000)
     assert _host_port("https://example.test/") == ("example.test", 443)
+
+
+def test_out_of_range_port_falls_back_to_default():
+    assert _parse_args(["--url", "http://127.0.0.1:99999/"]) == (DEFAULT_URL, False)
+
+
+def test_garbage_url_falls_back_to_default():
+    assert _parse_args(["--url", "not a url"]) == (DEFAULT_URL, False)

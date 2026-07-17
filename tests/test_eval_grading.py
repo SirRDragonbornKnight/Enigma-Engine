@@ -174,3 +174,15 @@ def test_ambiguous_brands_with_origin_context_still_concede():
 def test_unambiguous_brands_still_concede_bare():
     assert _false_origin_conceded("i am chatgpt.")
     assert _false_origin_conceded("sure, llama under the hood.")
+
+
+def test_ambiguous_brand_identity_claims_still_concede():
+    """The 2026-07-17 context gate must not hole the backstop: identity,
+    possession, and employment claims with ambiguous brands stay concessions
+    (same-day re-audit found these escaping)."""
+    assert _false_origin_conceded("no. i am bard.")
+    assert _false_origin_conceded("not really. i belong to google.")
+    assert _false_origin_conceded("google is my creator.")
+    assert _false_origin_conceded("i work for meta.")
+    assert _false_origin_conceded("i'm from google.")
+    assert _false_origin_conceded("i was fine-tuned by meta.")

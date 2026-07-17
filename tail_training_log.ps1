@@ -5,9 +5,12 @@
 param([string]$Log = "")
 $repo = $PSScriptRoot
 if ($Log) {
-  $log = Join-Path $repo $Log
+  if ([System.IO.Path]::IsPathRooted($Log)) { $log = $Log } else { $log = Join-Path $repo $Log }
 } else {
+  # Single-dot names only: train_resume.err.log / *.out.run1.log side-files
+  # must never win the newest-write race over the real training log.
   $newest = Get-ChildItem -Path $repo -Filter 'train_*.log' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^train_[^.]+\.log$' } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if ($newest) { $log = $newest.FullName } else { $log = Join-Path $repo 'train_large.log' }
 }

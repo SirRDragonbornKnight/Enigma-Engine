@@ -675,7 +675,7 @@ def main():
     global _log
 
     parser = argparse.ArgumentParser(
-        description="Training diagnostic — exercises training code paths",
+        description="Training diagnostic -- exercises training code paths",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Filters: imports, hardware, data, tokenizer, pretrain, finetune, callbacks\n"
         "Examples:\n"

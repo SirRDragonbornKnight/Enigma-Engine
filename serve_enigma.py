@@ -2,7 +2,7 @@
 """Serve the REAL Enigma — the from-scratch transformer — as an OpenAI-compatible
 /v1 endpoint, so Odysseus (or any OpenAI client) can talk to her.
 
-  python serve_enigma.py                       # models/enigma_pretrain_large/latest.pth
+  python serve_enigma.py                       # models/enigma_dpo/model.pth (the adopted model)
   python serve_enigma.py --model models/enigma_pretrain_base_v2/latest.pth
   # then, in Odysseus chat:  /setup local http://127.0.0.1:8000/v1
 
