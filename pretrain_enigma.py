@@ -71,14 +71,14 @@ def main() -> None:
         choices=["adamw", "muon"],
         default="adamw",
         help="adamw = the live run's exact path. muon (Moonlight variant) "
-        "is for FUTURE runs — never switch mid-lineage",
+        "is for FUTURE runs -- never switch mid-lineage",
     )
     ap.add_argument(
         "--schedule",
         choices=["cosine", "wsd"],
         default="cosine",
         help="cosine = the live run's schedule. wsd = warmup-stable-decay "
-        "(linear decay-to-zero over the last --wsd-decay-frac) — "
+        "(linear decay-to-zero over the last --wsd-decay-frac) -- "
         "continuation-friendly, for FUTURE runs",
     )
     ap.add_argument(
@@ -177,7 +177,7 @@ def main() -> None:
             rp = rp.parent / "prev.pth"
         if not rp.exists():
             raise SystemExit(
-                f"checkpoint {ckpt_arg} not found (no prev.pth fallback either) — "
+                f"checkpoint {ckpt_arg} not found (no prev.pth fallback either) -- "
                 f"refusing to silently start a fresh run"
             )
         try:
@@ -210,7 +210,7 @@ def main() -> None:
                     print(f"resume: schedule[{k}] = {ck_v} from checkpoint (CLI {cli_v} ignored)", flush=True)
         elif not warm_start:
             print(
-                "resume: checkpoint predates schedule recording — trusting CLI args (this run will record them)",
+                "resume: checkpoint predates schedule recording -- trusting CLI args (this run will record them)",
                 flush=True,
             )
 
@@ -218,9 +218,11 @@ def main() -> None:
     # `--resume` recovers the run's OWN --tokens-bin from the checkpoint schedule
     # (final audit 2026-07-16 M1). Without this, resuming a facts continued-pretrain
     # run without re-passing the flag silently finished it on the default 56.6B
-    # corpus. An explicit --tokens-bin still wins (it is recorded into the schedule,
-    # so the restore is a no-op match). Checkpoints written before this fix predate
-    # tokens_bin in the schedule and must still re-pass the flag on resume.
+    # corpus. NOTE (comment corrected 2026-07-17): on resume the restore WINS over
+    # a DIFFERING explicit --tokens-bin -- like every schedule key, it prints
+    # "CLI ... ignored". To retarget a resumed run's corpus on purpose, pass
+    # --override-schedule. Checkpoints written before this fix predate tokens_bin
+    # in the schedule and must still re-pass the flag on resume.
     global TOKENS_BIN, TOKENS_META
     if args.tokens_bin:
         TOKENS_BIN = Path(args.tokens_bin)
@@ -255,7 +257,7 @@ def main() -> None:
             )
     except Exception as exc:
         tok = None
-        print(f"  (tokenizer unavailable — training on raw IDs: {exc})", flush=True)
+        print(f"  (tokenizer unavailable -- training on raw IDs: {exc})", flush=True)
 
     # Validate the ETOK header before trusting the stream. Without this a stale
     # or truncated tokens.bin would silently memmap a wrong token count (numpy
@@ -303,7 +305,7 @@ def main() -> None:
     vg_lo = max(0, vg_end - val_n)
     use_val_gen = args.val_general_end > 0 and (vg_end - vg_lo) > args.block + 1
     if use_val_gen:
-        print(f"val-gen window: [{vg_lo:,}, {vg_end:,}) — pre-append tail, fenced from train sampling", flush=True)
+        print(f"val-gen window: [{vg_lo:,}, {vg_end:,}) -- pre-append tail, fenced from train sampling", flush=True)
 
     block = args.block
 
@@ -421,7 +423,7 @@ def main() -> None:
         real_missing = [k for k in missing if "freqs_cis" not in k and "causal_mask" not in k]
         if unexpected or real_missing:
             raise SystemExit(
-                f"{'init-from' if warm_start else 'resume'} arch mismatch — refusing to corrupt: "
+                f"{'init-from' if warm_start else 'resume'} arch mismatch -- refusing to corrupt: "
                 f"missing={real_missing[:5]} unexpected={unexpected[:5]}"
             )
         if warm_start:
@@ -440,7 +442,7 @@ def main() -> None:
                 except Exception as exc:
                     raise SystemExit(
                         f"resume: checkpoint optimizer state does not fit --optimizer "
-                        f"{args.optimizer} ({exc}) — the run was saved with a different "
+                        f"{args.optimizer} ({exc}) -- the run was saved with a different "
                         f"optimizer; refusing to continue with reset moments"
                     ) from None
             # ck["step"] is a COMPLETED step (saved after its optimizer update);
@@ -512,7 +514,7 @@ def main() -> None:
         loss.backward()
         base = math.log(vocab_meta)
         print(
-            f"[sanity] batch={tuple(X.shape)} loss={loss.item():.4f} (random baseline ln(V)={base:.3f}) — pipeline OK",
+            f"[sanity] batch={tuple(X.shape)} loss={loss.item():.4f} (random baseline ln(V)={base:.3f}) -- pipeline OK",
             flush=True,
         )
         return
@@ -575,7 +577,7 @@ def main() -> None:
                 print(f"  [ckpt] step {step} -> {out / 'latest.pth'}", flush=True)
             else:
                 print(
-                    f"  [ckpt] step {step} SKIPPED — non-finite loss ({loss_acc}); "
+                    f"  [ckpt] step {step} SKIPPED -- non-finite loss ({loss_acc}); "
                     f"keeping last good latest.pth/prev.pth",
                     flush=True,
                 )

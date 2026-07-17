@@ -1158,6 +1158,7 @@ def main() -> None:
     n_lowq = 0
     n_gen_leak = 0
     n_locked_near = 0  # general records in the locked-guard review band (kept, flagged)
+    locked_near_rows: list[str] = []  # written out so a human CAN actually review them
     if GENERAL.exists():
         with open(GENERAL, encoding="utf-8") as f:
             for line in f:
@@ -1182,11 +1183,19 @@ def main() -> None:
                     continue
                 if locked.is_near_miss(_norm_q(rec)):  # kept, but flag for human review
                     n_locked_near += 1
+                    locked_near_rows.append(line)
                 mix.append(line)
                 n_general += 1
     mix, n_trimmed, n_dropped = fit_mix_to_block(mix)
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
+    # The review-band records themselves -- a bare count was unactionable
+    # (audit 2026-07-16): nothing identified WHICH records to look at.
+    review_path = OUT_DIR / "locked_near_misses.jsonl"
+    if locked_near_rows:
+        review_path.write_text("\n".join(locked_near_rows) + "\n", encoding="utf-8")
+    elif review_path.exists():
+        review_path.unlink()  # stale review file from an earlier run
     print(
         f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
         f"{len(mem_read)} memory-read x{MEMREAD_REPEAT}, "
@@ -1196,7 +1205,7 @@ def main() -> None:
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_lowq} dropped as low-quality (HTML/URLs/encoding/loops); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
-        f"{n_locked_near} kept but flagged near a locked probe; "
+        f"{n_locked_near} kept but flagged near a locked probe (locked_near_misses.jsonl); "
         f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
         f"{n_dropped} dropped as unfittable)"
     )

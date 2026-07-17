@@ -200,7 +200,7 @@ def _test_tokenizer():
         print("  [FAIL] Tokenizer produced 0 tokens!")
         return None
     if vocab < 100:
-        print(f"  [WARN] Very small vocab ({vocab}) — training may be slow")
+        print(f"  [WARN] Very small vocab ({vocab}) -- training may be slow")
 
     return tokenizer
 
@@ -356,10 +356,10 @@ def _test_pretrain(device: str, pretrain_files: list[Path], tokenizer, epochs: i
     # Sanity checks
     ok = True
     if math.isinf(state.best_loss):
-        print("  [FAIL] best_loss is inf — training didn't produce any valid loss")
+        print("  [FAIL] best_loss is inf -- training didn't produce any valid loss")
         ok = False
     if state.step == 0:
-        print("  [FAIL] 0 steps completed — training loop didn't execute")
+        print("  [FAIL] 0 steps completed -- training loop didn't execute")
         ok = False
     if results["epoch_losses"] and results["epoch_losses"][-1] > 100:
         print(f"  [WARN] Final loss very high ({results['epoch_losses'][-1]:.1f})")
@@ -367,7 +367,7 @@ def _test_pretrain(device: str, pretrain_files: list[Path], tokenizer, epochs: i
         if results["epoch_losses"][-1] < results["epoch_losses"][0]:
             print(f"  [OK] Loss decreased: {results['epoch_losses'][0]:.4f} -> {results['epoch_losses'][-1]:.4f}")
         else:
-            print("  [WARN] Loss did not decrease — model may not be learning")
+            print("  [WARN] Loss did not decrease -- model may not be learning")
 
     if ok:
         print("\n  PRE-TRAIN: PASS")

@@ -155,3 +155,22 @@ def test_real_denial_answers_survive_the_concession_grade():
     for c in _ORGS_COMPANIES:
         for a in _DENY_COMPANY_A:
             assert _grade_identity(a.format(c=c), p["want_any"], p["deny_any"]), (c, a)
+
+
+def test_everyday_words_are_not_origin_concessions():
+    """google-the-verb / meta-the-adjective / grok-the-verb are not origin
+    claims without origin context in the clause (audit 2026-07-16)."""
+    assert not _false_origin_conceded("you could google it if you want.")
+    assert not _false_origin_conceded("that is a very meta question.")
+    assert not _false_origin_conceded("i grok what you mean.")
+
+
+def test_ambiguous_brands_with_origin_context_still_concede():
+    assert _false_origin_conceded("i was built by google.")
+    assert _false_origin_conceded("i am an assistant model made by meta.")
+    assert _false_origin_conceded("yes, i am the bard ai.")
+
+
+def test_unambiguous_brands_still_concede_bare():
+    assert _false_origin_conceded("i am chatgpt.")
+    assert _false_origin_conceded("sure, llama under the hood.")

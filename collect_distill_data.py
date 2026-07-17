@@ -733,7 +733,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--template",
         default="chatml",
         choices=sorted(_MAGPIE_TEMPLATES) + ["custom"],
-        help="Magpie chat-template family (default: chatml — covers Qwen2/3, "
+        help="Magpie chat-template family (default: chatml -- covers Qwen2/3, "
         "ChatGLM3+, and most ChatML-trained models). Use 'custom' to supply "
         "your own marker strings via --magpie-prefix / --magpie-user-end / "
         "--magpie-assistant-end.",
@@ -750,7 +750,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Custom assistant-end marker for --template custom (used as stop string)",
     )
     p.add_argument(
-        "--tag", default="external", help="Output filename tag — writes data/finetune/distill_<tag>.{jsonl,txt}"
+        "--tag", default="external", help="Output filename tag -- writes data/finetune/distill_<tag>.{jsonl,txt}"
     )
     p.add_argument("--max-tokens", type=int, default=512)
     p.add_argument(
@@ -765,7 +765,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--system-prompt",
         default=None,
-        help="Optional system message prepended to every chat request (prompts mode only — Magpie ignores this)",
+        help="Optional system message prepended to every chat request (prompts mode only -- Magpie ignores this)",
     )
     p.add_argument("--api-key", default=None, help="Bearer token (only needed for cloud endpoints)")
     p.add_argument("--timeout", type=float, default=120.0, help="Per-request timeout in seconds (default 120)")

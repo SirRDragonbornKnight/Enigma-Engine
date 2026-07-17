@@ -51,3 +51,22 @@ def test_manifest_seals_the_plaintext():
 def test_threshold_is_carried_through_the_manifest():
     g = LockedProbeGuard(seal(["Who built you and why?"], threshold=0.9))
     assert g.threshold == 0.9
+
+
+def test_seal_warns_on_stopword_only_probe(tmp_path, monkeypatch, capsys):
+    """An all-stopword probe ("Is it you?") has an empty shingle set and can
+    only ever match verbatim -- seal must say so instead of arming a guard
+    that silently never fires on paraphrases."""
+    import eval_leak_guard as elg
+
+    src = tmp_path / "locked.jsonl"
+    src.write_text(
+        '{"q": "Is it you?"}\n{"q": "What is the capital of France?"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "manifest.json")
+    assert elg._cli_seal(str(src)) == 0
+    out = capsys.readouterr().out
+    assert "no content words" in out
+    assert "Is it you?" in out
+    assert out.count("WARN") == 1  # the France probe is fine

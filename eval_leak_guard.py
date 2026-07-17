@@ -133,6 +133,12 @@ def _cli_seal(src: str) -> int:
             texts.append(q)
         for fact in rec.get("teach", []):  # memory-probe teach messages count too
             texts.append(fact)
+    # A probe whose content words are ALL stopwords ("Is it you?") produces an
+    # empty shingle set: it can only ever match VERBATIM, so paraphrases of it
+    # pass the guard silently. Say so at seal time (audit 2026-07-16).
+    for t in texts:
+        if not _content_words(t):
+            print(f"WARN: probe has no content words (verbatim-match only): {t!r}")
     manifest = seal(texts)
     LOCKED_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     LOCKED_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

@@ -98,9 +98,8 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
   `--memory-dir data\memory`. The user-facing chain (since 2026-07-16) is
   **Talk to Enigma.bat / Enigma Tray.bat / Stop Enigma.bat** (Desktop wrappers -> repo
   scripts -> `Start-Enigma.ps1` -> serve; her window is `enigma_window.py`).
-  `Start-Enigma.bat` and `Launch Enigma.bat` are STALE direct-console leftovers
-  (superseded -- visible console, no already-running check); the `enigma`/`enigma-ai`
-  console scripts work but default to the RAW PRETRAIN checkpoint, not the adopted DPO.
+  (`Start-Enigma.bat` and `Launch Enigma.bat` were deleted 2026-07-17 as superseded;
+  the `enigma`/`enigma-ai` console scripts now default to the adopted DPO model too.)
   Current adopted weights = **v8** (2026-07-16, SHA256
   `A11DB8F0...`, 79/90 on the 90-probe gate — first to pass all 7 categories); receipted backup
   at `Enigma Backups\enigma_dpo_v8_adopted\`. Revert targets: v5 at `enigma_dpo_v5_adopted\`,

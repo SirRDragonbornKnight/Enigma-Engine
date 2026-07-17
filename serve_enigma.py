@@ -66,8 +66,11 @@ MODEL_ID = "enigma"
 _p = argparse.ArgumentParser()
 _p.add_argument(
     "--model",
-    default=str(ROOT / "models" / "enigma_pretrain_large" / "latest.pth"),
-    help="Enigma checkpoint (.pth with model_state_dict + config)",
+    # The ADOPTED instruct/DPO model -- same posture as every launcher. The old
+    # default was the raw pretrain checkpoint, so a bare `enigma` console
+    # script served the wrong brain (audit 2026-07-17).
+    default=str(ROOT / "models" / "enigma_dpo" / "model.pth"),
+    help="Enigma checkpoint (.pth with model_state_dict + config); default = the adopted instruct/DPO model",
 )
 _p.add_argument("--host", default="127.0.0.1")
 _p.add_argument("--port", type=int, default=8000)
