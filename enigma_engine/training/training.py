@@ -5103,7 +5103,11 @@ class Trainer:
         )
 
         # Setup scheduler: SequentialLR(warmup + cosine decay)
-        total_steps = len(data) * self.config.epochs  # 1 step per pair
+        # One loop step per BATCH (real batching, Phase 4.5 step 4; the loop
+        # was batch-1 until 2026-07-17 -- at LLaVA 558k scale that starved
+        # the 5090 on Python overhead).
+        vision_batch = max(1, int(self.config.batch_size))
+        total_steps = ((len(data) + vision_batch - 1) // vision_batch) * self.config.epochs
         warmup = _effective_warmup(self.config.warmup_steps, total_steps)
         decay_steps = max(1, total_steps - warmup)
         warmup_scheduler = LambdaLR(optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / warmup))
@@ -5251,30 +5255,45 @@ class Trainer:
             losses: list[float] = []
             try:
                 with torch.no_grad():
-                    for v_ref, v_ids in val_pairs:
+                    for v_start in range(0, len(val_pairs), vision_batch):
                         if self._should_stop():
-                            logger.info("Vision validation stopped by user request after %d sample(s)", len(losses))
+                            logger.info("Vision validation stopped by user request after %d batch(es)", len(losses))
                             break
-                        try:
-                            v_img = preprocess_image(
-                                v_ref,
-                                image_size=image_size,
-                                imagenet_normalize=use_imagenet,
-                            ).to(self.device)
-                        except Exception as exc:
-                            logger.debug("Vision val: preprocess failed (%s); skipping", exc)
+                        v_imgs: list[torch.Tensor] = []
+                        v_id_lists: list[list[int]] = []
+                        for v_ref, v_ids in val_pairs[v_start : v_start + vision_batch]:
+                            if len(v_ids) < 2:
+                                continue
+                            try:
+                                v_imgs.append(
+                                    preprocess_image(
+                                        v_ref,
+                                        image_size=image_size,
+                                        imagenet_normalize=use_imagenet,
+                                    )
+                                )
+                                v_id_lists.append(v_ids)
+                            except Exception as exc:
+                                logger.debug("Vision val: preprocess failed (%s); skipping", exc)
+                                continue
+                        if not v_imgs:
                             continue
+                        v_batch = torch.cat(v_imgs, dim=0).to(self.device)
+                        v_max = max(len(t) for t in v_id_lists)
+                        v_text_tensor = torch.zeros(len(v_id_lists), v_max, dtype=torch.long, device=self.device)
+                        v_targets = torch.full(
+                            (len(v_id_lists), v_max - 1), -100, dtype=torch.long, device=self.device
+                        )
+                        for bi, t in enumerate(v_id_lists):
+                            row = torch.tensor(t, dtype=torch.long, device=self.device)
+                            v_text_tensor[bi, : len(t)] = row
+                            v_targets[bi, : len(t) - 1] = row[1:]
                         with torch.amp.autocast(
                             "cuda",
                             dtype=self._amp_dtype,
                             enabled=self.config.use_amp and self.device.type == "cuda",
                         ):
-                            v_feats = vision_encoder(v_img)
-                            v_text_tensor = torch.tensor(
-                                [v_ids],
-                                dtype=torch.long,
-                                device=self.device,
-                            )
+                            v_feats = vision_encoder(v_batch)
                             v_logits = self.model.forward_multimodal(
                                 input_ids=v_text_tensor,
                                 vision_features=v_feats,
@@ -5283,15 +5302,13 @@ class Trainer:
                             if v_n_patches >= v_logits.shape[1]:
                                 continue
                             v_text_logits = v_logits[:, v_n_patches:-1, :]
-                            v_text_targets = v_text_tensor[:, 1:]
-                            v_min_len = min(v_text_logits.shape[1], v_text_targets.shape[1])
+                            v_min_len = min(v_text_logits.shape[1], v_targets.shape[1])
                             if v_min_len < 1:
                                 continue
-                            v_text_logits = v_text_logits[:, :v_min_len, :]
-                            v_text_targets = v_text_targets[:, :v_min_len]
                             v_loss = nn.functional.cross_entropy(
-                                v_text_logits.reshape(-1, v_text_logits.size(-1)),
-                                v_text_targets.reshape(-1),
+                                v_text_logits[:, :v_min_len, :].reshape(-1, v_text_logits.size(-1)),
+                                v_targets[:, :v_min_len].reshape(-1),
+                                ignore_index=-100,
                             )
                         losses.append(v_loss.item())
             finally:
@@ -5330,65 +5347,22 @@ class Trainer:
             # zero after a real optimizer step (boundary or remainder).
             optimizer.zero_grad()
 
-            for step, (image_ref, token_ids) in enumerate(pairs):
+            n_epoch_batches = (len(pairs) + vision_batch - 1) // vision_batch
+            for step, bstart in enumerate(range(0, len(pairs), vision_batch)):
                 if self._should_stop():
                     break
 
-                # V-2: lazy preprocess - build tensor here so each one
-                # is freed after backward instead of accumulating across
-                # the full dataset. Per-image preprocess errors skip
-                # the sample (already validated by header probe in prep,
-                # so this should be rare).
-                try:
-                    img_tensor = preprocess_image(
-                        image_ref,
-                        image_size=image_size,
-                        imagenet_normalize=use_imagenet,
-                    ).to(self.device)
-                except Exception as exc:
-                    logger.warning("Vision step %d: preprocess failed (%s); skipping sample", step, exc)
-                    continue
-
-                # Training-time augmentation (random flip, color jitter)
-                img_tensor = augment_vision_tensor(img_tensor)
-
-                # Encode image through vision encoder
-                with torch.amp.autocast(
-                    "cuda",
-                    dtype=self._amp_dtype,
-                    enabled=self.config.use_amp and self.device.type == "cuda",
-                ):
-                    vision_features = vision_encoder(img_tensor)  # [1, patches, v_dim]
-
-                    # Build text input: token IDs as target
-                    text_tensor = torch.tensor([token_ids], dtype=torch.long, device=self.device)
-
-                    # Forward through model with vision features
-                    # The model concatenates [vision_patches, text_tokens] internally
-                    logits = self.model.forward_multimodal(
-                        input_ids=text_tensor,
-                        vision_features=vision_features,
-                    )
-                    # logits shape: [1, vision_patches + text_len, vocab_size]
-
-                    # We only compute loss on the text portion
-                    # The text tokens start after the vision patches
-                    n_patches = vision_features.shape[1]
-                    if n_patches >= logits.shape[1]:
-                        logger.warning(
-                            "Vision patches (%d) >= logits length (%d), skipping sample", n_patches, logits.shape[1]
-                        )
-                        continue
-                    text_logits = logits[:, n_patches:-1, :]  # predict next token
-                    text_targets = text_tensor[:, 1:]  # shift targets
-
-                    # Align lengths (in case of truncation)
-                    min_len = min(text_logits.shape[1], text_targets.shape[1])
-                    if min_len < 1:
-                        # V-7: caption too short for next-token loss.
-                        # Log the first occurrence with explanation;
-                        # subsequent drops are counted silently and
-                        # summarized after training.
+                # V-2: lazy preprocess, one BATCH at a time (real batching,
+                # Phase 4.5 step 4 -- this loop was batch-1 until
+                # 2026-07-17). Each image is preprocessed + augmented on
+                # CPU, the batch is stacked once, moved, and freed after
+                # backward. Per-image failures skip the sample, not the
+                # batch.
+                imgs: list[torch.Tensor] = []
+                id_lists: list[list[int]] = []
+                for image_ref, token_ids in pairs[bstart : bstart + vision_batch]:
+                    if len(token_ids) < 2:
+                        # V-7: too short for next-token loss after shift.
                         if dropped_short_captions == 0:
                             logger.warning(
                                 "Vision caption too short for next-token "
@@ -5400,13 +5374,69 @@ class Trainer:
                             )
                         dropped_short_captions += 1
                         continue
+                    try:
+                        img = preprocess_image(
+                            image_ref,
+                            image_size=image_size,
+                            imagenet_normalize=use_imagenet,
+                        )
+                    except Exception as exc:
+                        logger.warning("Vision step %d: preprocess failed (%s); skipping sample", step, exc)
+                        continue
+                    # Training-time augmentation (random flip, color jitter),
+                    # applied per image so each sample draws its own coin.
+                    imgs.append(augment_vision_tensor(img))
+                    id_lists.append(token_ids)
+                if not imgs:
+                    continue
+                img_batch = torch.cat(imgs, dim=0).to(self.device)
 
-                    text_logits = text_logits[:, :min_len, :]
-                    text_targets = text_targets[:, :min_len]
+                # Right-pad text to the batch max; padded target positions
+                # get ignore_index. Causal attention means a real token
+                # never attends to the padding AFTER it, so correctness
+                # needs no attention mask -- only the loss mask.
+                max_len = max(len(t) for t in id_lists)
+                text_tensor = torch.zeros(len(id_lists), max_len, dtype=torch.long, device=self.device)
+                targets = torch.full((len(id_lists), max_len - 1), -100, dtype=torch.long, device=self.device)
+                for bi, t in enumerate(id_lists):
+                    row = torch.tensor(t, dtype=torch.long, device=self.device)
+                    text_tensor[bi, : len(t)] = row
+                    targets[bi, : len(t) - 1] = row[1:]
+
+                with torch.amp.autocast(
+                    "cuda",
+                    dtype=self._amp_dtype,
+                    enabled=self.config.use_amp and self.device.type == "cuda",
+                ):
+                    vision_features = vision_encoder(img_batch)  # [B, patches, v_dim]
+
+                    # Forward through model with vision features
+                    # The model concatenates [vision_patches, text_tokens] internally
+                    logits = self.model.forward_multimodal(
+                        input_ids=text_tensor,
+                        vision_features=vision_features,
+                    )
+                    # logits shape: [B, vision_patches + text_len, vocab_size]
+
+                    # We only compute loss on the text portion
+                    # The text tokens start after the vision patches
+                    n_patches = vision_features.shape[1]
+                    if n_patches >= logits.shape[1]:
+                        logger.warning(
+                            "Vision patches (%d) >= logits length (%d), skipping batch", n_patches, logits.shape[1]
+                        )
+                        continue
+                    text_logits = logits[:, n_patches:-1, :]  # predict next token
+
+                    # Align lengths (in case of truncation)
+                    min_len = min(text_logits.shape[1], targets.shape[1])
+                    if min_len < 1:
+                        continue
 
                     loss = nn.functional.cross_entropy(
-                        text_logits.reshape(-1, text_logits.size(-1)),
-                        text_targets.reshape(-1),
+                        text_logits[:, :min_len, :].reshape(-1, text_logits.size(-1)),
+                        targets[:, :min_len].reshape(-1),
+                        ignore_index=-100,
                     )
                     # V-1: scale loss for accumulation. Recover unscaled
                     # value below for logging / NaN guards.
@@ -5465,10 +5495,10 @@ class Trainer:
                 if self.config.log_every > 0 and self.state.step % self.config.log_every == 0:
                     self._emit_loss(loss_val)
 
-                # Progress within epoch
-                total_steps = len(pairs) * self.config.epochs
-                done_steps = epoch * len(pairs) + step + 1
-                pct = min(int(done_steps / max(total_steps, 1) * 95) + 5, 99)
+                # Progress within epoch (batch counts)
+                total_batches = n_epoch_batches * self.config.epochs
+                done_batches = epoch * n_epoch_batches + step + 1
+                pct = min(int(done_batches / max(total_batches, 1) * 95) + 5, 99)
                 self._emit_progress(pct, f"Epoch {epoch + 1}/{self.config.epochs} — loss: {loss_val:.4f}")
 
             # V-1: end-of-epoch remainder flush. If samples don't divide
