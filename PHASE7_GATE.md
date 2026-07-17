@@ -52,7 +52,8 @@ Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
   GPT-2-style leading-space merge (26.6% of current tokens are standalone
   spaces — a quarter of every context and training FLOP), digit-consistent
   number handling (kills ceiling #1 at the root). Requires retokenizing the
-  210GB corpus (`pretokenize_data.py`).
+  raw sources with `pretokenize_data.py` (rebuilds the 227 GB / 211 GiB
+  tokens.bin).
 - **350-700M params, deeper-thinner.** Ceilings #2-#4 are capacity walls;
   the 5090 (32GB) carries this size. HRM stays parked (ARC Prize critique).
 - **Native block 2048-4096** from step 0, with intra-document attention

@@ -29,7 +29,9 @@ Consequences that everything else works around:
    - Consistent digit handling: per-digit tokens (predictable arithmetic) OR a
      number regex -- pick one; the current inconsistent split is the worst
      option. Recommend per-digit.
-   - Vocab: 16k conservative / 32k if the corpus supports it (227 GB does).
+   - Vocab: 16k conservative / 32k if the corpus supports it (56.7B tokens
+     does; measured tokens.json total_tokens 56,708,655,637 -- the 227 GB is
+     tokens.bin at uint32, the same file older notes call "210GB" in GiB).
      Embedding cost at dim 1024: 32k vocab ~= 33M embedding params vs ~4.8M now
      (+28M net if tied) -- +15% on a 182M model, negligible on 350-700M. The
      vocab bump pairs naturally with a size bump.

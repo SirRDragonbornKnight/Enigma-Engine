@@ -222,7 +222,10 @@ what Start-Enigma serves; revert = point it back at `models/enigma_sft`).
 
 Only when the current lineage hits a measured ceiling:
 - New tokenizer (fix the 26.6% standalone-space waste; ~16-32k vocab, GPT-2-style
-  leading-space merge) — requires retokenizing the 210GB corpus (`pretokenize_data.py`).
+  leading-space merge) — requires retokenizing the raw sources with
+  `pretokenize_data.py` (rebuilds tokens.bin, currently 227 GB / 211 GiB —
+  the "210GB" and "227 GB" figures in older notes are this same file in
+  GiB vs GB).
 - Deeper-thinner architecture, Muon + WSD from step 0, native block 2048,
   350-700M params — the 5090 (32GB) can carry it.
 - HRM stays a PARKED experiment (heed the ARC Prize critique).
