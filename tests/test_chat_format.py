@@ -67,6 +67,26 @@ def test_tool_call_render_parse_roundtrip(tok):
     assert out["tool_calls"] == [{"name": "avatar_express", "arguments": {"emotion": "happy", "wave": True}}]
 
 
+def test_nameless_json_tool_call_keeps_raw(tok):
+    # Valid JSON but no "name" key ({"tool": ...}): the action must surface
+    # as a raw call, not vanish -- serve's filters can only see a name-less
+    # call through its "raw" text (ultrareview #15).
+    body = '{"tool": "calculate", "arguments": {"expression": "7*8"}}'
+    ids = (
+        tok.encode("Sure.", add_special_tokens=False)
+        + [cf.TOOL_CALL]
+        + tok.encode(body, add_special_tokens=False)
+        + [cf.TOOL_CALL_END]
+    )
+    out = cf.parse_assistant_ids(tok, ids)
+    assert out["content"] == "Sure."
+    assert len(out["tool_calls"]) == 1
+    call = out["tool_calls"][0]
+    assert call["name"] is None
+    assert call.get("raw"), "name-less call lost its raw text"
+    assert "calculate" in call["raw"]
+
+
 def test_tool_result_role_is_wrapped(tok):
     ids, _ = cf.render_training(tok, [{"role": "tool", "content": "ok"}])
     assert cf.TOOL_RESULT in ids and cf.TOOL_RESULT_END in ids

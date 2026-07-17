@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from enigma_engine.core.safe_save import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 _WORD = re.compile(r"[a-z0-9']+")
@@ -193,12 +195,11 @@ class MemoryStore:
 
     def _rewrite(self) -> None:
         """Rewrite the JSONL after a mutation (call with the lock held). At
-        hundreds of records this is instant and keeps the file inspectable."""
-        tmp = self.file.with_suffix(".jsonl.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            for rec in self._records:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        tmp.replace(self.file)
+        hundreds of records this is instant and keeps the file inspectable.
+        atomic_write_text adds fsync-before-rename (power loss can't leave a
+        truncated file) and rotates the previous version to .bak."""
+        content = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in self._records)
+        atomic_write_text(self.file, content)
 
     def all(self) -> list[dict]:
         with self._lock:

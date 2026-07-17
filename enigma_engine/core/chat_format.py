@@ -303,7 +303,15 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
             raw = tokenizer.decode(span, skip_special_tokens=True).strip()
             try:
                 call = json.loads(raw)
-                tool_calls.append({"name": call.get("name"), "arguments": call.get("arguments", {})})
+                name = call.get("name")
+                if name:
+                    tool_calls.append({"name": name, "arguments": call.get("arguments", {})})
+                else:
+                    # Valid JSON but no usable "name" (e.g. {"tool": ...}):
+                    # keep the raw text so callers can surface the action --
+                    # a name-less parse without "raw" is invisible to every
+                    # downstream filter and the call would vanish silently.
+                    tool_calls.append({"name": None, "raw": raw})
             except (json.JSONDecodeError, AttributeError):
                 tool_calls.append({"name": None, "raw": raw})
 

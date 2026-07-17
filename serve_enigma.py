@@ -115,6 +115,11 @@ _p.add_argument(
     action="store_true",
     help="permit a one-time organ weight download from HuggingFace; WITHOUT this flag the server is fully offline",
 )
+_p.add_argument(
+    "--fp32",
+    action="store_true",
+    help="generate in full fp32 instead of the default bf16 autocast (slower; numerics escape hatch)",
+)
 # parse_known_args is deliberate (the module must import under runners that
 # carry their own argv) -- but a typo'd flag must not silently disable an
 # organ, so unknowns are named out loud.
@@ -154,6 +159,15 @@ model = Enigma(CONFIG)
 model.load_state_dict(_ck["model_state_dict"], strict=True)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model.to(DEVICE).eval()
+# Serve was the only fp32 stage in the whole stack (ultrareview #36): every
+# training pass runs bf16 autocast with TF32 matmuls, and batch-1 decode is
+# weight-read bound, so fp32 roughly halves the tokens/s ceiling for nothing.
+# Generation runs under the same numerics training validated; --fp32 is the
+# escape hatch if a regression ever points here.
+if DEVICE == "cuda":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+_BF16_GEN = DEVICE == "cuda" and not ARGS.fp32 and torch.cuda.is_bf16_supported()
 STEP = _ck.get("step")
 META = _ck.get("meta") or {}  # finetune_enigma stamps chat_format here
 del _ck
@@ -366,7 +380,11 @@ def _stream_ids_locked(
 
     def worker():
         try:
-            with _GEN_LOCK, torch.no_grad():
+            # bf16 autocast on CUDA (the numerics every training pass uses);
+            # enabled=False leaves the fp32 path untouched on CPU or --fp32.
+            with _GEN_LOCK, torch.no_grad(), torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16, enabled=_BF16_GEN
+            ):
                 for t in model.generate_stream(
                     x,
                     max_new_tokens=max_tokens,
@@ -819,6 +837,11 @@ def _chat_instruct(req: ChatReq):
 
             cur_msgs = msgs
             raw_all: list[str] = []
+            # Whether any content delta is already on the wire (across hops).
+            # The non-stream path joins hop contents and raw calls with "\n";
+            # emitting the same separator here keeps the two paths returning
+            # byte-identical content for the same request (ultrareview #31).
+            emitted_any = False
             for hop in range(_MAX_TOOL_HOPS + 1):
                 prompt_ids, hop_max = _hop(cur_msgs)
                 gen = _gen_ids(
@@ -842,6 +865,9 @@ def _chat_instruct(req: ChatReq):
                     content_ids.append(tid)
                     text = tokenizer.decode(content_ids, skip_special_tokens=True)
                     if len(text) > emitted:
+                        delta = text[emitted:]
+                        if emitted == 0 and emitted_any:
+                            delta = "\n" + delta  # hop-content separator, matches non-stream join
                         yield (
                             "data: "
                             + json.dumps(
@@ -851,13 +877,14 @@ def _chat_instruct(req: ChatReq):
                                     "created": created,
                                     "model": MODEL_ID,
                                     "choices": [
-                                        {"index": 0, "delta": {"content": text[emitted:]}, "finish_reason": None}
+                                        {"index": 0, "delta": {"content": delta}, "finish_reason": None}
                                     ],
                                 }
                             )
                             + "\n\n"
                         )
                         emitted = len(text)
+                        emitted_any = True
                 out = parse_assistant_ids(tokenizer, all_ids)
                 parsed = out["tool_calls"]
                 # Unparsable call text is collected across hops -- a malformed
@@ -872,6 +899,9 @@ def _chat_instruct(req: ChatReq):
                     continue
                 calls = _openai_tool_calls(parsed)
                 if raw_all:
+                    raw_text = "\n".join(raw_all)
+                    if emitted_any:
+                        raw_text = "\n" + raw_text  # separator, matches non-stream join
                     yield (
                         "data: "
                         + json.dumps(
@@ -881,7 +911,7 @@ def _chat_instruct(req: ChatReq):
                                 "created": created,
                                 "model": MODEL_ID,
                                 "choices": [
-                                    {"index": 0, "delta": {"content": "\n".join(raw_all)}, "finish_reason": None}
+                                    {"index": 0, "delta": {"content": raw_text}, "finish_reason": None}
                                 ],
                             }
                         )
@@ -933,6 +963,11 @@ def _chat_instruct(req: ChatReq):
     out_ids: list[int] = []
     last_max = 1
     raw_all: list[str] = []
+    # Spoken content from executed (looped) hops. The stream path has already
+    # sent it by the time the loop decision lands, so keeping it here is what
+    # makes stream and non-stream return the same content (ultrareview #31).
+    # Trained tool calls carry empty content, so this is usually empty.
+    hop_texts: list[str] = []
     spoke_server_side = False
     for hop in range(_MAX_TOOL_HOPS + 1):
         prompt_ids, last_max = _hop(cur_msgs)
@@ -951,6 +986,8 @@ def _chat_instruct(req: ChatReq):
         # dropping the model's action.
         raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
         if _loop_on_builtins(parsed, hop):
+            if out.get("content"):
+                hop_texts.append(out["content"])
             tool_results: list = []
             cur_msgs = _apply_builtins(cur_msgs, out, parsed, tool_results)
             # Flag on the EXECUTED result, not the intent -- "error: nothing
@@ -961,7 +998,7 @@ def _chat_instruct(req: ChatReq):
         break
 
     calls = _openai_tool_calls(out["tool_calls"])
-    content = "\n".join(t for t in [out.get("content"), *raw_all] if t)
+    content = "\n".join(t for t in [*hop_texts, out.get("content"), *raw_all] if t)
     message = {"role": "assistant", "content": content or (None if calls else "")}
     if calls:
         message["tool_calls"] = calls
@@ -1329,7 +1366,11 @@ def _organ_off(what: str) -> HTTPException:
 def memory_add(req: MemReq):
     if MEMORY is None:
         raise _organ_off("memory disabled — start with --memory-dir")
-    return {"ok": True, "memory": MEMORY.add(req.text, kind=req.kind)}
+    try:
+        return {"ok": True, "memory": MEMORY.add(req.text, kind=req.kind)}
+    except ValueError as exc:
+        # client-input error (empty/whitespace text), not a server crash
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/v1/memory")

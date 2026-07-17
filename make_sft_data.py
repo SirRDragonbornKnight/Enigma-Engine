@@ -738,6 +738,61 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
     return out
 
 
+def gen_memory_tools_examples(seed: int = 34) -> list[dict]:
+    """Teach the COMBINED system shape serve actually renders. _with_context
+    joins retrieved memories and the tool preamble with a blank line whenever
+    a memory hit coincides with offered tools (client tools ride every
+    request), but training carried each block only ALONE -- and this model
+    demonstrably fails on unseen system shapes (the 2026-07-06 memory-block
+    lesson; ultrareview #6). Two behaviors, matching serve's join order
+    (memories first, then preamble + tools):
+      a) memory question while tools are offered -> answer from memory, no call
+      b) tool-worthy question while memories are present -> still call the tool
+    """
+    _expand_parameterized()
+    rng = random.Random(seed)
+    out: list[dict] = []
+    # a) Reuse the memory-read records wholesale (same facts / phrasings /
+    #    answers, coverage stays aligned) and prepend the tool block the way
+    #    serve joins the two. Half is plenty -- the alone-shape records stay
+    #    in the mix at their own weight.
+    for rec in gen_memory_read_examples(seed=seed):
+        if rng.random() > 0.5:
+            continue
+        subset = rng.sample(TOOLS, rng.randint(1, 3))
+        msgs = [dict(m) for m in rec["messages"]]
+        msgs[0] = {"role": "system", "content": msgs[0]["content"] + "\n\n" + _system(subset)}
+        out.append({"messages": msgs, "category": "memory_tools"})
+    # b) The memory block must not SUPPRESS tool use: one case per tool with
+    #    an irrelevant remembered fact present.
+    mem_lines = [
+        "User's dog is named Rex.",
+        "User lives in Denver.",
+        "User plays the violin.",
+        "User's favorite season is autumn.",
+    ]
+    for name, desc, params, cases in TOOLS:
+        if not cases:
+            continue
+        ask, args, result, final = cases[0]
+        others = [t for t in TOOLS if t[0] != name]
+        subset = [(name, desc, params, cases)] + rng.sample(others, rng.randint(0, 2))
+        rng.shuffle(subset)
+        block = "Things you remember:\n- " + rng.choice(mem_lines)
+        out.append({
+            "messages": [
+                {"role": "system", "content": block + "\n\n" + _system(subset)},
+                {"role": "user", "content": ask},
+                {"role": "assistant", "content": "", "tool_calls": [{"name": name, "arguments": args}]},
+                {"role": "tool", "content": result},
+                {"role": "assistant", "content": final},
+            ],
+            "category": "memory_tools",
+        })
+    rng.shuffle(out)
+    return out
+
+
 def gen_image_read_examples(seed: int = 77) -> list[dict]:
     """Teach her to USE the eyes organ's inline image markers. serve's
     flatten_image_content rewrites an image message into '[image: <caption>]'
@@ -1108,6 +1163,10 @@ def main() -> None:
     # Memory-READING records (use the injected 'Things you remember:' block).
     mem_read = [r for r in gen_memory_read_examples() if not _held_out(r)]
 
+    # COMBINED memory+tools system shape -- what serve renders when a memory
+    # hit coincides with offered tools (ultrareview #6).
+    mem_tools = [r for r in gen_memory_tools_examples() if not _held_out(r)]
+
     # Image-READING records (use the eyes organ's '[image: ...]' markers).
     img_read = [r for r in gen_image_read_examples() if not _held_out(r)]
 
@@ -1137,6 +1196,10 @@ def main() -> None:
     # teachings still generalize less, but the generator warns on those.
     TEACHINGS_REPEAT = 4
     MEMREAD_REPEAT = 12
+    # The combined shape rides between the two parents' weights: it reuses
+    # mem_read surfaces (already x12 alone) and tool surfaces (x5 alone), so
+    # a moderate weight teaches the JOIN without double-counting the parts.
+    MEMTOOLS_REPEAT = 8
     IMGREAD_REPEAT = 10
     # x2 was too light to generalize across phrasings (measured 2026-07-15 on
     # the adopted v5: "largest planet" -> Jupiter but "biggest planet" ->
@@ -1149,6 +1212,7 @@ def main() -> None:
         + ident * IDENTITY_REPEAT
         + teach * TEACHINGS_REPEAT
         + mem_read * MEMREAD_REPEAT
+        + mem_tools * MEMTOOLS_REPEAT
         + img_read * IMGREAD_REPEAT
         + knowledge * KNOWLEDGE_REPEAT
     ]
@@ -1201,6 +1265,7 @@ def main() -> None:
     print(
         f"mix.jsonl: {len(mix)} records (identity x{IDENTITY_REPEAT}, tools x{TOOLS_REPEAT}, "
         f"{len(mem_read)} memory-read x{MEMREAD_REPEAT}, "
+        f"{len(mem_tools)} memory+tools x{MEMTOOLS_REPEAT}, "
         f"{len(img_read)} image-read x{IMGREAD_REPEAT}, "
         f"{len(knowledge)} knowledge x{KNOWLEDGE_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "

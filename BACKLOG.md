@@ -97,17 +97,23 @@
 
 ## 2. Ultrareview backlog — verified-open correctness majors
 
-> 11 confirmed open 2026-07-14. Mostly the DORMANT training arsenal (LoRA / RL /
-> queue) -- but NOT all (corrected 2026-07-16): #6 below is a live train/serve
-> shape mismatch, and the unverified tail holds more live-path serve findings
-> (#15 tool-call name drop, #31 stream/non-stream divergence, #36 serve runs
-> fp32, #45 memory-store fsync, #51 /v1/memory empty-text 500). AUDIT_2026-07-13's
-> "~43 of 44 open" counts every category; this list is the verified
-> correctness-major subset.
+> 11 confirmed open 2026-07-14. The LIVE-PATH subset was triaged and CLOSED
+> 2026-07-17 (all six verified still present, then fixed + regression-tested;
+> serve smoke + full 90-probe eval green): #6 (combined shape, data-side),
+> #15 (name-less tool call kept via raw), #31 (stream/non-stream parity),
+> #36 (serve bf16 autocast + TF32 — eval re-measured 79/90, same as fp32),
+> #45 (memory-store fsync via atomic_write_text), #51 (/v1/memory 400).
+> What remains below is the DORMANT training arsenal (LoRA / RL / queue).
+> AUDIT_2026-07-13's "~43 of 44 open" counts every category; this list is
+> the verified correctness-major subset.
 
 - [ ] #5 training_queue: `start()` after `stop()` can run two jobs concurrently.
-- [ ] #6 memory-block + tool-spec never combined in TRAINING but serve combines
-  them — the combined system shape is 0% of training data.
+- [x] #6 memory-block + tool-spec combined shape — FIXED 2026-07-17 (data
+  side): `gen_memory_tools_examples` bakes serve's exact join (memories,
+  blank line, preamble + tools; both answer-from-memory and still-call-the-
+  tool behaviors), x8 in the mix (53 records), locked by
+  `tests/test_memory_tools_data.py`. NOTE: the SERVED model only learns the
+  shape at the next SFT->DPO cycle; until then serve still renders it.
 - [ ] #7 LoRA + kv_share models crash on grad-checkpointing.
 - [ ] #8 online-DPO generates from un-stripped trailing EOS.
 - [ ] #10 DPO fp16 fallback has no GradScaler (bf16 path, the one we use, is fine).
