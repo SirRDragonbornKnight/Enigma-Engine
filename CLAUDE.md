@@ -31,7 +31,8 @@ Perception is HALF-BUILT; text-only ships today:
   here said frozen — wrong). Encoder persistence was FIXED `f9ec5184` (2026-07-15): checkpoints
   now carry `vision/audio_encoder_state_dict` + the local optimizer, and resume refuses
   text-only checkpoints. Remaining gotcha: **serve has no encoder load path** (Phase 4.5
-  step 5). Restore history: `KNOWN_ISSUES.md` #11.
+  step 1, "wire serve to load them" -- audit 2026-07-17 corrected the step pointer).
+  Restore history: `KNOWN_ISSUES.md` #11.
 
 The Modkit-era `mods/` + `plugins/` subsystem and its `commands`/`mod_tools`/`plugin_loader` registry
 were REMOVED 2026-07-13 (never loaded by `serve_enigma.py`; superseded). Pip distribution renamed
@@ -89,9 +90,18 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
   asserted bit-identical to the live training lineage. Muon / WSD are future-run-only, behind flags.
 - Checkpoints rotate `latest.pth` → `prev.pth` atomically with a finite-loss guard; resume rebuilds
   config from the checkpoint and hard-fails on any arch/optimizer mismatch.
-- Pretraining **DONE 2026-07-03**: full 287,882 steps / 56.6B tokens, val ppl 3.5 (`models/enigma_pretrain_large/model.pth`, SHA256-backed). Lineage is immutable; forward plan is `ROADMAP.md`. Bottleneck is now SFT data, not compute.
-- SFT+DPO **ADOPTED**: all three launchers (`Start-Enigma.ps1`/`.bat`, `Launch Enigma.bat`)
-  serve `models/enigma_dpo/model.pth`. Current adopted weights = **v8** (2026-07-16, SHA256
+- Pretraining **DONE 2026-07-03**: full 287,882 steps / 56.6B tokens, val ppl 3.5
+  (`models/enigma_pretrain_large/model.pth`; SHA256 receipts live in
+  `Enigma Backups\enigma_pretrain_large_final\`, not beside the checkpoint). Lineage is
+  immutable; forward plan is `ROADMAP.md`. Bottleneck is now SFT data, not compute.
+- SFT+DPO **ADOPTED**: every entry point serves `models/enigma_dpo/model.pth` with
+  `--memory-dir data\memory`. The user-facing chain (since 2026-07-16) is
+  **Talk to Enigma.bat / Enigma Tray.bat / Stop Enigma.bat** (Desktop wrappers -> repo
+  scripts -> `Start-Enigma.ps1` -> serve; her window is `enigma_window.py`).
+  `Start-Enigma.bat` and `Launch Enigma.bat` are STALE direct-console leftovers
+  (superseded -- visible console, no already-running check); the `enigma`/`enigma-ai`
+  console scripts work but default to the RAW PRETRAIN checkpoint, not the adopted DPO.
+  Current adopted weights = **v8** (2026-07-16, SHA256
   `A11DB8F0...`, 79/90 on the 90-probe gate — first to pass all 7 categories); receipted backup
   at `Enigma Backups\enigma_dpo_v8_adopted\`. Revert targets: v5 at `enigma_dpo_v5_adopted\`,
   older v1 at `enigma_dpo_adopted\`, or `models/enigma_sft`. Backups hold model+config+vocab .sha256.
@@ -139,6 +149,13 @@ the only coupling is the WebSocket bus protocol.
 - **Launch user-facing long-lived processes DETACHED** (Start-Process), never as harness
   background tasks — a chat window launched as a background task was tethered to the Claude
   session and read to the user as a stuck task (2026-07-16).
+- **Runtime state files must be CWD-independent, and helper threads handed to
+  `webview.start` are NON-daemon.** A relative `Path("data")/mute_state.json` silently
+  breaks mute persistence for console-script servers started elsewhere, and a
+  never-give-up poll loop in the window shim leaks a ghost `pythonw.exe` when the window
+  closes first (both found by the 2026-07-17 adversarial audit of the previous day's
+  fixes). Anchor state at the repo dir or `Path.home()/".enigma_engine"`; daemonize or
+  bound loops that outlive their window.
 - **A refactor that deletes a module must also delete or guard its callers.** The Modkit-era
   "dissolve the monolith" refactor deleted 6 modules (vision/audio encoders, gguf, reasoning,
   sentiment, inference) but kept code importing them — 4 were crash-on-use landmines found only

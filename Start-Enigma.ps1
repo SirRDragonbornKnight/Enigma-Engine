@@ -1,6 +1,7 @@
 # Start-Enigma.ps1 -- bring up the Enigma OpenAI-compatible server (port 8000)
 # if it isn't already running. Called by Desktop\Odysseus.bat (same pattern as
-# Start-Chroma.ps1), by "Talk to Enigma.bat" (with -Voice), or run by hand.
+# Start-Chroma.ps1), by "Talk to Enigma.bat" (voiceless -- user ruling
+# 2026-07-16), or run by hand.
 # Serves the instruct checkpoint WITH her real long-term memory enabled
 # (data\memory -- the remember tool writes here).
 # ASCII-only output (Windows cp1252 console).
