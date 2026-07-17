@@ -83,7 +83,8 @@ $script:miStop.add_Click({
     # Report what Stop-Enigma actually did -- "Stopped." when nothing was
     # running (or the port was foreign) is a lie the user acts on.
     $out = (& "$script:engineDir\Stop-Enigma.ps1") -join " "
-    if ($out -match "left alone") { $tip = "Port 8000 is not Enigma -- left it alone." }
+    if ($out -match "FAILED") { $tip = "Could not stop Enigma -- run Stop Enigma from the Desktop to see why." }
+    elseif ($out -match "left alone") { $tip = "Port 8000 is not Enigma -- left it alone." }
     elseif ($out -match "already stopped" -and $out -match "none open") { $tip = "Nothing was running." }
     else { $tip = "Stopped." }
     $script:notify.ShowBalloonTip(1500, "Enigma", $tip, [System.Windows.Forms.ToolTipIcon]::None)

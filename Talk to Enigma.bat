@@ -8,18 +8,29 @@ REM Start-Enigma line to turn her voice back on; the page degrades to
 REM "voice: off" honestly. Gaming-friendly on purpose: 182M model (~750MB
 REM VRAM, ms-scale replies); eyes/image-gen stay OFF here.
 
+set "PYDIR=C:\Users\SirKn\AppData\Local\Programs\Python\Python312"
+
 REM This bat often runs HIDDEN (from the tray), so a failure must be a popup,
-REM not console text nobody sees.
-py -3.12 -c "pass" >nul 2>nul
-if errorlevel 1 (
+REM not console text nobody sees. Gate on the SAME python the server uses --
+REM the py launcher can be missing while python itself is fine.
+if not exist "%PYDIR%\python.exe" (
     powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Python 3.12 was not found, so Enigma cannot start. Reinstall Python 3.12 from python.org and try again.','Enigma') | Out-Null"
     exit /b 1
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\SirKn\Enigma Engine\Start-Enigma.ps1"
-REM pyw = console-less Python launcher; plain py (visible console) as fallback.
+REM Nonzero = the port is held by something that is NOT Enigma (Start-Enigma
+REM already showed the popup) -- do not open a window onto a foreign service.
+if errorlevel 1 exit /b 1
+
+REM Console-less launch: pyw, then py, then pythonw.exe directly.
 where pyw >nul 2>nul
-if errorlevel 1 (
-    start "" py -3.12 "%~dp0enigma_window.py"
-) else (
+if not errorlevel 1 (
     start "" pyw -3.12 "%~dp0enigma_window.py"
+    goto :eof
 )
+where py >nul 2>nul
+if not errorlevel 1 (
+    start "" py -3.12 "%~dp0enigma_window.py"
+    goto :eof
+)
+start "" "%PYDIR%\pythonw.exe" "%~dp0enigma_window.py"

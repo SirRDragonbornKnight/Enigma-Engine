@@ -28,6 +28,11 @@ if ($up) {
         exit 0
     }
     Write-Output "WARN: port $port is held by pid $ownerId ($procName), which is NOT Enigma -- not starting a second server."
+    # Usually launched hidden -- the refusal must be visible (2026-07-17 audit).
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "Port $port is in use by another program (pid $ownerId, $procName), so Enigma cannot start. Close that program and try again.",
+        "Enigma") | Out-Null
     exit 1
 }
 

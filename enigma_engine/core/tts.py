@@ -123,6 +123,13 @@ class Speaker:
             except Exception:
                 self.voices = []  # discovery is best-effort; speaking still works
             self._resolve_voice()
+            del probe
+            # Second probe THROUGH _new_engine: validates rate and the
+            # (resolved or passed-through) voice at construction time, so a
+            # bad value fails the constructor loudly instead of every job
+            # quietly (2026-07-17 audit). Also covers the discovery-failed
+            # case, where an unresolvable name would otherwise slip through.
+            probe = self._new_engine()
             del probe  # clear pyttsx3's cache so job 1 gets a fresh engine
         except BaseException as exc:  # surfaced to the constructor
             init_error.append(exc)

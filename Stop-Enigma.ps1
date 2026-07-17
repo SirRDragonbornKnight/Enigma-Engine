@@ -14,8 +14,12 @@ if ($windows.Count -eq 0) {
     Write-Output "window: none open."
 } else {
     foreach ($w in $windows) {
-        Stop-Process -Id $w.ProcessId -Force
-        Write-Output "window: closed (pid $($w.ProcessId))."
+        try {
+            Stop-Process -Id $w.ProcessId -Force -ErrorAction Stop
+            Write-Output "window: closed (pid $($w.ProcessId))."
+        } catch {
+            Write-Output "window: FAILED to close pid $($w.ProcessId) ($($_.Exception.Message))."
+        }
     }
 }
 
@@ -31,8 +35,14 @@ if ($null -eq $conn) {
     # Ours = serve_enigma.py directly, OR the enigma/enigma-ai console-script
     # wrappers from pyproject (those run as enigma.exe with no .py on the line).
     if ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai")) {
-        Stop-Process -Id $ownerId -Force
-        Write-Output "server: stopped (pid $ownerId)."
+        try {
+            Stop-Process -Id $ownerId -Force -ErrorAction Stop
+            Write-Output "server: stopped (pid $ownerId)."
+        } catch {
+            # e.g. access denied when the server was started elevated --
+            # saying "stopped" here would be a lie the tray balloon repeats.
+            Write-Output "server: FAILED to stop pid $ownerId ($($_.Exception.Message)) -- try from an elevated shell."
+        }
     } else {
         Write-Output "server: port 8000 is held by pid $ownerId ($procName), which is NOT Enigma -- left alone."
         Write-Output "  command line: $cmd"

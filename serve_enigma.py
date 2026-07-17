@@ -220,11 +220,16 @@ if ARGS.voice:
 MUTED = False
 # The truth survives restarts: best-effort persisted to a tiny state file
 # (a crash-relaunch must not silently unmute a muted gaming session).
-_MUTE_STATE = Path("data") / "mute_state.json"
+# Anchored to the repo (this file's directory), NOT the CWD -- the enigma /
+# enigma-ai console scripts can be launched from anywhere and must still see
+# the same state file (2026-07-17 audit).
+_MUTE_STATE = Path(__file__).resolve().parent / "data" / "mute_state.json"
 try:
-    MUTED = bool(json.loads(_MUTE_STATE.read_text(encoding="utf-8")).get("muted", False))
+    _state = json.loads(_MUTE_STATE.read_text(encoding="utf-8"))
+    if isinstance(_state, dict):
+        MUTED = bool(_state.get("muted", False))
 except (OSError, ValueError):
-    pass
+    pass  # best-effort: a missing or corrupt state file must never stop serve
 
 EARS = None
 if ARGS.ears:
@@ -778,14 +783,20 @@ def _chat_instruct(req: ChatReq):
         hop_max = max(1, min(int(req.max_tokens), ARGS.max_context - len(prompt_ids)))
         return prompt_ids, hop_max
 
-    def _apply_builtins(cur_msgs: list[dict], out: dict, parsed: list[dict]) -> list[dict]:
+    def _apply_builtins(
+        cur_msgs: list[dict], out: dict, parsed: list[dict], results: list | None = None
+    ) -> list[dict]:
         # Append the assistant turn that made the calls, then each built-in's
-        # result, so the next hop sees a coherent tool trace.
+        # result, so the next hop sees a coherent tool trace. `results`
+        # collects (name, result) so the caller can see what actually ran.
         named = [{"name": c["name"], "arguments": c.get("arguments") or {}} for c in parsed if c.get("name")]
         nxt = cur_msgs + [{"role": "assistant", "content": out.get("content") or "", "tool_calls": named}]
         for c in parsed:
             if c.get("name") in _BUILTIN_NAMES:
-                nxt = nxt + [{"role": "tool", "content": _execute_builtin(c["name"], c.get("arguments") or {})}]
+                result = _execute_builtin(c["name"], c.get("arguments") or {})
+                if results is not None:
+                    results.append((c["name"], result))
+                nxt = nxt + [{"role": "tool", "content": result}]
         return nxt
 
     def _loop_on_builtins(parsed: list[dict], hop: int) -> bool:
@@ -937,9 +948,12 @@ def _chat_instruct(req: ChatReq):
         # dropping the model's action.
         raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
         if _loop_on_builtins(parsed, hop):
-            if SPEAKER is not None and not MUTED and any(c.get("name") == "speak" for c in parsed):
-                spoke_server_side = True  # the chat page skips its own TTS for this reply
-            cur_msgs = _apply_builtins(cur_msgs, out, parsed)
+            tool_results: list = []
+            cur_msgs = _apply_builtins(cur_msgs, out, parsed, tool_results)
+            # Flag on the EXECUTED result, not the intent -- "error: nothing
+            # to say" must not silence the page's own TTS (2026-07-17 audit).
+            if any(name == "speak" and result == "speaking" for name, result in tool_results):
+                spoke_server_side = True
             continue
         break
 
@@ -1079,9 +1093,10 @@ function speak(text) {
       if (!b || muted) return;
       stopAudio();
       currentUrl = URL.createObjectURL(b);
-      currentAudio = new Audio(currentUrl);
-      currentAudio.addEventListener("ended", stopAudio);
-      currentAudio.play().catch(function () {});
+      var a = new Audio(currentUrl);
+      currentAudio = a;
+      a.addEventListener("ended", function () { if (currentAudio === a) stopAudio(); });
+      a.play().catch(function () {});
     }).catch(function () {});
 }
 document.getElementById("f").onsubmit = function (ev) {
