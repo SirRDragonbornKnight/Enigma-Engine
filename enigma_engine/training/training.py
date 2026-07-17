@@ -4987,6 +4987,7 @@ class Trainer:
         unfreeze_text_layers: int = 0,
         val_data: list[dict[str, Any]] | None = None,
         resume_from: str | Path | None = None,
+        freeze_text_io: bool = False,
     ) -> "TrainingState":
         """
         Train the vision encoder and projection layer on image-text pairs.
@@ -5060,13 +5061,20 @@ class Trainer:
         for param in self.model.vision_projection.parameters():
             param.requires_grad = True
 
-        # Unfreeze output/embedding (needed for text loss)
-        for param in self.model.tok_embeddings.parameters():
-            param.requires_grad = True
-        for param in self.model.output.parameters():
-            param.requires_grad = True
-        for param in self.model.norm.parameters():
-            param.requires_grad = True
+        # Unfreeze output/embedding. NOT needed for gradient flow to the
+        # projection (frozen modules still propagate grads) -- it lets the
+        # text side co-adapt. freeze_text_io=True keeps them frozen so the
+        # projection targets the base checkpoint's EXACT embedding space
+        # (align recipe: serve later loads encoder+projection onto the
+        # pristine served weights, so text drift here would be discarded
+        # and the projection mismatched; Phase 4.5 step 4, 2026-07-17).
+        if not freeze_text_io:
+            for param in self.model.tok_embeddings.parameters():
+                param.requires_grad = True
+            for param in self.model.output.parameters():
+                param.requires_grad = True
+            for param in self.model.norm.parameters():
+                param.requires_grad = True
 
         # Optionally unfreeze last N text transformer layers
         if unfreeze_text_layers > 0:
