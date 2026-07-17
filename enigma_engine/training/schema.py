@@ -24,7 +24,6 @@ ModeName = Literal[
     "rlhf",
     "self_play",
     "remax",
-    "adaptive",
 ]
 
 

@@ -1839,9 +1839,6 @@ class SelfPlayTrainer:
     def _get_trainer_score(self, prompt: str, response: str) -> float:
         """Ask the TRAINER model to score a response.
 
-        Includes a small emotional quality bonus (Phase 6) that rewards
-        responses likely to increase user engagement.
-
         Args:
             prompt: The original question.
             response: The student's response.
@@ -1867,16 +1864,6 @@ class SelfPlayTrainer:
                 base_score = min(max(base_score, 0.0), 10.0)
         except Exception as exc:
             logger.debug("Trainer scoring failed: %s", exc)
-
-        # Phase 6: emotional quality bonus
-        try:
-            from enigma_engine.core.sentiment import evaluate_response_quality
-
-            bonus = evaluate_response_quality(prompt, response)
-            # Scale bonus to 0-10 range (±0.5 → ±2.5 points)
-            base_score = min(max(base_score + bonus * 5.0, 0.0), 10.0)
-        except Exception:
-            pass
 
         return base_score
 

@@ -330,9 +330,4 @@ def run_training(config: TrainingJobConfig | dict[str, Any], ctx: DispatchContex
         _apply_callbacks(sp_trainer, ctx)
         return sp_trainer.train(job.data)
 
-    if job.mode == "adaptive":
-        raise NotImplementedError(
-            "adaptive mode is a GUI/meta scheduler path and is not yet supported by the dispatcher"
-        )
-
     raise ValueError(f"Unhandled training mode: {job.mode}")

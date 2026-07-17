@@ -20,13 +20,9 @@ SCAN_DIRS = ["enigma_engine", "tests"]
 SKIP_PARTS = {"__pycache__", "venv", "_archive", ".git", "node_modules"}
 
 # Known dangling imports that are ALLOWED because every call site degrades
-# gracefully (verified 2026-07-13). Remove an entry here when the module is
-# restored or the caller is deleted.
-ALLOWED_MISSING = {
-    # rl_training's emotional-quality bonus: inside `except Exception: pass`.
-    # Restoring needs core/sentiment.py + core/model_context.py (user call).
-    "enigma_engine.core.sentiment",
-}
+# gracefully. Remove an entry here when the module is restored or the caller
+# is deleted. Empty since 2026-07-17 (rl_training's sentiment caller removed).
+ALLOWED_MISSING: set[str] = set()
 
 _IMPORT = re.compile(r"(?:from|import)\s+(enigma_engine(?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
 

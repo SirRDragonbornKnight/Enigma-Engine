@@ -5,8 +5,9 @@ Harness-enforced rules (permissions, hooks, model) belong in `.claude/settings.j
 
 ## What this is
 This repo is **Enigma** — a **from-scratch** decoder-only LLM (its own architecture, BPE tokenizer base
-vocab 4718, and weights; NOT a wrapper). Python. Pipeline is **pretrain → SFT → DPO → serve**; train +
-serve share one chat renderer (`enigma_engine/core/chat_format.py`) so the prompt format can't drift.
+vocab 4718, and weights; NOT a wrapper). Python. Pipeline is **pretrain → (facts continued-pretrain,
+optional) → SFT → DPO → serve**; train + serve share one chat renderer
+(`enigma_engine/core/chat_format.py`) so the prompt format can't drift.
 
 **Identity ruling (user, 2026-07-16):** Enigma Engine IS Enigma — one AI, her own model, and the
 machinery that trains and serves HER. The Forge-era framing (a generic engine to spawn different

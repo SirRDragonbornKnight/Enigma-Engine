@@ -32,5 +32,4 @@ def get_mode_registry() -> Dict[str, ModeSpec]:
         "rlhf": ModeSpec("rlhf", True, "RLHF PPO-style policy training"),
         "self_play": ModeSpec("self_play", True, "Self-play policy training"),
         "remax": ModeSpec("remax", True, "ReMax policy training"),
-        "adaptive": ModeSpec("adaptive", True, "Meta-scheduled adaptive training"),
     }

@@ -3,7 +3,7 @@
 Enigma is trained in three passes, all from the repo root:
 
 ```
-pretrain -> SFT -> DPO -> (eval) -> serve
+pretrain -> facts continued-pretrain (optional) -> SFT -> DPO -> (eval) -> serve
 ```
 
 Every pass renders text through the same
@@ -30,6 +30,30 @@ training tokens), `--optimizer adamw|muon`, `--schedule cosine|wsd`,
 
 ---
 
+## Stage 1.5: Facts continued-pretrain (optional knowledge hop)
+
+SFT surfaces knowledge; it cannot install it (measured 2026-07-15:
+"largest planet" -> Jupiter but "biggest planet" -> Saturn). Installation
+happens in pretraining, where a fact appears in many textual forms. This
+short low-LR pass mixes the `knowledge_corpus.py` fact lines (declarative /
+QA / cloze / in-context) into replay chunks from the real corpus, so the
+model learns the facts without forgetting the language:
+
+```
+python make_facts_pretrain_data.py                 # -> data/pretrain/facts_tokens.bin (60M tokens, ~2% facts)
+python pretrain_enigma.py --tokens-bin data/pretrain/facts_tokens.bin \
+    --init-from models/enigma_pretrain_large/latest.pth \
+    --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50 \
+    --val-general-end 0
+```
+
+Then point SFT at the facts base instead of the raw one:
+`python finetune_enigma.py --init models/enigma_pretrain_facts/latest.pth ...`.
+Measured effect on the 90-probe gate: factual 13/20 -> 19/20 (v6 lineage);
+the adopted v8 sits on this base.
+
+---
+
 ## Stage 2: SFT (instruct/tool fine-tune)
 
 Turns the pretrained base into an instruct model that follows the chat
@@ -42,6 +66,15 @@ python finetune_enigma.py --data data/sft/mix.jsonl --out models/enigma_sft
 
 `--init` defaults to `models/enigma_pretrain_large/latest.pth`.
 Defaults: 2 epochs, lr 2e-5 (~peak/30 of pretraining), block 1024.
+
+The general-conversation side of the mix comes from
+`collect_finetuning_data.py`. `--all` downloads every source EXCEPT
+OpenThoughts3 (its completions are block-unfit at 1024). The short-completion
+"diet" sources added 2026-07-15 are cherry-pickable with per-source caps:
+`--smoltalk2 N` (+ `--smoltalk2-config/--smoltalk2-split/--smoltalk2-cap`),
+`--no-robots N`, `--everyday N`, `--triviaqa N`, `--nq-open N` -- see
+`--help` for defaults. Completions are capped at 600 chars so records
+actually fit the block.
 
 **Data formats** (JSONL, one record per line):
 

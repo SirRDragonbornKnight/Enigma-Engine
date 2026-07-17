@@ -209,26 +209,27 @@
 
 ## 7. Housekeeping / dormant code (low priority, low risk)
 
-- [ ] `enigma_engine/core/adaptive_trainer.py` — orphaned (registered but
-  dispatch rejects it). Keep or delete — user call.
-- [ ] Unused deps `SpeechRecognition` + `sounddevice` (nothing imports them).
-- [ ] `data/sft/math.jsonl` — orphan file, neither written nor read.
-- [ ] `enigma_engine/core/rl_training.py:1873` — guarded caller of the deleted
-  `sentiment` module.
-- [ ] Config naming: the loader searches `forge_config.json` (exists, repo
-  root, and is found) plus a never-created `~/.enigma_engine/config.json` —
-  naming inconsistency only, nothing broken.
+- [x] `enigma_engine/core/adaptive_trainer.py` — DELETED 2026-07-17 along with
+  `adaptive_prompts.json` and the "adaptive" mode registration
+  (schema/registry/dispatch); regression assert in `test_training_dispatch.py`.
+- [x] Unused deps `SpeechRecognition` + `sounddevice` — dropped from
+  `pyproject.toml` (full + voice extras) 2026-07-17.
+- [x] `data/sft/math.jsonl` — deleted 2026-07-17.
+- [x] `enigma_engine/core/rl_training.py` guarded caller of the deleted
+  `sentiment` module — removed 2026-07-17; `test_import_integrity.py`
+  ALLOWED_MISSING is now empty (gate fully strict).
+- [x] Config naming — `_load_user_config` now also searches
+  `~/.enigma_engine/forge_config.json` (legacy `config.json` kept for
+  back-compat) 2026-07-17.
 - [x] **Scratch checkpoints PRUNED 2026-07-16** (user-approved in chat): ~500 GB
   freed (1.0T -> 1.5T free) across scratch sft/dpo checkpoints and five
   forgotten April `_pretrain_sequences.jsonl` caches. v8 is the adopted DPO
   (`models/enigma_dpo`, receipted backup `enigma_dpo_v8_adopted\`); kept:
   `enigma_sft`/`enigma_dpo`, `sft_v8`/`dpo_v8`, all pretrain runs, the Qwen
   zoo, smoke/trainv4 fixtures.
-- [ ] Docs: `information/training_guide.md` + `quick_commands.md` don't yet
-  cover the facts continued-pretrain recipe or the new collector flags
-  (--no-robots/--everyday/--triviaqa/--nq-open/--smoltalk2-cap); CLAUDE.md
-  pipeline line should mention the optional facts hop (final audit
-  2026-07-16, findings 18-20).
+- [x] Docs: facts continued-pretrain recipe (training_guide.md Stage 1.5 +
+  quick_commands.md rows) + diet collector flags documented; CLAUDE.md
+  pipeline line mentions the optional facts hop (2026-07-17).
 - [x] Teach tool nits (final audit m3/m4) — DONE 2026-07-16 alongside the
   auto-augment work: `/good` now refuses when the exchange already has a saved
   teaching (no double-write; `/undo` first to change it); `retract` only ever

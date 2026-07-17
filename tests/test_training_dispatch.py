@@ -39,7 +39,7 @@ def test_registry_core_and_experimental_flags() -> None:
     assert registry["sft"].experimental is False
     assert registry["grpo"].experimental is False
     assert registry["simpo"].experimental is True
-    assert registry["adaptive"].experimental is True
+    assert "adaptive" not in registry  # orphaned meta-scheduler removed 2026-07-17
 
 
 def test_grpo_requires_prompt_list() -> None:

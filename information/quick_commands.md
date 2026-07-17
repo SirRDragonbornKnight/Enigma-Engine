@@ -25,12 +25,14 @@ Organ flags combine freely, e.g. `python serve_enigma.py --voice --ears --eyes -
 
 ---
 
-## Training Pipeline (pretrain -> SFT -> DPO)
+## Training Pipeline (pretrain -> facts (optional) -> SFT -> DPO)
 
 | Command | What It Does |
 |---------|-------------|
 | `python pretrain_enigma.py` | Pretrain from scratch on `data/pretrain/tokens.bin` |
 | `python pretrain_enigma.py --sanity` | One forward/backward step, then exit (smoke test) |
+| `python make_facts_pretrain_data.py` | Build the facts continued-pretrain stream -> `data/pretrain/facts_tokens.bin` (knowledge install; see training_guide.md Stage 1.5) |
+| `python pretrain_enigma.py --tokens-bin data/pretrain/facts_tokens.bin --init-from models/enigma_pretrain_large/latest.pth --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50 --val-general-end 0` | Low-LR continued pretrain that installs the knowledge corpus in weights |
 | `python make_sft_data.py` | Build SFT data -> `data/sft/{tool_calls,identity,mix}.jsonl` |
 | `python finetune_enigma.py --data data/sft/mix.jsonl --out models/enigma_sft` | SFT the pretrained model into an instruct/tool model |
 | `python make_dpo_data.py` | Build DPO preference pairs -> `data/sft/dpo_pairs.jsonl` |
@@ -56,7 +58,8 @@ Serve the candidate on its own port with an isolated memory dir, then run the ha
 |---------|-------------|
 | `python collect_pretraining_data.py --stats` | Show collected pretraining data summary |
 | `python collect_pretraining_data.py --all-sources` | Download pretraining text (Wikipedia, Gutenberg, FineWeb-Edu, ...) |
-| `python collect_finetuning_data.py --all` | Download instruction datasets (OASST1, Dolly, SlimOrca, ...) |
+| `python collect_finetuning_data.py --all` | Download all instruction datasets except OpenThoughts3 (OASST1, Dolly, SlimOrca, SmolTalk2, No Robots, Everyday Conversations, TriviaQA, NQ-Open) |
+| `python collect_finetuning_data.py --no-robots N --everyday N --triviaqa N --nq-open N --smoltalk2 N` | Cherry-pick the short-completion "diet" sources with per-source caps (see `--help`) |
 | `python collect_distill_data.py --model <teacher>` | Collect responses from an external OpenAI-compatible teacher as a fine-tune corpus (`--model` is required) |
 | `python collect_search_data.py` | Emit the synthetic `<search>` tag training corpus |
 | `python collect_vision_data.py --llava-pretrain 100000 --images-dir <extracted images.zip>` | Download image-caption pairs for vision SFT (bare invocation just prints help) |

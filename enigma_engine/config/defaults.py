@@ -282,6 +282,8 @@ def _load_user_config() -> None:
     """
     config_paths = [
         Path.cwd() / "forge_config.json",
+        Path.home() / ".enigma_engine" / "forge_config.json",
+        # legacy name, kept so an existing home config keeps working
         Path.home() / ".enigma_engine" / "config.json",
         BASE_DIR / "forge_config.json",
     ]

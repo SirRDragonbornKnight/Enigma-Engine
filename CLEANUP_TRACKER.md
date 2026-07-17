@@ -33,10 +33,11 @@ modules) live in git history. Current truth:
   `progressive_growing.py`, `weight_mapping.py`,
   `hardware_detection.py`, `config/`.
   (`commands.py`, `plugin_loader.py`, `mod_tools.py` REMOVED 2026-07-13 with the modkit subsystem.)
-- **FULL ORPHAN (audit 2026-07-16):** `adaptive_trainer.py` — its covering
-  tests (`test_gui.py`/`test_new_features.py`/`test_training.py`) are long
-  deleted, zero importers anywhere, and `training/dispatch.py` explicitly
-  rejects the registered "adaptive" mode. Safely deletable per rule 1.
+- **REMOVED 2026-07-17:** `adaptive_trainer.py` + `information/trainer/
+  adaptive_prompts.json` — was a full orphan (covering tests long deleted,
+  zero importers, dispatch rejected the registered "adaptive" mode). The
+  "adaptive" registration is gone from schema/registry/dispatch; a regression
+  assert in `test_training_dispatch.py` keeps it out.
 - **In git history only (idea-source, not code):** `core/personality_data.py`'s
   distillation prompts are an idea-source for the values corpus — retrieve
   from git when needed.

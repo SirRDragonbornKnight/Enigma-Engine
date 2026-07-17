@@ -43,7 +43,7 @@ class TrainingJob:
         mode: Training mode key (Solo, DPO, LoRA, etc.).
         model_path: Path to the model to train.
         data_path: Optional path to training data file.
-        stage: Training stage for guided/adaptive modes.
+        stage: Training stage for guided modes.
         epochs: Number of training epochs.
         learning_rate: Learning rate for this job.
         batch_size: Batch size for this job.
