@@ -49,7 +49,8 @@ Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
 ## Remake decisions (design of the next generation, when the gate opens)
 
 - **Tokenizer first — the one provably wrong foundation.** ~16-32k vocab,
-  GPT-2-style leading-space merge (26.6% of current tokens are standalone
+  GPT-2-style leading-space merge (26.6% of corpus tokens — 29.5% on the
+  2026-07-16 English-sample measure — are standalone
   spaces — a quarter of every context and training FLOP), digit-consistent
   number handling (kills ceiling #1 at the root). Requires retokenizing the
   raw sources with `pretokenize_data.py` (rebuilds the 227 GB / 211 GiB

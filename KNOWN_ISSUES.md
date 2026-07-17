@@ -70,11 +70,12 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
 7. **Environment quirks (this dev box):** MCP servers load ONLY from the
    project `.mcp.json`; Claude Desktop is MSIX-sandboxed so `%LOCALAPPDATA%`
    writes are virtualized; no Windows admin without explicit user grant.
-8. **Tokenizer facts:** token 44 (space) ≈ 26.6% of corpus tokens — baked-in
+8. **Tokenizer facts:** token 44 (space) ≈ 26.6% of corpus tokens (29.5% on
+   the 2026-07-16 English-sample re-measure) — baked-in
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (500 tests as of 2026-07-16). The
+9. **The python suite is engine-only** (502 tests as of 2026-07-16 evening). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).

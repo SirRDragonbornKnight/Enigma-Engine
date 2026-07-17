@@ -44,9 +44,10 @@ loaded eagerly at startup (a broken organ WARNs and text serving continues).
 - `--voice` -> `core/tts.py` (pyttsx3/SAPI; one engine per JOB — say-then-save on one engine
   deadlocks, see module docstring): intent-gated `speak` built-in + `/v1/audio/speech` (WAV) +
   `/v1/audio/voices`. `speak` = server speakers; `avatar_say` stays a CLIENT tool.
-  **User dislikes the stock Windows voice (2026-07-16)** — launchers pass `--voice-name zira`
-  as a stopgap (only other installed SAPI voice); the wanted fix is the Kokoro-82M swap
-  (BACKLOG §5, ~330 MB download, needs the user's go-ahead).
+  **Voice PARKED by user ruling (2026-07-16): launchers start voiceless** — the chat page
+  degrades to "voice: off"; revisit "later when it matters." When it lifts: `Start-Enigma.ps1
+  -Voice` serves `--voice-name zira` (user dislikes the stock David voice), and the wanted
+  real fix is the Kokoro-82M swap (BACKLOG §5, ~330 MB download, needs the user's go-ahead).
 - `--ears` -> `core/asr.py` (faster-whisper, cuda->cpu fallback): `/v1/audio/transcriptions`.
 - `--eyes` -> `core/eyes.py` (BLIP captioner): OpenAI image_url content in chat is captioned to
   `[image: ...]` text before gates/memory/render (`flatten_image_content`, data: URLs only,

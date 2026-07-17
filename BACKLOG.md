@@ -97,9 +97,13 @@
 
 ## 2. Ultrareview backlog — verified-open correctness majors
 
-> 11 confirmed open 2026-07-14; all in the DORMANT training arsenal (LoRA / RL /
-> queue), so none affect the live serve/SFT/DPO path today. Fix if/when that
-> code is reconnected.
+> 11 confirmed open 2026-07-14. Mostly the DORMANT training arsenal (LoRA / RL /
+> queue) -- but NOT all (corrected 2026-07-16): #6 below is a live train/serve
+> shape mismatch, and the unverified tail holds more live-path serve findings
+> (#15 tool-call name drop, #31 stream/non-stream divergence, #36 serve runs
+> fp32, #45 memory-store fsync, #51 /v1/memory empty-text 500). AUDIT_2026-07-13's
+> "~43 of 44 open" counts every category; this list is the verified
+> correctness-major subset.
 
 - [ ] #5 training_queue: `start()` after `stop()` can run two jobs concurrently.
 - [ ] #6 memory-block + tool-spec never combined in TRAINING but serve combines
@@ -172,6 +176,10 @@
 
 ## 5. Interim organ upgrades (still borrowed, better scaffolding; pip-only)
 
+> USER RULING 2026-07-16: voice/sound stays OFF for now ("we will work on it
+> later when it matters") -- launchers no longer pass -Voice. The zira
+> `--voice-name` stopgap and the Kokoro swap below wait for that ruling to lift.
+
 - [ ] TTS SAPI -> **Kokoro-82M** (~330 MB; near-natural, pure-Python G2P).
 - [ ] ASR whisper-base -> **large-v3-turbo** (~1.6 GB; ~half the errors).
   VERIFY FIRST: CTranslate2 CUDA works on the 5090 (sm_120) — else it silently
@@ -210,10 +218,12 @@
 - [ ] Config naming: the loader searches `forge_config.json` (exists, repo
   root, and is found) plus a never-created `~/.enigma_engine/config.json` —
   naming inconsistency only, nothing broken.
-- [ ] **Scratch checkpoints now span v2-v8** (each sft_v* ~6.6 GB, each dpo_v*
-  ~2.2 GB, plus enigma_pretrain_facts ~6.6 GB) — re-measure before pruning;
-  v5 is adopted + backed up; v2-v4 (~26 GB) remain prune-safe on your word,
-  v6-v8 hold this arc's evidence until an adoption call is made.
+- [x] **Scratch checkpoints PRUNED 2026-07-16** (user-approved in chat): ~500 GB
+  freed (1.0T -> 1.5T free) across scratch sft/dpo checkpoints and five
+  forgotten April `_pretrain_sequences.jsonl` caches. v8 is the adopted DPO
+  (`models/enigma_dpo`, receipted backup `enigma_dpo_v8_adopted\`); kept:
+  `enigma_sft`/`enigma_dpo`, `sft_v8`/`dpo_v8`, all pretrain runs, the Qwen
+  zoo, smoke/trainv4 fixtures.
 - [ ] Docs: `information/training_guide.md` + `quick_commands.md` don't yet
   cover the facts continued-pretrain recipe or the new collector flags
   (--no-robots/--everyday/--triviaqa/--nq-open/--smoltalk2-cap); CLAUDE.md
@@ -233,7 +243,8 @@
 
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 
-- [ ] New tokenizer — fix the 26.6% standalone-space waste + digit-splitting
+- [ ] New tokenizer — fix the standalone-space waste (26.6% corpus-wide; 29.5%
+  on the 2026-07-16 English-sample re-measure) + digit-splitting
   (the real fix for number recall; word-numbers are a band-aid). Requires
   retokenizing the corpus.
 - [ ] Length extension block 1024 -> 2048+ (Phase 4) — unlocks real multi-turn

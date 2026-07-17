@@ -100,7 +100,8 @@ for FUTURE decisions — none justify touching the paused run mid-schedule:
   `sample_next_token`).
 - **Tokenizer:** small vocab is *defensible* at our compute scale (vocab
   scaling laws: embedding FLOPs saved fund longer training; big vocabs
-  underfit rare tokens). The standalone-space token (26.6% of the stream)
+  underfit rare tokens). The standalone-space token (26.6% of the stream;
+  29.5% on the 2026-07-16 English-sample re-measure)
   remains our real inefficiency — a next-generation tokenizer should merge
   leading spaces GPT-2-style before any re-pretrain. Not fixable for this
   lineage: retokenizing means a new run.

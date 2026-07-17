@@ -103,7 +103,9 @@ Muppet.
 
 ---
 
-## Phase 0 — Lock in today (minutes; do first)
+## Phase 0 — Lock in today (minutes; do first) — CLOSED 2026-07-16
+(#1 and #4 verified DONE: repo fully committed + pushed, SUGGESTIONS updated;
+#2/#3 subsumed by the receipted v1/v5/v8 backups and the later audits.)
 
 1. Commit the 2026-07-03 work to `engine-refactor` (10 fixes + training_progress.py
    + data rebuild), PR when ready.
@@ -215,13 +217,17 @@ measured-failure-mode pairs) + `dpo_enigma.py` (policy + frozen reference,
 render_training masks). At lr 2e-6 x2 epochs DPO OVER-OPTIMIZED and damaged
 her (identity 83->50%, factual 50->0%) — at 182M DPO is a nudge or a wrecking
 ball. At lr 5e-7 x1 epoch: preference accuracy 100% with margin AND the full
-scorecard held (26/29, all gates PASS) — ADOPTED (`models/enigma_dpo`, now
-what Start-Enigma serves; revert = point it back at `models/enigma_sft`).
+scorecard held (26/29, all gates PASS) — ADOPTED then, as v1. Superseded:
+**v8 is the adopted DPO since 2026-07-16** (79/90 on the 90-probe gate, first
+to pass all seven categories; `models/enigma_dpo` holds v8, receipted backup
+`Enigma Backups\enigma_dpo_v8_adopted\`; revert targets = v5/v1 backups or
+`models/enigma_sft`).
 
 ## Phase 7 — The next generation (the big fork; weeks of GPU)
 
 Only when the current lineage hits a measured ceiling:
-- New tokenizer (fix the 26.6% standalone-space waste; ~16-32k vocab, GPT-2-style
+- New tokenizer (fix the standalone-space waste — 26.6% corpus-wide, 29.5% on
+  the 2026-07-16 English-sample measure; ~16-32k vocab, GPT-2-style
   leading-space merge) — requires retokenizing the raw sources with
   `pretokenize_data.py` (rebuilds tokens.bin, currently 227 GB / 211 GiB —
   the "210GB" and "227 GB" figures in older notes are this same file in
