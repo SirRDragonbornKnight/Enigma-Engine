@@ -197,9 +197,14 @@ class MemoryStore:
         """Rewrite the JSONL after a mutation (call with the lock held). At
         hundreds of records this is instant and keeps the file inspectable.
         atomic_write_text adds fsync-before-rename (power loss can't leave a
-        truncated file) and rotates the previous version to .bak."""
+        truncated file). backup=False ON PURPOSE: every _rewrite caller is a
+        delete/supersede/clear, and a .bak would keep a full pre-delete copy
+        on disk -- "clear my memories" must actually clear (privacy
+        regression caught by the 2026-07-17 re-audit). Any .bak an earlier
+        build left behind is scrubbed for the same reason."""
         content = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in self._records)
-        atomic_write_text(self.file, content)
+        atomic_write_text(self.file, content, backup=False)
+        self.file.with_suffix(self.file.suffix + ".bak").unlink(missing_ok=True)
 
     def all(self) -> list[dict]:
         with self._lock:

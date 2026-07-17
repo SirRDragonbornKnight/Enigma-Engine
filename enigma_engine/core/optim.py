@@ -126,7 +126,7 @@ class CompositeOptimizer:
 
     def load_state_dict(self, sd):
         if "composite" not in sd:
-            raise ValueError("optimizer state is not composite — this checkpoint was saved by a different --optimizer")
+            raise ValueError("optimizer state is not composite -- this checkpoint was saved by a different --optimizer")
         for o, s in zip(self.opts, sd["composite"]):
             o.load_state_dict(s)
 

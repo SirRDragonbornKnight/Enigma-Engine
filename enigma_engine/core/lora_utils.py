@@ -117,7 +117,7 @@ def get_memory_info() -> Dict[str, float]:
         ram_available = ram.available / (1024**3)
         ram_used = ram.used / (1024**3)
     except ImportError:
-        logger.debug("psutil not installed — RAM stats unavailable")
+        logger.debug("psutil not installed -- RAM stats unavailable")
         ram_total = 0.0
         ram_available = 0.0
         ram_used = 0.0
@@ -961,7 +961,7 @@ class LoraTrainer:
 
         n_batches = len(self._create_batches(data, max_length))
         if n_batches == 0:
-            logger.warning("No valid training batches created — all items may be too short (< 2 tokens) or empty.")
+            logger.warning("No valid training batches created -- all items may be too short (< 2 tokens) or empty.")
             self._emit_progress(100, "No valid batches — skipped.")
             return {
                 "total_loss": 0.0,
@@ -1022,7 +1022,7 @@ class LoraTrainer:
                     if "out of memory" in str(e).lower():
                         oom_retries += 1
                         if oom_retries > 2:
-                            logger.error("OOM persists after %d retries — aborting LoRA training", oom_retries)
+                            logger.error("OOM persists after %d retries -- aborting LoRA training", oom_retries)
                             raise
                         logger.warning("OOM detected - clearing VRAM and retrying (%d/2)", oom_retries)
                         clear_vram()
@@ -1243,7 +1243,7 @@ class LoraTrainer:
             # Defensive: should never happen because __init__ always
             # wraps with create_lora_model / create_qlora_model.
             raise RuntimeError(
-                "LoraTrainer.model is not a PEFT model — cannot save "
+                "LoraTrainer.model is not a PEFT model -- cannot save "
                 "adapter. This is a bug; LoraTrainer should always "
                 "wrap with create_lora_model() in __init__."
             )

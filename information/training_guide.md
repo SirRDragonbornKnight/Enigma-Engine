@@ -73,8 +73,12 @@ OpenThoughts3 (its completions are block-unfit at 1024). The short-completion
 "diet" sources added 2026-07-15 are cherry-pickable with per-source caps:
 `--smoltalk2 N` (+ `--smoltalk2-config/--smoltalk2-split/--smoltalk2-cap`),
 `--no-robots N`, `--everyday N`, `--triviaqa N`, `--nq-open N` -- see
-`--help` for defaults. Completions are capped at 600 chars so records
-actually fit the block.
+`--help` for defaults. Length caps differ per source (audit 2026-07-17):
+No Robots and Everyday Conversations cap completions at 600 chars;
+TriviaQA and NQ-Open cap ANSWERS at 80 chars; SmolTalk2 is UNCAPPED unless
+you pass `--smoltalk2-cap 600` (the 2026-07-15 diet did -- and note `--all`
+downloads SmolTalk2 uncapped too). Overlong records are dropped at bake,
+so an uncapped pull wastes download, not training.
 
 **Data formats** (JSONL, one record per line):
 

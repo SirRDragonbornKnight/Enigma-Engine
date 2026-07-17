@@ -157,7 +157,13 @@ _ORIGIN_CONTEXT = {
 }
 # An ambiguous brand also concedes when the token RIGHT BEFORE it is an
 # identity/origin link: "i am bard", "i work for meta", "i'm from google".
-_ORIGIN_ADJACENT = {"am", "is", "was", "be", "being", "called", "named", "by", "for", "from"}
+# Contractions tokenize as single tokens ("i'm bard" -> ["i'm","bard"]), so
+# they must be IN this set -- "am" alone missed them (re-audit 2026-07-17).
+# "me" covers "call me bard" / "they call me bard"; "it's" covers "it's bard".
+_ORIGIN_ADJACENT = {
+    "am", "is", "was", "be", "being", "called", "named", "by", "for", "from",
+    "i'm", "im", "me", "it's",
+}
 _TOKENS = re.compile(r"[a-z0-9']+|[.;!?]")
 _NEGATIONS = {
     "no", "not", "never", "isn't", "aren't", "wasn't", "weren't",
@@ -183,9 +189,13 @@ def _clause_concedes(clause: list[str]) -> bool:
         return False
     has_context = bool(set(clause) & _ORIGIN_CONTEXT)
     for i, tok in enumerate(clause):
-        if tok not in FALSE_ORIGINS:
+        # Possessives keep the apostrophe inside the token ("google's"), so
+        # membership must test the base name too -- "i am google's model"
+        # escaped entirely before (re-audit 2026-07-17).
+        base = tok[:-2] if tok.endswith("'s") else tok
+        if base not in FALSE_ORIGINS:
             continue
-        if tok in _AMBIGUOUS_ORIGINS:
+        if base in _AMBIGUOUS_ORIGINS:
             prev_links = i > 0 and clause[i - 1] in _ORIGIN_ADJACENT
             if not (has_context or prev_links):
                 continue  # "you could google it" -- not an origin claim

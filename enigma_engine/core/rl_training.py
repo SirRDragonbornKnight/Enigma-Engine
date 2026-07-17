@@ -385,7 +385,7 @@ def _get_response_logps(
     response_start = max(prompt_len - 1, 0)
     seq_len = per_token.shape[1]
     if response_start >= seq_len:
-        logger.warning("prompt_len %d >= sequence length %d — returning zeros", prompt_len, seq_len + 1)
+        logger.warning("prompt_len %d >= sequence length %d -- returning zeros", prompt_len, seq_len + 1)
         return per_token.new_zeros(1)
     return per_token[0, response_start:]
 
@@ -411,7 +411,7 @@ def _get_response_entropy(
     response_start = max(prompt_len - 1, 0)
     seq_len = entropy.shape[1]
     if response_start >= seq_len:
-        logger.warning("prompt_len %d >= sequence length %d — returning zeros", prompt_len, seq_len + 1)
+        logger.warning("prompt_len %d >= sequence length %d -- returning zeros", prompt_len, seq_len + 1)
         return entropy.new_zeros(1)
     return entropy[0, response_start:]
 
@@ -492,7 +492,7 @@ def _get_logps_hidden_entropy(
     response_start = max(prompt_len - 1, 0)
     seq_len = per_token_logps.shape[1]
     if response_start >= seq_len:
-        logger.warning("prompt_len %d >= sequence length %d — returning zeros", prompt_len, seq_len + 1)
+        logger.warning("prompt_len %d >= sequence length %d -- returning zeros", prompt_len, seq_len + 1)
         zeros = per_token_logps.new_zeros(1)
         dummy_hidden = h[:, :1, :]
         return zeros, dummy_hidden, zeros
@@ -615,7 +615,7 @@ class RewardModel(nn.Module):
             # Last non-zero position per batch
             lengths = attention_mask.sum(dim=-1).long() - 1
             if (lengths < 0).any():
-                logger.warning("RewardModel received all-padding batch — reward scores will be unreliable.")
+                logger.warning("RewardModel received all-padding batch -- reward scores will be unreliable.")
             lengths = lengths.clamp(min=0)
             last_hidden = h[torch.arange(B, device=h.device), lengths]
         else:
@@ -1235,7 +1235,7 @@ class RLHFTrainer:
                 lora_cfg = LoraConfig(rank=8, alpha=16, dropout=0.0)
                 self.model = create_lora_model(self.model, lora_cfg)
                 self._use_lora_ref = True
-                logger.info("RLHF: using LoRA — frozen base weights serve as reference policy (no extra VRAM)")
+                logger.info("RLHF: using LoRA -- frozen base weights serve as reference policy (no extra VRAM)")
                 return
         except Exception as exc:
             logger.debug("LoRA setup failed, using copy: %s", exc)
@@ -1294,7 +1294,7 @@ class RLHFTrainer:
             ref = self._ref_model_cpu.to(self.device)
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                logger.error("OOM moving reference model to %s — freeing cache", self.device)
+                logger.error("OOM moving reference model to %s -- freeing cache", self.device)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             raise
@@ -1883,7 +1883,7 @@ class SelfPlayTrainer:
                 lora_cfg = LoraConfig(rank=8, alpha=16, dropout=0.0)
                 self.student = create_lora_model(self.student, lora_cfg)
                 self._use_lora_ref = True
-                logger.info("Self-play: using LoRA — frozen base weights serve as reference policy (no extra VRAM)")
+                logger.info("Self-play: using LoRA -- frozen base weights serve as reference policy (no extra VRAM)")
                 return
         except Exception as exc:
             logger.debug("LoRA setup failed, using CPU offload: %s", exc)
@@ -1918,7 +1918,7 @@ class SelfPlayTrainer:
             ref = self._ref_model_cpu.to(self.device)
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                logger.error("OOM moving reference model to %s — freeing cache", self.device)
+                logger.error("OOM moving reference model to %s -- freeing cache", self.device)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             raise

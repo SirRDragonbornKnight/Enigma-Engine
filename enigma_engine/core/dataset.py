@@ -171,7 +171,7 @@ def _process_file(path: Path, *, text_key: str = "text") -> str:
         file_size = 0
     if file_size > MAX_FILE_SIZE:
         logger.warning(
-            "Skipping %s (%d MB) — exceeds MAX_FILE_SIZE (%d MB)",
+            "Skipping %s (%d MB) -- exceeds MAX_FILE_SIZE (%d MB)",
             path,
             file_size // 1_000_000,
             MAX_FILE_SIZE // 1_000_000,
@@ -294,7 +294,7 @@ def load_text_chunks(
         except OSError:
             file_size = 0
         if file_size > MAX_FILE_SIZE:
-            logger.warning("Skipping %s (%d MB) — exceeds MAX_FILE_SIZE", source, file_size // 1_000_000)
+            logger.warning("Skipping %s (%d MB) -- exceeds MAX_FILE_SIZE", source, file_size // 1_000_000)
             return []
         suffix = source.suffix.lower()
         if suffix not in (".jsonl", ".json") and file_size > _STREAM_THRESHOLD:
@@ -344,7 +344,7 @@ def iter_text_chunks(
         file_size = 0
 
     if file_size > MAX_FILE_SIZE:
-        logger.warning("Skipping %s (%d MB) — exceeds MAX_FILE_SIZE", source, file_size // 1_000_000)
+        logger.warning("Skipping %s (%d MB) -- exceeds MAX_FILE_SIZE", source, file_size // 1_000_000)
         return
 
     suffix = source.suffix.lower()
@@ -477,7 +477,7 @@ def _process_jsonl(path: Path, *, text_key: str = "text") -> str:
                         texts.append(val.strip())
                         if len(texts) >= _MAX_JSONL_ENTRIES:
                             logger.warning(
-                                "%s: hit %d entry cap at line %d — remaining lines skipped",
+                                "%s: hit %d entry cap at line %d -- remaining lines skipped",
                                 path.name,
                                 _MAX_JSONL_ENTRIES,
                                 line_num,

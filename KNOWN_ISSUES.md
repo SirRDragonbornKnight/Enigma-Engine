@@ -75,7 +75,7 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (515 tests as of 2026-07-17). The
+9. **The python suite is engine-only** (528 tests as of 2026-07-17). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
@@ -97,9 +97,10 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
     both modalities through `forward_multimodal` (finite logits).
     LEFT ALONE, deliberately: `core/sentiment.py` (+ its dep
     `core/model_context.py`, ~940 lines combined — would revive the emotional-state
-    subsystem; user call). Its rl_training caller degrades gracefully (guarded), so it
-    stays allowlisted in `tests/test_import_integrity.py`, which gates the suite against
-    this failure mode recurring. (`core/inference.py`, deleted in the pivot `0eab02a3`,
+    subsystem; user call). UPDATE 2026-07-17: its guarded rl_training caller was
+    removed, so `tests/test_import_integrity.py`'s ALLOWED_MISSING is now EMPTY —
+    the import gate is fully strict; restoring sentiment means restoring the module
+    AND writing a new caller. (`core/inference.py`, deleted in the pivot `0eab02a3`,
     was dropped from the allowlist 2026-07-13: its only consumer was the Modkit-era
     `mods/codegen`, removed with the rest of modkit — nothing imports it now.)
     STILL ABSENT (honest gap): inference-side multimodal wiring — no

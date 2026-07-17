@@ -252,7 +252,7 @@ def _validate_config_types(user_config: dict[str, Any]) -> dict[str, Any]:
             continue
         if not isinstance(value, expected):
             logger.warning(
-                "Config key %r has wrong type: expected %s, got %s — skipped",
+                "Config key %r has wrong type: expected %s, got %s -- skipped",
                 key,
                 expected,
                 type(value).__name__,
@@ -271,14 +271,15 @@ def _load_user_config() -> None:
     """
     The Ritual of Reading User Configuration.
 
-    Searches the realm for custom configuration scrolls (forge_config.json)
-    in several sacred locations. The first scroll found is read, and its
-    contents override the default settings.
+    Searches the realm for custom configuration scrolls in several sacred
+    locations. The first scroll found is read, and its contents override
+    the default settings.
 
     Search Order:
-        1. Current working directory
-        2. User's home directory (~/.enigma_engine/)
-        3. Enigma AI Engine installation directory
+        1. Current working directory (forge_config.json)
+        2. User's home directory (~/.enigma_engine/forge_config.json,
+           then the legacy name config.json)
+        3. Enigma AI Engine installation directory (forge_config.json)
     """
     config_paths = [
         Path.cwd() / "forge_config.json",

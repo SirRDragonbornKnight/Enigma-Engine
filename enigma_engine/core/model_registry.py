@@ -142,7 +142,7 @@ def safe_load_weights(
             checkpoint = load_file(str(path), device=map_location)
         else:
             logger.warning(
-                "Loading %s — .pth/.pt/.bin files use pickle. "
+                "Loading %s -- .pth/.pt/.bin files use pickle. "
                 "Prefer .safetensors format for models from "
                 "untrusted sources.",
                 path.name,
@@ -206,7 +206,7 @@ def get_state_dict(checkpoint: dict[str, Any], prefix: str = "") -> dict[str, to
         state_dict = checkpoint
 
     if not state_dict:
-        logger.warning("Extracted state dict is empty — checkpoint may be corrupted or in an unrecognized format")
+        logger.warning("Extracted state dict is empty -- checkpoint may be corrupted or in an unrecognized format")
 
     # Strip prefix if present
     if prefix:

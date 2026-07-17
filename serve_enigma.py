@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Serve the REAL Enigma — the from-scratch transformer — as an OpenAI-compatible
+"""Serve the REAL Enigma -- the from-scratch transformer -- as an OpenAI-compatible
 /v1 endpoint, so Odysseus (or any OpenAI client) can talk to her.
 
   python serve_enigma.py                       # models/enigma_dpo/model.pth (the adopted model)
   python serve_enigma.py --model models/enigma_pretrain_base_v2/latest.pth
   # then, in Odysseus chat:  /setup local http://127.0.0.1:8000/v1
 
-She is a BASE model (mid-pretraining): no chat template and no tool tokens yet —
+She is a BASE model (mid-pretraining): no chat template and no tool tokens yet --
 those arrive with the instruct pass (special-token IDs 4718-4735 are reserved in
 the padded embedding). /v1/chat/completions therefore bridges by rendering the
 conversation as a plain-text transcript she continues; /v1/completions is her
@@ -164,10 +164,18 @@ model.to(DEVICE).eval()
 # weight-read bound, so fp32 roughly halves the tokens/s ceiling for nothing.
 # Generation runs under the same numerics training validated; --fp32 is the
 # escape hatch if a regression ever points here.
-if DEVICE == "cuda":
+if DEVICE == "cuda" and not ARGS.fp32:
+    # TF32 rides the same flag: --fp32 must reproduce the true fp32 baseline
+    # (TF32 truncates matmul mantissas, so leaving it on would defeat the
+    # escape hatch; re-audit 2026-07-17).
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-_BF16_GEN = DEVICE == "cuda" and not ARGS.fp32 and torch.cuda.is_bf16_supported()
+# device_count guard: is_available() can be True with zero visible devices
+# (CUDA_VISIBLE_DEVICES=""), where is_bf16_supported() raises instead of
+# returning False (measured on torch 2.10).
+_BF16_GEN = (
+    DEVICE == "cuda" and not ARGS.fp32 and torch.cuda.device_count() > 0 and torch.cuda.is_bf16_supported()
+)
 STEP = _ck.get("step")
 META = _ck.get("meta") or {}  # finetune_enigma stamps chat_format here
 del _ck
@@ -177,12 +185,12 @@ del _ck
 # client max_tokens would shrink the prompt budget toward zero and the model
 # would answer from a near-empty context (confident garbage). We keep the
 # prompt intact (up to max_context - MIN_GEN_TOKENS) and let generation take
-# whatever room is left — never the other way around.
+# whatever room is left -- never the other way around.
 MIN_GEN_TOKENS = 64
 
 # Prompt truncation budgets against ARGS.max_context, but the model's KV
 # cache holds min(max_seq_len, MAX_CACHE_SEQ_LEN) positions and refuses a
-# larger prefill outright — clamp so an oversize --max-context cannot let
+# larger prefill outright -- clamp so an oversize --max-context cannot let
 # prompts through that the cache will reject.
 from enigma_engine.core.model_components import Attention as _Attn
 
@@ -211,7 +219,7 @@ BOS_ID = getattr(tokenizer, "bos_token_id", 1)
 
 # Instruct mode: SFT checkpoints (finetune_enigma.py) carry meta.chat_format.
 # Base checkpoints get the plain-transcript bridge below. Attaching the chat
-# tokens is safe either way — plain text encodes byte-identically.
+# tokens is safe either way -- plain text encodes byte-identically.
 INSTRUCT = META.get("chat_format") == CHAT_FORMAT_NAME
 attach_chat_tokens(tokenizer)
 
@@ -288,7 +296,7 @@ print(
 
 app = FastAPI(title="Enigma (from-scratch)")
 
-# One model, one KV-cache — generation must be serialized across requests.
+# One model, one KV-cache -- generation must be serialized across requests.
 _GEN_LOCK = threading.Lock()
 
 # Transcript turn markers: a base model will happily continue the whole
@@ -440,7 +448,7 @@ def _generate_text(
     ``stats`` (if given) is filled once the generator finishes:
     prompt_tokens = ids actually fed, completion_tokens = ids actually
     sampled, finish = "stop" (eos / stop marker) or "length" (budget spent).
-    Re-encoding the decoded text is NOT a substitute — strip() plus BPE
+    Re-encoding the decoded text is NOT a substitute -- strip() plus BPE
     re-merge under-count what the model really produced.
     """
     # encode() brackets text as [BOS]...[EOS]; drop the trailing EOS so she
@@ -450,7 +458,7 @@ def _generate_text(
     if ids and ids[-1] == EOS_ID:
         ids = ids[:-1]
     # Clamp the GENERATION side too: she trains at block 1024, and the RoPE
-    # table ends at 2x max_seq_len — an unclamped client max_tokens could walk
+    # table ends at 2x max_seq_len -- an unclamped client max_tokens could walk
     # past both. (2026-06-11 audit finding.)
     # Reserve the prompt first, generation second: keep the most recent
     # prompt context (up to max_context - MIN_GEN_TOKENS ids, leaving 1 for
@@ -519,7 +527,7 @@ def _gen_ids(
     repetition_penalty: float = 1.1,
 ):
     """ID-level generation for instruct mode: render_chat already built the
-    exact prompt (BOS included, no trailing EOS — the whole encode() EOS
+    exact prompt (BOS included, no trailing EOS -- the whole encode() EOS
     gotcha is bypassed). Yields raw token ids; stops on EOS/<|im_end|>."""
     # Defensive: prompt + generation must fit in max_context (caller already
     # sized max_tokens against len(ids), but never let a bad caller overflow).
@@ -852,6 +860,14 @@ def _chat_instruct(req: ChatReq):
                 content_ids: list[int] = []
                 emitted = 0
                 depth = 0
+                # Parity with non-stream, which returns parse_assistant_ids'
+                # STRIPPED per-hop content: drop leading whitespace, hold any
+                # trailing-whitespace run back until more non-whitespace
+                # arrives, and discard it at hop end. Without this, a hop
+                # ending in "\n" or a whitespace-only hop breaks the
+                # byte-identical guarantee (re-audit 2026-07-17).
+                hop_started = False
+                pending_ws = ""
                 for tid in gen:
                     all_ids.append(tid)
                     if tid in (THINK, TOOL_CALL):
@@ -861,30 +877,42 @@ def _chat_instruct(req: ChatReq):
                         depth = max(0, depth - 1)
                         continue
                     if depth:
-                        continue  # span ids surface at the end, parsed — not as text
+                        continue  # span ids surface at the end, parsed -- not as text
                     content_ids.append(tid)
                     text = tokenizer.decode(content_ids, skip_special_tokens=True)
-                    if len(text) > emitted:
-                        delta = text[emitted:]
-                        if emitted == 0 and emitted_any:
-                            delta = "\n" + delta  # hop-content separator, matches non-stream join
-                        yield (
-                            "data: "
-                            + json.dumps(
-                                {
-                                    "id": cid,
-                                    "object": "chat.completion.chunk",
-                                    "created": created,
-                                    "model": MODEL_ID,
-                                    "choices": [
-                                        {"index": 0, "delta": {"content": delta}, "finish_reason": None}
-                                    ],
-                                }
-                            )
-                            + "\n\n"
+                    if len(text) <= emitted:
+                        continue
+                    delta = text[emitted:]
+                    emitted = len(text)
+                    chunk = pending_ws + delta
+                    if not hop_started:
+                        chunk = chunk.lstrip()
+                        if not chunk:
+                            pending_ws = ""
+                            continue
+                    body = chunk.rstrip()
+                    pending_ws = chunk[len(body):]
+                    if not body:
+                        continue
+                    if not hop_started and emitted_any:
+                        body = "\n" + body  # hop-content separator, matches non-stream join
+                    hop_started = True
+                    emitted_any = True
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "id": cid,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": MODEL_ID,
+                                "choices": [
+                                    {"index": 0, "delta": {"content": body}, "finish_reason": None}
+                                ],
+                            }
                         )
-                        emitted = len(text)
-                        emitted_any = True
+                        + "\n\n"
+                    )
                 out = parse_assistant_ids(tokenizer, all_ids)
                 parsed = out["tool_calls"]
                 # Unparsable call text is collected across hops -- a malformed
@@ -981,7 +1009,7 @@ def _chat_instruct(req: ChatReq):
         n_prompt += len(prompt_ids)
         n_out += len(out_ids)
         parsed = out["tool_calls"]
-        # A tool call whose JSON didn't parse has no name — its raw text is
+        # A tool call whose JSON didn't parse has no name -- its raw text is
         # collected across hops and surfaced as content instead of silently
         # dropping the model's action.
         raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
@@ -1271,7 +1299,7 @@ def chat(req: ChatReq):
 
     text = "".join(gen).strip()
     # Usage is ground truth from _generate_text: ids actually fed and ids
-    # actually sampled. (Re-encoding the stripped text under-counted — BPE
+    # actually sampled. (Re-encoding the stripped text under-counted -- BPE
     # re-merge + strip() lost tokens the model really produced.)
     n_prompt = stats["prompt_tokens"]
     n_out = stats["completion_tokens"]
@@ -1365,7 +1393,7 @@ def _organ_off(what: str) -> HTTPException:
 @app.post("/v1/memory")
 def memory_add(req: MemReq):
     if MEMORY is None:
-        raise _organ_off("memory disabled — start with --memory-dir")
+        raise _organ_off("memory disabled -- start with --memory-dir")
     try:
         return {"ok": True, "memory": MEMORY.add(req.text, kind=req.kind)}
     except ValueError as exc:
@@ -1376,7 +1404,7 @@ def memory_add(req: MemReq):
 @app.get("/v1/memory")
 def memory_list(q: str | None = None, k: int = 5):
     if MEMORY is None:
-        raise _organ_off("memory disabled — start with --memory-dir")
+        raise _organ_off("memory disabled -- start with --memory-dir")
     recs = MEMORY.search(q, k=k) if q else MEMORY.all()[-k:]
     return {"count": len(MEMORY), "results": recs}
 
@@ -1386,14 +1414,14 @@ def memory_delete(mem_id: int):
     """User control over her memory (the ChatGPT-memory-management parallel):
     a saved fact can always be inspected (GET) and removed."""
     if MEMORY is None:
-        raise _organ_off("memory disabled — start with --memory-dir")
+        raise _organ_off("memory disabled -- start with --memory-dir")
     return {"ok": MEMORY.delete(mem_id), "count": len(MEMORY)}
 
 
 @app.delete("/v1/memory")
 def memory_clear():
     if MEMORY is None:
-        raise _organ_off("memory disabled — start with --memory-dir")
+        raise _organ_off("memory disabled -- start with --memory-dir")
     return {"ok": True, "cleared": MEMORY.clear()}
 
 
@@ -1410,9 +1438,9 @@ class SpeechReq(BaseModel):
 @app.post("/v1/audio/speech")
 def audio_speech(req: SpeechReq):
     if SPEAKER is None:
-        raise _organ_off("voice disabled — start with --voice")
+        raise _organ_off("voice disabled -- start with --voice")
     if req.voice is not None:
-        raise HTTPException(status_code=400, detail="voice selection not supported yet — one system voice")
+        raise HTTPException(status_code=400, detail="voice selection not supported yet -- one system voice")
     if MUTED:
         return Response(status_code=204)
     fd, tmp = tempfile.mkstemp(suffix=".wav")
@@ -1430,7 +1458,7 @@ def audio_speech(req: SpeechReq):
 @app.get("/v1/audio/voices")
 def audio_voices():
     if SPEAKER is None:
-        raise _organ_off("voice disabled — start with --voice")
+        raise _organ_off("voice disabled -- start with --voice")
     return {"voices": SPEAKER.voices}
 
 
@@ -1464,7 +1492,7 @@ def audio_transcriptions(file: UploadFile = File(...)):
     The ears organ -- clients (push-to-talk, the avatar) send what they hear
     and feed the text back into chat."""
     if EARS is None:
-        raise _organ_off("ears disabled — start with --ears")
+        raise _organ_off("ears disabled -- start with --ears")
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
     fd, tmp = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
@@ -1482,7 +1510,7 @@ def images_describe(file: UploadFile = File(...)):
     """The eyes organ's direct face: upload an image, get her caption.
     (In chat, OpenAI-style image messages are captioned automatically.)"""
     if EYES is None:
-        raise _organ_off("eyes disabled — start with --eyes")
+        raise _organ_off("eyes disabled -- start with --eyes")
     try:
         return {"description": EYES.describe(file.file.read())}
     except EyesError as exc:
@@ -1501,7 +1529,7 @@ class ImageGenReq(BaseModel):
 @app.post("/v1/images/generations")
 def images_generations(req: ImageGenReq):
     if PAINTER is None:
-        raise _organ_off("image generation disabled — start with --image-gen")
+        raise _organ_off("image generation disabled -- start with --image-gen")
     try:
         width, height = (int(x) for x in req.size.lower().split("x"))
     except ValueError as exc:

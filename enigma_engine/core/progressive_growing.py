@@ -166,7 +166,7 @@ def expand_model_weights(
     # Embeddings: [padded_vocab, dim]
     old_emb = source_sd.get("tok_embeddings.weight")
     if old_emb is None:
-        raise ValueError("State dict missing 'tok_embeddings.weight' — cannot expand model weights")
+        raise ValueError("State dict missing 'tok_embeddings.weight' -- cannot expand model weights")
     new_emb = torch.zeros(tgt_padded_vocab, tgt.dim, dtype=old_emb.dtype)
     copy_rows = min(src_padded_vocab, tgt_padded_vocab)
     new_emb[:copy_rows, : src.dim] = old_emb[:copy_rows]
@@ -561,7 +561,7 @@ class GradualUnfreezer:
                     last_step += interval
                     self.schedule.append(last_step)
                 logger.warning(
-                    "unfreeze_schedule had %d entries for %d layers — padded with interval %d",
+                    "unfreeze_schedule had %d entries for %d layers -- padded with interval %d",
                     len(unfreeze_schedule),
                     n_layers,
                     interval,

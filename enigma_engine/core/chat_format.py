@@ -304,7 +304,10 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
             try:
                 call = json.loads(raw)
                 name = call.get("name")
-                if name:
+                # isinstance: a truthy NON-string name ({"name": {"a": 1}})
+                # must go to the raw branch too -- downstream does
+                # `name in _BUILTIN_NAMES`, which throws on unhashables.
+                if isinstance(name, str) and name:
                     tool_calls.append({"name": name, "arguments": call.get("arguments", {})})
                 else:
                     # Valid JSON but no usable "name" (e.g. {"tool": ...}):

@@ -46,13 +46,18 @@ Taking minutes? Check serve_enigma.err.log in the Enigma Engine folder.</small><
 
 
 def _valid_url(candidate: str) -> bool:
-    """http(s) with a hostname and an in-range (or absent) port -- a garbage
-    URL must fall back to the default, not kill the poller thread later
-    (urlparse defers port validation to the .port property)."""
+    """http(s) with a REAL hostname and a usable (or absent) port -- a garbage
+    URL must fall back to the default, not leave the poller retrying a target
+    that can never answer. urlparse defers port validation to .port, treats 0
+    as in-range (nothing can listen on 0 client-side), and accepts whitespace
+    hostnames -- all three fall back here (re-audit 2026-07-17)."""
     try:
         p = urllib.parse.urlparse(candidate)
-        _ = p.port  # raises ValueError on non-numeric / out-of-range ports
-        return p.scheme in ("http", "https") and p.hostname is not None
+        port = p.port  # raises ValueError on non-numeric / out-of-range ports
+        if port == 0:
+            return False
+        host = p.hostname
+        return p.scheme in ("http", "https") and host is not None and host.strip() != ""
     except ValueError:
         return False
 

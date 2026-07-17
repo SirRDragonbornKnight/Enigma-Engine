@@ -199,7 +199,7 @@ def main() -> None:
         src = Path(args.init)
         if not src.exists():
             raise SystemExit(
-                f"--init {src} not found — the instruct pass starts from a "
+                f"--init {src} not found -- the instruct pass starts from a "
                 f"pretrained checkpoint (her run is user-gated)"
             )
     try:
@@ -286,7 +286,7 @@ def main() -> None:
     if meta.get("chat_format") != CHAT_FORMAT_NAME:
         rows = reinit_chat_rows(raw_model)
         print(
-            f"init: chat-token embedding rows {rows} re-initialized (mean + noise) — "
+            f"init: chat-token embedding rows {rows} re-initialized (mean + noise) -- "
             f"first instruct pass over a base checkpoint",
             flush=True,
         )
@@ -399,7 +399,7 @@ def main() -> None:
         n_train_tok = int((by != IGNORE).sum())
         print(
             f"[sanity] batch={tuple(bx.shape)} loss={loss.item():.4f} "
-            f"({n_train_tok} assistant-target tokens) — pipeline OK",
+            f"({n_train_tok} assistant-target tokens) -- pipeline OK",
             flush=True,
         )
         return

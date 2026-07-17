@@ -1102,7 +1102,7 @@ class Enigma(nn.Module):
         wired in. This currently falls back to dynamic INT8. The log
         message reflects the actual path taken so operators can trust it.
         """
-        logger.info("Static INT8 calibration data absent — fell back to dynamic INT8 quantization")
+        logger.info("Static INT8 calibration data absent -- fell back to dynamic INT8 quantization")
         self._apply_dynamic_quantization()
 
     def _apply_int4_quantization(self) -> None:
@@ -1134,7 +1134,7 @@ class Enigma(nn.Module):
             # Fallback to dynamic quantization. Log reflects the actual
             # path so operators reading logs aren't told "INT4" when
             # only dynamic INT8 ran.
-            logger.warning("bitsandbytes not available — fell back to dynamic INT8 quantization (not true INT4)")
+            logger.warning("bitsandbytes not available -- fell back to dynamic INT8 quantization (not true INT4)")
             self._apply_dynamic_quantization()
 
     @classmethod

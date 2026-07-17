@@ -144,3 +144,19 @@ def test_load_renumbers_duplicate_ids_even_when_file_is_readonly(tmp_path):
         assert len(set(ids)) == 2, f"duplicate ids survived load: {ids}"
     finally:
         os.chmod(f, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_delete_and_clear_leave_no_backup_copy(tmp_path):
+    """Privacy contract (re-audit 2026-07-17): the fsync'd rewrite must NOT
+    rotate a .bak -- a pre-delete copy on disk would silently defeat
+    delete/clear. Any .bak an earlier build left behind is scrubbed too."""
+    m = MemoryStore(tmp_path)
+    m.add("secret one")
+    m.add("secret two")
+    bak = (tmp_path / "memories.jsonl").with_suffix(".jsonl.bak")
+    bak.write_text("stale pre-delete copy from an older build\n", encoding="utf-8")
+    m.delete(1)
+    assert not bak.exists(), "delete left a backup copy on disk"
+    m.clear()
+    assert not bak.exists()
+    assert (tmp_path / "memories.jsonl").read_text(encoding="utf-8") == ""

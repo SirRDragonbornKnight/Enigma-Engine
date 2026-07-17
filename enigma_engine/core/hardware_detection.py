@@ -79,7 +79,7 @@ def detect_hardware() -> HardwareProfile:
         profile.ram_gb = mem.total / (1024**3)
         profile.available_ram_gb = mem.available / (1024**3)
     except ImportError:
-        logger.warning("psutil not installed — defaulting to 8 GB RAM")
+        logger.warning("psutil not installed -- defaulting to 8 GB RAM")
         profile.ram_gb = 8.0  # Default assumption
         profile.available_ram_gb = profile.ram_gb * 0.5
     profile.total_ram_gb = profile.ram_gb

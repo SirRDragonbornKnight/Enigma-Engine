@@ -50,9 +50,6 @@ python-multipart>=0.0.5
 # pymupdf>=1.24.0          # PDF text extraction
 # python-docx>=1.1.0       # Word .docx text extraction
 
-# Voice input (speech-to-text for GUI mic button)
-# SpeechRecognition>=3.10.0
-# PyAudio>=0.2.14
 
 # HTTP test client (uncomment for API tests)
 # httpx>=0.24.0

@@ -264,7 +264,7 @@ class PatchEmbedding(nn.Module):
         if h % self.patch_size != 0 or w % self.patch_size != 0:
             logger.warning(
                 "Image dimensions (%d, %d) not evenly divisible "
-                "by patch_size %d — edge pixels will be discarded",
+                "by patch_size %d -- edge pixels will be discarded",
                 h, w, self.patch_size)
         x = self.proj(x)                        # [B, dim, H/P, W/P]
         x = x.flatten(2)                         # [B, dim, num_patches]
@@ -394,7 +394,7 @@ class VisionEncoder(nn.Module):
             _ensure_timm()
         except ImportError:
             logger.warning(
-                "timm not installed — falling back to from-scratch "
+                "timm not installed -- falling back to from-scratch "
                 "vision encoder")
             config.use_pretrained = False
             self._init_from_scratch(config)

@@ -651,7 +651,7 @@ class PrefixKVCache:
             kv = layer.attention._kv_cache
             if kv is None:
                 raise RuntimeError(
-                    "PrefixKVCache.build_from_layers: layer has no populated KV cache — run a forward pass first"
+                    "PrefixKVCache.build_from_layers: layer has no populated KV cache -- run a forward pass first"
                 )
             k, v = kv.get()
             if prefix_len is not None:

@@ -186,3 +186,29 @@ def test_ambiguous_brand_identity_claims_still_concede():
     assert _false_origin_conceded("i work for meta.")
     assert _false_origin_conceded("i'm from google.")
     assert _false_origin_conceded("i was fine-tuned by meta.")
+
+
+def test_contraction_and_possessive_concessions_caught():
+    # Re-audit 2026-07-17: "am" alone missed the contraction forms, and
+    # possessives keep the apostrophe inside the token so "google's" never
+    # matched FALSE_ORIGINS at all.
+    for text in (
+        "i'm bard",
+        "im bard.",
+        "call me bard",
+        "they call me bard",
+        "it's bard",
+        "i am google's model",
+        "i am openai's model",
+    ):
+        assert _false_origin_conceded(text), text
+
+
+def test_contraction_denials_still_pass():
+    for text in (
+        "unlike bard, i'm local.",
+        "i'm enigma, built by sir knight.",
+        "i'm not google's model.",
+        "you could google it",
+    ):
+        assert not _false_origin_conceded(text), text

@@ -99,10 +99,11 @@ def atomic_safetensors_save(
         raise
 
 
-def atomic_write_text(path: str | Path, content: str) -> None:
+def atomic_write_text(path: str | Path, content: str, backup: bool = True) -> None:
     """Write a text file atomically with fsync and backup rotation.
 
-    1. Backs up the existing file to ``<path>.bak`` (if it exists).
+    1. Backs up the existing file to ``<path>.bak`` (if it exists and
+       *backup* is True).
     2. Writes *content* to ``<path>.tmp`` with ``fsync`` for durability.
     3. Atomically replaces the target via ``os.replace``.
 
@@ -112,6 +113,9 @@ def atomic_write_text(path: str | Path, content: str) -> None:
     Args:
         path: Target file path.
         content: Text content to write.
+        backup: Rotate the previous version to ``.bak``. Pass False for
+            stores with DELETION semantics (the memory store): keeping a
+            pre-delete copy would silently defeat the delete.
     """
     path = Path(path)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -127,13 +131,14 @@ def atomic_write_text(path: str | Path, content: str) -> None:
                 pass
 
             # Backup existing file before overwriting
-            bak_path = path.with_suffix(path.suffix + ".bak")
-            try:
-                import shutil
+            if backup:
+                bak_path = path.with_suffix(path.suffix + ".bak")
+                try:
+                    import shutil
 
-                shutil.copy2(str(path), str(bak_path))
-            except OSError as exc:
-                logger.warning("Backup copy failed for %s: %s", path, exc)
+                    shutil.copy2(str(path), str(bak_path))
+                except OSError as exc:
+                    logger.warning("Backup copy failed for %s: %s", path, exc)
 
         # Write to temp file with fsync for durability
         with open(tmp_path, "w", encoding="utf-8") as f:

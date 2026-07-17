@@ -2206,7 +2206,7 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
             if domain_tried % 100 == 0:
                 print(
                     f"  [Wayback] {label}: tried {domain_tried}/"
-                    f"{len(urls)} — saved {domain_saved}, "
+                    f"{len(urls)} -- saved {domain_saved}, "
                     f"skip: dup={skip_dup} http={skip_http} "
                     f"quality={skip_quality} ai={skip_ai}"
                 )

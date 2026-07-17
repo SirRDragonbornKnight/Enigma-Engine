@@ -1,7 +1,7 @@
 # CLAUDE.md — Enigma Engine
 
 Guidance for Claude Code working in this repo. Keep this file short (target <200 lines).
-Harness-enforced rules (permissions, hooks, model) belong in `.claude/settings.json`, NOT here.
+Harness-enforced rules (permissions, hooks, model) belong in `.claude/settings.local.json`, NOT here.
 
 ## What this is
 This repo is **Enigma** — a **from-scratch** decoder-only LLM (its own architecture, BPE tokenizer base
@@ -13,7 +13,7 @@ optional) → SFT → DPO → serve**; train + serve share one chat renderer
 machinery that trains and serves HER. The Forge-era framing (a generic engine to spawn different
 AIs off copies of itself) is RETIRED — never describe this repo as a "model factory" or a
 framework; the AI we made is the thing being worked on. The name arc stays visible in history
-(ForgeEngine → EnigmaEngine `7ef9068f`; a Modkit refocus, dissolved 2026-07-13 `5bbb4b44`) and in
+(ForgeEngine → EnigmaEngine `7ef9068f`; a Modkit refocus, dissolved 2026-07-14 `5bbb4b44`) and in
 surviving identifiers (`ForgeConfig`, the FORGE trainer, `forge_config.json`,
 `models/enigma_forge_tiny`) — those are identifiers, not identity; renaming them is optional
 cleanup, and the git history STAYS (no rewrites — it is honest archaeology).
@@ -33,10 +33,14 @@ Perception is HALF-BUILT; text-only ships today:
   now carry `vision/audio_encoder_state_dict` + the local optimizer, and resume refuses
   text-only checkpoints. Remaining gotcha: **serve has no encoder load path** (Phase 4.5
   step 1, "wire serve to load them" -- audit 2026-07-17 corrected the step pointer).
-  Restore history: `KNOWN_ISSUES.md` #11.
+  Restore history: `KNOWN_ISSUES.md` #11. **Phase 4.5 vision IN PROGRESS (2026-07-17):**
+  LLaVA-Pretrain images live at `data/vision/llava/images/`; `distill_vision_encoder.py`
+  distills DINOv2-S into her own ViT-medium (student sees [-1,1], teacher ImageNet norm —
+  align + serve preprocessing must match); `train_vision` now runs REAL batches
+  (`config.batch_size`, right-padded text, ignore_index loss — was batch-1).
 
 The Modkit-era `mods/` + `plugins/` subsystem and its `commands`/`mod_tools`/`plugin_loader` registry
-were REMOVED 2026-07-13 (never loaded by `serve_enigma.py`; superseded). Pip distribution renamed
+were REMOVED 2026-07-14 (never loaded by `serve_enigma.py`; superseded). Pip distribution renamed
 `modkit` -> `enigma-engine`. Capabilities that are genuinely separate models (image gen, TTS, ASR,
 search) return as hub/tool services, NOT in-repo mods.
 
@@ -82,11 +86,14 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
 - **Finetune (SFT)** — `python finetune_enigma.py` (base checkpoint → instruct/tool model;
   imports the optimizer/LR "arsenal" from `enigma_engine.core.optim`, shared with pretrain).
 - **Serve** — `python serve_enigma.py` (OpenAI-compatible FastAPI server; loads the `.pth`
-  checkpoint directly). Run with `--help` for flags.
+  checkpoint directly). Generation runs **bf16 autocast + TF32** on CUDA since 2026-07-17
+  (`--fp32` = full-fp32 escape hatch, disables both; 90-probe gate re-measured 79/90 under
+  bf16, same as fp32). Run with `--help` for flags.
 
 ## Conventions / guardrails
-- **Console output must be ASCII** — the Windows cp1252 console can't print `→`, `—`, etc.
-  Use ASCII in any script that prints.
+- **Console output must be ASCII** — the Windows cp1252 console hard-crashes on unmapped
+  chars (`→`); em dashes happen to map but the rule is ZERO non-ASCII in console-bound
+  strings (print/logger/raise/argparse) — swept to zero 2026-07-17, keep it there.
 - **Do not change the live pretrain defaults** (`--optimizer adamw --schedule cosine`) — they are
   asserted bit-identical to the live training lineage. Muon / WSD are future-run-only, behind flags.
 - Checkpoints rotate `latest.pth` → `prev.pth` atomically with a finite-loss guard; resume rebuilds
@@ -95,8 +102,9 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
   (`models/enigma_pretrain_large/model.pth`; SHA256 receipts live in
   `Enigma Backups\enigma_pretrain_large_final\`, not beside the checkpoint). Lineage is
   immutable; forward plan is `ROADMAP.md`. Bottleneck is now SFT data, not compute.
-- SFT+DPO **ADOPTED**: every entry point serves `models/enigma_dpo/model.pth` with
-  `--memory-dir data\memory`. The user-facing chain (since 2026-07-16) is
+- SFT+DPO **ADOPTED**: every entry point serves `models/enigma_dpo/model.pth`; the launcher
+  chain adds `--memory-dir data\memory` (bare `enigma`/`enigma-ai` console scripts default
+  memory OFF — `--memory-dir` default is None). The user-facing chain (since 2026-07-16) is
   **Talk to Enigma.bat / Enigma Tray.bat / Stop Enigma.bat** (Desktop wrappers -> repo
   scripts -> `Start-Enigma.ps1` -> serve; her window is `enigma_window.py`).
   (`Start-Enigma.bat` and `Launch Enigma.bat` were deleted 2026-07-17 as superseded;
@@ -180,7 +188,8 @@ no longer sizes `k` off the unfiltered list (was a crash). Bottleneck stays SFT 
 2026-07-15: facts INSTALL via a continued-pretrain pass (`make_facts_pretrain_data.py` ->
 `pretrain_enigma.py --tokens-bin` -> `models/enigma_pretrain_facts`; SFT inits from it and
 `knowledge_corpus.py` x5 only SURFACES them) — measured factual 13/20 -> 19/20 on the 90-probe
-suite. The general diet is 105,203 short pairs (see collect_finetuning_data.py).
+suite. The general diet is 105,203 short pairs (count receipted in `BACKLOG.md` §3; produced by
+collect_finetuning_data.py — per-source length caps DIFFER, see training_guide.md Stage 2).
 Reading rules: `CODE_REVIEW.md` is a closed-bug LEDGER — its present-tense entries are history,
 not current state. (Removed 2026-07-14 as dead cruft: `FORGE_TEST_GUIDE.md`, `ENIGMA_QUANTIZE_PLAN.md`,
 `AA code maker.md` (all Qwen-8B/Forge-GUI era), and `information/commands_reference.md` (documented the
