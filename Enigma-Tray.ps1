@@ -52,9 +52,12 @@ $script:miTalk.add_Click($talk)
 $script:notify.add_DoubleClick($talk)
 
 $script:miMute.add_Click({
+    # One POST -- the target state comes from the label the Popup handler just
+    # painted (the menu can't be shown without Popup firing first). Halves the
+    # time this handler blocks the UI thread.
+    $target = ($script:miMute.Text -eq "Mute")
     try {
-        $state = Invoke-RestMethod -Uri $script:muteUrl -TimeoutSec 2
-        $body = @{ muted = (-not $state.muted) } | ConvertTo-Json -Compress
+        $body = @{ muted = $target } | ConvertTo-Json -Compress
         $now = Invoke-RestMethod -Uri $script:muteUrl -Method Post -Body $body `
             -ContentType "application/json" -TimeoutSec 2
         if ($now.muted) { $tip = "Muted." } else { $tip = "Voice back on." }
@@ -77,14 +80,23 @@ $menu.add_Popup({
 })
 
 $script:miStop.add_Click({
-    & "$script:engineDir\Stop-Enigma.ps1" | Out-Null
-    $script:notify.ShowBalloonTip(1200, "Enigma", "Stopped.", [System.Windows.Forms.ToolTipIcon]::None)
+    # Report what Stop-Enigma actually did -- "Stopped." when nothing was
+    # running (or the port was foreign) is a lie the user acts on.
+    $out = (& "$script:engineDir\Stop-Enigma.ps1") -join " "
+    if ($out -match "left alone") { $tip = "Port 8000 is not Enigma -- left it alone." }
+    elseif ($out -match "already stopped" -and $out -match "none open") { $tip = "Nothing was running." }
+    else { $tip = "Stopped." }
+    $script:notify.ShowBalloonTip(1500, "Enigma", $tip, [System.Windows.Forms.ToolTipIcon]::None)
 })
 
 $script:miExit.add_Click({
-    $script:notify.Visible = $false
-    $script:notify.Dispose()
     [System.Windows.Forms.Application]::Exit()
 })
 
-[System.Windows.Forms.Application]::Run()
+try {
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    # Normal exit or exception: never leave a ghost icon in the tray.
+    $script:notify.Visible = $false
+    $script:notify.Dispose()
+}

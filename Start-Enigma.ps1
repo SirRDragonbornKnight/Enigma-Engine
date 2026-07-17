@@ -18,8 +18,25 @@ $port = 8000
 
 $up = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($up) {
-    Write-Output "Enigma already serving on port $port (pid $($up[0].OwningProcess))."
-    exit 0
+    # Verify the listener really is Enigma before claiming she's up.
+    $ownerId = $up[0].OwningProcess
+    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId" -ErrorAction SilentlyContinue).CommandLine
+    $procName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
+    if ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai")) {
+        Write-Output "Enigma already serving on port $port (pid $ownerId)."
+        exit 0
+    }
+    Write-Output "WARN: port $port is held by pid $ownerId ($procName), which is NOT Enigma -- not starting a second server."
+    exit 1
+}
+
+if (-not (Test-Path $python)) {
+    # Often launched hidden (tray/bat) -- a popup is the only failure anyone sees.
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "Python was not found at $python -- Enigma cannot start. Reinstall Python 3.12 from python.org.",
+        "Enigma") | Out-Null
+    exit 1
 }
 
 # Hidden window: a visible console gets closed by accident (see CLAUDE.md

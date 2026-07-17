@@ -75,7 +75,7 @@ _p.add_argument(
     "--max-context",
     type=int,
     default=1024,
-    help="prompt+generation token budget; she trains at block 1024 — longer is mechanically possible but untested",
+    help="prompt+generation token budget; she trains at block 1024 -- longer is mechanically possible but untested",
 )
 _p.add_argument(
     "--memory-dir",
@@ -112,7 +112,12 @@ _p.add_argument(
     action="store_true",
     help="permit a one-time organ weight download from HuggingFace; WITHOUT this flag the server is fully offline",
 )
-ARGS, _ = _p.parse_known_args()
+# parse_known_args is deliberate (the module must import under runners that
+# carry their own argv) -- but a typo'd flag must not silently disable an
+# organ, so unknowns are named out loud.
+ARGS, _UNKNOWN = _p.parse_known_args()
+if _UNKNOWN:
+    print(f"  WARN: ignoring unrecognized args: {' '.join(_UNKNOWN)}", flush=True)
 
 # PRIVACY: she is local, fully. Her own weights never touch the network; the
 # organ libraries (transformers/diffusers/faster-whisper) would by default
@@ -213,6 +218,13 @@ if ARGS.voice:
 # answers 204 (no audio) so muting from anywhere silences every open window.
 # The server is the single source of truth; the page polls and adopts it.
 MUTED = False
+# The truth survives restarts: best-effort persisted to a tiny state file
+# (a crash-relaunch must not silently unmute a muted gaming session).
+_MUTE_STATE = Path("data") / "mute_state.json"
+try:
+    MUTED = bool(json.loads(_MUTE_STATE.read_text(encoding="utf-8")).get("muted", False))
+except (OSError, ValueError):
+    pass
 
 EARS = None
 if ARGS.ears:
@@ -907,6 +919,7 @@ def _chat_instruct(req: ChatReq):
     out_ids: list[int] = []
     last_max = 1
     raw_all: list[str] = []
+    spoke_server_side = False
     for hop in range(_MAX_TOOL_HOPS + 1):
         prompt_ids, last_max = _hop(cur_msgs)
         out_ids = list(
@@ -924,6 +937,8 @@ def _chat_instruct(req: ChatReq):
         # dropping the model's action.
         raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
         if _loop_on_builtins(parsed, hop):
+            if SPEAKER is not None and not MUTED and any(c.get("name") == "speak" for c in parsed):
+                spoke_server_side = True  # the chat page skips its own TTS for this reply
             cur_msgs = _apply_builtins(cur_msgs, out, parsed)
             continue
         break
@@ -936,7 +951,7 @@ def _chat_instruct(req: ChatReq):
     # honest finish_reason: a generation that spent the whole budget was cut
     # off ("length"), not naturally finished ("stop")
     finish = "tool_calls" if calls else ("length" if len(out_ids) >= last_max else "stop")
-    return {
+    resp = {
         "id": cid,
         "object": "chat.completion",
         "created": created,
@@ -944,6 +959,11 @@ def _chat_instruct(req: ChatReq):
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
+    if spoke_server_side:
+        # Non-standard extension the chat page reads so it never double-voices
+        # a reply the speak tool already said on the server's speakers.
+        resp["enigma"] = {"spoke": True}
+    return resp
 
 
 # Built-in chat page (GET /): self-contained HTML+JS, no external assets
@@ -994,9 +1014,11 @@ _CHAT_PAGE = """<!doctype html>
 <script>
 "use strict";
 var history_ = [];
-var muted = localStorage.getItem("enigma_muted") === "1";
+var muted = false;  // the SERVER owns mute; syncMute adopts the truth within 3s
 var voiceReady = false;
 var currentAudio = null;
+var currentUrl = null;   // blob URL of the playing reply, revoked in stopAudio
+var muteEpoch = 0;       // clicks invalidate in-flight polls (no stale revert)
 var log = document.getElementById("log");
 var box = document.getElementById("box");
 var send = document.getElementById("send");
@@ -1013,6 +1035,7 @@ function add(cls, text) {
 }
 function stopAudio() {
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
 }
 function paintMute() {
   muteBtn.textContent = muted ? "Muted" : "Mute";
@@ -1025,19 +1048,20 @@ function pushMute() {
     body: JSON.stringify({ muted: muted }) }).catch(function () {});
 }
 function syncMute() {
+  var epoch = muteEpoch;
   fetch("/v1/audio/mute")
     .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
     .then(function (s) {
+      if (epoch !== muteEpoch) return;  // a click won since this poll left
       if (s.muted === muted) return;
       muted = s.muted;
-      localStorage.setItem("enigma_muted", muted ? "1" : "0");
       if (muted) stopAudio();
       paintMute();
     }).catch(function () {});
 }
 muteBtn.onclick = function () {
   muted = !muted;
-  localStorage.setItem("enigma_muted", muted ? "1" : "0");
+  muteEpoch += 1;
   if (muted) stopAudio();
   paintMute();
   pushMute();
@@ -1054,7 +1078,9 @@ function speak(text) {
     .then(function (b) {
       if (!b || muted) return;
       stopAudio();
-      currentAudio = new Audio(URL.createObjectURL(b));
+      currentUrl = URL.createObjectURL(b);
+      currentAudio = new Audio(currentUrl);
+      currentAudio.addEventListener("ended", stopAudio);
       currentAudio.play().catch(function () {});
     }).catch(function () {});
 }
@@ -1077,10 +1103,14 @@ document.getElementById("f").onsubmit = function (ev) {
     .then(function (data) {
       thinking.remove();
       var msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
-      var reply = msg.content || "[no text reply]";
+      var reply = (typeof msg.content === "string") ? msg.content : "";
+      if (!reply) {
+        add("sys", "[no text reply]");  // shown, never spoken or remembered
+        return;
+      }
       add("her", reply);
       history_.push({ role: "assistant", content: reply });
-      speak(reply);
+      if (!(data.enigma && data.enigma.spoke)) speak(reply);
     })
     .catch(function (e) {
       thinking.remove();
@@ -1356,10 +1386,16 @@ def get_mute():
 
 @app.post("/v1/audio/mute")
 def set_mute(req: MuteReq):
-    """The chat page's mute button. Gates the server-side speak TOOL; the
-    page itself also stops playing /v1/audio/speech replies while muted."""
+    """The mute switch (chat page button + tray icon). Gates the server-side
+    speak TOOL and turns /v1/audio/speech into 204s; persisted so a restart
+    cannot silently unmute."""
     global MUTED
     MUTED = bool(req.muted)
+    try:
+        _MUTE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _MUTE_STATE.write_text(json.dumps({"muted": MUTED}), encoding="utf-8")
+    except OSError:
+        pass  # mute still works for this run; it just won't survive a restart
     return {"muted": MUTED}
 
 

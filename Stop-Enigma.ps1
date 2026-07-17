@@ -5,15 +5,17 @@
 # really is serve_enigma.py -- anything else holding the port is left alone.
 # ASCII-only output (Windows cp1252 console).
 
-# 1) Her chat window (the enigma_window.py shim), if one is open.
-$windows = @(Get-Process python, pythonw -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowTitle -eq "Enigma" })
+# 1) Her chat window (the enigma_window.py shim), if one is open. Matched by
+# COMMAND LINE, not window title -- any other python window that happens to
+# be titled "Enigma" (avatar tooling, a second pywebview app) is not ours.
+$windows = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*enigma_window.py*" })
 if ($windows.Count -eq 0) {
     Write-Output "window: none open."
 } else {
     foreach ($w in $windows) {
-        Stop-Process -Id $w.Id -Force
-        Write-Output "window: closed (pid $($w.Id))."
+        Stop-Process -Id $w.ProcessId -Force
+        Write-Output "window: closed (pid $($w.ProcessId))."
     }
 }
 
@@ -24,12 +26,15 @@ if ($null -eq $conn) {
     Write-Output "server: nothing on port 8000 -- already stopped."
 } else {
     $ownerId = $conn.OwningProcess
-    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId").CommandLine
-    if ($cmd -like "*serve_enigma.py*") {
+    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId" -ErrorAction SilentlyContinue).CommandLine
+    $procName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
+    # Ours = serve_enigma.py directly, OR the enigma/enigma-ai console-script
+    # wrappers from pyproject (those run as enigma.exe with no .py on the line).
+    if ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai")) {
         Stop-Process -Id $ownerId -Force
         Write-Output "server: stopped (pid $ownerId)."
     } else {
-        Write-Output "server: port 8000 is held by pid $ownerId, which is NOT serve_enigma.py -- left alone."
+        Write-Output "server: port 8000 is held by pid $ownerId ($procName), which is NOT Enigma -- left alone."
         Write-Output "  command line: $cmd"
     }
 }
