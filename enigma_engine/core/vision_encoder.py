@@ -430,7 +430,7 @@ class VisionEncoder(nn.Module):
             "VisionEncoder: pretrained %s (dim=%d%s, %s)",
             config.pretrained_model,
             backbone_dim,
-            f" → {config.dim}" if backbone_dim != config.dim else "",
+            f" -> {config.dim}" if backbone_dim != config.dim else "",
             "frozen" if config.freeze_backbone else "trainable",
         )
 
@@ -452,7 +452,7 @@ class VisionEncoder(nn.Module):
         )
         logger.info(
             "VisionEncoder: hybrid CNN+ViT mode "
-            "(CNN stem → %d patches → %d transformer blocks)",
+            "(CNN stem -> %d patches -> %d transformer blocks)",
             cnn_patches, config.n_layers)
 
         self._init_blocks_and_norm(config)

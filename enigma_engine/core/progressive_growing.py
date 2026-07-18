@@ -185,7 +185,7 @@ def expand_model_weights(
     layer_mapping = compute_layer_mapping(src.n_layers, tgt.n_layers)
 
     logger.info(
-        "Progressive growing: %d→%d layers, %d→%d dim, %d→%d heads, %d→%d kv_heads, %d→%d hidden_dim",
+        "Progressive growing: %d->%d layers, %d->%d dim, %d->%d heads, %d->%d kv_heads, %d->%d hidden_dim",
         src.n_layers,
         tgt.n_layers,
         src.dim,

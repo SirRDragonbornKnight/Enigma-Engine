@@ -198,7 +198,7 @@ class WeightMapper:
                     result[forge_name] = tensor
                     self._stats["mapped"] += 1
                     mapped = True
-                    logger.debug(f"Mapped: {source_name} → {forge_name}")
+                    logger.debug(f"Mapped: {source_name} -> {forge_name}")
                     break
 
             if not mapped:
@@ -335,7 +335,7 @@ class WeightMapper:
             # Token embeddings: [vocab_size, dim]
             if shape == (vocab_size, dim) and "tok_embeddings.weight" not in result:
                 result["tok_embeddings.weight"] = tensor
-                logger.info(f"Shape-matched: {name} → tok_embeddings.weight")
+                logger.info(f"Shape-matched: {name} -> tok_embeddings.weight")
 
             # Final norm: [dim]
             elif shape == (dim,) and "norm.weight" not in result:

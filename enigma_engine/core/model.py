@@ -217,15 +217,15 @@ class Enigma(nn.Module):
             )
             logger.info(
                 f"Added vision projection (LLaVA-1.5 MLP): "
-                f"{self.config.vision_hidden_size} → {self.config.dim} "
-                f"→ {self.config.dim}"
+                f"{self.config.vision_hidden_size} -> {self.config.dim} "
+                f"-> {self.config.dim}"
             )
         else:
             self.vision_projection = None
 
         if self.config.audio_hidden_size is not None:
             self.audio_projection = nn.Linear(self.config.audio_hidden_size, self.config.dim, bias=False)
-            logger.info(f"Added audio projection: {self.config.audio_hidden_size} → {self.config.dim}")
+            logger.info(f"Added audio projection: {self.config.audio_hidden_size} -> {self.config.dim}")
         else:
             self.audio_projection = None
 
