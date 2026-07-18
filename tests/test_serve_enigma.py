@@ -402,13 +402,14 @@ _HF_ENV_KEYS = (
 
 
 def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
-    """The full startup path on a 2-layer toy model, twice: the first boot
+    """The full startup path on a 2-layer toy model, SIX boots: the first
     exercises the --allow-downloads env branch AND the KV-cache clamp
     (--max-context 4096 vs max_seq_len 256 -- the 2026-07-17 version never
     entered either branch); the second, flagless boot must RESTORE the
     offline default despite the first boot's leftover "0" (the double-boot
-    hole, re-audit 2026-07-18). CUDA is masked off so this never touches the
-    GPU; mute state and env are patched hermetic and restored."""
+    hole, re-audit 2026-07-18); legs C/D pin the operator-export semantics.
+    CUDA is masked off so this never touches the GPU; mute state and env are
+    patched hermetic and restored."""
     import os
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
@@ -458,15 +459,24 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
         # (C) an export that AGREES with the flag is never claimed and
         # survives an allow-downloads -> flagless boot pair untouched:
         os.environ["HF_HUB_OFFLINE"] = "0"  # operator: downloads always ok
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
         serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--allow-downloads"])
         serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
         assert os.environ["HF_HUB_OFFLINE"] == "0"  # respected, not forced to 1
-        # (D) an export the flag DISPLACED is restored on the next boot:
-        os.environ["HF_HUB_OFFLINE"] = "1"  # operator: hard offline
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "0"
+        # (D) an export the flag DISPLACED is restored on the next boot.
+        # "true" on purpose (a huggingface_hub-recognized truthy spelling):
+        # the displaced value must differ from the "1" that setdefault would
+        # write, or delete-then-setdefault masquerades as a restore and the
+        # restore half of the fix is unpinned (round-3 re-audit 2026-07-18).
+        os.environ["HF_HUB_OFFLINE"] = "true"  # operator: hard offline
+        os.environ["TRANSFORMERS_OFFLINE"] = "true"
         serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--allow-downloads"])
         assert os.environ["HF_HUB_OFFLINE"] == "0"  # the flag wins, out loud
+        assert serve._BOOT_ENV_WRITES["HF_HUB_OFFLINE"] == ("true", "0")
         serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
-        assert os.environ["HF_HUB_OFFLINE"] == "1"  # operator's export is back
+        assert os.environ["HF_HUB_OFFLINE"] == "true"  # the LITERAL export is back
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "true"
     finally:
         for name, value in snapshot.items():
             setattr(serve, name, value)

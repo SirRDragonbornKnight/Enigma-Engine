@@ -12,9 +12,12 @@ run_training_diagnostic.py exec()s a list of such strings, and the first AST
 version silently dropped that coverage the regex incidentally had (round-2
 re-audit: bpe_tokenizer became invisibly deletable). Known blind spots:
 importlib.import_module("...") dotted-name strings (not import statements,
-never covered by any version) and RELATIVE imports inside the package
-(never covered by any version either -- the recorded #11 incident callers
-were all absolute).
+never covered by any version); RELATIVE imports inside the package (never
+covered by any version either -- the recorded #11 incident callers were all
+absolute); f-string literal segments are deliberately EXCLUDED from the
+exec-string scan (log/help prose, not executable imports; round-3 re-audit);
+and module-level for/walrus/with-as bindings in a package __init__ are
+invisible to check 2 (none exist in any real __init__).
 
 Two checks per file (static -- nothing from the tree is executed):
 1. every dotted module path in `import a.b.c` / `from a.b.c import x` must
@@ -23,8 +26,9 @@ Two checks per file (static -- nothing from the tree is executed):
    name the package __init__ actually DEFINES (import aliases, assignments,
    def/class, __all__ strings) -- prose mentions no longer count (the old
    substring check was satisfiable by a docstring word). A package __init__
-   with module-level __getattr__ (lazy exports) makes names statically
-   unverifiable, so such packages are exempt from check 2.
+   with module-level __getattr__ is exempt from check 2 ONLY when it has no
+   __all__ literal to consult -- core/ and training/ have both, and their
+   __all__ is the authoritative surface (so they are NOT exempt).
 """
 from __future__ import annotations
 
@@ -81,7 +85,17 @@ def _iter_imports(tree: ast.AST):
     for from-imports of the first-party package -- including imports living
     inside string constants that are pure import statements (exec pattern).
     Compiled AST, so quoted prose, comments and continuations cannot
-    confuse it."""
+    confuse it. F-string literal segments are excluded from the string scan
+    -- ast.walk yields them as plain Constants, and log/help prose like
+    f"import enigma_engine.core.x\n{err}" is not an executable import
+    (round-3 re-audit 2026-07-18)."""
+    fstring_parts = {
+        id(v)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.JoinedStr)
+        for v in n.values
+        if isinstance(v, ast.Constant)
+    }
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -97,6 +111,7 @@ def _iter_imports(tree: ast.AST):
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and _PKG_NAME in node.value
+            and id(node) not in fstring_parts
         ):
             inner = _parse_import_string(node.value)
             if inner is not None:
@@ -142,7 +157,9 @@ def _init_defined_names(init_path: Path) -> set[str] | None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for t in targets:
                     for n in ast.walk(t):  # covers a, b = ... unpacks too
-                        if not isinstance(n, ast.Name):
+                        # Store ctx only: `d[key] = v` must not collect the
+                        # Load-context `key`/`d` reads (round-3 re-audit)
+                        if not (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)):
                             continue
                         names.add(n.id)
                         if n.id == "__getattr__":
@@ -260,6 +277,11 @@ def test_exec_string_imports_are_covered():
     assert ("from", "enigma_engine.core.model", ["Enigma"]) in list(_iter_imports(tree))
     prose = ast.parse('DOC = "see: from enigma_engine.core import totally_fake_module for info"\n')
     assert not list(_iter_imports(prose))
+    # f-string literal segments are prose, not executable imports -- a log
+    # line must not register even when its segment parses as a pure import
+    # (round-3 re-audit)
+    fstr = ast.parse('msg = f"import enigma_engine.core.fake_xyz\\n{err}"\n')
+    assert not list(_iter_imports(fstr))
 
 
 def test_init_defined_names_is_scope_correct(tmp_path):
