@@ -83,6 +83,34 @@ def test_utterances_play_in_order(rig):
     assert says == ["first", "second", "third"]
 
 
+def test_fresh_engine_per_job(tmp_path):
+    """One engine per JOB, not per Speaker: say-then-save_to_file on a single
+    SAPI engine deadlocks the second runAndWait (measured; module docstring).
+    The singleton-engine `rig` fixture cannot see a revert to one-engine-per-
+    Speaker -- every other test passes either way. This factory counts
+    constructions and checks each job ran on its OWN engine (test-suite
+    audit 2026-07-17)."""
+    engines: list[FakeEngine] = []
+
+    def factory():
+        e = FakeEngine()
+        engines.append(e)
+        return e
+
+    speaker = Speaker(engine_factory=factory)
+    n_init = len(engines)  # constructor probes (discovery + validation)
+    speaker.speak("first", wait=True)
+    speaker.save_wav("second", tmp_path / "u.wav")
+    speaker.speak("third", wait=True)
+    speaker.close()
+
+    assert len(engines) == n_init + 3, "each job must construct its own engine"
+    j1, j2, j3 = engines[n_init:]
+    assert ("say", "first") in j1.calls and not any(c[0] == "wav" for c in j1.calls)
+    assert any(c[0] == "wav" for c in j2.calls) and not any(c[0] == "say" for c in j2.calls)
+    assert ("say", "third") in j3.calls
+
+
 def test_save_wav_writes_file(rig, tmp_path):
     engine, speaker = rig
     out = speaker.save_wav("to disk", tmp_path / "utterance.wav")

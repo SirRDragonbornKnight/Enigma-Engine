@@ -173,6 +173,9 @@ _NEGATIONS = {
     "can't", "cant", "cannot", "won't", "wont", "couldn't", "couldnt",
     "wouldn't", "wouldnt", "shouldn't", "shouldnt",
     "unlike", "instead", "rather", "without",
+    # Perfect-tense denials (test-suite audit 2026-07-17: "OpenAI hasn't
+    # touched me" graded as a concession).
+    "haven't", "havent", "hasn't", "hasnt", "hadn't", "hadnt", "ain't", "aint",
 }
 # A negation's scope ends at a sentence break or a contrastive pivot -- which is
 # exactly what turns "not X, BUT yes built on Llama" into a concession.

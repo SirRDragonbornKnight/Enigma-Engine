@@ -46,7 +46,19 @@ def _install_fake_datasets(monkeypatch, rows_by_path, splits_by_path=None):
     def _load_dataset(path, *args, **kwargs):
         if path not in rows_by_path:
             raise ValueError("BuilderConfig 'unknown' not found. Available: ['default', 'subset_a', 'subset_b']")
-        return _FakeDataset(rows_by_path[path])
+        rows = rows_by_path[path]
+        # Per-split rows: a dict value maps split name -> row list, and the
+        # requested split MUST exist -- a collector that ignores its split
+        # argument (or hardcodes "train") fails loudly instead of silently
+        # receiving the same rows for every split (test-suite audit
+        # 2026-07-17: identical-rows-per-split + dedup made the split tests
+        # unfalsifiable).
+        if isinstance(rows, dict):
+            split = kwargs.get("split")
+            if split not in rows:
+                raise ValueError(f"Unknown split {split!r}. Available: {sorted(rows)}")
+            rows = rows[split]
+        return _FakeDataset(rows)
 
     def _get_dataset_split_names(path, config=None, *args, **kwargs):
         if splits_by_path is not None and path in splits_by_path:
@@ -122,14 +134,25 @@ class TestCollectOpenThoughts3:
         assert len(pairs) == 1
 
     def test_respects_max_samples(self, monkeypatch, cf_module):
-        """`max_samples` caps streaming early."""
-        rows = [self._SAMPLE_ROW] * 50
+        """`max_samples` caps streaming early.
+
+        DISTINCT rows on purpose: with 50 identical rows, dedup collapsed
+        the result to 1 whether or not the cap existed, so deleting the
+        `seen >= max_samples` break stayed green (audit 2026-07-17).
+        """
+        rows = [
+            {
+                "conversations": [
+                    {"from": "human", "value": f"What is {i} + {i}?"},
+                    {"from": "gpt", "value": f"<think>\nadding.\n</think>\n\nThe answer is {2 * i}."},
+                ]
+            }
+            for i in range(50)
+        ]
         _install_fake_datasets(monkeypatch, {"open-thoughts/OpenThoughts3-1.2M": rows})
         cf = importlib.reload(cf_module)
         pairs = cf.collect_openthoughts3(max_samples=3)
-        # Dedup collapses identical rows to 1 — but we cap iteration at 3
-        # before dedup, so the function should not iterate past 3.
-        assert len(pairs) <= 3
+        assert len(pairs) == 3  # exactly the cap: iteration stopped there
 
 
 # ── SmolTalk2 (D-11) ────────────────────────────────────────────────────────
@@ -200,24 +223,44 @@ class TestCollectSmolTalk2:
         called "train". Default behaviour is auto-iterate-all so users
         do not need to pick one of 25 names.
         """
+        def _row(topic: str, answer: str) -> dict:
+            return {
+                "messages": [
+                    {"role": "user", "content": f"Explain {topic} briefly."},
+                    {"role": "assistant", "content": answer},
+                ]
+            }
+
+        # DISTINCT rows per split: with one identical row for every split,
+        # dedup collapsed to 1 whether the collector iterated all splits,
+        # only the first, or hardcoded "train" (audit 2026-07-17).
         _install_fake_datasets(
             monkeypatch,
-            {"HuggingFaceTB/smoltalk2": [self._SAMPLE_ROW]},
+            {
+                "HuggingFaceTB/smoltalk2": {
+                    "split_a_think": [_row("gravity", "Gravity pulls masses together, about 9.8 m/s^2 here.")],
+                    "split_b_no_think": [_row("rain", "Water condenses in clouds and falls when drops grow heavy.")],
+                    "split_c": [_row("tides", "The moon's gravity drags the oceans into two daily bulges.")],
+                }
+            },
             splits_by_path={"HuggingFaceTB/smoltalk2": ["split_a_think", "split_b_no_think", "split_c"]},
         )
         cf = importlib.reload(cf_module)
         pairs = cf.collect_smoltalk2(max_samples=10, config="SFT", split=None)
-        # Same row in every split → after dedup, 1 pair survives.
-        assert len(pairs) == 1
+        assert len(pairs) == 3  # one from EVERY split, including the last
+        completions = " ".join(p["completion"] for p in pairs)
+        assert "9.8" in completions and "condenses" in completions and "bulges" in completions
 
     def test_explicit_split_used_directly(self, monkeypatch, cf_module):
-        """When split is provided, function uses it without enumerating."""
+        """When split is provided, function uses it without enumerating.
+        The row lives ONLY under the requested split name, so passing any
+        other split (or enumerating) fails the load."""
         _install_fake_datasets(
             monkeypatch,
-            {"HuggingFaceTB/smoltalk2": [self._SAMPLE_ROW]},
+            {"HuggingFaceTB/smoltalk2": {"my_exact_split": [self._SAMPLE_ROW]}},
         )
         cf = importlib.reload(cf_module)
-        pairs = cf.collect_smoltalk2(max_samples=10, config="SFT", split="train")
+        pairs = cf.collect_smoltalk2(max_samples=10, config="SFT", split="my_exact_split")
         assert len(pairs) == 1
 
 
@@ -338,15 +381,31 @@ class TestSmolTalk2CompletionCap:
                 {"role": "assistant", "content": "Gravity pulls masses together; drop a cup and the floor wins."},
             ]
         }
+        # The think split holds a KEEPABLE short row with a marker answer:
+        # if the skip guard vanishes, the marker leaks into the result. The
+        # old identical-rows fake couldn't tell skipping from dedup
+        # (audit 2026-07-17).
+        think_row = {
+            "messages": [
+                {"role": "user", "content": "Explain thinking briefly."},
+                {"role": "assistant", "content": "THINK-SPLIT-MARKER: this row must never be collected."},
+            ]
+        }
         _install_fake_datasets(
             monkeypatch,
-            {"HuggingFaceTB/smoltalk2": [long_row, short_row]},
+            {
+                "HuggingFaceTB/smoltalk2": {
+                    "big_corpus_think": [think_row],
+                    "magpie_no_think": [long_row, short_row],
+                }
+            },
             splits_by_path={"HuggingFaceTB/smoltalk2": ["big_corpus_think", "magpie_no_think"]},
         )
         cf = importlib.reload(cf_module)
         pairs = cf.collect_smoltalk2(max_samples=10, config="SFT", max_completion_chars=600)
         assert len(pairs) == 1
         assert pairs[0]["completion"].startswith("Gravity")
+        assert not any("THINK-SPLIT-MARKER" in p["completion"] for p in pairs)
 
     def test_cap_also_drops_giant_prompts(self, monkeypatch, cf_module):
         """LongAlign-style rows pair a 64k-char context with a short answer;

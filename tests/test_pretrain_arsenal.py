@@ -142,10 +142,27 @@ def test_composite_param_groups_propagate_lr():
     assert all(g["lr"] == 0.123 for o in opt.opts for g in o.param_groups)
 
 
-def test_min_p_plumbs_through_generation():
+def test_min_p_plumbs_through_generation(monkeypatch):
+    """min_p must actually REACH the sampler. The old version asserted only
+    output length, which cannot fail while generate runs at all -- silently
+    dropping the kwarg stayed green (test-suite audit 2026-07-17)."""
+    import enigma_engine.core.model as model_mod
+
+    seen: list[float] = []
+    real = model_mod.sample_next_token
+
+    def spy(logits, generated_tokens, *args, **kwargs):
+        seen.append(kwargs.get("min_p"))
+        return real(logits, generated_tokens, *args, **kwargs)
+
+    monkeypatch.setattr(model_mod, "sample_next_token", spy)
     m = _nano().eval()
     ids = torch.randint(0, 256, (1, 8))
     out = m.generate(ids, max_new_tokens=3, temperature=0.8, min_p=0.5)
     assert out.shape[1] > ids.shape[1]
+    assert seen and all(v == 0.5 for v in seen)
+
+    seen.clear()
     toks = list(m.generate_stream(ids, max_new_tokens=3, min_p=0.5))
     assert 1 <= len(toks) <= 3
+    assert seen and all(v == 0.5 for v in seen)

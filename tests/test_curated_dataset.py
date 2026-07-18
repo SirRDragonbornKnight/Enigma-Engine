@@ -270,18 +270,23 @@ class TestCuratedDatasetPersistence:
         assert ds.count == 0
 
     def test_load_handles_malformed_lines(self, tmp_path):
-        """Malformed JSONL causes a logged error — dataset loads 0.
+        """One corrupt line is skipped-and-counted; BOTH good lines survive.
 
-        The implementation wraps the entire load in try/except, so
-        any parse error aborts the whole file (fail-fast design).
+        The old version asserted `count >= 0` -- a tautology that stayed
+        green while describing a fail-fast design the implementation never
+        had (it does per-line skip, curated_dataset._load_entries). A
+        regression that loads 0 entries from a file with 2 good lines --
+        total data loss, then save() clobbers the file -- must fail here
+        (test-suite audit 2026-07-17).
         """
         path = tmp_path / "bad.jsonl"
         path.write_text(
             '{"text": "good", "status": "pending"}\nnot valid json\n{"text": "also good", "status": "approved"}\n'
         )
         ds = CuratedDataset(path)
-        # Implementation logs error on malformed lines, may load 0
-        assert ds.count >= 0
+        assert ds.count == 2
+        texts = {e.text for e in ds.entries}
+        assert texts == {"good", "also good"}
 
 
 # ================================================================
@@ -591,12 +596,31 @@ class TestIterTextChunks:
         assert "line one" in combined
 
     def test_on_progress_called(self, tmp_path):
+        """The callback must actually fire on the chunked-read path.
+
+        Small files never reach _chunked_read_text (>500 MB gate), so the
+        old version's `isinstance(calls, list)` on its own list could not
+        fail -- iter_text_chunks silently dropping on_progress stayed green
+        (test-suite audit 2026-07-17). Drive the chunked reader directly:
+        one small file = one chunk = one callback at 100%.
+        """
+        from enigma_engine.core.dataset import _chunked_read_text
+
         f = tmp_path / "data.txt"
-        f.write_text("Hello world test data", encoding="utf-8")
+        # newline-terminated: progress fires per completed-line chunk (text
+        # with no newline at all rides the remainder path, no callback)
+        f.write_text("Hello world test data\nsecond line\n", encoding="utf-8")
         calls = []
-        list(iter_text_chunks(f, on_progress=lambda p, m: calls.append(p)))
-        # Small files may not trigger progress, but should not error
-        assert isinstance(calls, list)
+        chunks = _chunked_read_text(f, on_progress=lambda p, m: calls.append((p, m)))
+        assert "Hello world" in "".join(chunks)
+        assert calls, "on_progress never fired on the chunked-read path"
+        pct, msg = calls[-1]
+        assert pct == 100
+        assert "data.txt" in msg
+        # and the small-file fast path still tolerates the kwarg silently
+        small_calls = []
+        list(iter_text_chunks(f, on_progress=lambda p, m: small_calls.append(p)))
+        assert small_calls == []  # below the streaming threshold: no progress
 
     def test_string_path(self, tmp_path):
         f = tmp_path / "data.txt"

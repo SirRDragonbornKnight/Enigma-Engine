@@ -139,9 +139,14 @@ class TestCollectLLaVAPretrain:
             monkeypatch.delitem(sys.modules, "collect_vision_data")
         cv = importlib.import_module("collect_vision_data")
 
+        # RELATIVE images_dir on purpose: with an absolute tmp_path the
+        # is_absolute() assert below passed even without the collector's
+        # .resolve() -- a production `--images-dir data/vision` would then
+        # emit cwd-relative paths (test-suite audit 2026-07-17).
+        monkeypatch.chdir(tmp_path)
         pairs = cv.collect_llava_pretrain(
             max_samples=10,
-            images_dir=images_dir,
+            images_dir=Path("llava_images"),
         )
 
         assert len(pairs) == 3

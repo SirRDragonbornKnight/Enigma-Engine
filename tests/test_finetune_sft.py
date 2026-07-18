@@ -52,6 +52,34 @@ def test_pack_blocks_target_alignment_and_pad_ignore(tok):
     assert int((Y[0] != ft.IGNORE).sum()) > 0  # but the assistant span does
 
 
+def test_pack_blocks_trains_only_the_assistant_span(tok):
+    """WHICH positions train, not just what values they carry. The alignment
+    test above verifies Y[i] == padded[i+1] at non-IGNORE positions -- but a
+    mask regression that trains USER-turn tokens (mask[i] instead of
+    mask[i+1], or mask=all-True) still yields correct VALUES everywhere and
+    passed it (test-suite audit 2026-07-17). This is the module's headline
+    property: she learns to ANSWER, never to imitate the user."""
+    msgs = [
+        {"role": "user", "content": "Please greet the visitors warmly."},
+        {"role": "assistant", "content": "hi"},
+    ]
+    ids, mask = render_training(tok, msgs)
+    assert any(mask) and not all(mask)  # sanity: both spans exist
+    X, Y = ft.pack_blocks([(ids, mask)], block=64)
+
+    trained = [i for i in range(64) if Y[0, i].item() != ft.IGNORE]
+    # position i trains iff its TARGET (token i+1) is assistant content
+    expected = [i for i in range(len(ids) - 1) if mask[i + 1]]
+    assert trained, "no position trains at all"
+    assert trained == expected
+    # the learned targets are exactly the assistant-span ids...
+    assert [Y[0, i].item() for i in trained] == [ids[i + 1] for i in expected]
+    # ...and the user's words are not among them
+    target_text = tok.decode([Y[0, i].item() for i in trained], skip_special_tokens=True)
+    for word in ("Please", "greet", "visitors", "warmly"):
+        assert word not in target_text
+
+
 def test_reinit_chat_rows_touches_only_chat_rows():
     m = _nano4718()
     before = m.tok_embeddings.weight.detach().clone()

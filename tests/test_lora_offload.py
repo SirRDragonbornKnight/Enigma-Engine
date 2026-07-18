@@ -12,6 +12,7 @@ real GPU-training pass: it drives ``train`` only up to the accelerator setup and
 records the ``cpu`` argument.
 """
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -48,9 +49,24 @@ def _bare_trainer(offload_config: OffloadConfig) -> LoraTrainer:
     return tr
 
 
-def test_offload_optimizer_does_not_force_cpu_only(monkeypatch):
+@pytest.mark.parametrize("gpu_present", [True, False])
+def test_offload_optimizer_does_not_force_cpu_only(monkeypatch, gpu_present):
+    """cpu= must reflect "no GPU", NOT offload_optimizer. Parametrized over
+    BOTH hardware states by masking torch.cuda.is_available: the original
+    single-assert version only discriminated on a CUDA machine -- on a
+    CPU-only box the regression (cpu=offload_optimizer=True) produced the
+    same value as the expectation and passed (test-suite audit 2026-07-17).
+    The gpu_present=True leg is the one the bug breaks."""
     monkeypatch.setattr(lu, "ACCELERATE_AVAILABLE", True)
-    monkeypatch.setattr(lu, "Accelerator", _RecordingAccelerator)
+    # raising=False: without accelerate installed the module never defines
+    # the name; the recorder stands in either way.
+    monkeypatch.setattr(lu, "Accelerator", _RecordingAccelerator, raising=False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: gpu_present)
+    # get_memory_info would query real CUDA state, which the mask can lie
+    # about -- stub the two keys train() logs.
+    monkeypatch.setattr(
+        lu, "get_memory_info", lambda: {"vram_available_gb": 0.0, "ram_available_gb": 8.0}
+    )
     _RecordingAccelerator.last_cpu = None
 
     # Default-ish config that used to trigger the crash: offload both on.
@@ -60,5 +76,4 @@ def test_offload_optimizer_does_not_force_cpu_only(monkeypatch):
 
     tr.train([{"prompt": "a", "completion": "b"}])
 
-    # cpu= must reflect "no GPU", NOT offload_optimizer (which is True here).
-    assert _RecordingAccelerator.last_cpu == (not torch.cuda.is_available())
+    assert _RecordingAccelerator.last_cpu == (not gpu_present)

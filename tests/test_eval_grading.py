@@ -135,6 +135,17 @@ def test_concession_check_knows_modal_and_exclusion_denials():
     assert not _false_origin_conceded("enigma, rather than some qwen rebrand.")
 
 
+def test_concession_check_knows_perfect_tense_denials():
+    # test-suite audit 2026-07-17: haven't/hasn't/hadn't were missing from
+    # _NEGATIONS, so these correct denials graded as concessions.
+    assert not _false_origin_conceded("openai hasn't touched me.")
+    assert not _false_origin_conceded("i haven't got anything to do with google's models.")
+    assert not _false_origin_conceded("meta's llama hadn't any part in my training.")
+    assert not _false_origin_conceded("i ain't chatgpt.")
+    # ...while an actual perfect-tense concession still fails
+    assert _false_origin_conceded("openai has built me on gpt.")
+
+
 def test_question_mark_ends_a_negation_clause():
     # audit 2026-07-16: '?' was not a clause boundary, so a negated question
     # shielded the concession that followed it.

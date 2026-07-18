@@ -41,6 +41,10 @@ class TestHuggingFaceLlamaMapping:
         assert "output.weight" in result
 
     def test_attention_projections(self):
+        """Identity asserts, not just key presence: tensors pass through by
+        reference, so `is` pins WHICH source landed on WHICH target -- with
+        four identical mocks and `in` checks, a q<->k table swap (a silently
+        scrambled converted model) was undetectable (audit 2026-07-17)."""
         from enigma_engine.core.weight_mapping import WeightMapper
 
         mapper = WeightMapper()
@@ -51,10 +55,10 @@ class TestHuggingFaceLlamaMapping:
             "model.layers.0.self_attn.o_proj.weight": _make_dummy_tensor(),
         }
         result = mapper.map_huggingface_to_forge(sd, model_type="llama")
-        assert "layers.0.attention.wq.weight" in result
-        assert "layers.0.attention.wk.weight" in result
-        assert "layers.0.attention.wv.weight" in result
-        assert "layers.0.attention.wo.weight" in result
+        assert result["layers.0.attention.wq.weight"] is sd["model.layers.0.self_attn.q_proj.weight"]
+        assert result["layers.0.attention.wk.weight"] is sd["model.layers.0.self_attn.k_proj.weight"]
+        assert result["layers.0.attention.wv.weight"] is sd["model.layers.0.self_attn.v_proj.weight"]
+        assert result["layers.0.attention.wo.weight"] is sd["model.layers.0.self_attn.o_proj.weight"]
 
     def test_ffn_projections(self):
         from enigma_engine.core.weight_mapping import WeightMapper
@@ -66,9 +70,10 @@ class TestHuggingFaceLlamaMapping:
             "model.layers.2.mlp.up_proj.weight": _make_dummy_tensor(),
         }
         result = mapper.map_huggingface_to_forge(sd, model_type="llama")
-        assert "layers.2.feed_forward.w1.weight" in result
-        assert "layers.2.feed_forward.w2.weight" in result
-        assert "layers.2.feed_forward.w3.weight" in result
+        # identity, not presence: a w1<->w3 (gate/up) swap must fail here
+        assert result["layers.2.feed_forward.w1.weight"] is sd["model.layers.2.mlp.gate_proj.weight"]
+        assert result["layers.2.feed_forward.w2.weight"] is sd["model.layers.2.mlp.down_proj.weight"]
+        assert result["layers.2.feed_forward.w3.weight"] is sd["model.layers.2.mlp.up_proj.weight"]
 
     def test_layer_norms(self):
         from enigma_engine.core.weight_mapping import WeightMapper
@@ -165,11 +170,18 @@ class TestGGUFMapping:
             "output_norm.weight": _make_dummy_tensor(),
         }
         result = mapper.map_gguf_to_forge(sd)
-        assert "tok_embeddings.weight" in result
-        assert "output.weight" in result
-        assert "layers.0.attention.wq.weight" in result
-        assert "layers.0.feed_forward.w1.weight" in result
-        assert "norm.weight" in result
+        # identity, not presence (see TestHuggingFaceLlamaMapping): the
+        # attention/FFN rows are where a table swap would scramble a model
+        assert result["tok_embeddings.weight"] is sd["token_embd.weight"]
+        assert result["output.weight"] is sd["output.weight"]
+        assert result["layers.0.attention.wq.weight"] is sd["blk.0.attn_q.weight"]
+        assert result["layers.0.attention.wk.weight"] is sd["blk.0.attn_k.weight"]
+        assert result["layers.0.attention.wv.weight"] is sd["blk.0.attn_v.weight"]
+        assert result["layers.0.attention.wo.weight"] is sd["blk.0.attn_output.weight"]
+        assert result["layers.0.feed_forward.w1.weight"] is sd["blk.0.ffn_gate.weight"]
+        assert result["layers.0.feed_forward.w2.weight"] is sd["blk.0.ffn_down.weight"]
+        assert result["layers.0.feed_forward.w3.weight"] is sd["blk.0.ffn_up.weight"]
+        assert result["norm.weight"] is sd["output_norm.weight"]
 
     def test_gguf_multi_block(self):
         from enigma_engine.core.weight_mapping import WeightMapper

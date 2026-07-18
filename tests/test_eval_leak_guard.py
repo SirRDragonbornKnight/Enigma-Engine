@@ -31,12 +31,32 @@ def test_verbatim_and_paraphrase_leak_but_distinct_facts_do_not():
 
 
 def test_near_miss_band_is_flagged_not_dropped():
+    """is_near_miss must return True for a genuinely in-band paraphrase.
+
+    The old assertion `is_near_miss(x) or score(x) < 0.5` reduced to
+    `score(x) < threshold` -- already guaranteed by the `not leaks` line
+    above it -- AND its example scored ~0.17, nowhere near the band. The
+    band feeds make_sft_data's human-review flagging, and an is_near_miss
+    that always returned False stayed green (test-suite audit 2026-07-17).
+    """
+    g = LockedProbeGuard(seal(["Who developed the theory of relativity?"]))
+    # Verb-swap paraphrase (measured 2026-07-16): content words
+    # {came, theory, relativity} vs {developed, theory, relativity}
+    # -> Jaccard 2/4 = 0.5, inside [0.5, 0.6).
+    q = "Who came up with the theory of relativity?"
+    assert not g.leaks(q)  # below the drop threshold...
+    assert g.is_near_miss(q)  # ...but the review band MUST flag it
+    assert 0.5 <= g.score(q) < 0.6
+
+
+def test_clearly_different_question_is_not_near_missed():
     g = LockedProbeGuard(seal(["What's the capital city of France?"]))
-    # share one content word ("france") but clearly a different question:
-    # in the review band, not a hard leak.
-    assert not g.leaks("What language do they speak in France?")
-    assert g.is_near_miss("What language do they speak in France?") or \
-        g.score("What language do they speak in France?") < 0.5
+    # shares one content word ("france"): Jaccard ~0.17 -- neither a leak
+    # nor review-band noise.
+    other = "What language do they speak in France?"
+    assert not g.leaks(other)
+    assert not g.is_near_miss(other)
+    assert g.score(other) < 0.5
 
 
 def test_manifest_seals_the_plaintext():

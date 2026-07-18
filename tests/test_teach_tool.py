@@ -122,8 +122,18 @@ def test_statement_twin_speaks_in_the_assistant_voice():
 
 def test_statement_twin_uninverts_a_pronoun_subject():
     # audit 2026-07-16: 'Where were you born?' twinned to 'You born were ...'.
-    assert statement_twin("Where were you born?", "In the forge.") == "I was born In the forge."
-    assert statement_twin("What is it called?", "The forge.") == "It is called The forge."
+    # 2026-07-17: sentence-initial function words in the answer lowercase when
+    # embedded mid-statement (the old assert BAKED 'born In the forge' into
+    # training data); proper nouns keep their capital (next test).
+    assert statement_twin("Where were you born?", "In the forge.") == "I was born in the forge."
+    assert statement_twin("What is it called?", "The forge.") == "It is called the forge."
+
+
+def test_statement_twin_keeps_proper_noun_answer_casing():
+    assert statement_twin("Where were you born?", "Paris.") == "I was born Paris."
+    assert statement_twin("What is your name?", "Sir Knight's Enigma.") == (
+        "My name is Sir Knight's Enigma."
+    )
 
 
 def test_paraphrases_stay_grammatical_and_deduped():

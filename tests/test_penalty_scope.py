@@ -48,9 +48,10 @@ def test_stream_penalty_window_excludes_prompt(monkeypatch):
         for _ in m.generate_stream(prompt, max_new_tokens=3, stop_tokens=[-1]):
             pass
     # Step one sees zero prior tokens (not the 7-token prompt); each later
-    # step sees only what she generated so far.
-    assert seen[0] == 0
-    assert all(n < 7 for n in seen)
+    # step sees exactly what she generated so far. The exact sequence matters:
+    # `all(n < 7)` alone accepted [0,0,0] -- a penalty silently applied to an
+    # always-empty window, i.e. disabled -- (test-suite audit 2026-07-17).
+    assert seen == [0, 1, 2]
 
 
 def test_generate_penalty_window_excludes_prompt(monkeypatch):
@@ -59,8 +60,7 @@ def test_generate_penalty_window_excludes_prompt(monkeypatch):
     prompt = torch.randint(0, 64, (1, 7))
     with torch.no_grad():
         m.generate(prompt, max_new_tokens=3, stop_tokens=[-1])
-    assert seen[0] == 0
-    assert all(n < 7 for n in seen)
+    assert seen == [0, 1, 2]
 
 
 def test_penalty_noop_on_empty_window():
@@ -68,3 +68,18 @@ def test_penalty_noop_on_empty_window():
     empty = torch.empty(1, 0, dtype=torch.long)
     out = apply_repetition_penalty(logits, empty, penalty=1.1)
     assert torch.equal(out, logits)
+
+
+def test_penalty_actually_reduces_repeated_token():
+    """The positive case the file lacked: a token in the window must come out
+    LESS likely, and untouched tokens must be byte-identical. Without this, a
+    penalty that runs on the right window but modifies nothing stays green."""
+    logits = torch.zeros(1, 64)
+    logits[0, 5] = 2.0   # positive logit: penalty divides it down
+    logits[0, 9] = -1.0  # negative logit: penalty multiplies it further down
+    window = torch.tensor([[5, 9]], dtype=torch.long)
+    out = apply_repetition_penalty(logits.clone(), window, penalty=1.5)
+    assert out[0, 5] < logits[0, 5]
+    assert out[0, 9] < logits[0, 9]
+    untouched = [i for i in range(64) if i not in (5, 9)]
+    assert torch.equal(out[0, untouched], logits[0, untouched])

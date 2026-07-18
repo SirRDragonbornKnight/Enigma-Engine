@@ -22,6 +22,10 @@ def test_records_are_wellformed_and_clean():
 
 def test_no_eval_probe_leaks():
     eval_qs = _eval_probe_questions()
+    # An absent probes file returns an empty set, and `x not in {}` is
+    # vacuously true for everything -- guard like the pretrain twin below
+    # (test-suite audit 2026-07-17).
+    assert eval_qs, "behavior_probes.jsonl missing -- this test proves nothing"
     assert all(_norm_q(r) not in eval_qs for r in gen_knowledge_examples())
 
 

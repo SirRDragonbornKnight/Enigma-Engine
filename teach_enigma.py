@@ -119,6 +119,17 @@ def paraphrase_question(q: str) -> list[str]:
 
 _WH_STATEMENT = re.compile(r"^\s*(?:what|who|where)\b.*?\b(is|are|was|were)\b\s+(.+?)\s*\??\s*$", re.IGNORECASE)
 
+# A sentence-initial function word in the ANSWER keeps its capital when the
+# answer lands mid-statement ("In the forge." -> "I was born In the forge.",
+# baked into training data -- test-suite audit 2026-07-17). Lowercase ONLY
+# these openers; proper-noun answers (Paris, Jupiter, Sir Knight) keep their
+# casing, which is why a blanket lowercase was rejected (2026-07-16).
+_ANSWER_OPENER_LOWER = frozenset({
+    "a", "an", "the", "in", "at", "on", "of", "from", "by", "with", "near",
+    "inside", "under", "over", "behind", "beside", "between", "among",
+    "around", "during", "before", "after", "above", "below", "across", "through",
+})
+
 # The question is the USER's voice but the twin is baked as the ASSISTANT's
 # statement, so person must flip or the fact attaches to the wrong speaker
 # ('Who are you?' must twin to 'I am Enigma.', never 'You are Enigma.' --
@@ -146,6 +157,9 @@ def statement_twin(question: str, answer: str) -> str | None:
     ans = answer.strip().rstrip(".").strip()
     if not words or not ans:
         return None
+    first, _, rest = ans.partition(" ")
+    if first.lower() in _ANSWER_OPENER_LOWER and first[:1].isupper() and first[1:].islower():
+        ans = first.lower() + (" " + rest if rest else "")
     if words[0].lower() in _SUBJECT_PRONOUNS and len(words) > 1:
         # Subject-aux inversion: the trailing predicate belongs AFTER the verb.
         subject, predicate = [_PERSON_FLIP.get(words[0].lower(), words[0])], words[1:]
