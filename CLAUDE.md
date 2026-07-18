@@ -24,20 +24,19 @@ NOT this LLM's job; if wanted in-repo it is a bundled service, not the model pai
 Perception is HALF-BUILT; text-only ships today:
 - Ready: `forward_multimodal` + `vision_projection`/`audio_projection` (`core/model.py`), encoders
   `core/vision_encoder.py` + `core/audio_encoder.py`, Forge modes `train_vision`/`train_audio`.
-- NOT wired / NOT trained (verified): the shipped `enigma_dpo` checkpoint has NO projection weights
-  and `use_vision`/`use_audio` are off; `chat_format.py` has NO image/audio tokens; `serve_enigma.py`
-  has NO multimodal path; `collect_audio_data.py` does NOT exist (vision has a collector).
-- To finish seeing/hearing: the corrected plan is ROADMAP **Phase 4.5** (distill-then-align;
-  audit 2026-07-15). `train_vision`/`train_audio` train the encoders FULLY (an older claim
-  here said frozen — wrong). Encoder persistence was FIXED `f9ec5184` (2026-07-15): checkpoints
-  now carry `vision/audio_encoder_state_dict` + the local optimizer, and resume refuses
-  text-only checkpoints. Remaining gotcha: **serve has no encoder load path** (Phase 4.5
-  step 1, "wire serve to load them" -- audit 2026-07-17 corrected the step pointer).
-  Restore history: `KNOWN_ISSUES.md` #11. **Phase 4.5 vision IN PROGRESS (2026-07-17):**
-  LLaVA-Pretrain images live at `data/vision/llava/images/`; `distill_vision_encoder.py`
-  distills DINOv2-S into her own ViT-medium (student sees [-1,1], teacher ImageNet norm —
-  align + serve preprocessing must match); `train_vision` now runs REAL batches
-  (`config.batch_size`, right-padded text, ignore_index loss — was batch-1).
+- NOT trained yet (verified): the shipped `enigma_dpo` checkpoint has NO projection weights and
+  `use_vision`/`use_audio` are off; `chat_format.py` has NO image/audio tokens.
+- Plan is ROADMAP **Phase 4.5** (distill-then-align). Vision state 2026-07-17: distill DONE
+  (`models/enigma_vision_distill/` — DINOv2-S -> her ViT-medium; student sees [-1,1], teacher
+  ImageNet norm; the [-1,1] contract is TEST-PINNED in `tests/test_vision_normalization.py`);
+  `align_vision.py` built, data staged (558k pairs), run PARKED by the training-last ruling.
+  `serve --eyes` grafts the align checkpoint's encoder+projection onto served weights (missing
+  ckpt = WARN + text-only). Audio: `collect_audio_data.py` collected LibriSpeech (28,539 pairs);
+  `distill_audio_encoder.py` ready, not launched. Encoder persistence FIXED `f9ec5184`
+  (checkpoints carry encoder state; resume refuses text-only ckpts). History: `KNOWN_ISSUES.md` #11.
+- **TRAINING-LAST ruling (user, 2026-07-17):** all training runs (vision align, audio distill,
+  any SFT/DPO cycle) are deferred to the END of the current arc. Vision image DOMAIN is the
+  user's open decision (`VISION_QUALITY_SPEC.md` §4 — NOT the everyday-LLaVA diet).
 
 The Modkit-era `mods/` + `plugins/` subsystem and its `commands`/`mod_tools`/`plugin_loader` registry
 were REMOVED 2026-07-14 (never loaded by `serve_enigma.py`; superseded). Pip distribution renamed
@@ -55,10 +54,11 @@ loaded eagerly at startup (a broken organ WARNs and text serving continues).
   -Voice` serves `--voice-name zira` (user dislikes the stock David voice), and the wanted
   real fix is the Kokoro-82M swap (BACKLOG §5, ~330 MB download, needs the user's go-ahead).
 - `--ears` -> `core/asr.py` (faster-whisper, cuda->cpu fallback): `/v1/audio/transcriptions`.
-- `--eyes` -> `core/eyes.py` (BLIP captioner): OpenAI image_url content in chat is captioned to
+- `--eyes` -> `core/eyes.py` (**her OWN captioner since 2026-07-17** — aligned encoder + grafted
+  projection + the served model; BLIP DELETED): OpenAI image_url content in chat is captioned to
   `[image: ...]` text before gates/memory/render (`flatten_image_content`, data: URLs only,
-  honest markers when it can't see) + `/v1/images/describe`. This is the TODAY path; native
-  projectors (multimodal block above) stay the later in-model road.
+  honest markers when it can't see) + `/v1/images/describe`. Degrades text-only until the
+  align run produces a checkpoint (training-last).
 - `--image-gen` -> `core/imagegen.py` (diffusers sd-turbo, 1-step): intent-gated `imagine`
   built-in (PNGs land in `~/.enigma_engine/images/`) + `/v1/images/generations` (b64_json).
 Verified end-to-end vs served `enigma_dpo`: "Say hello out loud." -> speak call -> SAPI audio;
@@ -72,8 +72,9 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
 
 ## Setup / build / test — run these first
 - Python 3.12 (`C:\Users\SirKn\AppData\Local\Programs\Python\Python312\python.exe`).
-- Enigma tests: `python -m pytest tests/ -q`   ·   Lint: `ruff check` — use the system Python
-  above or `venv\Scripts\python.exe`; NOT `.venv\` (it has no pytest/ruff installed).
+- Enigma tests: `python -m pytest tests/ -q` — use the system Python above or
+  `venv\Scripts\python.exe`; NOT `.venv\` (no pytest installed there).
+- **NO ruff (user ruling 2026-07-18): do not run ruff or make ruff-appeasement edits.**
 - (Avatar tests live in the **Enigma Avatar** repo — the gate there is
   `powershell -File tools\verify.ps1` plus `python -m pytest python/tests`.
   `node --test` belongs to the Electron predecessor in `Enigma Avatar window\`.)
@@ -88,12 +89,17 @@ window\` (still runnable, maintenance-only). The two meet only at the local WebS
 - **Serve** — `python serve_enigma.py` (OpenAI-compatible FastAPI server; loads the `.pth`
   checkpoint directly). Generation runs **bf16 autocast + TF32** on CUDA since 2026-07-17
   (`--fp32` = full-fp32 escape hatch, disables both; 90-probe gate re-measured 79/90 under
-  bf16, same as fp32). Run with `--help` for flags.
+  bf16, same as fp32). Run with `--help` for flags. Since 2026-07-18 the module is
+  **import-safe**: startup lives in `boot()` (called by `main()`); a mounted-but-unbooted app
+  answers 503 via middleware, and `tests/test_serve_enigma.py` covers the live paths
+  (stream parity, mute, intent gates, train/serve system-shape byte-parity).
 
 ## Conventions / guardrails
 - **Console output must be ASCII** — the Windows cp1252 console hard-crashes on unmapped
   chars (`→`); em dashes happen to map but the rule is ZERO non-ASCII in console-bound
-  strings (print/logger/raise/argparse) — swept to zero 2026-07-17, keep it there.
+  strings (print/logger/raise/argparse/_emit_progress). Since 2026-07-18 this is TEST-GATED
+  (`tests/test_repo_hygiene.py` AST sweep over the console sinks — its first run caught 9
+  arrow lines three manual sweeps had missed; comments/docstrings stay out of scope).
 - **Do not change the live pretrain defaults** (`--optimizer adamw --schedule cosine`) — they are
   asserted bit-identical to the live training lineage. Muon / WSD are future-run-only, behind flags.
 - Checkpoints rotate `latest.pth` → `prev.pth` atomically with a finite-loss guard; resume rebuilds
@@ -167,7 +173,13 @@ the only coupling is the WebSocket bus protocol.
 - **A refactor that deletes a module must also delete or guard its callers.** The Modkit-era
   "dissolve the monolith" refactor deleted 6 modules (vision/audio encoders, gguf, reasoning,
   sentiment, inference) but kept code importing them — 4 were crash-on-use landmines found only
-  on 2026-07-13. `tests/test_import_integrity.py` now gates this; keep its allowlist honest.
+  on 2026-07-13. `tests/test_import_integrity.py` gates this (AST-based since 2026-07-18, incl.
+  from-lists and exec()-string imports; relative imports are a known blind spot); keep its
+  allowlist honest.
+- **Every fix pass gets its own adversarial re-audit, and every new regression test gets
+  mutation-verified** (reintroduce the bug, watch the test fail, revert). The 2026-07-17/18
+  test-suite audit ran 5 rounds to convergence; every round's fixes shipped smaller defects
+  than they fixed — the pattern held all five times.
 
 ## Project state docs
 `CLEANUP_TRACKER.md`, `CODE_REVIEW.md`, `KNOWN_ISSUES.md`, `SUGGESTIONS.md`,
