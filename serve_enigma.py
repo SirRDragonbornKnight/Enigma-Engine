@@ -157,6 +157,11 @@ EYES = None
 PAINTER = None
 EOS_ID = 2
 BOS_ID = 1
+# True only when boot() ran to COMPLETION. `model is None` was the readiness
+# signal at first, but boot() assigns model early and can still die at the
+# max-context guard / tokenizer / organs -- leaving exactly the deceptive
+# half-up app the middleware exists to kill (round-2 re-audit 2026-07-18).
+_BOOTED = False
 
 # Always keep this many ids of the context free for the reply. Prompt and
 # generation share the fixed max_context window; without a reserve a large
@@ -215,11 +220,17 @@ def _load_eyes(ckpt_path: Path, preset: str):
     return venc, proj_sd, VISION_PRESETS[preset].dim
 
 
-# Env keys boot() itself wrote (key -> value we set). setdefault must respect
-# an OPERATOR's shell export but not a leftover from a previous boot() in this
+# Env keys boot() itself wrote: key -> (value displaced by our write, or None
+# if the key was absent; the value we wrote). setdefault must respect an
+# OPERATOR's shell export but not a leftover from a previous boot() in this
 # same process -- an --allow-downloads boot writes "0", and a later flagless
-# boot's setdefault would silently keep the network open (re-audit 2026-07-18).
-_BOOT_ENV_WRITES: dict[str, str] = {}
+# boot's setdefault would silently keep the network open. Tracking the
+# DISPLACED value lets a re-boot RESTORE the operator's export instead of
+# deleting it, and a write that matches the current value claims nothing, so
+# an export that already agrees with us stays the operator's (round-2
+# re-audit 2026-07-18: the delete-only scheme destroyed a genuine
+# HF_HUB_OFFLINE=0 export across an allow-downloads -> flagless boot pair).
+_BOOT_ENV_WRITES: dict[str, tuple[str | None, str]] = {}
 
 
 def boot(argv: list[str] | None = None) -> None:
@@ -229,6 +240,9 @@ def boot(argv: list[str] | None = None) -> None:
     old import-time startup."""
     global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META
     global INSTRUCT, MEMORY, SPEAKER, MUTED, EARS, EYES, PAINTER, EOS_ID, BOS_ID
+    global _BOOTED
+
+    _BOOTED = False  # a re-boot is unready until it completes
 
     # parse_known_args is deliberate (the server must start under runners
     # that carry their own argv) -- but a typo'd flag must not silently
@@ -243,19 +257,26 @@ def boot(argv: list[str] | None = None) -> None:
     # the weights are already cached on disk. Offline is therefore the DEFAULT:
     # organs load from cache only. --allow-downloads exists solely for the
     # one-time first fetch of an organ's weights, on purpose, out loud.
-    for _k, _v in list(_BOOT_ENV_WRITES.items()):
-        if os.environ.get(_k) == _v:  # untouched since we wrote it -> ours to clear
-            del os.environ[_k]
+    for _k, (_prior, _ours) in list(_BOOT_ENV_WRITES.items()):
+        if os.environ.get(_k) == _ours:  # untouched since we wrote it
+            if _prior is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _prior  # give the operator's export back
+        # rewritten externally since -> theirs now, our claim is void
     _BOOT_ENV_WRITES.clear()
 
     def _own_setdefault(key: str, value: str) -> None:
         if key not in os.environ:
+            _BOOT_ENV_WRITES[key] = (None, value)
             os.environ[key] = value
-            _BOOT_ENV_WRITES[key] = value
 
     def _own_set(key: str, value: str) -> None:
+        prior = os.environ.get(key)
+        if prior == value:
+            return  # an export already agreeing with us stays the operator's
+        _BOOT_ENV_WRITES[key] = (prior, value)
         os.environ[key] = value
-        _BOOT_ENV_WRITES[key] = value
 
     _own_setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     _own_setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
@@ -426,6 +447,7 @@ def boot(argv: list[str] | None = None) -> None:
         + (" | image-gen: on" if PAINTER is not None else ""),
         flush=True,
     )
+    _BOOTED = True  # LAST statement: readiness means boot ran to completion
 
 app = FastAPI(title="Enigma (from-scratch)")
 
@@ -436,8 +458,10 @@ async def _require_boot(request, call_next):
     # (`uvicorn serve_enigma:app`) -- which WORKED before startup moved out
     # of import time. Serving half-up is worse than refusing: health
     # endpoints would 200 while every generation request 500s with an opaque
-    # NoneType error (re-audit 2026-07-18). Fail honestly instead.
-    if model is None:
+    # NoneType error (re-audit 2026-07-18). Gate on boot COMPLETION, not on
+    # `model is None` -- boot() assigns model early and can still die at the
+    # max-context guard or tokenizer load (round-2 re-audit).
+    if not _BOOTED:
         return JSONResponse(
             status_code=503,
             content={

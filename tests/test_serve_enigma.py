@@ -44,6 +44,7 @@ def test_import_ran_no_startup():
     assert serve.tokenizer is None
     assert serve.MEMORY is None and serve.SPEAKER is None
     assert serve.EARS is None and serve.EYES is None and serve.PAINTER is None
+    assert serve._BOOTED is False
 
 
 def test_unbooted_app_refuses_with_503(monkeypatch):
@@ -51,8 +52,18 @@ def test_unbooted_app_refuses_with_503(monkeypatch):
     (startup ran at import); afterwards it served a deceptive half-up app --
     health endpoints 200 while every generation request 500'd with an opaque
     NoneType error (re-audit 2026-07-18). The middleware must refuse
-    honestly, and pass requests through untouched once booted."""
-    monkeypatch.setattr(serve, "model", None)
+    honestly, gate on boot COMPLETION (a boot that dies after assigning
+    `model` is still unready -- round-2 re-audit), and pass requests through
+    untouched once booted."""
+    # the middleware must actually be REGISTERED -- deleting the decorator
+    # kept every test green until this pin (round-2 re-audit)
+    assert any(
+        getattr(m, "kwargs", {}).get("dispatch") is serve._require_boot
+        for m in serve.app.user_middleware
+    ), "boot-guard middleware is not registered on the app"
+
+    monkeypatch.setattr(serve, "_BOOTED", False)
+    monkeypatch.setattr(serve, "model", object())  # half-booted: model set...
     reached = []
 
     async def call_next(request):
@@ -60,11 +71,11 @@ def test_unbooted_app_refuses_with_503(monkeypatch):
         return "downstream-response"
 
     resp = asyncio.run(serve._require_boot(object(), call_next))
-    assert resp.status_code == 503
+    assert resp.status_code == 503  # ...but completion is what counts
     assert b"not booted" in resp.body
     assert not reached  # the request never hit a handler
 
-    monkeypatch.setattr(serve, "model", object())
+    monkeypatch.setattr(serve, "_BOOTED", True)
     assert asyncio.run(serve._require_boot(object(), call_next)) == "downstream-response"
     assert len(reached) == 1
 
@@ -380,6 +391,7 @@ def test_load_eyes_guards_and_happy_path(tmp_path):
 _RUNTIME_GLOBALS = [
     "ARGS", "CONFIG", "model", "tokenizer", "DEVICE", "_BF16_GEN", "STEP", "META",
     "INSTRUCT", "MEMORY", "SPEAKER", "MUTED", "EARS", "EYES", "PAINTER", "EOS_ID", "BOS_ID",
+    "_BOOTED",
 ]
 
 
@@ -422,6 +434,7 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
     )
     try:
         serve.boot(argv=["--model", str(ckpt), "--max-context", "4096", "--allow-downloads"])
+        assert serve._BOOTED is True  # readiness = boot ran to completion
         assert serve.model is not None
         assert serve.DEVICE == "cpu"
         assert serve.INSTRUCT is True  # meta.chat_format detected
@@ -439,6 +452,21 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
         # second server would have phoned home
         assert os.environ["HF_HUB_OFFLINE"] == "1"
         assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+        # OPERATOR-EXPORT legs (round-2 re-audit: the delete-only ownership
+        # scheme destroyed a genuine export across these exact sequences).
+        # (C) an export that AGREES with the flag is never claimed and
+        # survives an allow-downloads -> flagless boot pair untouched:
+        os.environ["HF_HUB_OFFLINE"] = "0"  # operator: downloads always ok
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--allow-downloads"])
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        assert os.environ["HF_HUB_OFFLINE"] == "0"  # respected, not forced to 1
+        # (D) an export the flag DISPLACED is restored on the next boot:
+        os.environ["HF_HUB_OFFLINE"] = "1"  # operator: hard offline
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--allow-downloads"])
+        assert os.environ["HF_HUB_OFFLINE"] == "0"  # the flag wins, out loud
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        assert os.environ["HF_HUB_OFFLINE"] == "1"  # operator's export is back
     finally:
         for name, value in snapshot.items():
             setattr(serve, name, value)

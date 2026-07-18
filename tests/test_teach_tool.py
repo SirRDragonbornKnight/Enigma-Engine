@@ -129,6 +129,14 @@ def test_statement_twin_uninverts_a_pronoun_subject():
     assert statement_twin("What is it called?", "The forge.") == "It is called the forge."
 
 
+def test_statement_twin_lowercases_single_char_article():
+    # round-2 re-audit 2026-07-18: ""[1:].islower() is False, so the bare
+    # islower() check silently skipped "A" -- the most common opener -- and
+    # the first fix shipped WITHOUT this pin (reverting it stayed green).
+    assert statement_twin("What is it?", "A dog.") == "It is a dog."
+    assert statement_twin("What is it?", "A.") == "It is a."
+
+
 def test_statement_twin_keeps_proper_noun_answer_casing():
     assert statement_twin("Where were you born?", "Paris.") == "I was born Paris."
     assert statement_twin("What is your name?", "Sir Knight's Enigma.") == (

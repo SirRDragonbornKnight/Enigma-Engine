@@ -114,6 +114,12 @@ def test_first_party_source_is_free_of_mojibake_markers() -> None:
 
 _LOGGER_METHODS = {"debug", "info", "warning", "warn", "error", "critical", "exception"}
 
+# Escape hatch for a future false positive (e.g. a non-console `.exit()` or
+# `._emit_progress()` on some other object): "path/to/file.py" silences the
+# whole file, "path/to/file.py:123" one line. Justify every entry with a
+# comment. Empty = the gate currently has zero false positives.
+CONSOLE_ALLOWED: set[str] = set()
+
 
 def _nonascii_strings(node: ast.AST):
     for sub in ast.walk(node):
@@ -154,11 +160,25 @@ def test_console_bound_strings_are_ascii() -> None:
                 # 2026-07-18)
                 isinstance(f, ast.Attribute) and f.attr == "ArgumentParser"
             ):
-                targets = [kw.value for kw in node.keywords if kw.arg in ("description", "epilog")]
+                targets = []
+                for kw in node.keywords:
+                    if kw.arg not in ("description", "epilog"):
+                        continue
+                    if isinstance(kw.value, ast.Name) and kw.value.id == "__doc__":
+                        # description=__doc__: the module docstring IS the
+                        # --help text -- scan it (round-2 re-audit; four
+                        # scripts use this form)
+                        doc = ast.get_docstring(tree, clean=False)
+                        if doc:
+                            targets.append(ast.Constant(value=doc, lineno=node.lineno, col_offset=0))
+                    else:
+                        targets.append(kw.value)
             else:
                 continue
             for target in targets:
                 for lineno, chars in _nonascii_strings(target):
+                    if rel in CONSOLE_ALLOWED or f"{rel}:{lineno}" in CONSOLE_ALLOWED:
+                        continue
                     violations.append(f"  {rel}:{lineno}: {chars}")
     assert not violations, (
         "non-ASCII in console-bound strings (crashes cp1252 consoles; "
