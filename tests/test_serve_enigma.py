@@ -461,6 +461,8 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
         os.environ["HF_HUB_OFFLINE"] = "0"  # operator: downloads always ok
         os.environ["TRANSFORMERS_OFFLINE"] = "0"
         serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--allow-downloads"])
+        # "never claimed" is a pinned claim, not prose (round-4 re-audit):
+        assert "HF_HUB_OFFLINE" not in serve._BOOT_ENV_WRITES
         serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
         assert os.environ["HF_HUB_OFFLINE"] == "0"  # respected, not forced to 1
         assert os.environ["TRANSFORMERS_OFFLINE"] == "0"

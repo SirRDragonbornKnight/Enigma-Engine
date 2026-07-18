@@ -14,8 +14,10 @@ re-audit: bpe_tokenizer became invisibly deletable). Known blind spots:
 importlib.import_module("...") dotted-name strings (not import statements,
 never covered by any version); RELATIVE imports inside the package (never
 covered by any version either -- the recorded #11 incident callers were all
-absolute); f-string literal segments are deliberately EXCLUDED from the
-exec-string scan (log/help prose, not executable imports; round-3 re-audit);
+absolute); segments of f-strings WITH placeholders are excluded from the
+exec-string scan (log/help prose -- but a placeholder-free f-string is a
+constant and DOES register; rounds 3-4 re-audit), and an implicit concat of
+a plain literal with a placeholder f-string folds into the excluded form;
 and module-level for/walrus/with-as bindings in a package __init__ are
 invisible to check 2 (none exist in any real __init__).
 
@@ -89,10 +91,13 @@ def _iter_imports(tree: ast.AST):
     -- ast.walk yields them as plain Constants, and log/help prose like
     f"import enigma_engine.core.x\n{err}" is not an executable import
     (round-3 re-audit 2026-07-18)."""
+    # Only f-strings WITH placeholders are prose to skip: a placeholder-free
+    # f"import ..." is semantically a constant and fully executable, so it
+    # must keep registering (round-4 re-audit 2026-07-18).
     fstring_parts = {
         id(v)
         for n in ast.walk(tree)
-        if isinstance(n, ast.JoinedStr)
+        if isinstance(n, ast.JoinedStr) and any(isinstance(v, ast.FormattedValue) for v in n.values)
         for v in n.values
         if isinstance(v, ast.Constant)
     }
@@ -277,11 +282,15 @@ def test_exec_string_imports_are_covered():
     assert ("from", "enigma_engine.core.model", ["Enigma"]) in list(_iter_imports(tree))
     prose = ast.parse('DOC = "see: from enigma_engine.core import totally_fake_module for info"\n')
     assert not list(_iter_imports(prose))
-    # f-string literal segments are prose, not executable imports -- a log
-    # line must not register even when its segment parses as a pure import
-    # (round-3 re-audit)
+    # f-string segments WITH placeholders are prose, not executable imports
+    # -- a log line must not register even when its segment parses as a pure
+    # import (round-3 re-audit)
     fstr = ast.parse('msg = f"import enigma_engine.core.fake_xyz\\n{err}"\n')
     assert not list(_iter_imports(fstr))
+    # ...but a placeholder-free f-string IS a constant and exec()able -- it
+    # must keep registering (round-4 re-audit)
+    plain_f = ast.parse('stmt = f"import enigma_engine.core.model"\n')
+    assert ("import", "enigma_engine.core.model") in list(_iter_imports(plain_f))
 
 
 def test_init_defined_names_is_scope_correct(tmp_path):
@@ -289,6 +298,8 @@ def test_init_defined_names_is_scope_correct(tmp_path):
     p.write_text(
         "from .real import thing\n"
         "A, B = 1, 2\n"
+        "CACHE = {}\n"
+        "CACHE[key_name] = 1\n"
         "def helper():\n"
         "    gguf = 1\n"
         "    return gguf\n"
@@ -299,9 +310,12 @@ def test_init_defined_names_is_scope_correct(tmp_path):
     names = _init_defined_names(p)
     # a CLASS-level __getattr__ must not disable the check for the package
     assert names is not None
-    assert {"thing", "A", "B", "helper", "C"} <= names
+    assert {"thing", "A", "B", "helper", "C", "CACHE"} <= names
     # a function LOCAL must not satisfy `from pkg import gguf`
     assert "gguf" not in names
+    # Load-context reads in a subscript assign are not defined names -- the
+    # Store-ctx guard was unpinned until this (round-4 re-audit)
+    assert "key_name" not in names
     # PEP 562 assignment form counts as lazy exports (no __all__ -> None)
     p.write_text("__getattr__ = object()\n", encoding="utf-8")
     assert _init_defined_names(p) is None
