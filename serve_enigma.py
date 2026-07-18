@@ -132,113 +132,31 @@ _p.add_argument(
     action="store_true",
     help="generate in full fp32 instead of the default bf16 autocast (slower; numerics escape hatch)",
 )
-# parse_known_args is deliberate (the module must import under runners that
-# carry their own argv) -- but a typo'd flag must not silently disable an
-# organ, so unknowns are named out loud.
-ARGS, _UNKNOWN = _p.parse_known_args()
-if _UNKNOWN:
-    print(f"  WARN: ignoring unrecognized args: {' '.join(_UNKNOWN)}", flush=True)
-
-# PRIVACY: she is local, fully. Her own weights never touch the network; the
-# organ libraries (transformers/diffusers/faster-whisper) would by default
-# phone HuggingFace at LOAD time for update checks and telemetry even when
-# the weights are already cached on disk. Offline is therefore the DEFAULT:
-# organs load from cache only. --allow-downloads exists solely for the
-# one-time first fetch of an organ's weights, on purpose, out loud.
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
-if not ARGS.allow_downloads:
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-else:
-    # The flag must WIN: a shell exporting HF_HUB_OFFLINE=1 would otherwise
-    # silently block the one fetch the operator just asked for out loud.
-    os.environ["HF_HUB_OFFLINE"] = "0"
-    os.environ["TRANSFORMERS_OFFLINE"] = "0"
-
-print(f"Loading Enigma from {ARGS.model} ...", flush=True)
-if not Path(ARGS.model).exists():
-    raise SystemExit(
-        f"checkpoint not found: {ARGS.model}\n"
-        "Pass --model <path to an Enigma .pth checkpoint> (the default only "
-        "exists inside a repo checkout with trained models)"
-    )
-_ck = torch.load(ARGS.model, map_location="cpu", weights_only=False)  # our own checkpoint
-if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
-    raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
-CONFIG = ForgeConfig.from_dict(_ck["config"])
-
-# Her own eyes (Phase 4.5 step 5): --eyes opens the model's vision port and
-# grafts the encoder + projection trained by align_vision.py onto the SERVED
-# text weights. The align pass kept every text weight frozen on purpose, so
-# the projection targets exactly this checkpoint's embedding space and text
-# behavior is byte-unchanged. Failure here degrades to text-only (WARN), the
-# organ pattern -- text serving never dies for a missing eye.
-_VISION_ENCODER = None
-_VISION_PROJ_SD = None
-if ARGS.eyes:
-    _eyes_ckpt = Path(ARGS.eyes_model) if ARGS.eyes_model else (
-        Path(__file__).resolve().parent / "models" / "enigma_vision_align" / "enigma_vision_align_vision_best.pt"
-    )
-    try:
-        from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
-
-        if not _eyes_ckpt.exists():
-            raise EyesError(
-                f"align checkpoint not found: {_eyes_ckpt} (run distill_vision_encoder.py then align_vision.py)"
-            )
-        _eck = torch.load(_eyes_ckpt, map_location="cpu", weights_only=False)
-        if "vision_encoder_state_dict" not in _eck:
-            raise EyesError(f"{_eyes_ckpt} carries no vision_encoder_state_dict (not an align checkpoint)")
-        _venc = VisionEncoder(VISION_PRESETS[ARGS.eyes_preset])
-        _venc.load_state_dict(_eck["vision_encoder_state_dict"], strict=True)
-        _VISION_PROJ_SD = {
-            k[len("vision_projection."):]: v
-            for k, v in _eck["model_state_dict"].items()
-            if k.startswith("vision_projection.")
-        }
-        if not _VISION_PROJ_SD:
-            raise EyesError(f"{_eyes_ckpt} carries no vision_projection weights")
-        CONFIG.vision_hidden_size = VISION_PRESETS[ARGS.eyes_preset].dim
-        _VISION_ENCODER = _venc
-        del _eck
-    except (EyesError, KeyError, RuntimeError, OSError) as exc:
-        print(f"  WARN: eyes disabled -- {exc}", flush=True)
-        _VISION_ENCODER = None
-        _VISION_PROJ_SD = None
-
-model = Enigma(CONFIG)
-if _VISION_ENCODER is not None:
-    # Text weights come from the SERVED checkpoint; only the projection is new.
-    _missing, _unexpected = model.load_state_dict(_ck["model_state_dict"], strict=False)
-    _bad = [k for k in _missing if "vision_projection" not in k]
-    if _bad or _unexpected:
-        raise SystemExit(f"checkpoint mismatch with vision port open: missing={_bad[:5]} unexpected={list(_unexpected)[:5]}")
-    model.vision_projection.load_state_dict(_VISION_PROJ_SD, strict=True)
-else:
-    model.load_state_dict(_ck["model_state_dict"], strict=True)
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(DEVICE).eval()
-# Serve was the only fp32 stage in the whole stack (ultrareview #36): every
-# training pass runs bf16 autocast with TF32 matmuls, and batch-1 decode is
-# weight-read bound, so fp32 roughly halves the tokens/s ceiling for nothing.
-# Generation runs under the same numerics training validated; --fp32 is the
-# escape hatch if a regression ever points here.
-if DEVICE == "cuda" and not ARGS.fp32:
-    # TF32 rides the same flag: --fp32 must reproduce the true fp32 baseline
-    # (TF32 truncates matmul mantissas, so leaving it on would defeat the
-    # escape hatch; re-audit 2026-07-17).
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-# device_count guard: is_available() can be True with zero visible devices
-# (CUDA_VISIBLE_DEVICES=""), where is_bf16_supported() raises instead of
-# returning False (measured on torch 2.10).
-_BF16_GEN = (
-    DEVICE == "cuda" and not ARGS.fp32 and torch.cuda.device_count() > 0 and torch.cuda.is_bf16_supported()
-)
-STEP = _ck.get("step")
-META = _ck.get("meta") or {}  # finetune_enigma stamps chat_format here
-del _ck
+# ---------------------------------------------------------------------------
+# Runtime state -- populated by boot(). This module used to do ALL of its
+# startup (argv parse, checkpoint load, organ construction) at import time,
+# which made it a zero-coverage island: a bare `import serve_enigma` needed a
+# real model file (test-suite audit 2026-07-17). boot() owns startup now and
+# main() calls it; tests import the module cheaply, then either boot() a tiny
+# checkpoint or set these globals directly.
+# ---------------------------------------------------------------------------
+ARGS: argparse.Namespace | None = None
+CONFIG = None
+model = None
+tokenizer = None
+DEVICE = "cpu"
+_BF16_GEN = False
+STEP = None
+META: dict = {}
+INSTRUCT = False
+MEMORY = None
+SPEAKER = None
+MUTED = False
+EARS = None
+EYES = None
+PAINTER = None
+EOS_ID = 2
+BOS_ID = 1
 
 # Always keep this many ids of the context free for the reply. Prompt and
 # generation share the fixed max_context window; without a reserve a large
@@ -248,118 +166,243 @@ del _ck
 # whatever room is left -- never the other way around.
 MIN_GEN_TOKENS = 64
 
-# Prompt truncation budgets against ARGS.max_context, but the model's KV
-# cache holds min(max_seq_len, MAX_CACHE_SEQ_LEN) positions and refuses a
-# larger prefill outright -- clamp so an oversize --max-context cannot let
-# prompts through that the cache will reject.
-from enigma_engine.core.model_components import Attention as _Attn
-
-_CACHE_CAP = min(CONFIG.max_seq_len, _Attn.MAX_CACHE_SEQ_LEN)
-if ARGS.max_context > _CACHE_CAP:
-    print(
-        f"  WARN: --max-context {ARGS.max_context} exceeds the model's KV cache "
-        f"capacity {_CACHE_CAP}; clamping to {_CACHE_CAP}",
-        flush=True,
-    )
-    ARGS.max_context = _CACHE_CAP
-if ARGS.max_context <= MIN_GEN_TOKENS:
-    raise SystemExit(
-        f"max_context {ARGS.max_context} leaves no prompt budget after the "
-        f"{MIN_GEN_TOKENS}-token generation reserve; this model context is too small to serve"
-    )
-
-tokenizer = get_tokenizer("bpe")  # the exact tokenizer that built tokens.bin
-if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
-    print(
-        f"  WARN: tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != model vocab {CONFIG.vocab_size}",
-        flush=True,
-    )
-EOS_ID = getattr(tokenizer, "eos_token_id", 2)
-BOS_ID = getattr(tokenizer, "bos_token_id", 1)
-
-# Instruct mode: SFT checkpoints (finetune_enigma.py) carry meta.chat_format.
-# Base checkpoints get the plain-transcript bridge below. Attaching the chat
-# tokens is safe either way -- plain text encodes byte-identically.
-INSTRUCT = META.get("chat_format") == CHAT_FORMAT_NAME
-attach_chat_tokens(tokenizer)
-
-MEMORY = None
-if ARGS.memory_dir:
-    from enigma_engine.core.memory_store import MemoryStore
-
-    MEMORY = MemoryStore(ARGS.memory_dir)
-
 # One model, one KV-cache -- generation must be serialized across requests.
 # Defined BEFORE the organs: the eyes borrow the served model for caption
 # generation and share this lock.
 _GEN_LOCK = threading.Lock()
 
-# Organs: constructed eagerly so a broken backend surfaces at startup, not
-# mid-conversation. She still serves text if an organ fails to come up.
-SPEAKER = None
-if ARGS.voice:
-    try:
-        SPEAKER = Speaker(voice=ARGS.voice_name)
-    except TTSError as exc:
-        print(f"  WARN: voice disabled -- {exc}", flush=True)
-
 # Runtime mute (POST /v1/audio/mute -- the chat page's Mute button and the
 # tray icon): silences the server-side speak TOOL, and /v1/audio/speech
 # answers 204 (no audio) so muting from anywhere silences every open window.
 # The server is the single source of truth; the page polls and adopts it.
-MUTED = False
 # The truth survives restarts: best-effort persisted to a tiny state file
 # (a crash-relaunch must not silently unmute a muted gaming session).
 # Anchored to the repo (this file's directory), NOT the CWD -- the enigma /
 # enigma-ai console scripts can be launched from anywhere and must still see
 # the same state file (2026-07-17 audit).
 _MUTE_STATE = Path(__file__).resolve().parent / "data" / "mute_state.json"
-try:
-    _state = json.loads(_MUTE_STATE.read_text(encoding="utf-8"))
-    if isinstance(_state, dict):
-        MUTED = bool(_state.get("muted", False))
-except (OSError, ValueError):
-    pass  # best-effort: a missing or corrupt state file must never stop serve
-
-EARS = None
-if ARGS.ears:
-    try:
-        EARS = Ears()
-    except ASRError as exc:
-        print(f"  WARN: ears disabled -- {exc}", flush=True)
-
-EYES = None
-if ARGS.eyes and _VISION_ENCODER is not None:
-    try:
-        # Her own eyes: aligned encoder + grafted projection + the served
-        # frozen model, sharing the generation lock.
-        EYES = Eyes(model=model, tokenizer=tokenizer, encoder=_VISION_ENCODER, gen_lock=_GEN_LOCK)
-    except EyesError as exc:
-        print(f"  WARN: eyes disabled -- {exc}", flush=True)
-
-PAINTER = None
-if ARGS.image_gen:
-    try:
-        PAINTER = Painter()
-    except ImageGenError as exc:
-        print(f"  WARN: image-gen disabled -- {exc}", flush=True)
 
 # Where the imagine tool and /v1/images/generations drop their PNGs: the
 # engine's data home, not the repo checkout.
 IMAGES_DIR = Path.home() / ".enigma_engine" / "images"
 
-_n_params = sum(p.numel() for p in model.parameters())
-print(
-    f"Enigma loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
-    + (f", checkpoint step {STEP:,}" if STEP is not None else "")
-    + (f" | INSTRUCT ({META.get('chat_format')})" if INSTRUCT else " | base (transcript bridge)")
-    + (f" | memory: {len(MEMORY)} entries" if MEMORY is not None else "")
-    + (" | voice: on" if SPEAKER is not None else "")
-    + (" | ears: on" if EARS is not None else "")
-    + (" | eyes: on" if EYES is not None else "")
-    + (" | image-gen: on" if PAINTER is not None else ""),
-    flush=True,
-)
+
+def _load_eyes(ckpt_path: Path, preset: str):
+    """Load an align checkpoint: her aligned VisionEncoder, the trained
+    vision_projection weights, and the encoder dim for the model's vision
+    port. Raises EyesError on every malformed shape so boot() can degrade to
+    text-only with one honest WARN (extracted for testability, 2026-07-17)."""
+    from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+    if not ckpt_path.exists():
+        raise EyesError(
+            f"align checkpoint not found: {ckpt_path} (run distill_vision_encoder.py then align_vision.py)"
+        )
+    eck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    if "vision_encoder_state_dict" not in eck:
+        raise EyesError(f"{ckpt_path} carries no vision_encoder_state_dict (not an align checkpoint)")
+    venc = VisionEncoder(VISION_PRESETS[preset])
+    venc.load_state_dict(eck["vision_encoder_state_dict"], strict=True)
+    proj_sd = {
+        k[len("vision_projection."):]: v
+        for k, v in eck["model_state_dict"].items()
+        if k.startswith("vision_projection.")
+    }
+    if not proj_sd:
+        raise EyesError(f"{ckpt_path} carries no vision_projection weights")
+    return venc, proj_sd, VISION_PRESETS[preset].dim
+
+
+def boot(argv: list[str] | None = None) -> None:
+    """Parse args, load the checkpoint, bring the organs up. main() calls
+    this; tests call it with an explicit argv (or skip it and set globals
+    directly). argv=None reads sys.argv -- byte-identical behavior to the
+    old import-time startup."""
+    global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META
+    global INSTRUCT, MEMORY, SPEAKER, MUTED, EARS, EYES, PAINTER, EOS_ID, BOS_ID
+
+    # parse_known_args is deliberate (the server must start under runners
+    # that carry their own argv) -- but a typo'd flag must not silently
+    # disable an organ, so unknowns are named out loud.
+    ARGS, unknown = _p.parse_known_args(argv)
+    if unknown:
+        print(f"  WARN: ignoring unrecognized args: {' '.join(unknown)}", flush=True)
+
+    # PRIVACY: she is local, fully. Her own weights never touch the network; the
+    # organ libraries (transformers/diffusers/faster-whisper) would by default
+    # phone HuggingFace at LOAD time for update checks and telemetry even when
+    # the weights are already cached on disk. Offline is therefore the DEFAULT:
+    # organs load from cache only. --allow-downloads exists solely for the
+    # one-time first fetch of an organ's weights, on purpose, out loud.
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+    if not ARGS.allow_downloads:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    else:
+        # The flag must WIN: a shell exporting HF_HUB_OFFLINE=1 would otherwise
+        # silently block the one fetch the operator just asked for out loud.
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+
+    print(f"Loading Enigma from {ARGS.model} ...", flush=True)
+    if not Path(ARGS.model).exists():
+        raise SystemExit(
+            f"checkpoint not found: {ARGS.model}\n"
+            "Pass --model <path to an Enigma .pth checkpoint> (the default only "
+            "exists inside a repo checkout with trained models)"
+        )
+    _ck = torch.load(ARGS.model, map_location="cpu", weights_only=False)  # our own checkpoint
+    if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
+        raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
+    CONFIG = ForgeConfig.from_dict(_ck["config"])
+
+    # Her own eyes (Phase 4.5 step 5): --eyes opens the model's vision port and
+    # grafts the encoder + projection trained by align_vision.py onto the SERVED
+    # text weights. The align pass kept every text weight frozen on purpose, so
+    # the projection targets exactly this checkpoint's embedding space and text
+    # behavior is byte-unchanged. Failure here degrades to text-only (WARN), the
+    # organ pattern -- text serving never dies for a missing eye.
+    _VISION_ENCODER = None
+    _VISION_PROJ_SD = None
+    if ARGS.eyes:
+        _eyes_ckpt = Path(ARGS.eyes_model) if ARGS.eyes_model else (
+            ROOT / "models" / "enigma_vision_align" / "enigma_vision_align_vision_best.pt"
+        )
+        try:
+            _VISION_ENCODER, _VISION_PROJ_SD, _vdim = _load_eyes(_eyes_ckpt, ARGS.eyes_preset)
+            CONFIG.vision_hidden_size = _vdim
+        except (EyesError, KeyError, RuntimeError, OSError) as exc:
+            print(f"  WARN: eyes disabled -- {exc}", flush=True)
+            _VISION_ENCODER = None
+            _VISION_PROJ_SD = None
+
+    model = Enigma(CONFIG)
+    if _VISION_ENCODER is not None:
+        # Text weights come from the SERVED checkpoint; only the projection is new.
+        _missing, _unexpected = model.load_state_dict(_ck["model_state_dict"], strict=False)
+        _bad = [k for k in _missing if "vision_projection" not in k]
+        if _bad or _unexpected:
+            raise SystemExit(f"checkpoint mismatch with vision port open: missing={_bad[:5]} unexpected={list(_unexpected)[:5]}")
+        model.vision_projection.load_state_dict(_VISION_PROJ_SD, strict=True)
+    else:
+        model.load_state_dict(_ck["model_state_dict"], strict=True)
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(DEVICE).eval()
+    # Serve was the only fp32 stage in the whole stack (ultrareview #36): every
+    # training pass runs bf16 autocast with TF32 matmuls, and batch-1 decode is
+    # weight-read bound, so fp32 roughly halves the tokens/s ceiling for nothing.
+    # Generation runs under the same numerics training validated; --fp32 is the
+    # escape hatch if a regression ever points here.
+    if DEVICE == "cuda" and not ARGS.fp32:
+        # TF32 rides the same flag: --fp32 must reproduce the true fp32 baseline
+        # (TF32 truncates matmul mantissas, so leaving it on would defeat the
+        # escape hatch; re-audit 2026-07-17).
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    # device_count guard: is_available() can be True with zero visible devices
+    # (CUDA_VISIBLE_DEVICES=""), where is_bf16_supported() raises instead of
+    # returning False (measured on torch 2.10).
+    _BF16_GEN = (
+        DEVICE == "cuda" and not ARGS.fp32 and torch.cuda.device_count() > 0 and torch.cuda.is_bf16_supported()
+    )
+    STEP = _ck.get("step")
+    META = _ck.get("meta") or {}  # finetune_enigma stamps chat_format here
+    del _ck
+
+    # Prompt truncation budgets against ARGS.max_context, but the model's KV
+    # cache holds min(max_seq_len, MAX_CACHE_SEQ_LEN) positions and refuses a
+    # larger prefill outright -- clamp so an oversize --max-context cannot let
+    # prompts through that the cache will reject.
+    from enigma_engine.core.model_components import Attention as _Attn
+
+    _cache_cap = min(CONFIG.max_seq_len, _Attn.MAX_CACHE_SEQ_LEN)
+    if ARGS.max_context > _cache_cap:
+        print(
+            f"  WARN: --max-context {ARGS.max_context} exceeds the model's KV cache "
+            f"capacity {_cache_cap}; clamping to {_cache_cap}",
+            flush=True,
+        )
+        ARGS.max_context = _cache_cap
+    if ARGS.max_context <= MIN_GEN_TOKENS:
+        raise SystemExit(
+            f"max_context {ARGS.max_context} leaves no prompt budget after the "
+            f"{MIN_GEN_TOKENS}-token generation reserve; this model context is too small to serve"
+        )
+
+    tokenizer = get_tokenizer("bpe")  # the exact tokenizer that built tokens.bin
+    if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
+        print(
+            f"  WARN: tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != model vocab {CONFIG.vocab_size}",
+            flush=True,
+        )
+    EOS_ID = getattr(tokenizer, "eos_token_id", 2)
+    BOS_ID = getattr(tokenizer, "bos_token_id", 1)
+
+    # Instruct mode: SFT checkpoints (finetune_enigma.py) carry meta.chat_format.
+    # Base checkpoints get the plain-transcript bridge below. Attaching the chat
+    # tokens is safe either way -- plain text encodes byte-identically.
+    INSTRUCT = META.get("chat_format") == CHAT_FORMAT_NAME
+    attach_chat_tokens(tokenizer)
+
+    MEMORY = None
+    if ARGS.memory_dir:
+        from enigma_engine.core.memory_store import MemoryStore
+
+        MEMORY = MemoryStore(ARGS.memory_dir)
+
+    # Organs: constructed eagerly so a broken backend surfaces at startup, not
+    # mid-conversation. She still serves text if an organ fails to come up.
+    SPEAKER = None
+    if ARGS.voice:
+        try:
+            SPEAKER = Speaker(voice=ARGS.voice_name)
+        except TTSError as exc:
+            print(f"  WARN: voice disabled -- {exc}", flush=True)
+
+    MUTED = False
+    try:
+        _state = json.loads(_MUTE_STATE.read_text(encoding="utf-8"))
+        if isinstance(_state, dict):
+            MUTED = bool(_state.get("muted", False))
+    except (OSError, ValueError):
+        pass  # best-effort: a missing or corrupt state file must never stop serve
+
+    EARS = None
+    if ARGS.ears:
+        try:
+            EARS = Ears()
+        except ASRError as exc:
+            print(f"  WARN: ears disabled -- {exc}", flush=True)
+
+    EYES = None
+    if ARGS.eyes and _VISION_ENCODER is not None:
+        try:
+            # Her own eyes: aligned encoder + grafted projection + the served
+            # frozen model, sharing the generation lock.
+            EYES = Eyes(model=model, tokenizer=tokenizer, encoder=_VISION_ENCODER, gen_lock=_GEN_LOCK)
+        except EyesError as exc:
+            print(f"  WARN: eyes disabled -- {exc}", flush=True)
+
+    PAINTER = None
+    if ARGS.image_gen:
+        try:
+            PAINTER = Painter()
+        except ImageGenError as exc:
+            print(f"  WARN: image-gen disabled -- {exc}", flush=True)
+
+    _n_params = sum(p.numel() for p in model.parameters())
+    print(
+        f"Enigma loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
+        + (f", checkpoint step {STEP:,}" if STEP is not None else "")
+        + (f" | INSTRUCT ({META.get('chat_format')})" if INSTRUCT else " | base (transcript bridge)")
+        + (f" | memory: {len(MEMORY)} entries" if MEMORY is not None else "")
+        + (" | voice: on" if SPEAKER is not None else "")
+        + (" | ears: on" if EARS is not None else "")
+        + (" | eyes: on" if EYES is not None else "")
+        + (" | image-gen: on" if PAINTER is not None else ""),
+        flush=True,
+    )
 
 app = FastAPI(title="Enigma (from-scratch)")
 
@@ -1613,6 +1656,7 @@ def images_generations(req: ImageGenReq):
 def main() -> None:
     """Run the server. Console-script entry point (pyproject [project.scripts])
     and the __main__ path share this."""
+    boot()
     print(f"Enigma OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     print(f"In Odysseus:  /setup local http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     uvicorn.run(app, host=ARGS.host, port=ARGS.port, log_level="warning")

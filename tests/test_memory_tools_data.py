@@ -1,10 +1,16 @@
-"""The combined memory+tools system shape (ultrareview #6).
+"""The combined memory+tools system shape (ultrareview #6) -- TRAINING side.
 
 serve's _with_context joins retrieved memories and the tool preamble with a
 blank line whenever a memory hit coincides with offered tools; training used
 to carry each block only ALONE, and the model demonstrably fails on unseen
-system shapes. gen_memory_tools_examples bakes exactly the joined shape --
-these tests lock the byte-level join and both trained behaviors.
+system shapes. gen_memory_tools_examples bakes exactly the joined shape.
+
+Scope honesty (test-suite audit 2026-07-17): these tests pin the TRAINING
+generator against the expected string. The SERVE half of the contract --
+that _with_context actually renders this same shape byte-for-byte -- is
+locked by tests/test_serve_enigma.py::test_with_context_matches_training_
+system_shape, which compares serve's real output to make_sft_data._system.
+Together the two files close the drift loop; alone, each is one side.
 """
 
 from make_sft_data import gen_memory_tools_examples
