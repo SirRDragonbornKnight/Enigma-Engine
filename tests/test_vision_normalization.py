@@ -5,7 +5,11 @@ the student x*2-1, train_vision (and therefore align_vision.py) derives the
 flag from encoder config.use_pretrained (False for her encoders), and
 eyes.py captions with imagenet_normalize=False. A silent flip anywhere in
 that chain keeps every shape correct and the suite green while caption
-quality is destroyed -- the audit found NO test pinned it. These do.
+quality is destroyed -- the audit found NO test pinned it. These pin the
+serve (eyes) and train/align (train_vision) links. Honest scope note
+(re-audit 2026-07-18): the distill script's own student normalization
+(x*2-1 inside distill_vision_encoder.py main()) is structurally out of
+test reach and remains unpinned -- re-check it before any re-distillation.
 """
 
 from __future__ import annotations

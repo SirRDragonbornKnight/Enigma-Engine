@@ -5507,7 +5507,7 @@ class Trainer:
                 total_batches = n_epoch_batches * self.config.epochs
                 done_batches = epoch * n_epoch_batches + step + 1
                 pct = min(int(done_batches / max(total_batches, 1) * 95) + 5, 99)
-                self._emit_progress(pct, f"Epoch {epoch + 1}/{self.config.epochs} — loss: {loss_val:.4f}")
+                self._emit_progress(pct, f"Epoch {epoch + 1}/{self.config.epochs} -- loss: {loss_val:.4f}")
 
             # V-1: end-of-epoch remainder flush. If samples don't divide
             # evenly into accum_steps, the trailing micro-batches have

@@ -962,7 +962,7 @@ class LoraTrainer:
         n_batches = len(self._create_batches(data, max_length))
         if n_batches == 0:
             logger.warning("No valid training batches created -- all items may be too short (< 2 tokens) or empty.")
-            self._emit_progress(100, "No valid batches — skipped.")
+            self._emit_progress(100, "No valid batches -- skipped.")
             return {
                 "total_loss": 0.0,
                 "epochs": 0,

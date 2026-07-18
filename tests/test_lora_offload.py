@@ -63,10 +63,14 @@ def test_offload_optimizer_does_not_force_cpu_only(monkeypatch, gpu_present):
     monkeypatch.setattr(lu, "Accelerator", _RecordingAccelerator, raising=False)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: gpu_present)
     # get_memory_info would query real CUDA state, which the mask can lie
-    # about -- stub the two keys train() logs.
+    # about -- stub the two keys train() logs. Same for clear_vram: with
+    # is_available masked True on a CPU-only box, torch.cuda.synchronize()
+    # would _lazy_init() and raise before the assertion under test is ever
+    # reached (re-audit 2026-07-18).
     monkeypatch.setattr(
         lu, "get_memory_info", lambda: {"vram_available_gb": 0.0, "ram_available_gb": 8.0}
     )
+    monkeypatch.setattr(lu, "clear_vram", lambda: None)
     _RecordingAccelerator.last_cpu = None
 
     # Default-ish config that used to trigger the crash: offload both on.

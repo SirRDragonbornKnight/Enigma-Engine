@@ -34,7 +34,7 @@ from pathlib import Path
 import torch
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
@@ -190,7 +190,9 @@ IMAGES_DIR = Path.home() / ".enigma_engine" / "images"
 def _load_eyes(ckpt_path: Path, preset: str):
     """Load an align checkpoint: her aligned VisionEncoder, the trained
     vision_projection weights, and the encoder dim for the model's vision
-    port. Raises EyesError on every malformed shape so boot() can degrade to
+    port. Raises EyesError for a missing file / non-align checkpoint / absent
+    projection; an unknown preset raises KeyError and a mismatched encoder
+    state dict RuntimeError -- boot() catches all of these and degrades to
     text-only with one honest WARN (extracted for testability, 2026-07-17)."""
     from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
 
@@ -211,6 +213,13 @@ def _load_eyes(ckpt_path: Path, preset: str):
     if not proj_sd:
         raise EyesError(f"{ckpt_path} carries no vision_projection weights")
     return venc, proj_sd, VISION_PRESETS[preset].dim
+
+
+# Env keys boot() itself wrote (key -> value we set). setdefault must respect
+# an OPERATOR's shell export but not a leftover from a previous boot() in this
+# same process -- an --allow-downloads boot writes "0", and a later flagless
+# boot's setdefault would silently keep the network open (re-audit 2026-07-18).
+_BOOT_ENV_WRITES: dict[str, str] = {}
 
 
 def boot(argv: list[str] | None = None) -> None:
@@ -234,16 +243,30 @@ def boot(argv: list[str] | None = None) -> None:
     # the weights are already cached on disk. Offline is therefore the DEFAULT:
     # organs load from cache only. --allow-downloads exists solely for the
     # one-time first fetch of an organ's weights, on purpose, out loud.
-    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-    os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+    for _k, _v in list(_BOOT_ENV_WRITES.items()):
+        if os.environ.get(_k) == _v:  # untouched since we wrote it -> ours to clear
+            del os.environ[_k]
+    _BOOT_ENV_WRITES.clear()
+
+    def _own_setdefault(key: str, value: str) -> None:
+        if key not in os.environ:
+            os.environ[key] = value
+            _BOOT_ENV_WRITES[key] = value
+
+    def _own_set(key: str, value: str) -> None:
+        os.environ[key] = value
+        _BOOT_ENV_WRITES[key] = value
+
+    _own_setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    _own_setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
     if not ARGS.allow_downloads:
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        _own_setdefault("HF_HUB_OFFLINE", "1")
+        _own_setdefault("TRANSFORMERS_OFFLINE", "1")
     else:
         # The flag must WIN: a shell exporting HF_HUB_OFFLINE=1 would otherwise
         # silently block the one fetch the operator just asked for out loud.
-        os.environ["HF_HUB_OFFLINE"] = "0"
-        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        _own_set("HF_HUB_OFFLINE", "0")
+        _own_set("TRANSFORMERS_OFFLINE", "0")
 
     print(f"Loading Enigma from {ARGS.model} ...", flush=True)
     if not Path(ARGS.model).exists():
@@ -405,6 +428,24 @@ def boot(argv: list[str] | None = None) -> None:
     )
 
 app = FastAPI(title="Enigma (from-scratch)")
+
+
+@app.middleware("http")
+async def _require_boot(request, call_next):
+    # An ASGI runner can mount this module without ever calling boot()
+    # (`uvicorn serve_enigma:app`) -- which WORKED before startup moved out
+    # of import time. Serving half-up is worse than refusing: health
+    # endpoints would 200 while every generation request 500s with an opaque
+    # NoneType error (re-audit 2026-07-18). Fail honestly instead.
+    if model is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "server not booted -- start with 'python serve_enigma.py' "
+                "(or call serve_enigma.boot() before mounting the app)"
+            },
+        )
+    return await call_next(request)
 
 
 # Transcript turn markers: a base model will happily continue the whole

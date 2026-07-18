@@ -158,7 +158,14 @@ def statement_twin(question: str, answer: str) -> str | None:
     if not words or not ans:
         return None
     first, _, rest = ans.partition(" ")
-    if first.lower() in _ANSWER_OPENER_LOWER and first[:1].isupper() and first[1:].islower():
+    # `not first[1:]` admits the single-char article "A" -- ""[1:].islower()
+    # is False, so the bare islower() check silently skipped the most common
+    # opener (re-audit 2026-07-18: "It is A dog." baked into training data).
+    if (
+        first.lower() in _ANSWER_OPENER_LOWER
+        and first[:1].isupper()
+        and (not first[1:] or first[1:].islower())
+    ):
         ans = first.lower() + (" " + rest if rest else "")
     if words[0].lower() in _SUBJECT_PRONOUNS and len(words) > 1:
         # Subject-aux inversion: the trailing predicate belongs AFTER the verb.

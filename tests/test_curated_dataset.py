@@ -595,32 +595,45 @@ class TestIterTextChunks:
         combined = "\n\n".join(chunks)
         assert "line one" in combined
 
-    def test_on_progress_called(self, tmp_path):
-        """The callback must actually fire on the chunked-read path.
+    def test_on_progress_called(self, tmp_path, monkeypatch):
+        """iter_text_chunks must actually forward on_progress to its reader.
 
-        Small files never reach _chunked_read_text (>500 MB gate), so the
-        old version's `isinstance(calls, list)` on its own list could not
-        fail -- iter_text_chunks silently dropping on_progress stayed green
-        (test-suite audit 2026-07-17). Drive the chunked reader directly:
-        one small file = one chunk = one callback at 100%.
+        Two prior versions of this test could not catch the named
+        regression: the original asserted isinstance() on its own list, and
+        the 2026-07-17 repair drove _chunked_read_text directly -- which is
+        load_text_chunks' reader, NOT the one iter_text_chunks uses
+        (_iter_chunked_read_text, dataset.py:352). Deleting the
+        on_progress= forwarding at that line stayed green both times
+        (re-audit 2026-07-18). Fix: lower the streaming threshold and drive
+        iter_text_chunks itself end to end.
         """
-        from enigma_engine.core.dataset import _chunked_read_text
+        import enigma_engine.core.dataset as ds_mod
 
         f = tmp_path / "data.txt"
         # newline-terminated: progress fires per completed-line chunk (text
         # with no newline at all rides the remainder path, no callback)
         f.write_text("Hello world test data\nsecond line\n", encoding="utf-8")
+
+        monkeypatch.setattr(ds_mod, "_STREAM_THRESHOLD", 1)  # everything streams
         calls = []
-        chunks = _chunked_read_text(f, on_progress=lambda p, m: calls.append((p, m)))
+        chunks = list(iter_text_chunks(f, on_progress=lambda p, m: calls.append((p, m))))
         assert "Hello world" in "".join(chunks)
-        assert calls, "on_progress never fired on the chunked-read path"
+        assert calls, "iter_text_chunks never forwarded on_progress to its reader"
         pct, msg = calls[-1]
         assert pct == 100
         assert "data.txt" in msg
-        # and the small-file fast path still tolerates the kwarg silently
+
+        # load_text_chunks' reader honors the callback too (different code path)
+        direct_calls = []
+        out = ds_mod._chunked_read_text(f, on_progress=lambda p, m: direct_calls.append(p))
+        assert "Hello world" in "".join(out)
+        assert direct_calls and direct_calls[-1] == 100
+
+        # and below the threshold the small-file fast path stays silent
+        monkeypatch.setattr(ds_mod, "_STREAM_THRESHOLD", 10_000_000)
         small_calls = []
         list(iter_text_chunks(f, on_progress=lambda p, m: small_calls.append(p)))
-        assert small_calls == []  # below the streaming threshold: no progress
+        assert small_calls == []
 
     def test_string_path(self, tmp_path):
         f = tmp_path / "data.txt"

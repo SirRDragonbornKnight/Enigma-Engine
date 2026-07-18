@@ -136,13 +136,24 @@ def test_console_bound_strings_are_ascii() -> None:
             if not isinstance(node, ast.Call):
                 continue
             f = node.func
+            # _emit_progress: the Trainer docstring documents wiring
+            # on_progress straight to print -- a de-facto console sink.
+            # sys.exit(msg) prints msg to stderr like SystemExit.
             if isinstance(f, ast.Name) and f.id in {"print", "SystemExit"}:
                 targets = [node]
-            elif isinstance(f, ast.Attribute) and f.attr in _LOGGER_METHODS:
+            elif isinstance(f, ast.Attribute) and (
+                f.attr in _LOGGER_METHODS or f.attr in {"_emit_progress", "exit"}
+            ):
                 targets = [node]
             elif isinstance(f, ast.Attribute) and f.attr == "add_argument":
                 targets = [kw.value for kw in node.keywords if kw.arg == "help"]
-            elif isinstance(f, ast.Name) and f.id == "ArgumentParser":
+            elif (isinstance(f, ast.Name) and f.id == "ArgumentParser") or (
+                # every call site in this repo uses the Attribute form
+                # argparse.ArgumentParser(...) -- the bare-Name-only match
+                # made description/epilog scanning dead code (re-audit
+                # 2026-07-18)
+                isinstance(f, ast.Attribute) and f.attr == "ArgumentParser"
+            ):
                 targets = [kw.value for kw in node.keywords if kw.arg in ("description", "epilog")]
             else:
                 continue

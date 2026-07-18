@@ -46,6 +46,29 @@ def test_import_ran_no_startup():
     assert serve.EARS is None and serve.EYES is None and serve.PAINTER is None
 
 
+def test_unbooted_app_refuses_with_503(monkeypatch):
+    """`uvicorn serve_enigma:app` without boot() WORKED before the refactor
+    (startup ran at import); afterwards it served a deceptive half-up app --
+    health endpoints 200 while every generation request 500'd with an opaque
+    NoneType error (re-audit 2026-07-18). The middleware must refuse
+    honestly, and pass requests through untouched once booted."""
+    monkeypatch.setattr(serve, "model", None)
+    reached = []
+
+    async def call_next(request):
+        reached.append(request)
+        return "downstream-response"
+
+    resp = asyncio.run(serve._require_boot(object(), call_next))
+    assert resp.status_code == 503
+    assert b"not booted" in resp.body
+    assert not reached  # the request never hit a handler
+
+    monkeypatch.setattr(serve, "model", object())
+    assert asyncio.run(serve._require_boot(object(), call_next)) == "downstream-response"
+    assert len(reached) == 1
+
+
 @pytest.fixture(scope="module")
 def tok():
     t = get_tokenizer("bpe")
@@ -337,6 +360,18 @@ def test_load_eyes_guards_and_happy_path(tmp_path):
     assert set(proj_sd) == {"0.weight", "0.bias"}  # prefix stripped, text keys excluded
     assert dim == VISION_PRESETS["small"].dim
 
+    # the non-EyesError degrade paths boot() also catches (re-audit
+    # 2026-07-18: these two classes were untested):
+    with pytest.raises(KeyError):  # unknown preset
+        serve._load_eyes(good, "no_such_preset")
+    bad_sd = tmp_path / "bad_sd.pt"
+    torch.save(
+        {"vision_encoder_state_dict": {"nope.weight": torch.zeros(1)}, "model_state_dict": {}},
+        bad_sd,
+    )
+    with pytest.raises(RuntimeError):  # strict load on a mismatched encoder
+        serve._load_eyes(bad_sd, "small")
+
 
 # ---------------------------------------------------------------------------
 # boot() end to end on a tiny checkpoint (CPU-forced; every global restored)
@@ -348,12 +383,28 @@ _RUNTIME_GLOBALS = [
 ]
 
 
+_HF_ENV_KEYS = (
+    "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE",
+    "HF_HUB_DISABLE_TELEMETRY", "HF_HUB_DISABLE_IMPLICIT_TOKEN",
+)
+
+
 def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
-    """The full startup path -- args, checkpoint, instruct detection, budget
-    clamp -- on a 2-layer toy model. CUDA is masked off so this never touches
-    the GPU (or VRAM) regardless of the machine it runs on."""
+    """The full startup path on a 2-layer toy model, twice: the first boot
+    exercises the --allow-downloads env branch AND the KV-cache clamp
+    (--max-context 4096 vs max_seq_len 256 -- the 2026-07-17 version never
+    entered either branch); the second, flagless boot must RESTORE the
+    offline default despite the first boot's leftover "0" (the double-boot
+    hole, re-audit 2026-07-18). CUDA is masked off so this never touches the
+    GPU; mute state and env are patched hermetic and restored."""
+    import os
+
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)  # no operator values in play
     cfg = ForgeConfig(
         vocab_size=64, dim=32, n_layers=2, n_heads=2,
         max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
@@ -370,14 +421,26 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
         ckpt,
     )
     try:
-        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "4096", "--allow-downloads"])
         assert serve.model is not None
         assert serve.DEVICE == "cpu"
         assert serve.INSTRUCT is True  # meta.chat_format detected
         assert serve.STEP == 7
-        assert serve.ARGS.max_context == 128
+        # oversize budget clamps to the model's real cache capacity
+        assert serve.ARGS.max_context == 256
+        assert os.environ["HF_HUB_OFFLINE"] == "0"  # the flag won, out loud
+
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        assert serve.ARGS.max_context == 128  # in-budget value passes through
         assert serve.tokenizer is not None
         assert serve.EOS_ID == serve.tokenizer.eos_token_id
+        # the flagless boot restored the offline default -- before the
+        # ownership fix, the first boot's "0" survived setdefault and the
+        # second server would have phoned home
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
     finally:
         for name, value in snapshot.items():
             setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)  # monkeypatch teardown restores originals
