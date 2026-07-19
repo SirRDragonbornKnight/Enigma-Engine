@@ -2,8 +2,10 @@
 
 > Consolidated open work, newest snapshot 2026-07-15. Sources: the 4-reviewer
 > methods audit (verdicts in `ROADMAP.md` "Update 2026-07-15"), the
-> ultrareview ledger (`ULTRAREVIEW_2026-07-12.md`), and the dormant-code audit
-> (`AUDIT_2026-07-13.md`). Priority = leverage x confidence, not size.
+> ultrareview ledger (`_archive/ULTRAREVIEW_2026-07-12.md`), and the
+> dormant-code audit (`_archive/AUDIT_2026-07-13.md`; both moved to
+> `_archive/` in the 2026-07-18 compression pass).
+> Priority = leverage x confidence, not size.
 > Status: [ ] open  [~] in progress (uncommitted)  [x] done this arc.
 
 ---
@@ -64,6 +66,22 @@
   optimizer that actually stepped, `_load_encoder_checkpoint` resumes and
   REFUSES text-only checkpoints; 6 tests. Residual open: serve-side
   native-encoder load path (Phase 4.5 step 5).
+- [x] **Checkpoint-safety arc 2026-07-19** (`vision_align.py` +
+  `align_vision.py`) — two audited rounds, converged; 12 regression tests
+  (file now holds 17), each mutation-verified; suite 349 -> 361. Round 1:
+  missing `resume_from` REFUSES (was warn-and-restart, which then overwrote
+  the prior best), `_load_encoder_checkpoint` writes the `.keep` cleanup
+  marker, train_vision body in try/finally (aborts left params frozen +
+  encoder in train mode), `save_every_steps` implemented (rolling
+  `{stem}_vision_step.pt`; `align_vision.py --save-steps`, default 500).
+  Round 2 (adversarial audit of round 1): best tracking split — `best_loss`
+  = pure metric (drives early stopping), `best_written` = what reached disk
+  (drives retry); a run whose best never persisted ends with `abort_reason`
+  set (align_vision SystemExits on it); mid-epoch rolling-checkpoint resume
+  winds scheduler+step back to the epoch boundary (`epoch_start_step` is now
+  load-bearing); str-path `.keep` fix; remainder-flush steps also fire the
+  rolling save; `encoder_key` ValueError raised before the swallow-all try;
+  fresh writes delete stale `.keep` markers; guarded finally.
 - [x] **`--tokens-bin` resume-locked** (`pretrain_enigma.py`; final audit
   2026-07-16 M1) — FIXED 2026-07-16: `tokens_bin` is now recorded in the
   checkpoint schedule, and corpus resolution moved to AFTER the resume/schedule
@@ -103,29 +121,37 @@
 > #15 (name-less tool call kept via raw), #31 (stream/non-stream parity),
 > #36 (serve bf16 autocast + TF32 — eval re-measured 79/90, same as fp32),
 > #45 (memory-store fsync via atomic_write_text), #51 (/v1/memory 400).
-> What remains below is the DORMANT training arsenal (LoRA / RL / queue).
-> AUDIT_2026-07-13's "~43 of 44 open" counts every category; this list is
-> the verified correctness-major subset.
+> What remained below was the DORMANT training arsenal (LoRA / RL / queue).
+> RESOLVED BY DELETION 2026-07-18: the compression pass removed the entire
+> dormant Forge stack (training.py, dispatch/schema/registry,
+> training_evaluation, rl_training, lora_utils, progressive_growing,
+> reasoning, training_queue, training_monitor, run_training_diagnostic),
+> so #5/#7/#8/#10/#11/#13/#33 and the ~63 unverified arsenal items no
+> longer have code to be wrong in. #33's decision landed as "deprecate":
+> `dpo_enigma.py` is the preference path. See CLEANUP_TRACKER.md.
 
-- [ ] #5 training_queue: `start()` after `stop()` can run two jobs concurrently.
+- [x] #5 training_queue double-run — module deleted 2026-07-18.
 - [x] #6 memory-block + tool-spec combined shape — FIXED 2026-07-17 (data
   side): `gen_memory_tools_examples` bakes serve's exact join (memories,
   blank line, preamble + tools; both answer-from-memory and still-call-the-
   tool behaviors), x8 in the mix (53 records), locked by
   `tests/test_memory_tools_data.py`. NOTE: the SERVED model only learns the
   shape at the next SFT->DPO cycle; until then serve still renders it.
-- [ ] #7 LoRA + kv_share models crash on grad-checkpointing.
-- [ ] #8 online-DPO generates from un-stripped trailing EOS.
-- [ ] #10 DPO fp16 fallback has no GradScaler (bf16 path, the one we use, is fine).
-- [ ] #11 LoRA `merge_into_base` doubles weights (treats saved values as deltas).
-- [ ] #13 LoRA `create()` snapshots the full model as a fake adapter.
-- [ ] #14 non-SDPA attention uses a square mask for rectangular cached decode
-  (CPU/MPS path; CUDA SDPA path is correct).
-- [ ] #33 Trainer preference path uses a bespoke `User:/Assistant:` template, not
-  `render_training` — format-misaligned with serve. DECISION: deprecate it
-  (the standalone `dpo_enigma.py` is the real path) vs align it.
-- [ ] ~63 majors/minors + ~15 appendix items UNVERIFIED — mostly efficiency /
-  simplification in the dormant arsenal + ASCII-console nits. Triage on demand.
+- [x] #7/#8/#10/#11/#13/#33 — resolved by deletion 2026-07-18 (LoRA stack,
+  online-DPO, Trainer preference paths all removed with the Forge bloc).
+- [x] #14 non-SDPA attention used a square mask for rectangular cached decode
+  (CPU/MPS path; CUDA SDPA path was already correct) — **FIXED 2026-07-18**.
+  Characterized by execution first: it was a loud broadcast CRASH
+  (`RuntimeError: size of tensor a (9) must match tensor b (3)`), not the
+  silent corruption the old wording implied. Unreachable from the live serve
+  loop (prefill once, then one token at a time), so it never bit us; any
+  chunked prefill or multi-token continuation on CPU died. Fix mirrors the
+  SDPA branch: bottom-right aligned `tril(diagonal=T_k - T)`; square prefill
+  reduces to the old mask (served logits verified byte-identical).
+  Regression tests: `tests/test_cpu_rectangular_decode.py` (5 tests, pins
+  crash-freedom AND value-correctness vs no-cache recompute, plus a causality
+  guard). MUTATION-VERIFIED against both the original square mask and a
+  correctly-shaped-but-top-left-aligned mask.
 
 ## 3. Data strategy (the real quality ceiling)
 
@@ -171,12 +197,22 @@
 
 - [x] 1. Encoder persistence — DONE `f9ec5184` (see section 1); the blocker
   is dead. Serve-side encoder loading folds into step 5.
-- [ ] 2. Collect LLaVA-Pretrain 558k (`collect_vision_data.py`, ~14 GB).
-- [ ] 3. Distill DINOv2-S -> her own ViT-medium (~25M, ~1-2 GPU-days).
-- [ ] 4. `train_vision` align on 558k (add real batching first — current loop is batch-1).
+- [x] 2. Collect LLaVA-Pretrain 558k — DONE (data staged; see CLAUDE.md
+  multimodal state 2026-07-17).
+- [x] 3. Distill DINOv2-S -> her own ViT-medium — DONE 2026-07-17
+  (`models/enigma_vision_distill/`, val cosine 0.3469; [-1,1] contract
+  test-pinned in `tests/test_vision_normalization.py`).
+- [ ] 4. `train_vision` align on 558k — `align_vision.py` BUILT (real
+  batching landed 2026-07-17; checkpoint-safety hardened 2026-07-19), run
+  PARKED by the training-last ruling. Before launching, consider the open
+  2026-07-19 review findings that touch this run (KNOWN_ISSUES #12 + the
+  review section below): serial PIL decode wall-time, biased val mean.
 - [ ] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
-- [ ] 6. Her ears: write `collect_audio_data.py` (LibriSpeech-clean-100),
-  distill whisper encoder, `train_audio`, wire, retire whisper (~3 days).
+- [ ] 6. Her ears: `collect_audio_data.py` DONE, `distill_audio_encoder.py`
+  DONE-not-launched (own loop, survived the compression pass). Align step
+  NEEDS REBUILDING — `Trainer.train_audio` was deleted 2026-07-18 and only
+  the vision half was carved into `enigma_engine/training/vision_align.py`;
+  mirror it for audio, then wire and retire whisper (~3 days).
 - [ ] 7. Her voice: train a small TTS on a chosen voice (later).
 - [ ] 8. Her imagination: own image generator (much later; SD stays the tool she wields).
 
@@ -247,6 +283,64 @@
   domains when widening further.
 - [ ] `teachings.jsonl` still the untouched example template — YOUR channel to
   author (values / personal facts); bakes in at x8.
+
+## 7.5 2026-07-19 review — open cleanup/efficiency findings
+
+> From the xhigh compression-pass review (25 verified findings; the
+> correctness/latent-bug subset lives in KNOWN_ISSUES #12, the
+> checkpoint-safety subset was fixed same day — section 1). All verified
+> against the working tree. Efficiency items matter most before the 558k
+> align run.
+
+- [ ] **Serial PIL decode inside the training step** (`vision_align.py`
+  train_vision ~1470): decode+augment runs on the main thread with no
+  workers/prefetch/pinned memory — the 5090 idles through CPU JPEG decode
+  every step; likely a several-fold wall-time cut on the 558k run from an
+  overlapped loader. Same file: the pre-training `verify()` pass re-opens
+  every image serially (the per-step handler already covers bad files), and
+  text batches are built with ~3 tiny H2D copies per sample instead of one
+  CPU-built padded batch + single `.to(device)`.
+- [ ] **Best-save rewrites the full frozen text transformer** every improving
+  epoch (hundreds of MB of byte-identical weights per save); consider a
+  trainable-subset format for intermediate bests.
+- [ ] **Dead fallback optimizer** (`_setup_optimizer`): full-model fused AdamW
+  built at __init__, never stepped; `load_checkpoint` restores full AdamW
+  moments into it (~1.5 GB device memory for nothing); its name-based decay
+  grouping DIFFERS from `core/optim.build_optimizer`'s dim<2 rule (two
+  policies drifting).
+- [ ] **`_estimate_batch_size` models the wrong workload**: text-only trial
+  forward, pre-freeze, charges optimizer+grad bytes for params that will be
+  frozen, omits encoder+patch activations — wrong in both directions for
+  the only workload this trainer runs. Also: `hardware_detection.
+  recommend_training_batch_size` now has zero callers (competing selector).
+- [ ] **`_run_validation` duplicates the train batch assembly** (drop
+  policies already disagree: train warns+counts <2-token drops, val is
+  silent); extract a shared batch-build/loss helper.
+- [ ] **`TrainingConfig.to_dict` hand-enumerates ~59 fields** — use
+  `dataclasses.asdict`; a forgotten future field silently vanishes from
+  checkpoints. Related: `_save_checkpoint` stores `config.__dict__` (leaks
+  `_frozen`) instead of canonical `ForgeConfig.to_dict()`, writes dual
+  `model_config`+`config` keys for the deleted gui_forge loader
+  (`test_encoder_persistence.py` pins both keys — update together), and
+  `dataset_fingerprint` is unconditionally None (its writer died with the
+  Forge trainer). Dead state: `TrainingState.total_tokens` never
+  incremented (stamps 0), `_emit_loss`'s `val_loss` param ignored.
+- [ ] **CPU-fallback mask builds 4 temporaries** (`model_components.py`
+  ~477): `torch.full((T,T_k), -inf, dtype=..., device=...).triu_(T_k-T+1)`
+  is one allocation and matches the deleted square-path idiom.
+- [ ] **Zero-caller re-export shim** (`training/__init__.py`): every caller
+  imports `vision_align` directly (as the docstring instructs); ambiguous
+  once the audio twin lands.
+- [ ] **`--no-diff-attn` zombie flag** (`pretrain_enigma.py` ~122): no-op;
+  consumers are `extend_length.ps1` + `resume_training.ps1` — update those
+  atomically if removed (resume script is the live run's).
+- [ ] **Doc drift**: `model.py` docstring still advertises MoE/LoRA/
+  speculative decoding (all deleted; also `model_utils.py:103`);
+  `model_presets.py` `estimate_parameters` docstring cites deleted MTP
+  heads; `test_import_integrity.py` cites deleted
+  `run_training_diagnostic.py` as its motivating consumer;
+  `test_encoder_persistence.py` still opens the audio port on every tiny
+  model with zero audio tests left.
 
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 

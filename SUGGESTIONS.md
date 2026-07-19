@@ -112,5 +112,7 @@ for FUTURE decisions — none justify touching the paused run mid-schedule:
 - **Ships to other machines:** no hardcoded user paths; degrade gracefully
   with NO model present.
 - **Keep ideas, not code** — git is the archive; verify before delete.
-- **The training arm is the moat:** Odysseus serves models but cannot train
-  them. Modkit can.
+- **The training arm is the moat** — meaning the LIVE bespoke scripts
+  (pretrain/finetune/dpo/teach + the data pipeline), not bulk. The dormant
+  Forge monolith was deleted 2026-07-18; future methods land as small
+  bespoke scripts in the `dpo_enigma.py` pattern.

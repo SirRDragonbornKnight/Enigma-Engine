@@ -121,7 +121,8 @@ def main() -> None:
     ap.add_argument(
         "--no-diff-attn",
         action="store_true",
-        help="disable differential attention -> use fused SDPA kernel (2-4x faster)",
+        help="accepted no-op (differential attention was removed 2026-07-18; "
+        "SDPA is always used). Kept so proven launch commands keep working.",
     )
     ap.add_argument(
         "--compile",
@@ -346,9 +347,6 @@ def main() -> None:
         print(f"{'init-from' if warm_start else 'resume'}: config rebuilt from checkpoint ({ckpt_arg})", flush=True)
     else:
         config = get_preset(args.size, vocab_size=vocab_size)
-        config.neftune_alpha = 0.0  # NEFTune is a finetuning trick; off for pretraining
-        if args.no_diff_attn:
-            config.use_differential_attn = False  # fused SDPA; must stay consistent across resumes
     config.dropout = args.dropout  # 0.0 for single-epoch pretraining (preset default 0.1 undertrains)
     if block > config.max_seq_len:
         config.max_seq_len = block
@@ -360,8 +358,7 @@ def main() -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(
         f"Enigma '{args.size}': {n_params / 1e6:.1f}M params, dim={config.dim} "
-        f"layers={config.n_layers} heads={config.n_heads} block={block} "
-        f"diff_attn={config.use_differential_attn}",
+        f"layers={config.n_layers} heads={config.n_heads} block={block}",
         flush=True,
     )
 

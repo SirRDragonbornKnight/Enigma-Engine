@@ -31,7 +31,8 @@ avatar, and run the avatar against any LLM.
 - **The avatar** — its own repo at `C:\Users\SirKn\Enigma Avatar\` (`CLAUDE.md` = its working
   rules + how to launch it; `TODO.md` = backlog / audit log).
 - **Project state** — `BACKLOG.md` (the consolidated open-work ledger), `ROADMAP.md`,
-  `CLEANUP_TRACKER.md`, `CODE_REVIEW.md`, `KNOWN_ISSUES.md`, `SUGGESTIONS.md`.
+  `CLEANUP_TRACKER.md`, `KNOWN_ISSUES.md`, `SUGGESTIONS.md`. Closed-bug ledgers and
+  point-in-time review dumps live in `_archive/`.
 
 ## A note on older docs ("Modkit")
 

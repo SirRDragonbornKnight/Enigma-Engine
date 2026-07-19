@@ -55,8 +55,6 @@ from .model_components import (  # noqa: F401
     TransformerBlock,
     precompute_rope_frequencies,
     apply_rotary_embedding,
-    HAS_FLASH_ATTN,
-    flash_attn_func,
 )
 from .model_utils import (  # noqa: F401
     apply_repetition_penalty,
@@ -236,22 +234,6 @@ class Enigma(nn.Module):
         # Transformer layers
         self.layers = nn.ModuleList([TransformerBlock(self.config, i) for i in range(self.config.n_layers)])
 
-        # T3-1: Cross-layer KV sharing — group layers into bands that
-        # share K, V projections.  Only the first layer in each band
-        # computes K, V; followers reuse them.
-        n_groups = getattr(self.config, "kv_share_groups", 0)
-        if n_groups > 0 and self.config.n_layers >= n_groups:
-            layers_per_group = self.config.n_layers // n_groups
-            for i, layer in enumerate(self.layers):
-                leader_idx = (i // layers_per_group) * layers_per_group
-                if i != leader_idx:
-                    layer.attention._kv_share_source = self.layers[leader_idx].attention
-                else:
-                    # Only leaders store _shared_kv (followers read it within
-                    # the same forward); non-leader/non-sharing layers must
-                    # not pin graph-attached activations on the module.
-                    layer.attention._kv_is_leader = True
-
         # Output (padded for GPU alignment, weight-tied with embeddings)
         Norm = RMSNorm if self.config.use_rms_norm else nn.LayerNorm
         self.norm = Norm(self.config.dim)
@@ -259,19 +241,6 @@ class Enigma(nn.Module):
 
         # Weight tying
         self.output.weight = self.tok_embeddings.weight
-
-        # Multi-token prediction heads (R25, Gloeckle et al. 2024)
-        # Extra heads predict 2nd, 3rd, ... next tokens. Train-only, dropped at inference.
-        self.predict_heads = nn.ModuleList()
-        if self.config.n_predict_heads > 0:
-            for _ in range(self.config.n_predict_heads):
-                self.predict_heads.append(nn.Linear(self.config.dim, padded_vocab, bias=False))
-
-        # T3-2: Self-speculative decoding — early-exit head
-        self.early_exit_layer = getattr(self.config, "early_exit_layer", 0)
-        if self.early_exit_layer > 0:
-            self.early_exit_norm = RMSNorm(self.config.dim)
-            self.early_exit_head = nn.Linear(self.config.dim, padded_vocab, bias=False)
 
         # RoPE frequencies with optional scaling
         if self.config.use_rope:
@@ -310,11 +279,6 @@ class Enigma(nn.Module):
         self.apply(self._init_weights)
         self._init_output_weights()
 
-        # nGPT: Apply weight normalization to all Linear layers
-        # (except weight-tied output head) for training stability.
-        if getattr(self.config, "use_weight_norm", False):
-            self._apply_weight_norm()
-
     def _init_weights(self, module) -> None:
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -333,16 +297,7 @@ class Enigma(nn.Module):
 
         Trades ~30% extra compute for ~50% VRAM savings by recomputing
         activations during the backward pass instead of storing them.
-
-        Raises:
-            ValueError: If the model uses kv_share_groups; checkpointed
-                recomputation cannot rebuild K/V shared across layers.
         """
-        if getattr(self.config, "kv_share_groups", 0) > 0:
-            raise ValueError(
-                "gradient checkpointing cannot be combined with kv_share_groups: "
-                "checkpointed recomputation cannot rebuild K/V shared across layers"
-            )
         for layer in self.layers:
             layer.use_checkpoint = True
 
@@ -350,25 +305,6 @@ class Enigma(nn.Module):
         """Disable gradient checkpointing on all transformer layers."""
         for layer in self.layers:
             layer.use_checkpoint = False
-
-    def _apply_weight_norm(self) -> None:
-        """Apply parametric weight normalization to all Linear layers.
-
-        Decomposes W = g * (v / ||v||), separating direction from magnitude.
-        Skips the output head (weight-tied with tok_embeddings) and any
-        Linear inside norm layers.
-        """
-        from torch.nn.utils.parametrizations import weight_norm
-
-        # Collect modules to normalize (skip output head — weight-tied)
-        tied_id = id(self.output.weight)
-        count = 0
-        for module in self.modules():
-            if isinstance(module, nn.Linear) and id(module.weight) != tied_id:
-                weight_norm(module, name="weight")
-                count += 1
-        if count:
-            logger.info(f"nGPT: applied weight normalization to {count} Linear layers")
 
     def _get_causal_mask(self, size: int) -> torch.Tensor:
         """Return a (size, size) causal mask, cached and grown on demand.
@@ -456,15 +392,9 @@ class Enigma(nn.Module):
         if not (0.0 <= label_smoothing <= 1.0):
             raise ValueError(f"label_smoothing must be in [0.0, 1.0], got {label_smoothing}")
 
-        B, T = input_ids.shape
+        T = input_ids.shape[1]
 
         h = self.tok_embeddings(input_ids)
-
-        # NEFTune: uniform noise on embeddings during training (R27, Jain et al. 2023)
-        if self.training and self.config.neftune_alpha > 0:
-            dims = T * h.shape[2]  # seq_len * hidden_dim
-            mag = self.config.neftune_alpha / math.sqrt(dims)
-            h = h + torch.empty_like(h).uniform_(-mag, mag)
 
         if not self.config.use_rope:
             end_pos = start_pos + T
@@ -495,19 +425,8 @@ class Enigma(nn.Module):
         # else: plain causal (T>1, no pad) or single-token decode (T==1) → mask stays
         # None; attention applies is_causal=True (correct for this decoder-only model).
 
-        # T3-2: Capture hidden state at early-exit layer for draft head
-        _early_h = None
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             h = layer(h, self.freqs_cis, mask, use_cache, start_pos)
-            if self.early_exit_layer > 0 and i == self.early_exit_layer - 1:
-                _early_h = h
-
-        # T3-1: shared K/V is intra-forward plumbing (leader writes, followers
-        # read within this same pass) — drop it so no graph-attached activation
-        # outlives the forward (VRAM + deepcopy safety).
-        if getattr(self.config, "kv_share_groups", 0) > 0:
-            for layer in self.layers:
-                layer.attention._shared_kv = None
 
         h_normed = self.norm(h)
 
@@ -535,45 +454,6 @@ class Enigma(nn.Module):
                     ignore_index=pad_token_id,
                     label_smoothing=label_smoothing,
                 )
-
-            # Multi-token prediction auxiliary loss (R25, Gloeckle et al. 2024)
-            # Each extra head predicts the k-th next token (k=2,3,...).
-            if self.training and self.predict_heads:
-                mtp_loss = torch.tensor(0.0, device=h_normed.device, dtype=h_normed.dtype)
-                for i, head in enumerate(self.predict_heads):
-                    shift = i + 1
-                    if targets.size(1) > shift:
-                        shifted_targets = targets[:, shift:]
-                        if use_chunked:
-                            mtp_loss = mtp_loss + _chunked_cross_entropy(
-                                head,
-                                h_normed[:, :-shift],
-                                shifted_targets,
-                                chunk_size=chunked_ce,
-                                ignore_index=pad_token_id,
-                                label_smoothing=label_smoothing,
-                            )
-                        else:
-                            head_logits = head(h_normed[:, :-shift])
-                            mtp_loss = mtp_loss + F.cross_entropy(
-                                head_logits.reshape(-1, head_logits.size(-1)),
-                                shifted_targets.reshape(-1),
-                                ignore_index=pad_token_id,
-                                label_smoothing=label_smoothing,
-                            )
-                loss = loss + mtp_loss / max(1, len(self.predict_heads))
-
-            # T3-2: Early-exit auxiliary loss for self-speculative decoding
-            if self.training and _early_h is not None:
-                ee_normed = self.early_exit_norm(_early_h)
-                ee_logits = self.early_exit_head(ee_normed)
-                ee_loss = F.cross_entropy(
-                    ee_logits.reshape(-1, ee_logits.size(-1)),
-                    targets.reshape(-1),
-                    ignore_index=pad_token_id,
-                    label_smoothing=label_smoothing,
-                )
-                loss = loss + 0.1 * ee_loss
 
         # Return format depends on whether loss was computed
         if targets is not None or return_loss:
@@ -617,30 +497,6 @@ class Enigma(nn.Module):
                     dtype=pk.dtype,
                 )
             attn._kv_cache.restore_prefix(pk, pv)
-
-    def get_moe_aux_loss(self) -> torch.Tensor:
-        """
-        Get total MoE auxiliary loss from all layers.
-
-        📖 WHAT THIS DOES:
-        Collects load balancing losses from all MoE layers to encourage
-        even distribution of tokens across experts during training.
-
-        ⚠️ TRAINING ONLY:
-        This loss should be added to the main training loss:
-            total_loss = ce_loss + model.get_moe_aux_loss()
-
-        Returns:
-            Scalar tensor with combined auxiliary loss from all MoE layers.
-            Returns 0.0 if MoE is not enabled.
-        """
-        if not self.config.use_moe:
-            return torch.tensor(0.0, device=next(self.parameters()).device)
-
-        aux_loss = torch.tensor(0.0, device=next(self.parameters()).device)
-        for layer in self.layers:
-            aux_loss = aux_loss + layer.get_moe_aux_loss()
-        return aux_loss
 
     def forward_multimodal(
         self,
@@ -1224,93 +1080,6 @@ class Enigma(nn.Module):
             "(there is no onnx_loader module); load Enigma checkpoints with "
             "from_pretrained or from_safetensors instead"
         )
-
-    # =========================================================================
-    # 🎯 LORA & ADAPTER SUPPORT
-    # =========================================================================
-
-    def load_lora(self, path: Union[str, Path], adapter_name: str = "default", merge: bool = False) -> None:
-        """
-        Load LoRA (Low-Rank Adaptation) weights.
-
-        📖 WHAT THIS DOES:
-        Loads LoRA adapter weights that modify the model's behavior without
-        full fine-tuning. LoRA is memory-efficient and can be quickly swapped.
-
-        📐 HOW LORA WORKS:
-        Instead of updating full weight matrix W, LoRA adds:
-        W' = W + A × B  (where A, B are small low-rank matrices)
-
-        Args:
-            path: Path to LoRA weights
-            adapter_name: Name for this adapter (for multi-adapter support)
-            merge: If True, immediately merge LoRA into base weights
-
-        Example:
-            model.load_lora("lora_adapters/coding.pth")
-            model.load_lora("lora_adapters/creative.pth", "creative")
-        """
-        try:
-            from .lora_utils import apply_lora, load_lora_weights
-        except ImportError:
-            logger.error("LoRA support requires lora_utils module")
-            raise
-
-        logger.info(f"Loading LoRA adapter '{adapter_name}' from: {path}")
-
-        # Load LoRA weights
-        lora_weights = load_lora_weights(path)
-
-        # Apply to model
-        if merge:
-            # Merge into base weights immediately
-            apply_lora(self, lora_weights, merge=True)
-            logger.info(f"Merged LoRA adapter '{adapter_name}' into base weights")
-        else:
-            # Keep as separate adapter; apply_lora registers it in
-            # self._lora_adapters once its key-match check passes, so a
-            # mismatched adapter is never left registered
-            apply_lora(self, lora_weights, adapter_name=adapter_name)
-            logger.info(f"Loaded LoRA adapter '{adapter_name}'")
-
-    def merge_lora(self, adapter_name: Optional[str] = None) -> None:
-        """
-        Merge LoRA adapters into base model weights.
-
-        📖 WHAT THIS DOES:
-        Permanently integrates LoRA adapter weights into the base model.
-        After merging, the adapter can be removed to save memory.
-
-        Args:
-            adapter_name: Specific adapter to merge (None = merge all)
-
-        Example:
-            model.load_lora("adapter.pth", "my_adapter")
-            model.merge_lora("my_adapter")  # Merge into base weights
-        """
-        if not hasattr(self, "_lora_adapters"):
-            logger.warning("No LoRA adapters loaded")
-            return
-
-        try:
-            from .lora_utils import merge_lora_weights
-        except ImportError:
-            logger.error("LoRA support requires lora_utils module")
-            raise
-
-        if adapter_name is None:
-            # Merge all adapters
-            for name in list(self._lora_adapters.keys()):
-                merge_lora_weights(self, self._lora_adapters[name])
-                del self._lora_adapters[name]
-                logger.info(f"Merged LoRA adapter: {name}")
-        else:
-            # Merge specific adapter
-            if adapter_name not in self._lora_adapters:
-                raise ValueError(f"LoRA adapter '{adapter_name}' not found")
-            merge_lora_weights(self, self._lora_adapters[adapter_name])
-            del self._lora_adapters[adapter_name]
-            logger.info(f"Merged LoRA adapter: {adapter_name}")
 
     # =========================================================================
     # MODEL EXPORT METHODS

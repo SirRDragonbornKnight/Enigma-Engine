@@ -60,6 +60,11 @@ Muppet.
   successful native-eye run evaporates on exit. Encoders train FULLY (the old
   "trains frozen" doc line was wrong). SAVE/RESUME/optimizer FIXED `f9ec5184`
   (2026-07-15); serve-side encoder loading remains Phase 4.5 work.
+  (Historical: both methods lived on the Forge Trainer. `train_vision` was
+  carved into `enigma_engine/training/vision_align.py` on 2026-07-18 keeping
+  this fix intact — smoke-verified: the checkpoint carries 45 encoder tensors
+  plus the stepped local optimizer. `train_audio` was NOT carved — see the
+  Phase 4.5 step-6 gap note.)
 - DATA: OpenThoughts3 (1,000 recs) is 100% dead weight — median completion
   ~14.5k tokens vs block 1024, every record silently dropped at build. Dolly
   (73% of general) trains extract-from-context, not recall. Rebuild the diet
@@ -137,7 +142,7 @@ The old roadmap said it first: "Before the REAL pass: fatten the tool corpus
 
 - Train on the fattened mix (2-4 epochs; `--optimizer muon` is queued for exactly
   this pass per the landscape research — flag exists, SFT runs are cheap to redo).
-- Behavior evals AS CODE (extend `_audit_eval.py`, don't duplicate): tool-emission
+- Behavior evals AS CODE (extend `eval_behavior.py`, don't duplicate): tool-emission
   rate on tool-appropriate asks, restraint rate, identity accuracy, format
   adherence (stops at <|im_end|>), val ppl. Every SFT run gets compared on the
   same probes.
@@ -184,9 +189,17 @@ weights that result are hers, on her machine, forever.
    final pass unfreezing the last 2-4 LM layers.
 5. **Wire and retire:** image begin/end tokens (ids 4724+ reserved, 12
    free), serve ingestion, delete the BLIP path. Her eyes are hers.
-6. **Her ears (same shape, ~3 days):** write `collect_audio_data.py`
-   (LibriSpeech-clean-100), distill the whisper encoder into her
-   AudioEncoder, `train_audio`, wire, retire whisper.
+6. **Her ears (same shape, ~3 days):** `collect_audio_data.py` DONE
+   (LibriSpeech-clean-100, 28,539 pairs); `distill_audio_encoder.py` DONE
+   (own loop, unaffected by the compression pass) but NOT launched.
+   **GAP created 2026-07-18:** the align step used `Trainer.train_audio`,
+   which was deleted with the Forge trainer — only the VISION half was
+   carved out (`enigma_engine/training/vision_align.py`). Rebuilding it is
+   mechanical: mirror `vision_align.py` + `align_vision.py` for audio
+   (same freeze logic, same local-optimizer + encoder-persistence
+   checkpoint contract; `tests/test_encoder_persistence.py` documents the
+   contract the retired audio twin used to pin). Then wire and retire
+   whisper.
 7. **Her voice (later):** train a small TTS on a chosen voice — in-house
    project; Kokoro is scaffolding until then.
 8. **Her imagination (much later):** an own-trained image generator is
@@ -208,8 +221,9 @@ video needs the Phase 4 length extension first. Real-time game vision
 
 ## Phase 6 — Alignment polish: DPO / self-play (optional; scaffolding exists)
 
-`enigma_engine/core/rl_training.py` already implements RewardModel + RLHF (RL-B)
-+ self-play (RL-C). Realistic at 182M: DPO on format/tone/values preferences.
+(The old RewardModel/RLHF/self-play scaffolding was deleted in the 2026-07-18
+compression pass — git history holds it; any future RL would be a small
+bespoke script.) Realistic at 182M: DPO on format/tone/values preferences.
 The "won't turn evil" property comes from Phase 1c authorship more than RL.
 
 **DONE 2026-07-06 (measured):** `make_dpo_data.py` (176 authored-voice vs
@@ -223,17 +237,51 @@ to pass all seven categories; `models/enigma_dpo` holds v8, receipted backup
 `Enigma Backups\enigma_dpo_v8_adopted\`; revert targets = v5/v1 backups or
 `models/enigma_sft`).
 
+### Candidate next lever: ON-POLICY DISTILLATION (research 2026-07-18, not started)
+
+The biggest post-training idea since our DPO adoption, and it FITS the
+owned-weights rule because the teacher exists only at training time — no
+runtime wrapping, her weights stay hers.
+
+- **Mechanism:** sample trajectories from HER (on-policy), have a big local
+  teacher (e.g. a Qwen3-class model run locally) grade EVERY token via reverse
+  KL, train on that dense signal. Sources: Thinking Machines' write-up +
+  Qwen3 report numbers (74.4% AIME'24 at ~1,800 GPU-hr vs RL's 67.6% at
+  ~17,920 — roughly 10x cheaper than RL, and it beats plain SFT).
+- **Why it matters HERE specifically:** its signature strength is preventing
+  catastrophic forgetting — domain SFT that crushed instruction-following was
+  recovered while KEEPING the new knowledge. That is exactly our recurring
+  v2-v8 failure mode (teach her facts, lose identity/voice; every cycle a
+  coin-flip on which category regresses).
+- **Honest caveat (fact-checked):** every public demonstration is a 4B+
+  student, Qwen-heavy. There is NO published sub-1B result — at 182M we would
+  be the replication, not the follower. Prototype small and gate it on the
+  locked eval before believing it.
+- **Shape if built:** a new bespoke script in the `dpo_enigma.py` pattern
+  (~200-300 lines: rollout, teacher-logprob, reverse-KL loss, the shared
+  chat_format masks) — NOT a revival of the deleted Forge trainer. Keep a
+  light DPO/SimPO pass for style on top.
+- Also worth knowing (same research pass): current preference-method consensus
+  puts SimPO (reference-free, length-normalized — drops the deepcopy'd
+  reference model) and KTO (thumbs-up/down data, which the avatar could
+  generate naturally) ahead of vanilla DPO; RLVR/GRPO "sharpens rather than
+  expands" and is only worth it for narrow verifiable rewards like tool-call
+  JSON validity.
+
 ## Phase 7 — The next generation (the big fork; weeks of GPU)
 
 Only when the current lineage hits a measured ceiling:
 - New tokenizer (fix the standalone-space waste — 26.6% corpus-wide, 29.5% on
-  the 2026-07-16 English-sample measure; ~16-32k vocab, GPT-2-style
-  leading-space merge) — requires retokenizing the raw sources with
-  `pretokenize_data.py` (rebuilds tokens.bin, currently 227 GB / 211 GiB —
-  the "210GB" and "227 GB" figures in older notes are this same file in
-  GiB vs GB).
-- Deeper-thinner architecture, Muon + WSD from step 0, native block 2048,
-  350-700M params — the 5090 (32GB) can carry it.
+  the 2026-07-16 English-sample measure; **16k vocab at a flat 182M, 32k only
+  with a size bump** — see TOKENIZER_V2_SPEC for the scaling-law grounding —
+  GPT-2-style leading-space merge, per-digit numbers) — requires retokenizing
+  the raw sources with `pretokenize_data.py` (rebuilds tokens.bin, currently
+  227 GB / 211 GiB — the "210GB" and "227 GB" figures in older notes are this
+  same file in GiB vs GB).
+- Deeper-thinner architecture, Muon + WSD from step 0 (both already
+  implemented in `core/optim.py`, just flag-gated off for lineage compat),
+  QK-norm BEFORE RoPE, RoPE theta down to 10k-100k, optional gated attention,
+  native block 2048, 350-700M params — the 5090 (32GB) can carry it.
 - HRM stays a PARKED experiment (heed the ARC Prize critique).
 - **Gate: a written list of things Phase 2-5 Enigma provably cannot do —
   that list now lives in `PHASE7_GATE.md` (started 2026-07-06, receipts

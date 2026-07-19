@@ -10,7 +10,7 @@ Teacher: openai/whisper-base encoder (frozen; d_model 512, 1500 frames for
 Student: AudioEncoder AUDIO_PRESETS["base"] (from scratch; dim 512, stride-2
         front-end -> also ~1500 frames at 30 s). Student consumes HER OWN
         mel pipeline's output for the SAME waveform -- the pipeline serve
-        and train_audio will use.
+        and the (still-to-be-built) audio-align trainer will use.
 
 Loss: per-frame cosine over the REAL (non-padding) frames only -- clips are
 2-15 s inside the padded 30 s window, and distilling 80% silence would waste

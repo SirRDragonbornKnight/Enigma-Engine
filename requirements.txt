@@ -1,10 +1,9 @@
 # Enigma AI Engine Requirements
-# Last Updated: February 2026
+# Last Updated: July 2026
 # Minimum Python version: 3.9+
 
 # === CORE (Required) ===
 numpy>=1.21.0
-python-dotenv>=0.19.0
 
 # === MODEL & TRAINING ===
 # PyTorch - install manually for your platform:
@@ -17,24 +16,18 @@ torch>=1.12; platform_system!="Darwin" or platform_machine=="arm64"
 # Safetensors - secure model loading
 safetensors>=0.4.0
 
-# LoRA/QLoRA Training (for efficient fine-tuning)
-peft>=0.10.0              # Parameter-Efficient Fine-Tuning (LoRA)
-bitsandbytes>=0.43.0      # 4-bit/8-bit quantization for QLoRA
-accelerate>=0.28.0        # Distributed training + CPU offloading
+# Quantization (guarded INT4 fallback in core/model.py)
+bitsandbytes>=0.43.0
 
-# HuggingFace Integration (for loading pre-trained models)
-tokenizers>=0.13.0
+# HuggingFace Integration (organ backbones + distill teachers)
 transformers>=4.20.0
 huggingface-hub>=0.20.0
 
 # === SYSTEM MONITORING ===
 psutil>=5.9.0             # Hardware detection, resource monitoring
 
-# === GUI ===
-customtkinter>=5.2.0      # Modern themed Tk widgets used by enigma_engine.gui
-
 # === HTTP CLIENT ===
-requests>=2.31.0          # Used by core.web_utils, data collectors, mods
+requests>=2.31.0          # Used by collect_pretraining_data.py
 
 # === API SERVER (for --serve) ===
 fastapi>=0.100.0

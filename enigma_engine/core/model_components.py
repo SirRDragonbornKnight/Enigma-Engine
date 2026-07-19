@@ -17,20 +17,6 @@ from .model_presets import ForgeConfig
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FLASH ATTENTION: Optional high-performance attention (2-4x faster)
-# ─────────────────────────────────────────────────────────────────────────────
-# Requires: pip install flash-attn (CUDA only, Ampere+ GPU recommended)
-# Falls back silently to standard attention if not available.
-try:
-    from flash_attn import flash_attn_func
-
-    HAS_FLASH_ATTN = True
-    logger.info("Flash Attention available - will use for fp16/bf16 CUDA tensors")
-except ImportError:
-    HAS_FLASH_ATTN = False
-    flash_attn_func = None  # type: ignore
-
 
 # =============================================================================
 # 🧱 MODEL COMPONENTS - The Building Blocks
@@ -346,44 +332,12 @@ class Attention(nn.Module):
             self.q_norm = RMSNorm(self.head_dim)
             self.k_norm = RMSNorm(self.head_dim)
 
-        # R22: Differential attention — split heads into two groups and
-        # subtract: attn = softmax(Q1@K1^T) - λ * softmax(Q2@K2^T).
-        # Cancels noise / uninformative attention mass.
-        self.use_differential_attn = config.use_differential_attn
-        if self.use_differential_attn and self.n_heads >= 2 and self.n_heads % 2 == 0:
-            # Per-head learnable lambda (initialized near zero so early
-            # training behaves close to standard attention).
-            self._diff_lambda = nn.Parameter(torch.full((self.n_heads // 2,), 0.05))
-        else:
-            self.use_differential_attn = False
-
         # ─────────────────────────────────────────────────────────────────────
         # KV-CACHE: Pre-allocated for O(1) per-token writes during generation
         # Uses the optimized KVCache from kv_cache.py instead of torch.cat()
         # which caused O(n) reallocation every token.
         # ─────────────────────────────────────────────────────────────────────
         self._kv_cache: Optional[object] = None
-
-        # T3-1: Cross-layer KV sharing (YOCO-style)
-        # Set by Enigma.__init__() to point followers at the leader's Attention.
-        self._kv_share_source: Optional["Attention"] = None
-        self._kv_is_leader: bool = False  # set by Enigma.__init__ when sharing is on
-        self._shared_kv: Optional[tuple[torch.Tensor, torch.Tensor]] = None
-
-        # T5-6: Multi-Head Latent Attention (MLA) — low-rank KV compression
-        # Instead of projecting dim → n_kv_heads*head_dim directly,
-        # factor through a smaller latent: dim → latent → K, V.
-        # Reduces parameter count and acts as regularization bottleneck.
-        self._use_mla = config.mla_latent_dim > 0
-        if self._use_mla:
-            ld = config.mla_latent_dim
-            self.wkv_down = nn.Linear(config.dim, ld, bias=False)
-            self.wk_up = nn.Linear(ld, self.n_kv_heads * self.head_dim, bias=False)
-            self.wv_up = nn.Linear(ld, self.n_kv_heads * self.head_dim, bias=False)
-
-        # T3-8: LongLoRA shifted sparse attention
-        self.use_shifted_attention = config.use_shifted_attention
-        self._shifted_group_size = config.shifted_group_size
 
     def forward(
         self,
@@ -409,103 +363,49 @@ class Attention(nn.Module):
         B, T, _ = x.shape  # Batch, Time (seq_len), _ (dim)
 
         # ─────────────────────────────────────────────────────────────────────
-        # T3-1: Cross-layer KV sharing — follower layers skip K, V
-        # projection and reuse the leader layer's K, V.
+        # STEP 1: Project input to Q, K, V
         # ─────────────────────────────────────────────────────────────────────
-        if self._kv_share_source is not None:
-            q = self.wq(x).reshape(B, T, self.n_heads, self.head_dim)
-            if self.use_rope and freqs_cis is not None:
-                q = apply_rotary_embedding(q, freqs_cis, start_pos)
-            if self.use_qk_norm:
-                q = self.q_norm(q)
+        q = self.wq(x).reshape(B, T, self.n_heads, self.head_dim)
+        k = self.wk(x).reshape(B, T, self.n_kv_heads, self.head_dim)
+        v = self.wv(x).reshape(B, T, self.n_kv_heads, self.head_dim)
 
-            # BUG-1 fix: source may not have run yet on this forward
-            # (first forward, after clear_cache, or out-of-order layer
-            # config). _kv_cache lazy-inits in the leader's STEP 3
-            # block, and _shared_kv is set only in the leader's
-            # training-mode branch. Either can be None when the
-            # follower reaches this point — compute K, V locally as a
-            # fallback rather than crashing.
-            source = self._kv_share_source
-            source_cache = source._kv_cache if use_cache else None
-            source_shared = source._shared_kv if not use_cache else None
-            if (use_cache and source_cache is not None) or (not use_cache and source_shared is not None):
-                if use_cache:
-                    k, v = source_cache.get()
-                else:
-                    k, v = source_shared
-            else:
-                # Source not warm yet — compute K, V from this
-                # follower's own wk/wv projection weights. Mirrors the
-                # leader path's STEP 1 + STEP 2 logic (MLA-aware).
-                if self._use_mla:
-                    kv_latent = self.wkv_down(x)
-                    k = self.wk_up(kv_latent).reshape(B, T, self.n_kv_heads, self.head_dim)
-                    v = self.wv_up(kv_latent).reshape(B, T, self.n_kv_heads, self.head_dim)
-                else:
-                    k = self.wk(x).reshape(B, T, self.n_kv_heads, self.head_dim)
-                    v = self.wv(x).reshape(B, T, self.n_kv_heads, self.head_dim)
-                if self.use_rope and freqs_cis is not None:
-                    k = apply_rotary_embedding(k, freqs_cis, start_pos)
-                if self.use_qk_norm:
-                    k = self.k_norm(k)
-        else:
-            # ─────────────────────────────────────────────────────────────────
-            # STEP 1: Project input to Q, K, V
-            # ─────────────────────────────────────────────────────────────────
-            q = self.wq(x).reshape(B, T, self.n_heads, self.head_dim)
-            if self._use_mla:
-                # T5-6: MLA — factored KV through latent bottleneck
-                kv_latent = self.wkv_down(x)
-                k = self.wk_up(kv_latent).reshape(B, T, self.n_kv_heads, self.head_dim)
-                v = self.wv_up(kv_latent).reshape(B, T, self.n_kv_heads, self.head_dim)
-            else:
-                k = self.wk(x).reshape(B, T, self.n_kv_heads, self.head_dim)
-                v = self.wv(x).reshape(B, T, self.n_kv_heads, self.head_dim)
+        # ─────────────────────────────────────────────────────────────────────
+        # STEP 2: Apply RoPE position embeddings to Q and K
+        # ─────────────────────────────────────────────────────────────────────
+        if self.use_rope and freqs_cis is not None:
+            q = apply_rotary_embedding(q, freqs_cis, start_pos)
+            k = apply_rotary_embedding(k, freqs_cis, start_pos)
 
-            # ─────────────────────────────────────────────────────────────────
-            # STEP 2: Apply RoPE position embeddings to Q and K
-            # ─────────────────────────────────────────────────────────────────
-            if self.use_rope and freqs_cis is not None:
-                q = apply_rotary_embedding(q, freqs_cis, start_pos)
-                k = apply_rotary_embedding(k, freqs_cis, start_pos)
+        # QK normalization: prevents fp16 attention overflow on long sequences
+        if self.use_qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
-            # QK normalization: prevents fp16 attention overflow on long sequences
-            if self.use_qk_norm:
-                q = self.q_norm(q)
-                k = self.k_norm(k)
+        # ─────────────────────────────────────────────────────────────────────
+        # STEP 3: Handle KV-cache (for efficient generation)
+        # ─────────────────────────────────────────────────────────────────────
+        if use_cache:
+            # Detach K, V from computation graph to prevent memory explosion
+            # if someone accidentally backprops with use_cache=True
+            k = k.detach()
+            v = v.detach()
 
-            # ─────────────────────────────────────────────────────────────────
-            # STEP 3: Handle KV-cache (for efficient generation)
-            # ─────────────────────────────────────────────────────────────────
-            if use_cache:
-                # Detach K, V from computation graph to prevent memory explosion
-                # if someone accidentally backprops with use_cache=True
-                k = k.detach()
-                v = v.detach()
+            # Lazy-init pre-allocated cache on first use
+            if self._kv_cache is None:
+                from enigma_engine.core.kv_cache import KVCache
 
-                # Lazy-init pre-allocated cache on first use
-                if self._kv_cache is None:
-                    from enigma_engine.core.kv_cache import KVCache
+                self._kv_cache = KVCache(
+                    batch_size=B,
+                    max_seq_len=self.max_cache_len,
+                    n_kv_heads=self.n_kv_heads,
+                    head_dim=self.head_dim,
+                    device=k.device,
+                    dtype=k.dtype,
+                )
 
-                    self._kv_cache = KVCache(
-                        batch_size=B,
-                        max_seq_len=self.max_cache_len,
-                        n_kv_heads=self.n_kv_heads,
-                        head_dim=self.head_dim,
-                        device=k.device,
-                        dtype=k.dtype,
-                    )
-
-                # O(1) index write instead of O(n) torch.cat() + realloc
-                self._kv_cache.update(k, v)
-                k, v = self._kv_cache.get()
-            elif self._kv_is_leader:
-                # T3-1: Store K, V for follower layers (training mode).
-                # Gated to actual leaders: pinning graph-attached activations
-                # on every layer wasted VRAM and broke deepcopy(model)
-                # (DPO/KTO reference models) after any training forward.
-                self._shared_kv = (k, v)
+            # O(1) index write instead of O(n) torch.cat() + realloc
+            self._kv_cache.update(k, v)
+            k, v = self._kv_cache.get()
 
         # ─────────────────────────────────────────────────────────────────────
         # STEP 4: Repeat K, V for GQA (if using fewer KV heads)
@@ -516,63 +416,9 @@ class Attention(nn.Module):
             v = v.repeat_interleave(self.n_rep, dim=2)
 
         # ─────────────────────────────────────────────────────────────────────
-        # T3-8: LongLoRA shifted sparse attention (training only)
+        # STEP 5: Compute attention (SDPA or Standard)
         # ─────────────────────────────────────────────────────────────────────
-        if self.use_shifted_attention and T > 1 and not use_cache and T > self._shifted_group_size:
-            output = self._shifted_sparse_attention(q, k, v, B, T)
-            return self.wo(output)
-
-        # ─────────────────────────────────────────────────────────────────────
-        # STEP 5: Compute attention (Flash or Standard)
-        # ─────────────────────────────────────────────────────────────────────
-        # Flash Attention conditions (all must be true):
-        #   1. flash_attn package is installed (pip install flash-attn)
-        #   2. Running on CUDA GPU
-        #   3. Using half precision (fp16 or bf16) - Flash doesn't support fp32
-        #   4. NOT using KV-cache (Flash doesn't support incremental decoding)
-        #   5. Processing full sequence (not continuing from cached K/V)
-        #
-        # ⚠️ IMPORTANT LIMITATION:
-        # Flash Attention is DISABLED during generation (use_cache=True) because:
-        #   - Flash computes the full attention matrix efficiently but atomically
-        #   - Incremental KV-cache decoding needs to attend to cached K/V
-        #   - This is a fundamental limitation, not a bug
-        #
-        # Flash is used during: Training, prompt encoding, non-cached inference
-        # Flash is NOT used during: Token-by-token generation with KV-cache
-        #
-        # Performance impact: Training gets 2-4x speedup. Generation uses standard
-        # attention which is still efficient due to KV-cache (O(1) per token).
-        use_flash = (
-            HAS_FLASH_ATTN
-            and x.is_cuda
-            and x.dtype in (torch.float16, torch.bfloat16)
-            and not use_cache  # Flash doesn't support incremental decode
-            and mask is None  # this flash call only does causal masking; an
-            # additive pad/packed mask MUST go through the SDPA path below or
-            # padding gets attended to (was: `mask is None or T == k.shape[1]`,
-            # which let a padded full-seq prefill silently drop the mask)
-            and not self.use_differential_attn  # diff-attn needs the two-softmax
-            # subtraction; the flash kernel would compute plain attention instead
-        )
-
-        if use_flash:
-            # ─────────────────────────────────────────────────────────────────
-            # FLASH ATTENTION PATH: O(n) memory, 2-4x faster
-            # ─────────────────────────────────────────────────────────────────
-            # flash_attn expects [batch, seq, heads, dim] - we already have that!
-            # It handles causal masking internally with is_causal=True
-            output = flash_attn_func(
-                q,
-                k,
-                v,
-                dropout_p=self.dropout.p if self.training else 0.0,
-                causal=True,  # Autoregressive masking
-                softmax_scale=self._scale,
-            )
-            # output is [batch, seq, heads, dim], need [batch, seq, dim]
-            output = output.reshape(B, T, -1)
-        elif not self.use_differential_attn and hasattr(F, "scaled_dot_product_attention") and x.is_cuda:
+        if hasattr(F, "scaled_dot_product_attention") and x.is_cuda:
             # ─────────────────────────────────────────────────────────────────
             # SDPA PATH: PyTorch 2.0+ built-in, auto-dispatches to
             # Flash/xFormers/math backend.  Free 2-4x speedup when
@@ -620,34 +466,23 @@ class Attention(nn.Module):
                 # Plain causal case: the main model now passes mask=None so the SDPA
                 # path can use is_causal=True. This non-SDPA / CPU fallback must apply
                 # causality itself. (T==1 decode needs none: the 1 query sees all keys.)
-                causal = torch.triu(
-                    torch.full((T, T), float("-inf"), device=scores.device, dtype=scores.dtype),
-                    diagonal=1,
+                #
+                # The mask must be BOTTOM-RIGHT aligned against the key axis, which is
+                # longer than T whenever a cached continuation feeds >1 new token
+                # (T queries against T_k = cache + T keys). A square (T, T) mask used
+                # to broadcast-crash there; query i is at absolute position T_k-T+i and
+                # may attend to keys 0..T_k-T+i, which is exactly tril(diagonal=T_k-T).
+                # Square prefill (T_k == T) reduces to the plain triu mask.
+                T_k = scores.shape[-1]
+                causal = torch.zeros(T, T_k, device=scores.device, dtype=scores.dtype).masked_fill(
+                    ~torch.ones(T, T_k, dtype=torch.bool, device=scores.device).tril(diagonal=T_k - T),
+                    float("-inf"),
                 )
                 scores = scores + causal
 
-            # R22: Differential attention — noise cancellation.
-            if self.use_differential_attn:
-                # Group 1 (even heads) and Group 2 (odd heads)
-                s1 = scores[:, 0::2, :, :]  # (B, half_h, T, Tk)
-                s2 = scores[:, 1::2, :, :]  # (B, half_h, T, Tk)
-                a1 = F.softmax(s1, dim=-1)
-                a2 = F.softmax(s2, dim=-1)
-                lam = torch.sigmoid(self._diff_lambda)  # (half_h,)
-                lam = lam[None, :, None, None]  # broadcast
-                diff_attn = self.dropout(a1 - lam * a2)  # (B, half_h, T, Tk)
-                # Apply to V: average even/odd V heads
-                v1 = v[:, 0::2, :, :]
-                v2 = v[:, 1::2, :, :]
-                diff_attn = diff_attn.to(v1.dtype)
-                out1 = torch.matmul(diff_attn, v1)
-                out2 = torch.matmul(diff_attn, v2)
-                # Interleave back to full head count
-                output = torch.stack([out1, out2], dim=2).reshape(B, self.n_heads, T, self.head_dim)
-            else:
-                # Softmax and dropout, then weighted sum of values
-                attn = self.dropout(F.softmax(scores, dim=-1))
-                output = torch.matmul(attn, v)
+            # Softmax and dropout, then weighted sum of values
+            attn = self.dropout(F.softmax(scores, dim=-1))
+            output = torch.matmul(attn, v)
 
             # Reshape back: [batch, heads, seq, dim] -> [batch, seq, heads*dim]
             output = output.transpose(1, 2).reshape(B, T, -1)
@@ -657,114 +492,16 @@ class Attention(nn.Module):
         # ─────────────────────────────────────────────────────────────────────
         return self.wo(output)
 
-    def _shifted_sparse_attention(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        B: int,
-        T: int,
-    ) -> torch.Tensor:
-        """LongLoRA shifted sparse attention (T3-8).
-
-        Both head groups use local chunked attention (O(T * group_size)
-        instead of O(T^2)). Group B shifts by half the group size so
-        overlapping windows provide cross-boundary information flow.
-
-        Note: the circular shift creates a minor causality edge case in
-        Group B's first chunk. This is standard LongLoRA behavior — the
-        unshifted Group A heads maintain strict causality.
-
-        Args:
-            q, k, v: [B, T, n_heads, head_dim] after GQA expansion.
-            B: Batch size.
-            T: Sequence length (must be > group_size).
-
-        Returns:
-            [B, T, dim] attention output.
-        """
-        gs = self._shifted_group_size
-        shift = gs // 2
-        half = self.n_heads // 2
-        n_hb = self.n_heads - half
-
-        # Pad T to multiple of group_size
-        pad = (gs - T % gs) % gs
-        if pad > 0:
-            q = F.pad(q, (0, 0, 0, 0, 0, pad))
-            k = F.pad(k, (0, 0, 0, 0, 0, pad))
-            v = F.pad(v, (0, 0, 0, 0, 0, pad))
-        T_padded = q.shape[1]
-        n_chunks = T_padded // gs
-
-        # Split heads: Group A (normal), Group B (shifted)
-        q_a, q_b = q[:, :, :half], q[:, :, half:]
-        k_a, k_b = k[:, :, :half], k[:, :, half:]
-        v_a, v_b = v[:, :, :half], v[:, :, half:]
-
-        # Shift Group B by half the group size
-        q_b = torch.roll(q_b, shifts=shift, dims=1)
-        k_b = torch.roll(k_b, shifts=shift, dims=1)
-        v_b = torch.roll(v_b, shifts=shift, dims=1)
-
-        # Reshape to chunks: [B, T_p, n_h, D] -> [B*n_chunks, gs, n_h, D]
-        def to_chunks(t: torch.Tensor) -> torch.Tensor:
-            return t.reshape(B, n_chunks, gs, -1, self.head_dim).reshape(B * n_chunks, gs, -1, self.head_dim)
-
-        q_a, k_a, v_a = to_chunks(q_a), to_chunks(k_a), to_chunks(v_a)
-        q_b, k_b, v_b = to_chunks(q_b), to_chunks(k_b), to_chunks(v_b)
-
-        # Causal mask for each local chunk
-        chunk_mask = torch.triu(
-            torch.full((gs, gs), float("-inf"), device=q.device, dtype=q.dtype),
-            diagonal=1,
-        )
-        scale = self._scale
-
-        # Local attention per group
-        def local_attn(qg: torch.Tensor, kg: torch.Tensor, vg: torch.Tensor) -> torch.Tensor:
-            qg = qg.transpose(1, 2)  # [B*C, n_h, gs, D]
-            kg = kg.transpose(1, 2)
-            vg = vg.transpose(1, 2)
-            scores = torch.matmul(qg, kg.transpose(-2, -1)) * scale
-            scores = scores + chunk_mask
-            attn = self.dropout(F.softmax(scores, dim=-1))
-            out = torch.matmul(attn, vg)
-            return out.transpose(1, 2)  # [B*C, gs, n_h, D]
-
-        out_a = local_attn(q_a, k_a, v_a)
-        out_b = local_attn(q_b, k_b, v_b)
-
-        # Un-chunk: [B*n_chunks, gs, n_h, D] -> [B, T_padded, n_h, D]
-        def from_chunks(t: torch.Tensor, n_h: int) -> torch.Tensor:
-            return t.reshape(B, n_chunks, gs, n_h, self.head_dim).reshape(B, T_padded, n_h, self.head_dim)
-
-        out_a = from_chunks(out_a, half)
-        out_b = from_chunks(out_b, n_hb)
-
-        # Unshift Group B
-        out_b = torch.roll(out_b, shifts=-shift, dims=1)
-
-        # Remove padding and combine
-        if pad > 0:
-            out_a = out_a[:, :T]
-            out_b = out_b[:, :T]
-
-        output = torch.cat([out_a, out_b], dim=2)  # [B, T, n_heads, D]
-        return output.reshape(B, T, -1)
-
     def clear_cache(self) -> None:
         """Clear the KV-cache (call between different sequences)."""
         if self._kv_cache is not None:
             self._kv_cache.clear()
         self._kv_cache = None
-        self._shared_kv = None
 
     def rewind_cache(self, position: int) -> None:
         """Truncate KV-cache back to *position* (keep cache alive)."""
         if self._kv_cache is not None:
             self._kv_cache.rewind_to(position)
-            self._shared_kv = None  # invalidate expanded view
 
 
 class FeedForward(nn.Module):
@@ -835,131 +572,6 @@ class FeedForward(nn.Module):
         return self.down(self.dropout(F.gelu(self.up(x))))
 
 
-# =============================================================================
-# T5-4: Token Merging (ToMe) — merge similar tokens mid-forward-pass
-# =============================================================================
-
-
-def _bipartite_soft_matching(
-    metric: torch.Tensor,
-    r: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Bipartite soft matching for Token Merging (Bolya et al. 2023).
-
-    Splits tokens into two sets (even/odd indices), finds the most
-    similar pairs, and merges the top-r pairs.
-
-    Args:
-        metric: (B, T, D) normalized token features for similarity.
-        r: Number of tokens to merge (remove).
-
-    Returns:
-        merge_dst: (B, T) indices mapping merged tokens to destinations.
-        merge_dst: Duplicate of first value (unmerge uses merge_dst directly).
-        merged_mask: (B, T) boolean mask — True for tokens that were merged.
-    """
-    B, T, D = metric.shape
-    if r <= 0 or T <= 2:
-        idx = torch.arange(T, device=metric.device).unsqueeze(0).expand(B, -1)
-        return idx, idx, torch.zeros(B, T, dtype=torch.bool, device=metric.device)
-
-    # O(T²) similarity matrix — skip for very long sequences to avoid OOM
-    _TOME_MAX_TOKENS = 4096
-    if T > _TOME_MAX_TOKENS:
-        idx = torch.arange(T, device=metric.device).unsqueeze(0).expand(B, -1)
-        return idx, idx, torch.zeros(B, T, dtype=torch.bool, device=metric.device)
-
-    r = min(r, T // 2)
-
-    # Split into two alternating sets: A (even) and B (odd)
-    a_idx = torch.arange(0, T, 2, device=metric.device)  # [T//2]
-    b_idx = torch.arange(1, T, 2, device=metric.device)  # [T//2]
-
-    a_tokens = metric[:, a_idx]  # (B, |A|, D)
-    b_tokens = metric[:, b_idx]  # (B, |B|, D)
-
-    # Similarity: dot product of L2-normalized features
-    scores = torch.bmm(a_tokens, b_tokens.transpose(1, 2))  # (B, |A|, |B|)
-
-    # For each A token, find its most similar B token
-    max_scores, most_similar = scores.max(dim=-1)  # (B, |A|)
-
-    # Pick the top-r A tokens by max similarity
-    _, top_r_idx = max_scores.topk(r, dim=-1)  # (B, r)
-
-    # Build merge mapping: merged A-tokens map to their most-similar B-token
-    merge_dst = torch.arange(T, device=metric.device).unsqueeze(0).expand(B, -1).clone()
-
-    merged_mask = torch.zeros(B, T, dtype=torch.bool, device=metric.device)
-    for b in range(B):
-        for i in range(r):
-            a_pos = a_idx[top_r_idx[b, i]]
-            b_pos = b_idx[most_similar[b, top_r_idx[b, i]]]
-            merge_dst[b, a_pos] = b_pos
-            merged_mask[b, a_pos] = True
-
-    return merge_dst, merge_dst, merged_mask
-
-
-def _tome_merge(
-    x: torch.Tensor,
-    merged_mask: torch.Tensor,
-) -> torch.Tensor:
-    """Merge tokens: average merged source into destination, remove sources.
-
-    Args:
-        x: (B, T, D) input tensor.
-        merged_mask: (B, T) boolean — True for tokens to remove (sources).
-
-    Returns:
-        (B, T', D) tensor with merged tokens removed.
-    """
-    B, T, D = x.shape
-    # For simplicity, just remove the merged tokens (source tokens)
-    # The destination tokens already contain similar information
-    keep_mask = ~merged_mask
-    # Collect kept tokens per batch
-    max_kept = keep_mask.sum(dim=1).max().item()
-    result = x.new_zeros(B, max_kept, D)
-    for b in range(B):
-        kept = x[b, keep_mask[b]]
-        result[b, : kept.shape[0]] = kept
-    return result
-
-
-def _tome_unmerge(
-    x: torch.Tensor,
-    original_len: int,
-    merged_mask: torch.Tensor,
-    merge_dst: torch.Tensor,
-) -> torch.Tensor:
-    """Restore merged tokens by copying from their destinations.
-
-    Args:
-        x: (B, T', D) tensor after processing.
-        original_len: Original sequence length T.
-        merged_mask: (B, T) — True for merged (removed) tokens.
-        merge_dst: (B, T) — destination index for each merged token.
-
-    Returns:
-        (B, T, D) tensor with original sequence length restored.
-    """
-    B, _, D = x.shape
-    result = x.new_zeros(B, original_len, D)
-    for b in range(B):
-        keep_positions = (~merged_mask[b]).nonzero(as_tuple=True)[0]
-        # Place kept tokens back
-        for i, pos in enumerate(keep_positions):
-            if i < x.shape[1]:
-                result[b, pos] = x[b, i]
-        # Copy merged tokens from their destinations
-        merge_positions = merged_mask[b].nonzero(as_tuple=True)[0]
-        for pos in merge_positions:
-            dst = merge_dst[b, pos].item()
-            result[b, pos] = result[b, dst]
-    return result
-
-
 class TransformerBlock(nn.Module):
     """
     Single Transformer block with pre-norm architecture.
@@ -997,12 +609,6 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.layer_id = layer_id
         self.use_checkpoint = config.use_gradient_checkpointing
-        # Checkpointed backward recomputes the block AFTER Enigma.forward has
-        # dropped the intra-forward shared K/V, so a follower layer would
-        # rebuild K/V from its own projections -- weights that never ran in
-        # the forward pass. The forward guard below refuses the combination.
-        self._kv_shared = getattr(config, "kv_share_groups", 0) > 0
-        self.use_moe = config.use_moe
 
         # Choose normalization type based on config
         Norm = RMSNorm if config.use_rms_norm else nn.LayerNorm
@@ -1029,16 +635,6 @@ class TransformerBlock(nn.Module):
         self.drop_path_attn = DropPath(layer_drop)
         self.drop_path_ffn = DropPath(layer_drop)
 
-        # T3-4: Mixture of Depths — per-token routing for FFN
-        self.use_mod = config.use_mixture_of_depths
-        self._mod_capacity = config.mod_capacity_factor
-        if self.use_mod:
-            self.depth_router = nn.Linear(config.dim, 1, bias=False)
-            self._mod_aux_loss = torch.tensor(0.0)
-
-        # T5-4: Token Merging (ToMe)
-        self._tome_ratio = config.tome_ratio
-
     def _forward_impl(
         self,
         x: torch.Tensor,
@@ -1048,61 +644,11 @@ class TransformerBlock(nn.Module):
         start_pos: int = 0,
     ) -> torch.Tensor:
         """Internal forward implementation (used by checkpointing)."""
-        B, T, D = x.shape
-
-        # T5-4: Token Merging — reduce seq length before attention
-        tome_active = self._tome_ratio > 0.0 and T > 4 and not use_cache and self.training
-        tome_merged_mask = None
-        tome_merge_dst = None
-        original_T = T
-
-        if tome_active:
-            r = max(1, int(T * self._tome_ratio))
-            normed = F.normalize(x, dim=-1)
-            tome_merge_dst, _, tome_merged_mask = _bipartite_soft_matching(normed, r)
-            x = _tome_merge(x, tome_merged_mask)
-            T = x.shape[1]
-            # Rebuild mask for shorter sequence
-            if mask is not None and mask.shape[-1] >= original_T:
-                # Build a new causal mask for the merged sequence length.
-                # SDPA/Flash handle is_causal=True internally, but the
-                # standard attention path needs an explicit mask.
-                causal = torch.full((T, T), float("-inf"), device=x.device, dtype=x.dtype)
-                causal = torch.triu(causal, diagonal=1)
-                mask = causal.unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
-
         # Attention sub-layer with residual connection
         attn_out = self.attention(self.attention_norm(x), freqs_cis, mask, use_cache, start_pos)
         if self.use_layer_scale:
             attn_out = attn_out * self.ls_attn
         h = x + self.drop_path_attn(attn_out)
-
-        # T5-4: Unmerge tokens back to original length after attention
-        if tome_active and tome_merged_mask is not None:
-            h = _tome_unmerge(h, original_T, tome_merged_mask, tome_merge_dst)
-            T = original_T
-
-        # T3-4: Mixture of Depths — route tokens for FFN
-        if self.use_mod and T > 1 and not use_cache:
-            scores = self.depth_router(h).squeeze(-1)  # [B, T]
-            k = max(1, int(T * self._mod_capacity))
-            topk_vals, topk_idx = torch.topk(scores, k, dim=1)
-            weights = torch.sigmoid(topk_vals).unsqueeze(-1)  # [B, k, 1]
-
-            # Gather → FFN → weight → scatter back
-            idx_expand = topk_idx.unsqueeze(-1).expand(-1, -1, D)
-            selected = torch.gather(h, 1, idx_expand)
-            ffn_out = self.feed_forward(self.ffn_norm(selected))
-            if self.use_layer_scale:
-                ffn_out = ffn_out * self.ls_ffn
-            ffn_out = self.drop_path_ffn(ffn_out) * weights
-            result = h.clone()
-            result.scatter_add_(1, idx_expand, ffn_out)
-
-            # Load-balancing auxiliary loss
-            probs = torch.sigmoid(scores)
-            self._mod_aux_loss = (probs.mean(dim=1) - self._mod_capacity).pow(2).mean()
-            return result
 
         # Standard FFN sub-layer with residual connection
         ffn_out = self.feed_forward(self.ffn_norm(h))
@@ -1137,15 +683,6 @@ class TransformerBlock(nn.Module):
         # Use gradient checkpointing during training if enabled
         # Don't use with KV-cache as it doesn't make sense (inference only)
         if self.use_checkpoint and self.training and not use_cache:
-            # getattr: whole-model pickles created before this attribute
-            # existed bypass __init__ on load
-            if getattr(self, "_kv_shared", False):
-                raise RuntimeError(
-                    "gradient checkpointing cannot be combined with kv_share_groups: "
-                    "shared K/V is dropped after the forward pass, so backward "
-                    "recomputation would rebuild follower layers from projection "
-                    "weights that never ran forward; disable one of the two"
-                )
             return torch.utils.checkpoint.checkpoint(
                 self._forward_impl,
                 x,
@@ -1164,15 +701,3 @@ class TransformerBlock(nn.Module):
     def rewind_cache(self, position: int) -> None:
         """Truncate KV-cache back to *position*."""
         self.attention.rewind_cache(position)
-
-    def get_moe_aux_loss(self) -> torch.Tensor:
-        """Get MoE auxiliary loss for load balancing during training."""
-        if self.use_moe and hasattr(self.feed_forward, "get_aux_loss"):
-            return self.feed_forward.get_aux_loss()
-        return torch.tensor(0.0)
-
-    def get_mod_aux_loss(self) -> torch.Tensor:
-        """Get Mixture-of-Depths auxiliary loss (T3-4)."""
-        if self.use_mod:
-            return self._mod_aux_loss
-        return torch.tensor(0.0)

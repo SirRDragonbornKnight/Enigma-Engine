@@ -1,6 +1,6 @@
 # Known Issues — current as of 2026-07-13
 
-_Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
+_Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (bugs),
 `CLEANUP_TRACKER.md` (file state)._
 
 1. **TRAINING -- DONE 2026-07-03: full 287,882 steps / 56.6B tokens, val ppl 3.5.** Base model shipped to `models/enigma_pretrain_large/model.pth` (final-save NaN guard passed), backed up with SHA256 receipts at `C:\Users\SirKn\Enigma Backups\enigma_pretrain_large_final\`. The finished lineage is immutable; any continuation run gets a NEW directory. Forward plan: `ROADMAP.md` (bottleneck is now SFT data, not compute).
@@ -33,7 +33,7 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
      during the build).
    - **History of this run:** resumed 2026-06-11 from step 51,000 on the user's
      word ("once we are ready start it"); attempt 1 crashed ~30 steps in on the
-     int32 fence-redraw bug (fixed, see CODE_REVIEW.md); attempt 2 ran healthy
+     int32 fence-redraw bug (fixed, see `_archive/CODE_REVIEW.md`); attempt 2 ran healthy
      ~8 h overnight (51k → 58.5k, ~50–52k tok/s, val ppl steady 3.8) until this
      pause. Detached `cmd /c` → `train_large.log`, survives Claude sessions.
    - (a) **torch.compile fell back to eager** — triton-windows lives in Claude
@@ -75,7 +75,9 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (574 tests as of 2026-07-18). The
+9. **The python suite is engine-only** (361 tests as of 2026-07-19 — 349 after the
+   2026-07-18 compression pass removed the dormant stack along with its own tests, +12
+   checkpoint-safety regression tests added by the 2026-07-19 fix arc). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
@@ -95,6 +97,9 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
     crashed training; the surrounding try only caught JSONDecodeError).
     Verified: imports clean, ruff clean, full suite green, smoke forward ran
     both modalities through `forward_multimodal` (finite logits).
+    UPDATE 2026-07-18: `core/reasoning.py` deleted again — this time WITH its
+    only caller (the Forge trainer's SFT path) in the compression pass, so
+    the dangling-import class this entry documents cannot recur for it.
     LEFT ALONE, deliberately: `core/sentiment.py` (+ its dep
     `core/model_context.py`, ~940 lines combined — would revive the emotional-state
     subsystem; user call). UPDATE 2026-07-17: its guarded rl_training caller was
@@ -111,3 +116,54 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `CODE_REVIEW.md` (bugs),
     projector training (see `collect_vision_data.py`) is the next step.
     Vision has a data collector; audio has NONE (`collect_audio_data.py`
     does not exist) — gap to fill before the audio mode is trainable.
+    UPDATE 2026-07-19: `collect_audio_data.py` exists now (28,539 LibriSpeech
+    pairs collected + `distill_audio_encoder.py` ready); the missing piece is
+    the audio ALIGN trainer — `train_audio` died with the Forge trainer, so
+    mirror `vision_align.py` to rebuild it (ROADMAP Phase 4.5 step 6).
+
+12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
+    the checkpoint-safety subset was FIXED same day in `vision_align.py` —
+    see `tests/test_encoder_persistence.py` "Checkpoint-safety contracts".
+    These remain, all verified against the working tree, none released):
+    - **Grad-accumulation step accounting** (`vision_align.py` train_vision):
+      `total_steps` for warmup/cosine is counted in MICRO-batches but
+      `scheduler.step()` fires per optimizer step, so `max_grad_accumulation
+      > 1` stretches the LR schedule by the accum factor; the `log_every`
+      gate also re-fires `_emit_loss` on every micro-batch of a matching
+      window. Latent: every current caller uses accum=1.
+    - **Validation mean is batch-biased** (`_run_validation`): unweighted mean
+      of per-batch token-means overweights the ragged tail batch, and the
+      `_should_stop` early-exit returns a prefix mean — this value drives
+      best-checkpoint selection and early stopping.
+    - **Config knobs stamped into checkpoints that never applied**:
+      `schedule_type` defaults to 'wsd' but the loop hardcodes warmup+cosine;
+      `label_smoothing=0.05`, `bpe_dropout=0.1`, `gradient_noise_eta=0.01`
+      (nonzero DEFAULTS), `val_split`, `curriculum`, `z_loss_weight`,
+      `r_drop_alpha`, `run_evaluation`, `eval_every` etc. are accepted by
+      validate() and recorded by to_dict() but implemented nowhere —
+      contradicts validate()'s own refuse-don't-lie policy for ema/swa/lisa.
+    - **ForgeConfig field list is hand-maintained in three places**
+      (`model_presets.py` to_dict + from_dict `known` set +
+      `test_config_compat.py` shape_fields): a future field forgotten in
+      `known` is silently stripped on checkpoint load; `sample_enigma.py` and
+      `Enigma.from_pretrained` discard the strict=False result (random-init
+      corruption class). Fix: derive `known` from `dataclasses.fields()` —
+      the `HardwareProfile` pattern in `model_utils.py`.
+    - **load_checkpoint falsy unwrap** (`vision_align.py:~911`): an
+      empty-but-present `model_state_dict` falls through to loading the whole
+      wrapper dict (confusing unexpected-keys error); reuse
+      `model_registry.get_state_dict`.
+    - **Trainer aliases + mutates the caller's TrainingConfig** (batch_size=0
+      sentinel overwritten in place; persisted into checkpoints as if
+      user-chosen).
+    - **Prep/loop caption thresholds disagree** (len<1 vs len<2): 1-token
+      captions survive prep, are re-skipped every epoch, and inflate
+      `dropped_short_captions` by the epoch factor.
+    - **Square-mask crash latent in the standard + SDPA attention branches**
+      (`model.py` `_get_causal_mask` at ~309/421): pairing an explicit
+      `attention_mask` with a warm KV cache broadcast-crashes; the
+      bottom-right rectangular fix (#14) landed only in the mask-is-None
+      branches. Unreachable today (no caller passes attention_mask with
+      use_cache); the first batched/padded cached serve path trips it —
+      docstring-noted only in `tests/test_cpu_rectangular_decode.py`.
+    - Efficiency/cleanup batch: see BACKLOG "2026-07-19 review".

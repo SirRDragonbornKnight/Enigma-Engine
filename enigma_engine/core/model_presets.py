@@ -60,7 +60,6 @@ class ForgeConfig:
     ┌────────────────────────────────────────────────────────────────────────┐
     │ rope_scaling_type   │ RoPE scaling for extended context              │
     │ rope_scaling_factor │ Scaling multiplier for context extension       │
-    │ use_moe            │ Enable Mixture of Experts architecture          │
     └────────────────────────────────────────────────────────────────────────┘
     """
 
@@ -92,11 +91,6 @@ class ForgeConfig:
     rope_scaling_factor: float = 1.0  # Context extension multiplier (>1.0 extends)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # MIXTURE OF EXPERTS (MoE)
-    # ─────────────────────────────────────────────────────────────────────────
-    use_moe: bool = False  # Enable MoE architecture (gates the model_components branch)
-
-    # ─────────────────────────────────────────────────────────────────────────
     # MEMORY OPTIMIZATION
     # ─────────────────────────────────────────────────────────────────────────
     use_gradient_checkpointing: bool = True  # Trade compute for memory during training
@@ -113,58 +107,6 @@ class ForgeConfig:
     use_qk_norm: bool = True  # Normalize Q and K in attention (stabilizes, prevents head collapse)
     use_layer_scale: bool = False  # Learnable residual scaling (stabilizes deep training)
     drop_path_rate: float = 0.0  # Stochastic depth (0.0 = disabled, 0.1-0.3 typical)
-    use_differential_attn: bool = False  # R22: Differential attention. OFF by default: it forces the
-    # slow non-SDPA attention branch (2-4x), and default-True here
-    # was the footgun behind the "always pass --no-diff-attn" rule.
-    # Set True explicitly to experiment.
-    neftune_alpha: float = 0.0  # R27: NEFTune embedding noise — a FINETUNING trick (5.0 =
-    # AlpacaEval optimal); wrong as a pretraining default, so off.
-    # Set explicitly when finetuning.
-    n_predict_heads: int = 0  # R25 / MTP-2b: Multi-token prediction extra heads.
-    # Paper (arxiv:2404.19737) shows MTP gain grows with model size and is
-    # marginal sub-1B; each head is `dim × padded_vocab` un-tied params
-    # (~33-49M each at 742M scale). Default 0 because Pass 148 supersedes
-    # Medusa inference (the only consumer) with EAGLE-2. Set >0 explicitly
-    # if Medusa speculative decoding is required for a run.
-
-    # nGPT: Weight normalization (Salimans & Kingma / Loshchilov et al.)
-    # Decomposes each Linear layer's weight into direction (v/||v||) and
-    # magnitude (g), stabilizing training by keeping updates on the
-    # hypersphere.  Non-breaking toggle — applies post-init.
-    use_weight_norm: bool = False
-
-    # T3-1: Cross-layer KV sharing (YOCO-style)
-    # Group layers into bands that share KV projections. First layer in
-    # each band computes K, V; followers reuse them. 0 = disabled.
-    kv_share_groups: int = 0
-
-    # T3-2: Self-speculative decoding (early exit)
-    # Layer index after which an early-exit head produces draft tokens.
-    # 0 = disabled. Recommended: n_layers // 3.
-    early_exit_layer: int = 0
-
-    # T3-4: Mixture of Depths (MoD)
-    # Router selects which tokens get full FFN processing.
-    # Unselected tokens skip FFN (identity passthrough).
-    use_mixture_of_depths: bool = False
-    mod_capacity_factor: float = 0.5  # Fraction of tokens processed per layer
-
-    # T3-8: LongLoRA shifted sparse attention
-    # Halves attention compute by using local chunked attention.
-    # Half the heads shift by group_size//2 for cross-boundary info flow.
-    # Only active during training (T > 1, not KV-cache).
-    use_shifted_attention: bool = False
-    shifted_group_size: int = 256  # Local attention window size
-
-    # T5-4: Token Merging (ToMe) — merge similar tokens mid-forward-pass
-    # using bipartite soft matching. Reduces sequence length for attention
-    # computation. 0.0 = disabled, 0.1-0.3 = merge 10-30% of tokens.
-    tome_ratio: float = 0.0
-
-    # T5-6: Multi-Head Latent Attention (MLA)
-    # Compress K/V into a low-rank latent before caching. Drastically
-    # reduces KV cache size. 0 = disabled, 64-256 = latent dimension.
-    mla_latent_dim: int = 0
 
     # Track if config is frozen (immutable after creation)
     _frozen: bool = False
@@ -246,18 +188,6 @@ class ForgeConfig:
             if self.rope_scaling_factor <= 0:
                 raise ValueError(f"rope_scaling_factor must be positive, got {self.rope_scaling_factor}")
 
-        # Cross-layer KV sharing: followers reuse the leader's K/V from the
-        # same forward pass, which checkpointed recomputation discards and
-        # cannot rebuild layer-by-layer. Normalized rather than refused so
-        # checkpoints stamped with the default flag still load (inference
-        # never touches checkpointing).
-        if self.kv_share_groups > 0 and self.use_gradient_checkpointing:
-            logger.warning(
-                "kv_share_groups is active: disabling use_gradient_checkpointing "
-                "(checkpointed backward cannot rebuild K/V shared across layers)"
-            )
-            self.use_gradient_checkpointing = False
-
     def validate(self) -> bool:
         """
         Run read-only validation on the config.
@@ -335,7 +265,6 @@ class ForgeConfig:
             # New parameters
             "rope_scaling_type": self.rope_scaling_type,
             "rope_scaling_factor": self.rope_scaling_factor,
-            "use_moe": self.use_moe,
             "use_gradient_checkpointing": self.use_gradient_checkpointing,
             "vision_hidden_size": self.vision_hidden_size,
             "audio_hidden_size": self.audio_hidden_size,
@@ -343,21 +272,6 @@ class ForgeConfig:
             "use_qk_norm": self.use_qk_norm,
             "use_layer_scale": self.use_layer_scale,
             "drop_path_rate": self.drop_path_rate,
-            "use_differential_attn": self.use_differential_attn,
-            "neftune_alpha": self.neftune_alpha,
-            "n_predict_heads": self.n_predict_heads,
-            # T3 architecture features
-            "kv_share_groups": self.kv_share_groups,
-            "early_exit_layer": self.early_exit_layer,
-            "use_mixture_of_depths": self.use_mixture_of_depths,
-            "mod_capacity_factor": self.mod_capacity_factor,
-            "use_shifted_attention": self.use_shifted_attention,
-            "shifted_group_size": self.shifted_group_size,
-            # T5 features
-            "tome_ratio": self.tome_ratio,
-            "mla_latent_dim": self.mla_latent_dim,
-            # nGPT
-            "use_weight_norm": self.use_weight_norm,
         }
 
     @classmethod
@@ -379,25 +293,12 @@ class ForgeConfig:
             # New parameters
             "rope_scaling_type",
             "rope_scaling_factor",
-            "use_moe",
             "use_gradient_checkpointing",
             "vision_hidden_size",
             "audio_hidden_size",
             "use_qk_norm",
             "use_layer_scale",
             "drop_path_rate",
-            "use_differential_attn",
-            "neftune_alpha",
-            "n_predict_heads",
-            "kv_share_groups",
-            "early_exit_layer",
-            "use_mixture_of_depths",
-            "mod_capacity_factor",
-            "use_shifted_attention",
-            "shifted_group_size",
-            "tome_ratio",
-            "mla_latent_dim",
-            "use_weight_norm",
         }
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -917,10 +818,7 @@ def estimate_parameters(config: ForgeConfig) -> int:
     # Final norm
     final_norm = config.dim
 
-    # MTP predict heads (not weight-tied)
-    mtp = config.n_predict_heads * config.vocab_size * config.dim
-
-    return embed + (per_layer * config.n_layers) + final_norm + mtp
+    return embed + (per_layer * config.n_layers) + final_norm
 
 
 def list_presets() -> dict:

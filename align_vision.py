@@ -36,7 +36,7 @@ from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.tokenizer import get_tokenizer
 from enigma_engine.core.vision_encoder import VisionEncoder, VisionEncoderConfig
-from enigma_engine.training.training import Trainer, TrainingConfig
+from enigma_engine.training.vision_align import Trainer, TrainingConfig
 
 ROOT = Path(__file__).resolve().parent
 
@@ -53,6 +53,13 @@ def main() -> None:
     p.add_argument("--warmup", type=int, default=500)
     p.add_argument("--val", type=int, default=2000, help="held-out tail of the (seed-shuffled) pairs")
     p.add_argument("--resume", default=None)
+    p.add_argument(
+        "--save-steps",
+        type=int,
+        default=500,
+        help="rolling mid-epoch checkpoint every N optimizer steps (0 = off); "
+        "crash insurance for the single-epoch 558k run",
+    )
     p.add_argument("--sanity", action="store_true", help="64 pairs, 1 epoch, then exit")
     args = p.parse_args()
 
@@ -116,6 +123,7 @@ def main() -> None:
         amp_dtype="bfloat16",
         checkpoint_dir=args.out,
         save_every=1,
+        save_every_steps=max(0, args.save_steps),
         log_every=50,
         seed=1234,
     )

@@ -23,7 +23,7 @@ from enigma_engine.core import vision_encoder as ve
 from enigma_engine.core.eyes import Eyes
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
-from enigma_engine.training.training import Trainer, TrainingConfig
+from enigma_engine.training.vision_align import Trainer, TrainingConfig
 
 # ---------------------------------------------------------------------------
 # preprocess_image: the two branches, value-level (hand-computed literals, not

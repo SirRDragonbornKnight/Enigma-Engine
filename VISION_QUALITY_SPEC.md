@@ -51,6 +51,38 @@ to find them.
 - Quality gate idea: the user thumbs-up/down her generations; keepers join
   the style corpus (the teach-loop pattern, applied to art).
 
+## 3b. External grounding (2026-07-18, adversarially fact-checked)
+
+Three findings from the tiny-VLM literature bear directly on this plan:
+
+1. **The DINOv2 teacher choice deserves a re-decision.** Her encoder was
+   distilled from DINOv2-S, which is SELF-SUPERVISED and NOT language-aligned.
+   Every successful sub-1B VLM (SmolVLM, Moondream, the LLaVA lineage) uses a
+   SigLIP/CLIP-class contrastive encoder precisely because projector alignment
+   onto an LM is far easier from a language-adjacent representation; the
+   literature shows DINOv2 only as an AUXILIARY spatial encoder in dual-encoder
+   setups, never alone. Expect the current align stage to need more LM-side
+   training than a SigLIP-teacher version would. Options: re-distill from
+   SigLIP, distill from BOTH (dual teacher), or keep DINOv2 and pay for it in
+   stage-2 training. Decide before spending the align GPU-days.
+   (arxiv 2504.05299 SmolVLM; Moondream = SigLIP.)
+2. **Frozen-LM projector-only alignment is stage 1, not the finish line.** The
+   Idefics-lineage result ("What matters when building VLMs", arxiv 2405.02246)
+   is that fully-frozen autoregressive training diverges, and LoRA-unfreezing
+   the LM gained +12.9 points. So plan a stage 2 that trains the LM — full or
+   a small bespoke LoRA. NOTE: the old `lora_utils.py` was deleted in the
+   2026-07-18 compression pass; if stage-2 LoRA is the pick, write a minimal
+   one against current `model.py` rather than reviving the old stack.
+3. **Compress visual tokens harder than instinct says.** SmolVLM's central
+   small-scale finding: SMALLER VLMs benefit from MORE aggressive compression
+   — pixel-shuffle r=4 (16x reduction) vs r=2 for big models, landing ~64-128
+   visual tokens/image. This materially softens lever A's context problem: at
+   ~64-128 tokens/tile, tiling fits far sooner than the ~980-token estimate in
+   §2 (which assumed uncompressed 196-patch tiles). Add pixel-shuffle to the
+   encoder->projection path and re-do that arithmetic before treating Phase 4
+   as an absolute blocker. Sub-image boundaries want LEARNED positional tokens
+   (SmolVLM found these beat raw-text separators for compact models).
+
 ## 4. Open decisions (user's, before any of this trains)
 
 1. Image DOMAIN for her eyes (game frames? anime? screenshots? mixed?).
@@ -59,7 +91,10 @@ to find them.
 3. Resolution target for fine detail (336? 448? tiled 224s?) — decides
    encoder re-distill settings.
 4. Whether Phase 4 (context 1024→2048) is approved as the vision
-   prerequisite it actually is.
+   prerequisite it actually is — **re-check after pixel-shuffle (§3b.3); it
+   may drop from hard-prereq to merely helpful.**
+5. **Encoder teacher: keep DINOv2, switch to SigLIP, or dual (§3b.1).**
+   This one gates any re-distill and should be settled first.
 
 ## 5. What already exists and carries over unchanged
 

@@ -26,15 +26,29 @@ Consequences that everything else works around:
    default vocab 32000). Requirements:
    - Leading-space merges (GPT-2 "Gdot" convention): space attaches to the
      following word -> kills the 29.5% waste.
-   - Consistent digit handling: per-digit tokens (predictable arithmetic) OR a
-     number regex -- pick one; the current inconsistent split is the worst
-     option. Recommend per-digit.
-   - Vocab: 16k conservative / 32k if the corpus supports it (56.7B tokens
-     does; measured tokens.json total_tokens 56,708,655,637 -- the 227 GB is
-     tokens.bin at uint32, the same file older notes call "210GB" in GiB).
-     Embedding cost at dim 1024: 32k vocab ~= 33M embedding params vs ~4.8M now
-     (+28M net if tied) -- +15% on a 182M model, negligible on 350-700M. The
-     vocab bump pairs naturally with a size bump.
+   - Consistent digit handling: **per-digit tokens** (predictable arithmetic).
+     Grounding (2026-07-18): the small-model evidence favors single-digit
+     (nanoGPT-scale ablation arxiv 2510.06824 finds it best, if costlier); the
+     often-cited 2402.14903 is GPT-3.5/4-eval-only and does NOT train from
+     scratch, so its "3-digit R2L beats L2R" result is about chunking DIRECTION,
+     not a case against single-digit. Per-digit is the pick; real math rides the
+     calculator tool anyway. The current inconsistent split is the worst option.
+   - Vocab: **16k is the better-supported target; 32k only with a size bump.**
+     External-research grounding (2026-07-18, adversarially fact-checked):
+     "Scaling Laws with Vocabulary" (arxiv 2407.13623) gives ~13-16k as the
+     COMPUTE-OPTIMAL vocab at ~200M non-embedding params; 24-32k is defensible
+     only via the paper's overtraining adjustment (our ~23B-token pass IS
+     heavily over-trained, which nudges it up) — but 16k is the safe pick and
+     32k is right only if the model also grows to 350-700M. Embedding cost at
+     dim 1024: 16k ~= 16M params, 32k ~= 33M vs ~4.8M now. The 32k bump pairs
+     naturally with a size bump; at a flat 182M prefer 16k.
+   - **SuperBPE (arxiv 2503.13423) is worth a controlled A/B, not a blind
+     adopt.** Superword tokens that cross whitespace directly target our 29.5%
+     bare-space waste (their headline: up to 33% fewer tokens, +4% avg / +8.2%
+     MMLU) — BUT every published result is at 200k vocab and 8B scale with NO
+     independent sub-1B replication, and it regressed LAMBADA/HumanEval. Treat
+     it as: implement leading-space merges first (the proven win), then A/B a
+     SuperBPE-style pass against it on the locked eval before committing.
 
 2. **Retokenize the corpus.** `pretokenize_data.py` over the raw sources -> new
    `tokens.bin`. New token count ~= 56.7B x (1.55/3.8) ~= **~23B tokens** (56.7B
@@ -46,6 +60,32 @@ Consequences that everything else works around:
    lineage, new directory; the 182M lineage stays immutable (revert intact).
    - Chinchilla-optimal for 182M ~= 3.6B tokens; ~23B -> heavily over-trained
      (good for a small model). At 350-700M, optimal ~7-14B; ~23B still ample.
+   - **Turn ON the levers that already exist but were frozen off for lineage
+     compat** (2026-07-18 research, fact-checked): `--optimizer muon` (hybrid
+     Muon-on-matrices / AdamW-on-embeddings+head — real ~1.3-1.4x speedup at
+     0.1-0.5B per arxiv 2509.02046, NOT the inflated 2x; contested by
+     Moonshot's ~2x claim, so measure) and `--schedule wsd` with a decay-phase
+     anneal loaded with the highest-quality data (knowledge_corpus + tool
+     traces + persona in the final ~10%). WSD ≈ cosine on loss ALONE — the win
+     is the data curriculum the decay phase enables, so stage the data, don't
+     just flip the schedule.
+   - **Fold in the facts-diversity lesson at pretrain time** (Physics of LMs
+     3.1/3.3, arxiv 2404.05405 — the principled version of the KNOWLEDGE_REPEAT
+     workaround): any must-know fact (identity, core domain) needs 5-10
+     paraphrase variants IN the pretrain corpus to be extractable, not just
+     surfaced at SFT. The ~2 bits/param ceiling (~45MB of facts at 182M) means
+     the model stays a REASONER+TOOLS+MEMORY router, not a knowledge store —
+     spend fact-space on identity/core only.
+   - **QK-norm ordering nit to fix in the v2 arch** (confirmed standard
+     2026-07-18): apply RMSNorm to Q/K BEFORE RoPE, not after — Qwen3/Gemma3/
+     modded-nanogpt all norm-then-RoPE. Near-equivalent math (RoPE preserves
+     RMS) so it's a convention fix, cheap to do in a fresh lineage. Also drop
+     RoPE theta from 500000 -> 10k-100k (500k is a long-context setting wasted
+     at 1024 ctx). Optional cheap adds: gated attention (Qwen3-Next, NeurIPS
+     2025 best paper — one sigmoid gate/layer, kills attention-sink spikes) and
+     a deeper-thinner reshape (MobileLLM: at sub-1B more layers beat more width;
+     16x1024 is on the wide side). All three UNPROVEN at sub-1B specifically —
+     you'd be the replication; A/B on the locked eval.
 
 ## Cost estimate (anchored on ROADMAP's ~12 GPU-days/epoch)
 

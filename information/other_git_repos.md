@@ -5,6 +5,13 @@ I'll give you a **deduped list of "top + latest"** AI repos that contain **raw m
 # REVIEW STATUS (March 2026)
 # ✅ = Reviewed against Enigma Engine source code
 # ⬜ = Not yet reviewed (relevant to Enigma)
+#
+# STALENESS NOTE (2026-07-18): the LoRA / RLHF / SelfPlay / Trainer /
+# rl_training.py / reward_functions.py capability references below are
+# HISTORICAL — that whole dormant stack was deleted in the 2026-07-18
+# compression pass (git history holds it). Idea-mappings to those files
+# now mean "a future bespoke script", not existing code. BLIP eyes note
+# is also stale: eyes are NATIVE (her own encoder) since 2026-07-17.
 # ============================================================
 #
 # ENIGMA CAPABILITIES (determines what repos are relevant):

@@ -58,16 +58,13 @@ measured runs.
 
 ---
 
-## LoRA / Evolutionary / RLHF (code exists, not in the pipeline)
+## LoRA / Evolutionary / RLHF (removed 2026-07-18)
 
-- **LoRA** utilities live in `enigma_engine/core/lora_utils.py`, but the
-  current pipeline scripts do full-parameter training.
-- **Evolutionary / self-play / RLHF** code lives in
-  `enigma_engine/core/rl_training.py` (RewardModel, RLHFTrainer,
-  SelfPlayTrainer); it is dormant and partially implemented (see
-  SUGGESTIONS.md -- PPO needs a rewrite before use).
-
-None of these have a supported command today.
+The dormant LoRA (`core/lora_utils.py`) and RL (`core/rl_training.py`)
+stacks were deleted in the 2026-07-18 compression pass -- the pipeline
+scripts do full-parameter training, and none of the dormant methods ever
+had a supported command. Git history holds the code; any future method
+lands as a small bespoke script in the `dpo_enigma.py` pattern.
 
 ---
 
