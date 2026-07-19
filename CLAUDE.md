@@ -69,11 +69,12 @@ voice->wav->ears and imagine->png->eyes loops pass on real weights.
 - Enigma tests: `python -m pytest tests/ -q` — use the system Python above or
   `venv\Scripts\python.exe`; NOT `.venv\` (no pytest installed there).
 - **NO ruff (user ruling 2026-07-18): do not run ruff or make ruff-appeasement edits.**
-- **The working tree carries a large UNCOMMITTED change** (the 2026-07-18 compression pass, ~64
-  files, ~19k lines removed). `git status` looks alarming and is expected — the user has not asked
-  for a commit. The suite dropping **574 → 349** is that pass deleting the dormant stack's own
-  tests, NOT lost coverage; the served checkpoint was verified byte-identical before/after.
-  Do not "restore" anything on the assumption it was an accident, and do not commit unbidden.
+- **The 2026-07-18 compression pass is COMMITTED** (`b02bc297`, on user order 2026-07-19,
+  together with the vision-align checkpoint-safety arc). The suite dropping **574 → 349** was
+  that pass deleting the dormant stack's own tests, NOT lost coverage (now **361** with the
+  checkpoint-safety regression tests); the served checkpoint was verified byte-identical
+  before/after. Do not "restore" deleted modules on the assumption their removal was an
+  accident, and do not commit unbidden.
 - (Avatar tests live in the Enigma Avatar repo and are gated there — see that section below.)
 - If a fresh session can't run the tests from this section, fix THIS section first.
 
