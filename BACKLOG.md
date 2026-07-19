@@ -203,10 +203,10 @@
   (`models/enigma_vision_distill/`, val cosine 0.3469; [-1,1] contract
   test-pinned in `tests/test_vision_normalization.py`).
 - [ ] 4. `train_vision` align on 558k — `align_vision.py` BUILT (real
-  batching landed 2026-07-17; checkpoint-safety hardened 2026-07-19), run
-  PARKED by the training-last ruling. Before launching, consider the open
-  2026-07-19 review findings that touch this run (KNOWN_ISSUES #12 + the
-  review section below): serial PIL decode wall-time, biased val mean.
+  batching 2026-07-17; checkpoint-safety hardened + decode overlap +
+  token-weighted val landed 2026-07-19), run PARKED by the training-last
+  ruling. Remaining pre-launch consideration: KNOWN_ISSUES #12's open
+  items (accum accounting is moot at accum=1; the falsy-unwrap nit).
 - [ ] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
 - [ ] 6. Her ears: `collect_audio_data.py` DONE, `distill_audio_encoder.py`
   DONE-not-launched (own loop, survived the compression pass). Align step
@@ -292,14 +292,20 @@
 > against the working tree. Efficiency items matter most before the 558k
 > align run.
 
-- [ ] **Serial PIL decode inside the training step** (`vision_align.py`
-  train_vision ~1470): decode+augment runs on the main thread with no
-  workers/prefetch/pinned memory — the 5090 idles through CPU JPEG decode
-  every step; likely a several-fold wall-time cut on the 558k run from an
-  overlapped loader. Same file: the pre-training `verify()` pass re-opens
-  every image serially (the per-step handler already covers bad files), and
-  text batches are built with ~3 tiny H2D copies per sample instead of one
-  CPU-built padded batch + single `.to(device)`.
+- [x] **Serial PIL decode inside the training step** — FIXED 2026-07-19
+  (pre-align batch, round 3): path decodes run on an 8-thread pool with
+  prefetch depth 2 while the GPU trains; augmentation stays on the main
+  thread in batch order (seeded determinism test-pinned); the `verify()`
+  probe pre-pass runs pooled in bounded 512-item chunks; text batches
+  build on CPU with one `.to(device)` (train + val). In-memory PIL refs
+  decode inline (no pool win; a shared lazy PIL object must not `load()`
+  concurrently). Same round: token-weighted val loss; epochs whose metric
+  a stop truncated are never ranked while a val pass that COMPLETED
+  before the stop still ranks (closes the stop-mid-epoch ranking finding
+  both ways); the four lying knob defaults refused;
+  `ForgeConfig.from_dict` known-set derived from `dataclasses.fields()`.
+  10 new tests; 19-mutation sweep all killed; suite 361 -> 371; audited
+  to convergence (4 rounds, severity high -> med -> low -> none).
 - [ ] **Best-save rewrites the full frozen text transformer** every improving
   epoch (hundreds of MB of byte-identical weights per save); consider a
   trainable-subset format for intermediate bests.

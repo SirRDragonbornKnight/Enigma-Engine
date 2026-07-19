@@ -105,6 +105,54 @@ def test_to_dict_from_dict_round_trip_preserves_architecture():
         assert getattr(rebuilt, field) == getattr(original, field), f"round-trip lost {field}"
 
 
+def test_to_dict_covers_every_public_field():
+    """to_dict is a hand-written dict: a field added to the dataclass but
+    forgotten there would silently vanish from every checkpoint's config.
+    Pin the two sets equal so the omission is impossible to miss."""
+    import dataclasses
+
+    public = {f.name for f in dataclasses.fields(ForgeConfig) if not f.name.startswith("_")}
+    assert set(ForgeConfig().to_dict().keys()) == public
+
+
+def test_from_dict_preserves_every_public_field():
+    """from_dict must pass EVERY public field through -- a field it strips
+    rebuilds the model at that field's default (the silent-corruption class
+    this file's docstring describes). Probes each field with a non-default,
+    construction-valid value; special cases keep the divisibility rules
+    (dim % n_heads, n_heads % n_kv_heads) intact."""
+    import dataclasses
+
+    base = ForgeConfig().to_dict()
+    special = {
+        "dim": 1024,
+        "n_heads": 16,
+        "n_kv_heads": 4,
+        "hidden_dim": 2048,
+        "rope_scaling_type": "linear",
+        "vision_hidden_size": 32,
+        "audio_hidden_size": 32,
+    }
+    for f in dataclasses.fields(ForgeConfig):
+        if f.name.startswith("_"):
+            continue
+        default = base[f.name]
+        if f.name in special:
+            probe = special[f.name]
+        elif isinstance(default, bool):
+            probe = not default
+        elif isinstance(default, int):
+            probe = default + 1
+        elif isinstance(default, float):
+            probe = default + 0.125
+        elif isinstance(default, str):
+            probe = default + "_probe"
+        else:
+            raise AssertionError(f"no probe rule for field {f.name} (default {default!r})")
+        cfg = ForgeConfig.from_dict({**base, f.name: probe})
+        assert getattr(cfg, f.name) == probe, f"from_dict dropped {f.name}"
+
+
 def _on_disk_configs() -> list[Path]:
     return sorted((ROOT / "models").glob("*/config.json"))
 

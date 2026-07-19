@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import logging
 from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -276,30 +277,14 @@ class ForgeConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ForgeConfig:
-        known = {
-            "vocab_size",
-            "dim",
-            "n_layers",
-            "n_heads",
-            "n_kv_heads",
-            "hidden_dim",
-            "max_seq_len",
-            "dropout",
-            "use_rope",
-            "use_rms_norm",
-            "use_swiglu",
-            "use_bias",
-            "rope_theta",
-            # New parameters
-            "rope_scaling_type",
-            "rope_scaling_factor",
-            "use_gradient_checkpointing",
-            "vision_hidden_size",
-            "audio_hidden_size",
-            "use_qk_norm",
-            "use_layer_scale",
-            "drop_path_rate",
-        }
+        # Derived from the dataclass itself so a NEW field can never be
+        # silently stripped by a stale hand-maintained list (a stripped
+        # shape field rebuilds the model at its default and strict=False
+        # loaders leave the mismatch at random init). Private fields
+        # (_frozen) stay excluded: a checkpoint blob must not freeze the
+        # new instance. Retired/unknown keys are still ignored, which
+        # test_config_compat.py pins as the load-bearing contract.
+        known = {f.name for f in dataclass_fields(cls) if not f.name.startswith("_")}
         return cls(**{k: v for k, v in d.items() if k in known})
 
 

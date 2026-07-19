@@ -75,9 +75,9 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (361 tests as of 2026-07-19 — 349 after the
-   2026-07-18 compression pass removed the dormant stack along with its own tests, +12
-   checkpoint-safety regression tests added by the 2026-07-19 fix arc). The
+9. **The python suite is engine-only** (371 tests as of 2026-07-19 — 349 after the
+   2026-07-18 compression pass removed the dormant stack along with its own tests, +22
+   regression tests from the 2026-07-19 checkpoint-safety and pre-align fix arcs). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
@@ -122,36 +122,32 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     mirror `vision_align.py` to rebuild it (ROADMAP Phase 4.5 step 6).
 
 12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
-    the checkpoint-safety subset was FIXED same day in `vision_align.py` —
-    see `tests/test_encoder_persistence.py` "Checkpoint-safety contracts".
-    These remain, all verified against the working tree, none released):
+    the checkpoint-safety subset AND the pre-align fix batch were FIXED same
+    day in `vision_align.py`/`model_presets.py` — see
+    `tests/test_encoder_persistence.py` + `tests/test_config_compat.py`.
+    FIXED and test-pinned 2026-07-19 (round 3): validation mean is now
+    token-weighted and an interrupted epoch is never ranked; the four lying
+    knob defaults (schedule_type 'wsd', label_smoothing 0.05, bpe_dropout
+    0.1, gradient_noise_eta 0.01) are inert and refused when set;
+    `ForgeConfig.from_dict`'s known-set is derived from
+    `dataclasses.fields()` with to_dict completeness pinned; the serial
+    decode/verify/H2D costs got the pooled-overlap rework. STILL OPEN:
     - **Grad-accumulation step accounting** (`vision_align.py` train_vision):
       `total_steps` for warmup/cosine is counted in MICRO-batches but
       `scheduler.step()` fires per optimizer step, so `max_grad_accumulation
       > 1` stretches the LR schedule by the accum factor; the `log_every`
       gate also re-fires `_emit_loss` on every micro-batch of a matching
       window. Latent: every current caller uses accum=1.
-    - **Validation mean is batch-biased** (`_run_validation`): unweighted mean
-      of per-batch token-means overweights the ragged tail batch, and the
-      `_should_stop` early-exit returns a prefix mean — this value drives
-      best-checkpoint selection and early stopping.
-    - **Config knobs stamped into checkpoints that never applied**:
-      `schedule_type` defaults to 'wsd' but the loop hardcodes warmup+cosine;
-      `label_smoothing=0.05`, `bpe_dropout=0.1`, `gradient_noise_eta=0.01`
-      (nonzero DEFAULTS), `val_split`, `curriculum`, `z_loss_weight`,
-      `r_drop_alpha`, `run_evaluation`, `eval_every` etc. are accepted by
-      validate() and recorded by to_dict() but implemented nowhere —
-      contradicts validate()'s own refuse-don't-lie policy for ema/swa/lisa.
-    - **ForgeConfig field list is hand-maintained in three places**
-      (`model_presets.py` to_dict + from_dict `known` set +
-      `test_config_compat.py` shape_fields): a future field forgotten in
-      `known` is silently stripped on checkpoint load; `sample_enigma.py` and
-      `Enigma.from_pretrained` discard the strict=False result (random-init
-      corruption class). Fix: derive `known` from `dataclasses.fields()` —
-      the `HardwareProfile` pattern in `model_utils.py`.
-    - **load_checkpoint falsy unwrap** (`vision_align.py:~911`): an
-      empty-but-present `model_state_dict` falls through to loading the whole
-      wrapper dict (confusing unexpected-keys error); reuse
+    - **Long-tail config knobs still accepted but unimplemented**:
+      `val_split`, `curriculum`, `z_loss_weight`, `r_drop_alpha`,
+      `run_evaluation`, `eval_every`, `use_sequence_packing`,
+      `general_mix_ratio`, `wsd_decay_fraction`, `cosine_restart_period`
+      etc. remain in TrainingConfig and are recorded by to_dict() without
+      applying (all inert-by-default; the config-slimming altitude fix in
+      BACKLOG 7.5 is the real cure).
+    - **load_checkpoint falsy unwrap** (`vision_align.py` load_checkpoint):
+      an empty-but-present `model_state_dict` falls through to loading the
+      whole wrapper dict (confusing unexpected-keys error); reuse
       `model_registry.get_state_dict`.
     - **Trainer aliases + mutates the caller's TrainingConfig** (batch_size=0
       sentinel overwritten in place; persisted into checkpoints as if

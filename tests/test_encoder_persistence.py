@@ -371,6 +371,238 @@ def test_fresh_write_supersedes_stale_keep_marker(tmp_path):
     assert not marker.exists()
 
 
+# ---------------------------------------------------------------------------
+# Pre-align fix batch (review 2026-07-19, round 2): token-weighted val loss,
+# refuse-don't-lie config knobs, and the decode-overlap pipeline's contracts
+# (determinism, per-sample failure isolation).
+# ---------------------------------------------------------------------------
+
+
+def test_val_loss_is_batch_size_invariant(tmp_path):
+    """Token-weighted validation: the same val set gives the same val loss
+    regardless of batch grouping -- a ragged tail batch must not be
+    overweighted, because this number drives best-checkpoint selection and
+    early stopping."""
+    from PIL import Image
+
+    # Train captions collapse to 1 token, so every train sample is dropped
+    # in-loop and no optimizer step runs: both runs evaluate IDENTICAL
+    # initial weights and only the val aggregation differs.
+    train = [{"image": Image.new("RGB", (8, 8), color=(9, 40, 40)), "text": "a"} for _ in range(2)]
+    val = [
+        {"image": Image.new("RGB", (8, 8), color=(30 * i % 255, 80, 120)), "text": t}
+        for i, t in enumerate(["ab", "cd", "ef", "gh", "a much longer caption here"])
+    ]
+    losses = []
+    for batch_size in (2, 3):
+        model = _tiny_model(seed=5)
+        torch.manual_seed(5)
+        encoder = _TinyVisionEncoder()
+        trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / f"bs{batch_size}", batch_size=batch_size))
+        state = trainer.train_vision(encoder, train, val_data=val)
+        assert state.validation_losses, "validation never ran"
+        losses.append(state.validation_losses[-1])
+    assert losses[0] == pytest.approx(losses[1], rel=1e-5)
+
+
+def test_validate_refuses_unimplemented_forge_knobs(tmp_path):
+    """Knobs the vision-align loop does not implement are refused instead
+    of being stamped into every checkpoint's training_config as if they
+    had applied (the same refuse-don't-lie rule as ema/swa/lisa)."""
+    for kwargs, needle in (
+        ({"label_smoothing": 0.05}, "label_smoothing"),
+        ({"gradient_noise_eta": 0.01}, "gradient_noise_eta"),
+        ({"bpe_dropout": 0.1}, "bpe_dropout"),
+        ({"schedule_type": "wsd"}, "schedule_type"),
+    ):
+        with pytest.raises(ValueError, match=needle):
+            _config(tmp_path / "knobs", **kwargs).validate()
+    _config(tmp_path / "knobs").validate()  # the inert defaults stay accepted
+
+
+def _png_dataset(tmp_path, n: int = 6) -> list[dict]:
+    """n tiny PNGs on disk -- path inputs exercise the probe pre-pass and
+    the pooled decode (in-memory PIL objects take the inline path)."""
+    from PIL import Image
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    data = []
+    for i in range(n):
+        p = tmp_path / f"img{i}.png"
+        Image.new("RGB", (8, 8), color=(40 * i % 255, 90, 130)).save(p)
+        data.append({"image": str(p), "text": f"sample caption {i}"})
+    return data
+
+
+def test_train_vision_deterministic_with_seed(tmp_path):
+    """Two identical seeded runs produce identical loss trajectories: the
+    decode-overlap pipeline must consume the augmentation RNG on the main
+    thread in batch order, exactly like the serial loop it replaced. Path
+    inputs, so the pooled decode path is the one under test."""
+    data = _png_dataset(tmp_path / "imgs")
+    results = []
+    for run in range(2):
+        model = _tiny_model(seed=3)
+        torch.manual_seed(3)
+        encoder = _TinyVisionEncoder()
+        trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / f"det{run}", epochs=2, batch_size=2))
+        state = trainer.train_vision(encoder, data)
+        assert not state.abort_reason
+        results.append((state.training_losses, state.validation_losses))
+    assert results[0] == results[1]
+
+
+def test_bad_image_skips_sample_not_run(tmp_path):
+    """A sample whose inline decode fails is skipped with a warning; the
+    batch and the run continue (per-sample failure isolation survived the
+    overlap rework)."""
+    data = _vision_data() + [{"image": object(), "text": "not decodable"}]
+    model = _tiny_model()
+    trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "bad", batch_size=3))
+    encoder = _TinyVisionEncoder()
+    initial = _snapshot(encoder)
+    state = trainer.train_vision(encoder, data)
+    assert not state.abort_reason
+    assert not _same_state(encoder.state_dict(), initial)  # the good samples trained
+
+
+def test_bad_pool_decode_skips_sample_not_run(tmp_path, monkeypatch):
+    """Same isolation for the POOLED decode path: a worker-side decode
+    failure surfaces as a per-sample skip, not a crashed run."""
+    import enigma_engine.core.vision_encoder as ve
+
+    data = _png_dataset(tmp_path / "imgs", n=4)
+    bad_path = data[-1]["image"]
+    real_pre = ve.preprocess_image
+    raises = {"n": 0}
+
+    def flaky_pre(image_ref, **kwargs):
+        if str(image_ref) == bad_path:
+            raises["n"] += 1
+            raise RuntimeError("decode blew up (simulated)")
+        return real_pre(image_ref, **kwargs)
+
+    monkeypatch.setattr(ve, "preprocess_image", flaky_pre)
+    model = _tiny_model()
+    trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "badpool", batch_size=2))
+    encoder = _TinyVisionEncoder()
+    initial = _snapshot(encoder)
+    state = trainer.train_vision(encoder, data)
+    assert raises["n"] == 1  # the fault really fired on the pool path
+    assert not state.abort_reason
+    assert not _same_state(encoder.state_dict(), initial)
+
+
+class _StopDuringValEncoder(_TinyVisionEncoder):
+    """Encoder that presses STOP on its Nth forward call -- lets a test
+    land the stop deterministically inside the validation pass."""
+
+    def __init__(self, stop_at_call: int):
+        super().__init__()
+        self.calls = 0
+        self.stop_at = stop_at_call
+        self.trainer = None
+
+    def forward(self, x):
+        self.calls += 1
+        if self.trainer is not None and self.calls == self.stop_at:
+            self.trainer.request_stop()
+        return super().forward(x)
+
+
+def test_stop_during_validation_does_not_rank_the_epoch(tmp_path):
+    """A stop that interrupts validation leaves the epoch unranked: the
+    train mean must not stand in for the val lineage and overwrite the
+    best checkpoint with the stop-epoch weights."""
+    from PIL import Image
+
+    train = [
+        {"image": Image.new("RGB", (8, 8), color=(200, 40, 40)), "text": "a red square"},
+        {"image": Image.new("RGB", (8, 8), color=(40, 40, 200)), "text": "a blue square"},
+    ]
+    val = [
+        {"image": Image.new("RGB", (8, 8), color=(20, 160, 60)), "text": "a green square"},
+        {"image": Image.new("RGB", (8, 8), color=(220, 200, 40)), "text": "a yellow square"},
+    ]
+    model = _tiny_model()
+    # Call schedule (batch_size=1): epoch1 train fwd 1-2, val fwd 3-4;
+    # epoch2 train fwd 5-6, val batch 1 = call 7 -> stop lands mid-val.
+    encoder = _StopDuringValEncoder(stop_at_call=7)
+    trainer = Trainer(
+        model, _CharTokenizer(64), _config(tmp_path / "stopval", epochs=2, learning_rate=5e-2)
+    )
+    encoder.trainer = trainer
+    state = trainer.train_vision(encoder, train, val_data=val)
+
+    # The stop really landed inside epoch 2's val pass (call 7 = its first
+    # val batch; nothing runs after the guard) -- pins the call arithmetic
+    # so schedule drift can't make this test pass vacuously.
+    assert encoder.calls == 7
+    # Epoch 1 completed and set the val-based best; epoch 2's interrupted
+    # val pass must not have re-ranked anything.
+    assert len(state.validation_losses) == 1
+    assert state.best_loss == pytest.approx(state.validation_losses[0])
+    best = list((tmp_path / "stopval").glob("*_vision_best.pt"))
+    assert len(best) == 1
+    saved = torch.load(best[0], map_location="cpu", weights_only=True)["training_state"]
+    assert saved["epoch"] == 1  # the best on disk is epoch 1's, not the stop epoch's
+
+
+def test_stop_after_completed_validation_still_ranks_the_epoch(tmp_path):
+    """The dual of the guard: a stop that lands during the LAST val batch's
+    forward leaves a fully-computed val metric -- that epoch must still
+    rank (discarding it silently loses a real best)."""
+    from PIL import Image
+
+    train = [
+        {"image": Image.new("RGB", (8, 8), color=(200, 40, 40)), "text": "a red square"},
+        {"image": Image.new("RGB", (8, 8), color=(40, 40, 200)), "text": "a blue square"},
+    ]
+    val = [
+        {"image": Image.new("RGB", (8, 8), color=(20, 160, 60)), "text": "a green square"},
+        {"image": Image.new("RGB", (8, 8), color=(220, 200, 40)), "text": "a yellow square"},
+    ]
+    model = _tiny_model()
+    # Call 8 = epoch 2's SECOND (final) val batch: the pass completes, the
+    # stop is only seen afterwards. Default lr (1e-3): epoch 2's val loss
+    # lands BELOW epoch 1's, so a discarded ranking is observable as
+    # best_loss != min (a hot lr overshoots and would hide it).
+    encoder = _StopDuringValEncoder(stop_at_call=8)
+    trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "stopdone", epochs=2))
+    encoder.trainer = trainer
+    state = trainer.train_vision(encoder, train, val_data=val)
+
+    assert encoder.calls == 8
+    assert len(state.validation_losses) == 2
+    # Guards the setup itself: if epoch 2 ever stops improving here, the
+    # min() assertion below would go vacuous -- fail loudly instead.
+    assert state.validation_losses[1] < state.validation_losses[0]
+    assert state.best_loss == pytest.approx(min(state.validation_losses))
+
+
+def test_abort_does_not_count_unconsumed_drops(tmp_path, caplog):
+    """dropped_short_captions counts CONSUMED batches only: an abort must
+    not report drops from batches the prefetcher submitted but training
+    never reached."""
+    import logging as _logging
+
+    from PIL import Image
+
+    # seed=7 keeps this 2-element order after the epoch shuffle: the good
+    # sample trains first and aborts on max_loss; the short caption sits
+    # prefetched in batch 1, never consumed.
+    data = [
+        {"image": Image.new("RGB", (8, 8), color=(200, 40, 40)), "text": "a red square"},
+        {"image": Image.new("RGB", (8, 8), color=(40, 200, 40)), "text": "a"},
+    ]
+    model = _tiny_model()
+    trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "abortcount", max_loss=1e-9))
+    with caplog.at_level(_logging.WARNING, logger="enigma_engine.training.vision_align"):
+        state = trainer.train_vision(_TinyVisionEncoder(), data)
+    assert state.abort_reason  # the max_loss guard fired
+    assert not any("caption(s) dropped" in r.message for r in caplog.records)
+
+
 def test_encoder_resume_writes_keep_marker(vision_run, tmp_path):
     """Resuming via _load_encoder_checkpoint protects the source checkpoint
     from _cleanup_periodic_checkpoints, matching load_checkpoint."""
