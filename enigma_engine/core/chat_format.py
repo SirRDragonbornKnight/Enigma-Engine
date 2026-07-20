@@ -12,6 +12,12 @@ pretraining never targets. Chat tokens live there:
     4722 <|tool_result|>  4723 <|/tool_result|>
     4724..4735 reserved for future passes.
 
+Those numbers are the LIVE v1 layout, kept as constants for the shipped
+checkpoints. ``attach_chat_tokens`` DERIVES the base per tokenizer (first
+row past the real vocab) and render/parse read ids off the instance via
+``chat_token_ids`` -- a hardcoded 4718 would alias real learned tokens on
+any bigger (v2) vocab (audit 2026-07-19, HIGH-2).
+
 Thinking spans reuse the tokenizer's NATIVE ``<think>``=10 / ``</think>``=11
 (the IDs the trained ``bpe_vocab.json`` actually assigns) — ``encode()`` already
 parses them and the SFT corpus preserves the tags verbatim, so reasoning traces
@@ -105,23 +111,77 @@ def render_tools_system(tools) -> str:
     return "Available tools:\n" + "\n".join(specs) + "\n" + TOOL_SYNTAX
 
 
+RESERVED_ROWS = PADDED_VOCAB - BASE_VOCAB  # 18: 6 chat tokens + 12 spare
+
+
+def real_vocab_rows(tokenizer) -> int:
+    """Number of REAL learned rows = the first free embedding row.
+
+    Refuses to guess on a non-contiguous vocab: if ids have holes, "the
+    row past the top" and "the count of rows" disagree and neither is a
+    safe base for control tokens.
+    """
+    n = len(tokenizer.token_to_id)
+    top = max(tokenizer.token_to_id.values(), default=-1)
+    if top != n - 1:
+        raise ValueError(f"vocab ids are not contiguous (rows={n}, max id={top}); cannot derive a chat-token base")
+    return n
+
+
+def chat_vocab_rows(tokenizer) -> tuple[int, int]:
+    """(base, padded) embedding geometry for THIS tokenizer's vocab.
+
+    base = first row past the real vocab (chat tokens start here);
+    padded = base + the 18-row reserve. For the live v1 vocab this is
+    exactly (BASE_VOCAB, PADDED_VOCAB) = (4718, 4736).
+    """
+    base = real_vocab_rows(tokenizer)
+    return base, base + RESERVED_ROWS
+
+
 def attach_chat_tokens(tokenizer):
     """Register the chat tokens on a tokenizer INSTANCE (idempotent).
 
     encode() then emits them as single IDs and decode() can render them.
     The BPE tables (token_to_id/merges) are deliberately untouched, so plain
     text keeps encoding byte-for-byte the same as during pretraining.
+
+    The ids are DERIVED from the tokenizer, not hardcoded: base = the
+    first row past the real vocab, which is 4718 (the constants above)
+    for the live v1 vocab and moves with any bigger vocab. A hardcoded
+    4718 ALIASES real learned tokens on a larger vocab -- the 2026-07-19
+    audit measured id 4718 = ' crashes' on a 5,996-row test vocab, and
+    the old name-keyed guard silently overwrote it (HIGH-2). If the
+    vocab file already bakes the chat tokens in as real rows, those ids
+    are adopted verbatim instead.
     """
-    for s, i in CHAT_TOKENS.items():
+    baked = [s for s in CHAT_TOKENS if s in tokenizer.token_to_id]
+    if baked and len(baked) != len(CHAT_TOKENS):
+        raise ValueError(
+            f"vocab bakes {len(baked)}/{len(CHAT_TOKENS)} chat tokens ({baked}); need all or none"
+        )
+    if baked:
+        ids = {s: tokenizer.token_to_id[s] for s in CHAT_TOKENS}
+    else:
+        base = real_vocab_rows(tokenizer)
+        ids = {s: base + offset for offset, s in enumerate(CHAT_TOKENS)}
+    for s, i in ids.items():
         have = tokenizer.special_tokens.get(s)
         if have is not None and have != i:
             raise ValueError(f"special token {s!r} already maps to {have}, wanted {i}")
-    tokenizer.special_tokens.update(CHAT_TOKENS)
-    for s, i in CHAT_TOKENS.items():
+        existing = tokenizer.id_to_token.get(i)
+        if existing is not None and existing != s:
+            raise ValueError(
+                f"chat token {s!r} at id {i} would overwrite {existing!r} -- refusing to alias a real token"
+            )
+    tokenizer.special_tokens.update(ids)
+    for s, i in ids.items():
         tokenizer.id_to_token[i] = s
-    # Fail honestly if the think constants disagree with the tokenizer's actual
-    # <think>/</think> ids: render/parse inject THINK/THINK_END as raw ids, so a
-    # mismatch would silently train/serve reasoning spans on the wrong token.
+    # Fail honestly if the tokenizer's actual <think>/</think> ids disagree
+    # with what render/parse will inject: a mismatch would silently
+    # train/serve reasoning spans on the wrong token. (On every vocab this
+    # trainer writes, the special dict pins <think>=10/</think>=11 -- same
+    # as v1 -- so the constants double as documentation.)
     for name, want in (("<think>", THINK), ("</think>", THINK_END)):
         have = tokenizer.token_to_id.get(name)
         if have is not None and have != want:
@@ -130,6 +190,27 @@ def attach_chat_tokens(tokenizer):
                 f"update THINK/THINK_END to match this vocab before training/serving"
             )
     return tokenizer
+
+
+def chat_token_ids(tokenizer) -> dict[str, int]:
+    """The chat-token id map registered on THIS instance by attach_chat_tokens.
+
+    Render/parse read ids from here rather than the module constants, so a
+    bigger (v2) vocab gets its derived rows automatically and the constants
+    stay what they are: the LIVE v1 checkpoint layout.
+    """
+    try:
+        return {s: tokenizer.special_tokens[s] for s in CHAT_TOKENS}
+    except (AttributeError, KeyError) as exc:
+        raise ValueError("tokenizer has no chat tokens attached; call attach_chat_tokens(tokenizer) first") from exc
+
+
+def think_token_ids(tokenizer) -> tuple[int, int]:
+    """(<think>, </think>) ids for THIS instance; the v1 constants are the
+    fallback for tokenizers that lack the tags (attach_chat_tokens verifies
+    equality whenever the vocab does carry them)."""
+    t2i = getattr(tokenizer, "token_to_id", {})
+    return t2i.get("<think>", THINK), t2i.get("</think>", THINK_END)
 
 
 def _enc(tokenizer, text: str) -> list[int]:
@@ -175,17 +256,25 @@ def _enc_content(tokenizer, text: str, allow_think: bool) -> list[int]:
 def _message_chunks(tokenizer, messages: list[dict[str, Any]]):
     """Render each message to (role, ids, trainable_mask) — the single source
     of template truth. trainable_mask marks the positions an SFT pass should
-    learn (assistant content + its <|im_end|>); everything else is context."""
+    learn (assistant content + its <|im_end|>); everything else is context.
+
+    Chat ids come from the INSTANCE (chat_token_ids), not the module
+    constants: on the live v1 vocab they are identical, on a bigger vocab
+    the constants would alias real tokens (HIGH-2)."""
+    ct = chat_token_ids(tokenizer)
+    im_start, im_end = ct["<|im_start|>"], ct["<|im_end|>"]
+    tool_call, tool_call_end = ct["<|tool_call|>"], ct["<|/tool_call|>"]
+    tool_result, tool_result_end = ct["<|tool_result|>"], ct["<|/tool_result|>"]
     chunks = []
     for m in messages:
         role = m.get("role", "")
         if role not in ROLES:
             raise ValueError(f"unknown chat role {role!r} (need one of {ROLES})")
         content = (m.get("content") or "").strip()
-        header = [IM_START] + _enc(tokenizer, role + "\n")
+        header = [im_start] + _enc(tokenizer, role + "\n")
         body: list[int] = _enc_content(tokenizer, content, allow_think=(role == "assistant")) if content else []
         if role == "tool":
-            body = [TOOL_RESULT] + body + [TOOL_RESULT_END]
+            body = [tool_result] + body + [tool_result_end]
         if role == "assistant":
             for call in m.get("tool_calls") or []:
                 fn = call.get("function", call)  # accept OpenAI nesting or flat
@@ -199,9 +288,9 @@ def _message_chunks(tokenizer, messages: list[dict[str, Any]]):
                     except json.JSONDecodeError:
                         pass  # unparsable client input: render as-is
                 payload = json.dumps({"name": fn.get("name"), "arguments": fn_args}, ensure_ascii=False)
-                body += [TOOL_CALL] + _enc_content(tokenizer, payload, allow_think=False) + [TOOL_CALL_END]
+                body += [tool_call] + _enc_content(tokenizer, payload, allow_think=False) + [tool_call_end]
         tail = _enc(tokenizer, "\n")
-        ids = header + body + [IM_END] + tail
+        ids = header + body + [im_end] + tail
         mask = [False] * len(header) + [True] * (len(body) + 1) + [False] * len(tail)
         if role != "assistant":
             mask = [False] * len(ids)
@@ -238,7 +327,8 @@ def render_training(
     eos = getattr(tokenizer, "eos_token_id", 2)
     chunks = _message_chunks(tokenizer, messages)
 
-    gen_ids = [IM_START] + _enc(tokenizer, "assistant\n") if add_generation_prompt else []
+    im_start = chat_token_ids(tokenizer)["<|im_start|>"]
+    gen_ids = [im_start] + _enc(tokenizer, "assistant\n") if add_generation_prompt else []
     fixed = 1 + len(gen_ids) + (1 if add_eos else 0)
 
     if max_ids is not None and chunks:
@@ -288,6 +378,10 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
     collisions); generation should stop at <|im_end|>/EOS, but a trailing
     one is tolerated and stripped."""
     eos = getattr(tokenizer, "eos_token_id", 2)
+    ct = chat_token_ids(tokenizer)
+    im_end = ct["<|im_end|>"]
+    tool_call, tool_call_end = ct["<|tool_call|>"], ct["<|/tool_call|>"]
+    think, think_end = think_token_ids(tokenizer)
     content_ids: list[int] = []
     think_ids: list[int] = []
     tool_calls: list[dict[str, Any]] = []
@@ -319,13 +413,13 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
                 tool_calls.append({"name": None, "raw": raw})
 
     for t in ids:
-        if t in (IM_END, eos):
+        if t in (im_end, eos):
             break
-        if t == THINK:
+        if t == think:
             span, span_kind = [], "think"
-        elif t == TOOL_CALL:
+        elif t == tool_call:
             span, span_kind = [], "tool"
-        elif t in (THINK_END, TOOL_CALL_END):
+        elif t in (think_end, tool_call_end):
             flush_span()
             span = None
         elif span is not None:

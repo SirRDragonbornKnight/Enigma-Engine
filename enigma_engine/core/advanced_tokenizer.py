@@ -17,7 +17,7 @@ from .pretokenize import (
     PRETOKENIZER_V1,
     PRETOKENIZER_V2,
     normalize_pretokenizer,
-    pretokenize_v2,
+    pretokenize_v2_with_specials,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +248,17 @@ class AdvancedBPETokenizer:
                 self.merges = [tuple(m) for m in data["merges"]]
                 self.merge_ranks = {m: i for i, m in enumerate(self.merges)}
 
+            # v2 ONLY: adopt the FILE's full special-token set before the
+            # re-sync below. The __init__ defaults carry 8 names but a
+            # trainer-written vocab registers 14 (<Q>, <USER>, ...); with
+            # re-sync alone the runtime carved a SUBSET of the trainer's
+            # specials and the two classes tokenized tag literals to
+            # different ids (HIGH-1, caught by the carve-out parity test).
+            # v1 deliberately keeps the legacy subset: its output is frozen
+            # by the immutability pins, quirks included.
+            if self.pretokenizer_version == PRETOKENIZER_V2 and isinstance(data.get("special_tokens"), dict):
+                self.special_tokens = {str(k): int(v) for k, v in data["special_tokens"].items()}
+
             # Re-sync EVERY special token to the LOADED vocab. The __init__
             # defaults use a compact 0..7 range (e.g. <think>=4), but a real
             # BPETokenizer-written vocab can place them elsewhere (<think>=10,
@@ -351,33 +362,14 @@ class AdvancedBPETokenizer:
         return tokens
 
     def _pre_tokenize_v2(self, text: str) -> list[str]:
-        """v2 word split with multi-char special tokens carved out first.
+        """v2 split, delegated WHOLE to the shared module.
 
-        The special tokens are removed from the stream BEFORE the v2
-        pattern is applied, so "<think>" is matched whole instead of
-        being shredded into a punctuation run plus a letter run. Uses the
-        shared pretokenize_v2 for everything else, so this runtime path
-        and the trainer path cannot diverge the way v1's two separate
-        inline regexes did.
+        Carve-out set and split logic both live in
+        ``pretokenize_v2_with_specials`` so this runtime path and the
+        trainer path (``BPETokenizer._pre_tokenize_v2``) cannot diverge
+        (2026-07-19 audit, HIGH-1).
         """
-        if not text:
-            return []
-
-        multi_char = sorted((t for t in self.special_tokens if len(t) > 1), key=len, reverse=True)
-        if not multi_char:
-            return pretokenize_v2(text)
-
-        tag_pattern = "(" + "|".join(re.escape(t) for t in multi_char) + ")"
-        specials = set(multi_char)
-        words: list[str] = []
-        for part in re.split(tag_pattern, text):
-            if not part:
-                continue
-            if part in specials:
-                words.append(part)
-            else:
-                words.extend(pretokenize_v2(part))
-        return words
+        return pretokenize_v2_with_specials(text, self.special_tokens)
 
     def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
         """Encode text to token IDs using BPE merges."""

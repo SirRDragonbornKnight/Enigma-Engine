@@ -753,9 +753,33 @@ class TiktokenWrapper:
 # Tokenizer Loading Functions
 # =============================================================================
 
-# Tokenizer cache for reuse - maps (tokenizer_type, vocab_path) to instance
+# Tokenizer cache for reuse - maps (tokenizer_type, vocab_path, file
+# fingerprint) to instance. The fingerprint (mtime_ns, size) is part of the
+# key so REPLACING a vocab file in place is visible to warm processes: with
+# a path-only key, a process that had already loaded the old vocab kept
+# serving it -- v1 rules on a v2 vocab, no error (2026-07-19 audit, MED-5).
 _tokenizer_cache: dict[tuple, Any] = {}
 _tokenizer_cache_lock = threading.Lock()
+
+
+def _vocab_file_for(tokenizer_type: str, vocab_path: Path) -> Optional[Path]:
+    """The actual file a given tokenizer_type would load from vocab_path."""
+    if tokenizer_type in ("auto", "bpe", "advanced"):
+        return vocab_path / "bpe_vocab.json" if vocab_path.is_dir() else vocab_path
+    if tokenizer_type == "simple":
+        return vocab_path / "simple_vocab.json" if vocab_path.is_dir() else vocab_path
+    return None  # tiktoken: no local file
+
+
+def _vocab_fingerprint(path: Optional[Path]) -> Optional[tuple[int, int]]:
+    """(mtime_ns, size) of the vocab file; None when there is no file."""
+    if path is None:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
 
 def get_tokenizer(tokenizer_type: str = "auto", vocab_path: Optional[str | Path] = None, use_cache: bool = True) -> Any:
@@ -780,8 +804,10 @@ def get_tokenizer(tokenizer_type: str = "auto", vocab_path: Optional[str | Path]
     """
     vocab_path = Path(vocab_path) if vocab_path else VOCAB_DIR
 
-    # Check cache first
-    cache_key = (tokenizer_type, str(vocab_path))
+    # Check cache first. The file fingerprint keys the cache to the vocab
+    # CONTENT generation, so an in-place vocab swap misses instead of
+    # silently serving the pre-swap instance (MED-5).
+    cache_key = (tokenizer_type, str(vocab_path), _vocab_fingerprint(_vocab_file_for(tokenizer_type, vocab_path)))
     if use_cache:
         with _tokenizer_cache_lock:
             if cache_key in _tokenizer_cache:
@@ -868,7 +894,11 @@ def clear_tokenizer_cache():
 
 
 def train_tokenizer(
-    data_paths: list[str], vocab_size: int = 32000, output_path: Optional[str] = None, tokenizer_type: str = "bpe"
+    data_paths: list[str],
+    vocab_size: int = 32000,
+    output_path: Optional[str] = None,
+    tokenizer_type: str = "bpe",
+    pretokenizer: Optional[str] = None,
 ) -> Any:
     """
     Train a tokenizer on text data.
@@ -876,12 +906,24 @@ def train_tokenizer(
     Args:
         data_paths: List of paths to training text files
         vocab_size: Target vocabulary size
-        output_path: Where to save the trained tokenizer
-        tokenizer_type: Type of tokenizer to train ("bpe" or "char")
+        output_path: Where to save the trained tokenizer. REQUIRED: the old
+            default silently overwrote the LIVE vocab
+            (enigma_engine/vocab_model/bpe_vocab.json) -- the one file the
+            served model's entire safety story rests on (audit 2026-07-19,
+            LOW-9).
+        tokenizer_type: Type of tokenizer to train ("bpe"/"advanced")
+        pretokenizer: Pre-tokenizer version ("v1" default, or "v2" for the
+            leading-space/per-digit split; stamped into the saved file)
 
     Returns:
         Trained tokenizer
     """
+    if output_path is None:
+        raise ValueError(
+            "train_tokenizer requires an explicit output_path -- refusing to "
+            "default to the live vocab (enigma_engine/vocab_model/bpe_vocab.json)"
+        )
+
     # Load training data
     texts = []
     for path in data_paths:
@@ -899,12 +941,10 @@ def train_tokenizer(
     if tokenizer_type in ("bpe", "advanced"):
         from .bpe_tokenizer import BPETokenizer
 
-        tokenizer = BPETokenizer()
+        tokenizer = BPETokenizer(pretokenizer=pretokenizer)
         tokenizer.train(texts, vocab_size=vocab_size, verbose=True)
 
-        # Save
-        save_path = Path(output_path) if output_path else VOCAB_DIR / "bpe_vocab.json"
-        tokenizer.save(save_path)
+        tokenizer.save(Path(output_path))
 
         return tokenizer
 

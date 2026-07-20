@@ -39,12 +39,13 @@ from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
     CHAT_FORMAT_NAME,
-    IM_END,
     ROLES,
     attach_chat_tokens,
+    chat_token_ids,
     parse_assistant_ids,
     render_chat,
     render_tools_system,
+    think_token_ids,
 )
 from enigma_engine.core.asr import ASRError, Ears
 from enigma_engine.core.calculator import CalcError, evaluate, format_result
@@ -170,6 +171,18 @@ _BOOTED = False
 # prompt intact (up to max_context - MIN_GEN_TOKENS) and let generation take
 # whatever room is left -- never the other way around.
 MIN_GEN_TOKENS = 64
+
+def _stop_ids() -> tuple[int, int]:
+    """(EOS, <|im_end|>) for the CURRENTLY attached tokenizer.
+
+    Derived per call rather than cached in a module global: the chat ids
+    belong to the tokenizer instance (they move with vocab size -- see
+    chat_format HIGH-2), and boot() can re-run with a different vocab. A
+    rebound global would also leak across boots, since serve's test
+    snapshot/restore list cannot see a name that only boot() writes.
+    """
+    return EOS_ID, chat_token_ids(tokenizer)["<|im_end|>"]
+
 
 # One model, one KV-cache -- generation must be serialized across requests.
 # Defined BEFORE the organs: the eyes borrow the served model for caption
@@ -1014,7 +1027,12 @@ def _chat_instruct(req: ChatReq):
     if req.stream:
 
         def _events_body():
-            from enigma_engine.core.chat_format import THINK, THINK_END, TOOL_CALL, TOOL_CALL_END
+            # Span ids from the ATTACHED tokenizer (v1: identical to the
+            # module constants; bigger vocab: derived rows -- HIGH-2).
+            _ct = chat_token_ids(tokenizer)
+            THINK, THINK_END = think_token_ids(tokenizer)
+            TOOL_CALL, TOOL_CALL_END = _ct["<|tool_call|>"], _ct["<|/tool_call|>"]
+            stop_ids = _stop_ids()
 
             cur_msgs = msgs
             raw_all: list[str] = []
@@ -1026,7 +1044,7 @@ def _chat_instruct(req: ChatReq):
             for hop in range(_MAX_TOOL_HOPS + 1):
                 prompt_ids, hop_max = _hop(cur_msgs)
                 gen = _gen_ids(
-                    prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END),
+                    prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, stop_ids,
                     top_k=req.top_k, repetition_penalty=req.repetition_penalty,
                 )
                 all_ids: list[int] = []
@@ -1174,7 +1192,7 @@ def _chat_instruct(req: ChatReq):
         prompt_ids, last_max = _hop(cur_msgs)
         out_ids = list(
             _gen_ids(
-                prompt_ids, last_max, req.temperature, req.top_p, req.min_p, (EOS_ID, IM_END),
+                prompt_ids, last_max, req.temperature, req.top_p, req.min_p, _stop_ids(),
                 top_k=req.top_k, repetition_penalty=req.repetition_penalty,
             )
         )

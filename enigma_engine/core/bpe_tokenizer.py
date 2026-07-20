@@ -28,7 +28,7 @@ from .pretokenize import (
     PRETOKENIZER_V1,
     PRETOKENIZER_V2,
     normalize_pretokenizer,
-    pretokenize_v2,
+    pretokenize_v2_with_specials,
 )
 
 logger = logging.getLogger(__name__)
@@ -412,13 +412,6 @@ class BPETokenizer:
             logger.info(f"Total merges: {len(self.merges)}")
             logger.info("Training complete!")
 
-    # Literal tag tokens that must survive v2 pre-tokenization intact.
-    # Only the angle-bracket tags: the v1 "Q:" / "User:" markers REWRITE
-    # the text into <Q> / <USER>, which is lossy, and v2's contract is
-    # lossless round-tripping. v2 therefore leaves those literals alone
-    # and tokenizes them as ordinary text.
-    _V2_SPECIAL_TAGS = ("<think>", "</think>", "<search>", "</search>")
-
     def _pre_tokenize(self, text: str) -> list[str]:
         """Split text into words for BPE processing."""
         if self.pretokenizer_version == PRETOKENIZER_V2:
@@ -462,27 +455,21 @@ class BPETokenizer:
         return result
 
     def _pre_tokenize_v2(self, text: str) -> list[str]:
-        """v2 split: special tags carved out first, then pretokenize_v2.
+        """v2 split, delegated WHOLE to the shared module.
 
-        The tags are matched BEFORE the v2 pattern touches the text, so
-        "<think>" stays one unit instead of being shredded into
-        punctuation and letter runs. Everything between tags goes through
-        the shared pretokenize_v2, so trainer and runtime cannot drift
-        apart the way v1's two copies of the regex did.
+        Both the carve-out set (every multi-char ``special_tokens`` key)
+        and the split logic live in ``pretokenize_v2_with_specials`` --
+        this class used to carve a hardcoded 4-tag tuple while the
+        runtime carved its full ``special_tokens``, which made the same
+        text tokenize to different ids per class (2026-07-19 audit,
+        HIGH-1). Sharing the function AND the input source closes it.
+
+        v1's "Q:" -> <Q> rewrites remain v1-only: they are lossy, and
+        v2's contract is lossless round-tripping -- but the literal
+        "<Q>" TAG (like every registered special literal) now maps to
+        its control id, exactly as the runtime class always did.
         """
-        if not text:
-            return []
-
-        tag_pattern = "(" + "|".join(re.escape(t) for t in self._V2_SPECIAL_TAGS) + ")"
-        result: list[str] = []
-        for part in re.split(tag_pattern, text):
-            if not part:
-                continue
-            if part in self._V2_SPECIAL_TAGS:
-                result.append(part)
-            else:
-                result.extend(pretokenize_v2(part))
-        return result
+        return pretokenize_v2_with_specials(text, self.special_tokens)
 
     def _tokenize_word(self, word: str, dropout: float = 0.0) -> list[str]:
         """Tokenize a single word using learned BPE merges.

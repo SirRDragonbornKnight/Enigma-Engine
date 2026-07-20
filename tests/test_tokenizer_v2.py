@@ -20,7 +20,10 @@ not trip the repo hygiene gates in tests/test_repo_hygiene.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -32,11 +35,19 @@ from enigma_engine.core.pretokenize import (
     PRETOKENIZER_V2,
     normalize_pretokenizer,
     pretokenize_v2,
+    pretokenize_v2_with_specials,
 )
-from enigma_engine.core.tokenizer import get_tokenizer
+from enigma_engine.core.tokenizer import get_tokenizer, train_tokenizer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LIVE_VOCAB = REPO_ROOT / "enigma_engine" / "vocab_model" / "bpe_vocab.json"
+
+# The live vocab's exact bytes (audit MED-3: the earlier claim that tests
+# "pin its sha256" was FALSE -- nothing hashed it, so a byte edit that kept
+# the four top-level keys passed unnoticed). Recorded 2026-07-19, verified
+# against the file 2026-07-20. If this fails, the served model's tokenizer
+# has physically changed -- that is NEVER a test-side fix.
+LIVE_VOCAB_SHA256 = "83510aefe587eab78a9d653fb8c532cd3bbf239974dcbe51776e4c559838bf03"
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +69,38 @@ V1_PINNED_ENCODINGS: dict[str, list[int]] = {
     "Numbers: 1000 2500 42 7": [
         2681, 277, 127, 70, 44, 61, 2234, 60, 44, 62, 65, 2234, 44, 64, 62, 44, 67,
     ],
+    # Widened 2026-07-20 (audit MED-4: the net was 2 assertions wide).
+    # Generated from the live tokenizer BEFORE the finding-fix edits, with
+    # the vocab file verified byte-identical to its pre-v2 state.
+    "the cat  sat on   the mat": [
+        383, 44, 111, 294, 44, 44, 127, 294, 44, 274, 44, 44, 44, 383, 44, 738,
+    ],
+    "line one\nline two\ttabbed end\n": [
+        120, 601, 44, 274, 113, 22, 120, 601, 44, 1481, 123, 21, 128, 325, 509, 112, 44, 1057, 22,
+    ],
+    "don't DON'T can't WE'VE it's": [
+        112, 274, 51, 128, 44, 80, 91, 90, 51, 96, 44, 1026, 51, 128, 44, 99, 81, 51, 98, 81, 44, 459, 51, 127,
+    ],
+    "In 1000 years 2500 cats ate 42 fish": [
+        582, 44, 61, 2234, 60, 44, 133, 1048, 127, 44, 62, 65, 2234, 44, 111, 294, 127, 44, 294, 113, 44, 64, 62,
+        44, 114, 1960,
+    ],
+    "snake_case_name = value_2; x+=1 // ok": [
+        127, 122, 109, 470, 107, 111, 3089, 107, 122, 368, 113, 44, 73, 44, 860, 113, 107, 62, 71, 44, 132, 55,
+        73, 61, 44, 59, 59, 44, 123, 119,
+    ],
 }
+
+# The serve render path on the live vocab: BOS + chat headers + content
+# through _enc_content + the generation prompt, with the chat ids attached
+# at their derived (== v1 constant) rows. Catches v1 drift that the plain
+# encode pins cannot see (audit MED-4: "no serve/chat/inference test
+# notices v1 tokenization changing"). Generated pre-change, same method as
+# the pins above.
+CHAT_RENDER_PIN = [
+    1, 4718, 418, 22, 101, 379, 44, 3063, 44, 81, 604, 115, 571, 58, 4719, 22, 4718, 355, 277, 22, 84, 305, 736,
+    56, 44, 445, 123, 44, 3063, 44, 133, 379, 75, 4719, 22, 4718, 3093, 298, 885, 22,
+]
 
 
 @pytest.fixture(scope="module")
@@ -110,6 +152,53 @@ def test_v1_trainer_pre_tokenizer_unchanged():
     tok = BPETokenizer()
     assert tok.pretokenizer_version == PRETOKENIZER_V1
     assert tok._pre_tokenize("the cat sat") == ["the", "cat", "sat"]
+
+
+def test_live_vocab_sha256_is_pinned():
+    """MED-3: pin the exact BYTES of the served vocab, not just its keys."""
+    if not LIVE_VOCAB.exists():
+        pytest.skip(f"live vocab not present: {LIVE_VOCAB}")
+    assert hashlib.sha256(LIVE_VOCAB.read_bytes()).hexdigest() == LIVE_VOCAB_SHA256, (
+        "the live vocab file's bytes changed -- the served v8 model depends on "
+        "this exact file; restore it, never update this hash"
+    )
+
+
+# Pins whose text contains a multi-digit run are STRUCTURALLY sensitive to a
+# v1->v2 splitter swap: the live vocab holds multi-digit merges ('00'=2234)
+# that v1's word units exercise but v2's one-digit units cannot. Pure-prose
+# pins are NOT guaranteed sensitive -- the live vocab has zero leading-space
+# merges, so v2's " word" units decompose to the same ids as v1's " "+"word"
+# (that is WHY v2 needs its own vocab). MED-4 asked for a net that provably
+# notices the swap; this parametrization is that proof.
+_SWAP_SENSITIVE = [t for t in V1_PINNED_ENCODINGS if any(a.isdigit() and b.isdigit() for a, b in zip(t, t[1:]))]
+
+
+@pytest.mark.parametrize("text", sorted(_SWAP_SENSITIVE))
+def test_v1_pins_detect_a_splitter_swap(text):
+    """Forcing the v2 splitter onto the live tokenizer MUST move these
+    encodings -- otherwise the pins above could not catch a v1 path that
+    silently started routing through v2."""
+    if not LIVE_VOCAB.exists():
+        pytest.skip(f"live vocab not present: {LIVE_VOCAB}")
+    tok = AdvancedBPETokenizer(vocab_file=LIVE_VOCAB)
+    tok.pretokenizer_version = PRETOKENIZER_V2
+    assert tok.encode(text, add_special_tokens=False) != V1_PINNED_ENCODINGS[text]
+
+
+def test_v1_chat_render_is_pinned():
+    """The FULL serve render path (attach + render_chat) on the live vocab."""
+    from enigma_engine.core.chat_format import attach_chat_tokens, render_chat
+
+    if not LIVE_VOCAB.exists():
+        pytest.skip(f"live vocab not present: {LIVE_VOCAB}")
+    tok = AdvancedBPETokenizer(vocab_file=LIVE_VOCAB)  # fresh: never mutate the shared fixture
+    attach_chat_tokens(tok)
+    msgs = [
+        {"role": "system", "content": "You are Enigma."},
+        {"role": "user", "content": "Hello, who are you?"},
+    ]
+    assert render_chat(tok, msgs, add_generation_prompt=True) == CHAT_RENDER_PIN
 
 
 # ---------------------------------------------------------------------------
@@ -422,3 +511,119 @@ def test_v2_is_more_efficient_than_v1(tmp_path):
     assert cpt2 > cpt1, f"v2 ({cpt2:.3f} chars/token) did not beat v1 ({cpt1:.3f})"
     # Only v2 can actually reconstruct the text it encoded.
     assert r2.decode(r2.encode(PROSE_HELD_OUT, add_special_tokens=False), True) == PROSE_HELD_OUT
+
+
+# ---------------------------------------------------------------------------
+# 5. 2026-07-19 audit findings -- regression pins
+# ---------------------------------------------------------------------------
+
+
+def test_v2_carve_out_is_shared_and_identical(v2_trained):
+    """HIGH-1: trainer and runtime must carve the SAME special-token set.
+
+    The trainer used a hardcoded 4-tag tuple while the runtime carved every
+    multi-char special_tokens entry, so 'a </s> b' tokenized to 6 trainer
+    ids but 4 runtime ids -- the silent train/serve corruption class v2
+    exists to prevent. Both classes now delegate carve-out AND split to
+    pretokenize_v2_with_specials with their own special_tokens as input.
+    """
+    tok, path = v2_trained
+    runtime = AdvancedBPETokenizer(vocab_file=path)
+    cases = (
+        "a </s> b",            # the audit's own reproducer
+        "x<pad>y",             # tag with no surrounding space
+        "pre <s>mid</s> post",  # nested-looking pair
+        "a <think>t</think> <Q> b",  # tags the OLD trainer carve did cover + one it did not
+        "no tags at all, just prose 123",
+    )
+    for text in cases:
+        t_ids = tok.encode(text, add_special_tokens=False)
+        r_ids = runtime.encode(text, add_special_tokens=False)
+        assert t_ids == r_ids, f"trainer/runtime split diverged on {text!r}"
+    eos = tok.special_tokens["</s>"]
+    assert tok.encode("a </s> b", add_special_tokens=False).count(eos) == 1
+
+
+def test_v2_carve_out_unit_shape():
+    """The shared function's unit shape, pinned at the source."""
+    assert pretokenize_v2_with_specials("a </s> b", {"</s>": 2}) == ["a", " ", "</s>", " b"]
+    assert pretokenize_v2_with_specials("plain text", {}) == ["plain", " text"]
+    assert pretokenize_v2_with_specials("", {"</s>": 2}) == []
+
+
+def test_v2_decode_of_special_literals_is_honest(v2_trained):
+    """MED-6: at the serving default (skip_special_tokens=True) a literal
+    tag in the INPUT is deleted on decode -- 'a </s> b' -> 'a  b' -- and a
+    string that merely looks like a tag is indistinguishable from a real
+    one. Exact round-trip requires skip_special_tokens=False. This is a
+    DOCUMENTED property, not a bug to fix silently: encode maps tag
+    literals to control ids by design (the SFT corpus depends on it)."""
+    tok, path = v2_trained
+    runtime = AdvancedBPETokenizer(vocab_file=path)
+    text = "a </s> b"
+    for t in (tok, runtime):
+        ids = t.encode(text, add_special_tokens=False)
+        assert t.decode(ids, skip_special_tokens=False) == text
+        assert t.decode(ids, skip_special_tokens=True) == "a  b"
+
+
+def test_v2_contractions_are_case_insensitive():
+    """LOW-7: cl100k treats contractions case-insensitively; v2 must too,
+    or uppercase text reintroduces the inconsistency class v2 kills."""
+    assert pretokenize_v2("DON'T") == ["DON", "'T"]
+    assert pretokenize_v2("WE'VE") == ["WE", "'VE"]
+    assert pretokenize_v2("It'S odd") == ["It", "'S", " odd"]
+    assert pretokenize_v2("JAMES'S") == ["JAMES", "'S"]
+
+
+def test_v2_space_before_a_tag_orphans_one_whitespace_unit():
+    """LOW-8: a space directly before a carved tag has no following word to
+    ride on, so it survives as a standalone unit. Inherent to atomic
+    control ids -- pinned here so the cost stays visible, and so bare-space
+    rates are always measured on TAG-BEARING text before being quoted."""
+    units = pretokenize_v2_with_specials("hello <think>hi</think>", {"<think>": 4, "</think>": 5})
+    assert units == ["hello", " ", "<think>", "hi", "</think>"]
+
+
+def test_tokenizer_cache_sees_an_in_place_vocab_swap(tmp_path, v2_trained):
+    """MED-5: the get_tokenizer cache was keyed on (type, path) only, so
+    replacing the vocab file in place left warm processes serving the OLD
+    instance -- v1 rules on a v2 vocab, no error. The file fingerprint is
+    part of the key now."""
+    _, v2_path = v2_trained
+    target = tmp_path / "swap_vocab.json"
+    v1 = BPETokenizer()
+    v1.train(["hello world hello there world hello"], vocab_size=300, min_frequency=1, verbose=False)
+    v1.save(target)
+
+    first = get_tokenizer("bpe", vocab_path=target)
+    assert first.pretokenizer_version == PRETOKENIZER_V1
+    assert get_tokenizer("bpe", vocab_path=target) is first  # warm hit, file unchanged
+
+    shutil.copyfile(v2_path, target)  # the retokenize plan's in-place swap
+    os.utime(target)  # force a fresh mtime even on coarse-timestamp filesystems
+
+    swapped = get_tokenizer("bpe", vocab_path=target)
+    assert swapped is not first, "cache served the pre-swap tokenizer"
+    assert swapped.pretokenizer_version == PRETOKENIZER_V2
+
+
+def test_train_tokenizer_requires_an_explicit_output_path(tmp_path):
+    """LOW-9 (a): the old default output path WAS the live vocab."""
+    data = tmp_path / "d.txt"
+    data.write_text("hello world " * 50, encoding="utf-8")
+    with pytest.raises(ValueError, match="output_path"):
+        train_tokenizer([str(data)], vocab_size=300)
+
+
+def test_train_tokenizer_is_plumbed_for_v2(tmp_path):
+    """LOW-9 (b): the supported entry point could only produce v1."""
+    data = tmp_path / "d.txt"
+    data.write_text(TINY_CORPUS, encoding="utf-8")
+    out = tmp_path / "v2_vocab.json"
+    tok = train_tokenizer([str(data)], vocab_size=350, output_path=str(out), pretokenizer="v2")
+    assert tok.pretokenizer_version == PRETOKENIZER_V2
+    raw = json.loads(out.read_text(encoding="utf-8"))
+    assert raw["pretokenizer"] == "v2"
+    reloaded = AdvancedBPETokenizer(vocab_file=out)
+    assert reloaded.pretokenizer_version == PRETOKENIZER_V2

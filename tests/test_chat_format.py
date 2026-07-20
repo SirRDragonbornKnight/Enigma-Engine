@@ -149,3 +149,124 @@ def test_render_tools_system_accepts_openai_nesting():
         assert cf.TOOL_SYNTAX in text
     assert cf.render_tools_system([]) == ""
     assert cf.render_tools_system(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# Derived chat-token ids on a BIGGER vocab (2026-07-19 audit, HIGH-2).
+#
+# chat_format used to hardcode BASE_VOCAB=4718: on any vocab bigger than
+# that (v2 targets 16k+) the chat ids ALIASED real learned tokens, and
+# attach_chat_tokens overwrote them without an error (measured: id 4718
+# was the real token ' crashes' on a 5,996-row vocab). attach now derives
+# the base from the tokenizer itself; these tests pin that on a synthetic
+# big vocab. BPETokenizer is used as the carrier because its special-token
+# layout natively places <think>=10/</think>=11, same as every vocab this
+# trainer writes, so the attach think-guard exercises its real path.
+# ---------------------------------------------------------------------------
+
+
+def _fake_big_vocab(rows: int):
+    from enigma_engine.core.bpe_tokenizer import BPETokenizer
+    from enigma_engine.core.pretokenize import PRETOKENIZER_V2
+
+    t = BPETokenizer(pretokenizer=PRETOKENIZER_V2)
+    while len(t.token_to_id) < rows:
+        i = len(t.token_to_id)
+        name = f"<fake{i}>"
+        t.token_to_id[name] = i
+        t.id_to_token[i] = name
+    t.vocab_size = len(t.token_to_id)
+    return t
+
+
+def test_attach_derives_base_past_a_bigger_vocab():
+    t = _fake_big_vocab(5996)
+    before = dict(t.id_to_token)
+    cf.attach_chat_tokens(t)
+    ids = cf.chat_token_ids(t)
+    assert sorted(ids.values()) == list(range(5996, 6002))
+    for i, name in before.items():  # no real row was overwritten
+        assert t.id_to_token[i] == name
+    cf.attach_chat_tokens(t)  # idempotent at the derived ids
+    assert cf.chat_token_ids(t) == ids
+    assert cf.chat_vocab_rows(t) == (5996, 6014)
+
+
+def test_attach_live_vocab_derives_exactly_the_v1_constants(tok):
+    """On the live vocab the derived ids ARE the module constants."""
+    assert cf.chat_token_ids(tok) == cf.CHAT_TOKENS
+    assert cf.chat_vocab_rows(tok) == (cf.BASE_VOCAB, cf.PADDED_VOCAB)
+
+
+def test_attach_refuses_stale_hardcoded_ids():
+    """A pre-registered chat token at the OLD hardcoded id must fail loudly,
+    not silently win over the derived id."""
+    t = _fake_big_vocab(5996)
+    t.special_tokens["<|im_start|>"] = 4718
+    with pytest.raises(ValueError, match="already maps"):
+        cf.attach_chat_tokens(t)
+
+
+def test_attach_refuses_to_alias_an_occupied_row():
+    t = _fake_big_vocab(5996)
+    t.id_to_token[5996] = "<ghost>"  # decode-side residue not in token_to_id
+    with pytest.raises(ValueError, match="alias"):
+        cf.attach_chat_tokens(t)
+
+
+def test_attach_refuses_a_non_contiguous_vocab():
+    t = _fake_big_vocab(5996)
+    name = t.id_to_token.pop(4321)
+    del t.token_to_id[name]
+    with pytest.raises(ValueError, match="contiguous"):
+        cf.attach_chat_tokens(t)
+
+
+def test_attach_adopts_fully_baked_chat_tokens():
+    """A future vocab that BAKES the chat tokens in as real rows keeps its
+    own ids; a partial bake is a corrupt vocab and must raise."""
+    t = _fake_big_vocab(5996)
+    for offset, name in enumerate(cf.CHAT_TOKENS):
+        rename = t.id_to_token[100 + offset]
+        del t.token_to_id[rename]
+        t.token_to_id[name] = 100 + offset
+        t.id_to_token[100 + offset] = name
+    cf.attach_chat_tokens(t)
+    assert sorted(cf.chat_token_ids(t).values()) == list(range(100, 106))
+
+    t2 = _fake_big_vocab(5996)
+    rename = t2.id_to_token[100]
+    del t2.token_to_id[rename]
+    t2.token_to_id["<|im_start|>"] = 100
+    t2.id_to_token[100] = "<|im_start|>"
+    with pytest.raises(ValueError, match="all or none"):
+        cf.attach_chat_tokens(t2)
+
+
+def test_render_and_parse_use_derived_ids_on_a_bigger_vocab():
+    """The serve-critical property: rendering with a big vocab must emit the
+    DERIVED ids, never the v1 constants (which are real tokens there)."""
+    t = _fake_big_vocab(5996)
+    cf.attach_chat_tokens(t)
+    ids = cf.render_chat(t, [{"role": "user", "content": "hi"}], add_generation_prompt=True)
+    ct = cf.chat_token_ids(t)
+    assert ids.count(ct["<|im_start|>"]) == 2  # user turn + generation prompt
+    for v1_id in cf.CHAT_TOKENS.values():
+        assert v1_id not in ids, "a hardcoded v1 chat id leaked into the render"
+
+    gen = (
+        t.encode("Sure.", add_special_tokens=False)
+        + [ct["<|tool_call|>"]]
+        + t.encode('{"name": "speak", "arguments": {}}', add_special_tokens=False)
+        + [ct["<|/tool_call|>"]]
+        + [ct["<|im_end|>"]]
+    )
+    out = cf.parse_assistant_ids(t, gen)
+    assert out["content"] == "Sure."
+    assert out["tool_calls"] == [{"name": "speak", "arguments": {}}]
+
+
+def test_chat_token_ids_requires_attach():
+    t = _fake_big_vocab(300)
+    with pytest.raises(ValueError, match="attach_chat_tokens"):
+        cf.chat_token_ids(t)

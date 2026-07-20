@@ -80,10 +80,10 @@ def test_pack_blocks_trains_only_the_assistant_span(tok):
         assert word not in target_text
 
 
-def test_reinit_chat_rows_touches_only_chat_rows():
+def test_reinit_chat_rows_touches_only_chat_rows(tok):
     m = _nano4718()
     before = m.tok_embeddings.weight.detach().clone()
-    rows = ft.reinit_chat_rows(m)
+    rows = ft.reinit_chat_rows(m, tok)
     emb = m.tok_embeddings.weight
     assert rows == sorted(CHAT_TOKENS.values())
     assert not torch.allclose(emb[rows], before[rows])

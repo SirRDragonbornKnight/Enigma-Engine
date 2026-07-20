@@ -10,12 +10,55 @@
 > trustworthy (see `EVAL_REDESIGN.md`) -- without it you can't tell a better
 > base from a differently-overfit one.
 >
+> **2026-07-20: all 9 audit findings FIXED** (see the BLOCKERS section, now a
+> resolution ledger). Suite 475 green; the 9 new/changed contracts are each
+> mutation-verified. The path forward is production vocab -> retokenize ->
+> the user's GPU go/no-go.
+>
 > **v1 is untouched** — verified directly: the live vocab's git blob oid is
 > identical from session start to HEAD and no commit touches it. But see
 > BLOCKERS below: the claim that tests "pin its sha256" was FALSE (no test
 > hashes it), and the v1-immutability net is thinner than advertised.
 
-## BLOCKERS found by the 2026-07-19 trust-nothing audit — FIX BEFORE ANY v2 PRETRAIN
+## BLOCKERS — ALL 9 FIXED 2026-07-20 (arc-1; suite 475 green, 9/9 mutation-killed)
+
+All nine findings below are RESOLVED. The two HIGH blockers no longer stand
+between here and a v2 pretrain. Summary of the fixes (files: `pretokenize.py`,
+`bpe_tokenizer.py`, `advanced_tokenizer.py`, `chat_format.py`, `tokenizer.py`,
+`finetune_enigma.py`, `serve_enigma.py`; tests in `test_tokenizer_v2.py` +
+`test_chat_format.py`):
+
+1. **HIGH-1 FIXED** — one shared carve-out. `pretokenize_v2_with_specials(text,
+   special_tokens)` is the single source for both classes; each passes its OWN
+   `special_tokens`, and the runtime now ADOPTS the file's full special set on
+   v2 load (the __init__ subset was why the runtime carved fewer tags than the
+   trainer). `'a </s> b'` -> identical ids on both paths. Parity pinned across
+   5 cases incl. the audit's own reproducer.
+2. **HIGH-2 FIXED** — chat-token ids are DERIVED, not hardcoded.
+   `attach_chat_tokens` computes base = first row past the real vocab (== 4718
+   on the live v1 vocab, so v1 is byte-unchanged), refuses to alias an occupied
+   row, refuses a non-contiguous vocab, and adopts fully-baked chat tokens if a
+   future vocab carries them. `render_*`/`parse_assistant_ids`/serve read ids
+   off the instance via `chat_token_ids`/`think_token_ids`; `reinit_chat_rows`
+   derives its rows + mean slice too. Verified on a synthetic 5,996-row vocab:
+   no real row overwritten, and no v1 constant leaks into a render.
+3. **MED-3 FIXED** — `test_live_vocab_sha256_is_pinned` hashes the file bytes
+   against `83510aef…bf03`.
+4. **MED-4 FIXED** — net widened: 5 more encode pins, a full chat-render pin,
+   and `test_v1_pins_detect_a_splitter_swap` (proves the digit-bearing pins
+   move if v1 silently routed through the v2 splitter).
+5. **MED-5 FIXED** — `get_tokenizer` cache key includes the vocab file
+   fingerprint `(mtime_ns, size)`; an in-place swap now misses the cache.
+6. **MED-6 FIXED (documented)** — decode of a special-token LITERAL at the
+   serving default is now a PINNED property (`'a </s> b'` -> `'a  b'` with
+   skip=True, exact only with skip=False), not a silent surprise.
+7. **LOW-7 FIXED** — `V2_PATTERN` contraction alt is `(?i:…)`, matching cl100k.
+8. **LOW-8 FIXED (documented)** — the orphaned pre-tag space is a pinned unit;
+   bare-space rates must be quoted on tag-bearing text.
+9. **LOW-9 FIXED** — `train_tokenizer` requires an explicit `output_path`
+   (no more live-vocab default) and takes a `pretokenizer=` arg.
+
+### Original audit text (2026-07-19) — kept for the record
 
 The v2 machinery is sound in the small (20/20 mutations killed a test, no
 vacuous tests, losslessness survived a 200k-string fuzz + codepoint sweep,

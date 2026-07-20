@@ -92,6 +92,37 @@ def tok():
 # ---------------------------------------------------------------------------
 
 
+def test_stop_ids_derive_from_the_attached_tokenizer(monkeypatch, tok):
+    """Generation stop ids must come from the ATTACHED tokenizer.
+
+    They were module constants (IM_END=4719), which alias a real learned
+    token on any vocab bigger than 4718 -- generation would then either
+    never stop or stop on a content token (chat_format HIGH-2). An earlier
+    version of this fix rebound a module GLOBAL inside boot(); that leaked
+    across boots because serve's _RUNTIME_GLOBALS snapshot cannot restore a
+    name only boot() writes, so the value is derived per call instead.
+    """
+    from enigma_engine.core.chat_format import IM_END, chat_token_ids
+
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "EOS_ID", 2)
+    assert serve._stop_ids() == (2, IM_END)  # live v1 vocab: derived == constant
+
+    class _BigVocabTok:
+        """A vocab whose chat rows sit far past the v1 constants."""
+
+        token_to_id = {f"<t{i}>": i for i in range(9000)}
+        id_to_token = {i: f"<t{i}>" for i in range(9000)}
+        special_tokens = {}
+
+    big = _BigVocabTok()
+    attach_chat_tokens(big)
+    monkeypatch.setattr(serve, "tokenizer", big)
+    eos, im_end = serve._stop_ids()
+    assert im_end == chat_token_ids(big)["<|im_end|>"] == 9001
+    assert im_end != IM_END, "stop id fell back to the hardcoded v1 constant"
+
+
 def test_chat_defaults_are_the_clarity_settings():
     req = serve.ChatReq(messages=[])
     assert req.temperature == 0.3

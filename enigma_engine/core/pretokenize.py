@@ -63,7 +63,9 @@ VALID_PRETOKENIZERS = (PRETOKENIZER_V1, PRETOKENIZER_V2)
 # Folding ``_`` into the punctuation run closes the hole; the property
 # tests sweep the codepoint space to prove there are no others.
 V2_PATTERN = (
-    r"'(?:[sdmt]|ll|ve|re)"  # contractions ('s 'd 'm 't 'll 've 're)
+    r"(?i:'(?:[sdmt]|ll|ve|re))"  # contractions, case-insensitive like cl100k:
+    #   "DON'T" must split ["DON", "'T"] exactly as "don't" -> ["don", "'t"],
+    #   or uppercase text reintroduces the inconsistency class v2 exists to kill
     r"| ?[^\W\d_]+"  # letter runs, optional LEADING SPACE attached
     r"| ?\d"  # ONE digit at a time, optional leading space
     r"| ?(?:[^\s\w]|_)+"  # punctuation runs, optional leading space
@@ -94,6 +96,53 @@ def pretokenize_v2(text: str) -> list[str]:
     return [piece for piece in _V2_RE.findall(text) if piece]
 
 
+def pretokenize_v2_with_specials(text: str, special_tokens) -> list[str]:
+    """v2 split with special-token LITERALS carved out first, as whole units.
+
+    THE single carve-out for both the trainer (``BPETokenizer``) and the
+    runtime (``AdvancedBPETokenizer``).  Each class used to carve its own
+    set -- the trainer a hardcoded 4-tag tuple, the runtime every
+    multi-char ``special_tokens`` entry -- so the same text tokenized to
+    DIFFERENT ids depending on which class ran (``'a </s> b'``: 6 trainer
+    tokens vs 4 runtime tokens).  That is exactly the silent train/serve
+    corruption v2 exists to prevent, so the rule now lives here once:
+    carve every multi-char key of the instance's ``special_tokens``,
+    longest first, then run ``pretokenize_v2`` over the text between tags.
+
+    A space immediately before a tag has no following word to attach to,
+    so it survives as a standalone whitespace unit -- inherent to atomic
+    control ids, and the reason bare-space rates must be measured on
+    TAG-BEARING text before quoting them (2026-07-19 audit, LOW-8).
+
+    Args:
+        text: Arbitrary text (any Unicode).
+        special_tokens: Mapping/iterable of special-token strings; only
+            multi-char entries participate (single chars are ordinary
+            vocab entries).
+
+    Returns:
+        List of units; special literals appear as single whole units.
+    """
+    if not text:
+        return []
+
+    multi_char = sorted((t for t in special_tokens if len(t) > 1), key=len, reverse=True)
+    if not multi_char:
+        return pretokenize_v2(text)
+
+    tag_pattern = "(" + "|".join(re.escape(t) for t in multi_char) + ")"
+    specials = set(multi_char)
+    words: list[str] = []
+    for part in re.split(tag_pattern, text):
+        if not part:
+            continue
+        if part in specials:
+            words.append(part)
+        else:
+            words.extend(pretokenize_v2(part))
+    return words
+
+
 def normalize_pretokenizer(value: str | None) -> str:
     """Coerce a stored/passed pretokenizer version to a known value.
 
@@ -120,5 +169,6 @@ __all__ = [
     "VALID_PRETOKENIZERS",
     "V2_PATTERN",
     "pretokenize_v2",
+    "pretokenize_v2_with_specials",
     "normalize_pretokenizer",
 ]

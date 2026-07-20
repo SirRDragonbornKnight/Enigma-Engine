@@ -126,18 +126,24 @@ def pack_blocks(examples, block: int, pad_id: int = 0, seed: int = 0):
     return X, Y
 
 
-def reinit_chat_rows(model: torch.nn.Module) -> list[int]:
+def reinit_chat_rows(model: torch.nn.Module, tokenizer) -> list[int]:
     """Give the chat-token rows a real starting point: mean of the trained
     embedding + small noise. Pretraining only ever pushed these rows DOWN
-    (never targets), so they carry no usable signal. Tied head => one tensor."""
-    from enigma_engine.core.chat_format import BASE_VOCAB, CHAT_TOKENS
+    (never targets), so they carry no usable signal. Tied head => one tensor.
 
+    Rows and the mean slice are DERIVED from the attached tokenizer (live
+    v1 vocab: rows 4718..4723, mean over :4718 -- identical to the old
+    constants); hardcoded rows would alias real tokens on a bigger vocab."""
+    from enigma_engine.core.chat_format import chat_token_ids, real_vocab_rows
+
+    rows = sorted(chat_token_ids(tokenizer).values())
+    base = real_vocab_rows(tokenizer)
     emb = model.tok_embeddings.weight
     with torch.no_grad():
-        mean = emb[:BASE_VOCAB].mean(dim=0)
-        for tid in sorted(CHAT_TOKENS.values()):
+        mean = emb[:base].mean(dim=0)
+        for tid in rows:
             emb[tid] = mean + 0.02 * torch.randn_like(mean)
-    return sorted(CHAT_TOKENS.values())
+    return rows
 
 
 def main() -> None:
@@ -284,7 +290,7 @@ def main() -> None:
 
     meta = dict(ck.get("meta") or {})
     if meta.get("chat_format") != CHAT_FORMAT_NAME:
-        rows = reinit_chat_rows(raw_model)
+        rows = reinit_chat_rows(raw_model, tokenizer)
         print(
             f"init: chat-token embedding rows {rows} re-initialized (mean + noise) -- "
             f"first instruct pass over a base checkpoint",
