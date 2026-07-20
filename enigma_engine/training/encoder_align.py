@@ -360,6 +360,10 @@ class _Modality:
     # to skip the probe pre-pass for path refs (still lazily decoded).
     probe: "Callable[[object], None] | None"
     enable_hint: str     # e.g. "Set vision_hidden_size in ForgeConfig to enable vision."
+    # Batch collate for RAGGED media: list of [1, ...] tensors ->
+    # (batch tensor, lengths tensor passed to encoder(x, lengths=...)).
+    # None = uniform media, plain torch.cat and no lengths (vision).
+    collate: "Callable[[list[torch.Tensor]], tuple[torch.Tensor, torch.Tensor]] | None" = None
 
 
 # =============================================================================
@@ -933,11 +937,14 @@ class Trainer:
         trained together. The text transformer is frozen by default (set
         unfreeze_text_layers > 0 to fine-tune the last N text layers too).
 
-        Requires batch_size=1: mel spectrograms are ragged along time and
-        the audio encoder has no padding mask, so a padded batch would
-        feed garbage frames as context. Larger batches are refused up
-        front instead of silently training on garbage (refuse-don't-lie);
-        batch support needs a mask-aware encoder first.
+        Batching: mel spectrograms are ragged along time; batches are
+        right-padded by the audio collate and encoded with a padding
+        mask (audio_encoder contract: pad rows excluded from attention,
+        emitted as exact zeros -- pinned by test_audio_padding_mask).
+        The zero rows remain in the media prefix as Whisper-style
+        constant "silence" slots. Conformer encoders still refuse
+        batch_size>1 up front: their BatchNorm has no masked statistics
+        yet (refuse-don't-lie).
 
         Data format: list of dicts with:
             - "audio": file path string, Path, or 1-D waveform tensor
@@ -978,15 +985,26 @@ class Trainer:
                 not exist (a silent fresh start would overwrite the
                 checkpoints the caller meant to continue).
         """
-        if self.config.batch_size > 1:
+        acfg = getattr(audio_encoder, "config", None)
+        if self.config.batch_size > 1 and getattr(acfg, "use_conformer", False):
             raise ValueError(
-                "audio align requires batch_size=1 - mel spectrograms are ragged "
-                "along time and the audio encoder has no padding mask, so a "
-                "padded batch would feed garbage frames as context; batch "
-                "support needs a mask-aware encoder first"
+                "audio align with batch_size>1 requires a NON-conformer encoder: "
+                "ConformerConv's BatchNorm has no masked statistics, so pad "
+                "frames would poison every sample in the batch (refuse-don't-lie)"
             )
 
         from enigma_engine.core.audio_encoder import preprocess_audio, spec_augment
+
+        def _collate_audio(mels: "list[torch.Tensor]") -> "tuple[torch.Tensor, torch.Tensor]":
+            """Right-pad ragged [1, n_mels, T] mels with zeros + lengths.
+            Zeros beyond a sample's length are inert: the mask-aware
+            encoder excludes them from attention entirely."""
+            lengths = torch.tensor([m.shape[-1] for m in mels], dtype=torch.long)
+            t_max = int(lengths.max())
+            batch = torch.zeros(len(mels), mels[0].shape[1], t_max, dtype=mels[0].dtype)
+            for i, m in enumerate(mels):
+                batch[i, :, : m.shape[-1]] = m[0]
+            return batch, lengths
 
         audio_config = getattr(audio_encoder, "config", None)
 
@@ -1006,6 +1024,7 @@ class Trainer:
             augment=spec_augment,
             probe=None,
             enable_hint="Set audio_hidden_size in ForgeConfig to enable audio.",
+            collate=_collate_audio,
         )
         return self._train_encoder(
             encoder=audio_encoder,
@@ -1320,7 +1339,11 @@ class Trainer:
                 stream -- fine after a no-grad val forward, but on a train
                 batch it would wedge a pipeline bubble between forward and
                 backward."""
-                media_batch = torch.cat(media, dim=0).to(self.device)
+                if modality.collate is not None:
+                    media_batch, media_lengths = modality.collate(media)
+                else:
+                    media_batch, media_lengths = torch.cat(media, dim=0), None
+                media_batch = media_batch.to(self.device)
                 max_len = max(len(t) for t in id_lists)
                 text_tensor = torch.zeros(len(id_lists), max_len, dtype=torch.long)
                 targets = torch.full((len(id_lists), max_len - 1), -100, dtype=torch.long)
@@ -1335,7 +1358,17 @@ class Trainer:
                     dtype=self._amp_dtype,
                     enabled=self.config.use_amp and self.device.type == "cuda",
                 ):
-                    feats = encoder(media_batch)
+                    if media_lengths is None:
+                        feats = encoder(media_batch)
+                    else:
+                        # Mask-aware encode: pad frames are excluded from
+                        # attention and their feature rows are exact zeros
+                        # (audio_encoder contract, test_audio_padding_mask).
+                        # The zero rows DO remain in the prefix -- Whisper-
+                        # style constant "silence" slots the text model
+                        # learns to ignore; per-sample truncation cannot
+                        # batch.
+                        feats = encoder(media_batch, lengths=media_lengths.to(self.device))
                     logits = self.model.forward_multimodal(
                         input_ids=text_tensor,
                         **{modality.features_kwarg: feats},

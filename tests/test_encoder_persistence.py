@@ -773,7 +773,9 @@ class _TinyAudioEncoder(nn.Module):
         )
         self.proj = nn.Linear(8, AUDIO_DIM)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None) -> torch.Tensor:
+        # lengths accepted to honour the mask-aware encoder contract the
+        # audio collate now exercises; the stub ignores it (uniform mels).
         return self.proj(x.transpose(1, 2))
 
 
@@ -859,13 +861,23 @@ def test_audio_resume_refuses_text_only_checkpoint(tmp_path):
         trainer2.train_audio(_TinyAudioEncoder(), _audio_data(), resume_from=text_ckpt)
 
 
-def test_audio_refuses_batched_config(tmp_path):
-    """batch_size > 1 is refused up front: mels are ragged along time and
-    the encoder has no padding mask, so a padded batch would silently
-    train on garbage frames (refuse-don't-lie)."""
+def test_audio_refuses_batched_conformer_only(tmp_path):
+    """batch_size > 1 now batches through the padding-mask collate; the
+    refusal survives ONLY for conformer encoders, whose BatchNorm has no
+    masked statistics (refuse-don't-lie)."""
+    enc = _TinyAudioEncoder()
+    enc.config.use_conformer = True
     trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "abatch", batch_size=2))
-    with pytest.raises(ValueError, match="padding mask"):
-        trainer.train_audio(_TinyAudioEncoder(), _audio_data())
+    with pytest.raises(ValueError, match="masked statistics"):
+        trainer.train_audio(enc, _audio_data())
+
+
+def test_audio_batched_training_runs(tmp_path):
+    """batch_size=2 over ragged pairs must complete an epoch through the
+    collate + lengths path (the old batch=1-only refusal is gone)."""
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "abatch2", batch_size=2))
+    state = trainer.train_audio(_TinyAudioEncoder(), _audio_data())
+    assert state.epoch >= 1 and not state.abort_reason
 
 
 def test_audio_rolling_step_checkpoint(tmp_path):

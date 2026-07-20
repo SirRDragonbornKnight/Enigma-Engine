@@ -138,13 +138,28 @@ class _AudioAttention(nn.Module):
         self.out_proj = nn.Linear(dim, dim, bias=False)
         self.attn_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor | None = None) -> torch.Tensor:
+        """key_padding_mask: [B, N] bool, True = PADDING (key masked out).
+
+        Padded batches (ragged mel lengths) need this: attention is
+        global, so without it every real frame would attend to garbage
+        pad frames -- the exact silent corruption train_audio's old
+        batch_size=1 refusal existed to prevent.
+        """
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.n_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, heads, N, head_dim]
         q, k, v = qkv.unbind(0)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
+        if key_padding_mask is not None:
+            # [B, N] -> [B, 1, 1, N]; -inf on pad KEYS. Pad QUERY rows
+            # softmax over all -inf... would be NaN, so pad queries keep
+            # one finite entry (themselves) -- their outputs are garbage
+            # by design and are zeroed by the encoder after every block.
+            neg = torch.finfo(attn.dtype).min
+            km = key_padding_mask[:, None, None, :]
+            attn = attn.masked_fill(km & ~torch.eye(N, dtype=torch.bool, device=x.device), neg)
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_dropout(attn)
 
@@ -226,8 +241,8 @@ class _AudioBlock(nn.Module):
         self.norm2 = RMSNorm(dim)
         self.ffn = _AudioFeedForward(dim, dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x))
+    def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor | None = None) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), key_padding_mask)
         if self.conv_module is not None:
             x = self.conv_module(x)
         x = x + self.ffn(self.norm2(x))
@@ -312,18 +327,67 @@ class AudioEncoder(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def feature_lengths(mel_lengths: torch.Tensor) -> torch.Tensor:
+        """Mel-frame counts -> feature-frame counts after the stride-2
+        conv2 (k=3, p=1): out = floor((T - 1) / 2) + 1 = ceil(T / 2)."""
+        return (mel_lengths + 1) // 2
+
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None) -> torch.Tensor:
         """
         Encode a mel spectrogram into audio features.
 
         Args:
-            x: Mel spectrogram [batch, n_mels, n_frames].
+            x: Mel spectrogram [batch, n_mels, n_frames]. Ragged batches
+                are padded along n_frames (pad value irrelevant -- see
+                lengths).
+            lengths: Optional [batch] int tensor of VALID mel-frame
+                counts per sample. When given, pad frames are excluded
+                from attention and their features zeroed after every
+                stage, so a padded batch's valid rows match the
+                unbatched forward. When None: exact legacy behaviour
+                (every frame is real -- the batch_size=1 align path and
+                the fixed 30 s distill windows).
 
         Returns:
-            Feature tensor [batch, n_frames // 2, dim].
+            Feature tensor [batch, ceil(n_frames / 2), dim]; rows at and
+            beyond a sample's feature_lengths entry are exact zeros.
         """
+        pad_mask = None  # [B, T_feat] bool, True = padding
+        if lengths is not None:
+            if self.config.use_conformer:
+                # ConformerConv's BatchNorm1d computes batch statistics
+                # over every time step; pad frames would poison them
+                # (and train/eval drift would hide it). Refuse loudly
+                # until a masked-stats conv module exists.
+                raise NotImplementedError(
+                    "padding mask with use_conformer=True: BatchNorm1d would "
+                    "mix pad frames into batch statistics -- train conformer "
+                    "encoders at batch_size=1 or implement masked BN first"
+                )
+            t_feat = (x.shape[-1] + 1) // 2
+            feat_lens = self.feature_lengths(lengths.to(x.device))
+            pad_mask = (
+                torch.arange(t_feat, device=x.device)[None, :] >= feat_lens[:, None]
+            )
+            # Zero the INPUT pad region: the k=3 convs read one frame
+            # across the valid/pad edge, and conv's own padding=1 already
+            # zero-pads beyond the tensor edge -- so zeroed pads make the
+            # batched boundary arithmetic IDENTICAL to the unbatched one.
+            in_pad = (
+                torch.arange(x.shape[-1], device=x.device)[None, :]
+                >= lengths.to(x.device)[:, None]
+            )
+            x = x.masked_fill(in_pad[:, None, :], 0.0)
+
         # Conv front-end: [B, n_mels, T] -> [B, dim, T] -> [B, dim, T//2]
         x = F.gelu(self.conv1(x))
+        if lengths is not None:
+            # conv1's output at the first pad position absorbs real
+            # neighbours through the k=3 kernel edge (and gelu(bias)
+            # elsewhere in the pad); unbatched, conv2 sees implicit
+            # ZEROS there. Zeroing makes both paths read identically.
+            x = x.masked_fill(in_pad[:, None, :], 0.0)
         x = F.gelu(self.conv2(x))
 
         # Transpose to [B, T//2, dim] for transformer
@@ -333,12 +397,24 @@ class AudioEncoder(nn.Module):
         T = x.shape[1]
         x = x + self.pos_embed[:, :T, :]
 
+        if pad_mask is not None:
+            # Kill conv bias bleed into the pad region before attention.
+            x = x.masked_fill(pad_mask[:, :, None], 0.0)
+
         # Transformer blocks
         for block in self.blocks:
-            x = block(x)
+            x = block(x, pad_mask)
+            if pad_mask is not None:
+                # Pad-query outputs are garbage by design (they only see
+                # themselves); re-zero so residuals never accumulate.
+                x = x.masked_fill(pad_mask[:, :, None], 0.0)
 
         # Final norm
         x = self.norm(x)
+
+        if pad_mask is not None:
+            # RMSNorm of zeros is zeros only in exact math; guarantee it.
+            x = x.masked_fill(pad_mask[:, :, None], 0.0)
 
         return x
 

@@ -48,6 +48,12 @@ def main() -> None:
     p.add_argument("--pairs", default=str(ROOT / "data" / "audio" / "librispeech.jsonl"))
     p.add_argument("--out", default=str(ROOT / "models" / "enigma_audio_align"))
     p.add_argument("--epochs", type=int, default=1)
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="ragged mels batch through the padding-mask collate (mask-aware encoder)",
+    )
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup", type=int, default=500)
     p.add_argument("--val", type=int, default=2000, help="held-out tail of the (seed-shuffled) pairs")
@@ -114,9 +120,7 @@ def main() -> None:
 
     tcfg = TrainingConfig(
         epochs=args.epochs,
-        # batch_size is NOT a flag: train_audio refuses >1 (ragged mels +
-        # no padding mask in the encoder; see the refusal in encoder_align).
-        batch_size=1,
+        batch_size=args.batch_size,
         learning_rate=args.lr,
         warmup_steps=args.warmup,
         weight_decay=0.01,
