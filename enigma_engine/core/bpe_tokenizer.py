@@ -743,11 +743,11 @@ class BPETokenizer:
         self.vocab_size = len(self.token_to_id)
         self.cache: OrderedDict[str, list[str]] = OrderedDict()
 
-        # Try loading Rust backend for fast encode/decode. Skipped for v2:
-        # the Rust backend implements v1 pre-tokenization only, so it
-        # would silently encode v2 vocabs with the wrong word split.
-        if self.pretokenizer_version == PRETOKENIZER_V1:
-            self._try_load_rust_backend(str(path))
+        # Try loading Rust backend for fast encode/decode. v2 vocabs
+        # additionally require a backend that declares V2_SUPPORTED --
+        # a stale built extension would silently split them with v1
+        # rules (the guard lives inside _try_load_rust_backend).
+        self._try_load_rust_backend(str(path))
 
         logger.info(
             f"Loaded tokenizer from {path} (vocab: {self.vocab_size}, merges: {len(self.merges)}"
@@ -759,11 +759,25 @@ class BPETokenizer:
         if BPETokenizer._rust_available is False:
             return
         try:
+            import enigma_bpe
             from enigma_bpe import RustBPETokenizer
 
             BPETokenizer._rust_available = True
+            if self.pretokenizer_version != PRETOKENIZER_V1 and not getattr(
+                enigma_bpe, "V2_SUPPORTED", False
+            ):
+                # Older built extension: v1-only splitting. Fail SOFT to
+                # Python rather than silently mis-splitting a v2 vocab.
+                logger.debug("Rust BPE backend lacks v2 support; using Python for this vocab")
+                return
             backend = RustBPETokenizer()
             backend.load(path)
+            if getattr(backend, "pretokenizer", PRETOKENIZER_V1) != self.pretokenizer_version:
+                # Defense in depth: the backend read the same file, so any
+                # disagreement means a version-parsing bug -- do not trust it.
+                logger.warning("Rust backend pretokenizer disagrees with vocab file; using Python")
+                self._rust_backend = None
+                return
             self._rust_backend = backend
         except ImportError:
             BPETokenizer._rust_available = False

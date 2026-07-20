@@ -189,6 +189,11 @@ def attach_chat_tokens(tokenizer):
                 f"chat_format {name} id {want} != tokenizer's {have}; "
                 f"update THINK/THINK_END to match this vocab before training/serving"
             )
+    # The Rust fast path snapshots special_tokens at load; the tags just
+    # registered change the v2 carve set, so a stale backend would split
+    # tag-bearing text as plain text. Detach -- the Python path knows them.
+    if getattr(tokenizer, "_rust_backend", None) is not None:
+        tokenizer._rust_backend = None
     return tokenizer
 
 

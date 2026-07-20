@@ -117,6 +117,9 @@ class AdvancedBPETokenizer:
         # with use_utf8_bytes=False (see load()).
         self.use_utf8_bytes: bool = True
 
+        # Rust fast path (attached by load() for v2 vocabs only)
+        self._rust_backend = None
+
         if vocab_file and Path(vocab_file).exists():
             self.load(vocab_file)
         else:
@@ -286,6 +289,34 @@ class AdvancedBPETokenizer:
             raise ValueError(f"Unknown tokenizer format in {vocab_file}")
 
         self._sync_decode_skip_ids()
+
+        # v2 Rust fast path. v1 deliberately stays Python HERE: this
+        # class's v1 pre-tokenizer differs from the trainer's (the known
+        # wart) and the Rust backend implements the trainer's v1. Under
+        # v2 both classes share ONE carve+split by contract (the arc-1
+        # parity pin), so one Rust implementation serves both. The
+        # backend snapshots the FILE -- any later vocab mutation (e.g.
+        # attach_chat_tokens) must detach it or encode goes stale.
+        self._rust_backend = None
+        if self.pretokenizer_version == PRETOKENIZER_V2:
+            try:
+                import enigma_bpe
+
+                if getattr(enigma_bpe, "V2_SUPPORTED", False):
+                    backend = enigma_bpe.RustBPETokenizer()
+                    backend.load(str(vocab_file))
+                    if (
+                        getattr(backend, "pretokenizer", "v1") == PRETOKENIZER_V2
+                        and self.bos_token in self.token_to_id
+                        and self.eos_token in self.token_to_id
+                    ):
+                        self._rust_backend = backend
+            except ImportError:
+                pass
+            except Exception as exc:
+                logger.warning(f"Rust BPE backend failed to load: {exc}")
+                self._rust_backend = None
+
         logger.info(f"Loaded tokenizer from {vocab_file} with {self.vocab_size} tokens")
 
     def save(self, vocab_file: Union[str, Path]) -> None:
@@ -375,6 +406,11 @@ class AdvancedBPETokenizer:
         """Encode text to token IDs using BPE merges."""
         if not text:
             return []
+
+        # Rust fast path (v2 vocabs; parity-pinned against this Python
+        # path). Detached whenever the vocab is mutated after load.
+        if self._rust_backend is not None:
+            return self._rust_backend.encode(text, add_special_tokens)
 
         ids = []
 

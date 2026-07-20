@@ -16,14 +16,15 @@ data/pretrain/tokens.bin, single process. The v2 retokenize
     python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json ^
         --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10
 
-Parallel layout (measured 4.42 -> 37.3 MB/s at 12 workers, spec table):
-the PARENT does the walk + paragraph dedup + filters -- that state is
-inherently sequential (shared seen_hashes) and is microseconds per doc
-against BPE encode at ~4.4 MB/s -- and WORKERS do the encoding. Ordered
-imap keeps the output stream byte-deterministic (= the sequential walk
-order). Launch the whole script at BelowNormal priority for the CRD
-budget (children inherit the class); default 10 workers leaves ~6 cores
-for the desktop session.
+Parallel layout: the PARENT does the walk + paragraph dedup + filters --
+that state is inherently sequential (shared seen_hashes) -- with file
+reads PREFETCHED by a thread pool (see iter_cleaned_docs: per-file open
+latency, not CPU, was the wall on the first v2 attempt), and WORKERS do
+the encoding (Rust v2 backend when built: measured 17.8 MB/s/worker vs
+~0.1 for pure Python). Ordered imap keeps the output stream
+byte-deterministic (= the sequential walk order). Launch the whole
+script at BelowNormal priority for the CRD budget (workers also self-set
+it); default 10 workers leaves ~6 cores for the desktop session.
 
 This runs independently of training and doesn't touch combined.txt.
 """
@@ -82,55 +83,87 @@ def build_source_dirs() -> list[tuple[str, Path]]:
     return source_dirs
 
 
-def iter_cleaned_docs(source_dirs):
+def _read_txt(path: str) -> str | None:
+    """One file read for the prefetch pool; None = unreadable (skip)."""
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64):
     """Walk + filter + paragraph-dedup, EXACT v1 semantics; yields
     (label, cleaned_text). The shared dedup set makes this inherently
-    sequential -- it stays in the parent by design."""
+    sequential -- it stays in the parent by design.
+
+    File READS are prefetched by a thread pool but consumed STRICTLY in
+    walk order, so dedup and the output stream stay byte-deterministic.
+    The prefetch is load-bearing, not a nicety: per-file open latency on
+    NTFS+Defender (~4 ms) serialized the first v2 run attempt to ~1 MB/s
+    with ten encode workers sitting 98% idle -- the walk itself was the
+    entire 25-hour wall."""
+    from concurrent.futures import ThreadPoolExecutor
+
     seen_hashes: set[bytes] = set()
     dedup_warned = False
     stats = iter_cleaned_docs.stats = {"dupes_skipped": 0}
 
-    for label, source_dir in source_dirs:
-        if not source_dir.exists():
-            continue
-        try:
-            with os.scandir(source_dir) as scanner:
-                for entry in scanner:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                    if not entry.name.endswith(".txt"):
-                        continue
-                    try:
-                        text = Path(entry.path).read_text(encoding="utf-8", errors="replace")
-                    except OSError:
-                        continue
-                    if len(text.strip()) < MIN_PARAGRAPH_LENGTH:
-                        continue
-
-                    paragraphs = text.split("\n\n")
-                    unique_paras: list[str] = []
-                    for para in paragraphs:
-                        para = para.strip()
-                        if len(para) < MIN_PARAGRAPH_LENGTH:
-                            unique_paras.append(para)
+    def walk():
+        for label, source_dir in source_dirs:
+            if not source_dir.exists():
+                continue
+            try:
+                with os.scandir(source_dir) as scanner:
+                    for entry in scanner:
+                        if not entry.is_file(follow_symlinks=False):
                             continue
-                        h = hashlib.sha256(para.encode("utf-8")).digest()[:8]
-                        if h in seen_hashes:
-                            stats["dupes_skipped"] += 1
+                        if not entry.name.endswith(".txt"):
                             continue
-                        if len(seen_hashes) < MAX_DEDUP_ENTRIES:
-                            seen_hashes.add(h)
-                        elif not dedup_warned:
-                            dedup_warned = True
-                            print(f"  WARNING: Dedup table at capacity ({MAX_DEDUP_ENTRIES:,})")
-                        unique_paras.append(para)
+                        yield label, entry.path
+            except OSError:
+                continue
 
-                    cleaned = "\n\n".join(unique_paras).strip()
-                    if len(cleaned) < MIN_PARAGRAPH_LENGTH:
-                        continue
-                    yield label, cleaned
-        except OSError:
-            continue
+    with ThreadPoolExecutor(max_workers=read_threads) as pool:
+        pending: deque = deque()
+        walker = walk()
+        exhausted = False
+        while pending or not exhausted:
+            while not exhausted and len(pending) < read_ahead:
+                try:
+                    label, path = next(walker)
+                except StopIteration:
+                    exhausted = True
+                    break
+                pending.append((label, pool.submit(_read_txt, path)))
+            if not pending:
+                break
+            label, fut = pending.popleft()
+            text = fut.result()
+            if text is None or len(text.strip()) < MIN_PARAGRAPH_LENGTH:
+                continue
+
+            paragraphs = text.split("\n\n")
+            unique_paras: list[str] = []
+            for para in paragraphs:
+                para = para.strip()
+                if len(para) < MIN_PARAGRAPH_LENGTH:
+                    unique_paras.append(para)
+                    continue
+                h = hashlib.sha256(para.encode("utf-8")).digest()[:8]
+                if h in seen_hashes:
+                    stats["dupes_skipped"] += 1
+                    continue
+                if len(seen_hashes) < MAX_DEDUP_ENTRIES:
+                    seen_hashes.add(h)
+                elif not dedup_warned:
+                    dedup_warned = True
+                    print(f"  WARNING: Dedup table at capacity ({MAX_DEDUP_ENTRIES:,})")
+                unique_paras.append(para)
+
+            cleaned = "\n\n".join(unique_paras).strip()
+            if len(cleaned) < MIN_PARAGRAPH_LENGTH:
+                continue
+            yield label, cleaned
 
 
 # ---------------------------------------------------------------------------

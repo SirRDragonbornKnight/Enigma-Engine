@@ -73,6 +73,76 @@ fn pre_tokenize(text: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// v2 pre-tokenizer (leading-space merges, per-digit) — port of
+// enigma_engine/core/pretokenize.py. PARITY WITH PYTHON IS THE CONTRACT:
+// every class below is spelled out to match PYTHON's `\w`/`\d`/`\s`
+// semantics, NOT rust's `\w` (which adds marks/join-controls python lacks):
+//   python \w = [\p{L}\p{Nd}\p{Nl}\p{No}_]      (str.isalnum() + underscore)
+//   python \d = \p{Nd}
+//   python \s = [\p{White_Space}\x1C-\x1F]      (FS/GS/RS/US are py-space)
+// ---------------------------------------------------------------------------
+
+/// Python's V2_PATTERN minus its `\s+(?!\S)` branch (rust `regex` has no
+/// lookahead); `split_v2_segment` reproduces that branch's behaviour by
+/// giving back the final whitespace char of a run followed by non-space.
+/// Branch ORDER matters (leftmost-first alternation, same as python re).
+fn v2_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i:'(?:[sdmt]|ll|ve|re))",                       // contractions
+            r"| ?[\p{L}\p{Nl}\p{No}]+",                         // ` ?[^\W\d_]+`
+            r"| ?\p{Nd}",                                       // ` ?\d` (ONE digit)
+            r"| ?(?:[^\s\x1C-\x1F\p{L}\p{Nd}\p{Nl}\p{No}_]|_)+", // ` ?(?:[^\s\w]|_)+`
+            r"|[\s\x1C-\x1F]+",                                 // whitespace runs
+        ))
+        .unwrap()
+    })
+}
+
+/// Python `\s` membership (rust is_whitespace = White_Space property,
+/// which misses the \x1C-\x1F separators python counts as space).
+#[inline(always)]
+fn is_py_space(c: char) -> bool {
+    c.is_whitespace() || ('\u{1C}'..='\u{1F}').contains(&c)
+}
+
+/// Split one carved segment with the v2 pattern.
+///
+/// Lookahead emulation: python's `\s+(?!\S)` branch makes a whitespace run
+/// followed by a word surrender its LAST char, so a literal space can join
+/// the next ` ?...` branch (" cat") while a tab stands alone. Here the
+/// plain `\s+` branch matches the whole run and, when non-whitespace
+/// follows, the run's last char is given back and re-matched.
+fn split_v2_segment(text: &str, out: &mut Vec<String>) {
+    let re = v2_re();
+    let mut pos = 0usize;
+    while pos < text.len() {
+        let m = match re.find(&text[pos..]) {
+            Some(m) => m,
+            None => break, // unreachable: the branches cover every char
+        };
+        // python findall silently skips unmatched text; mirror that
+        let start = pos + m.start();
+        let end = pos + m.end();
+        let piece = &text[start..end];
+        if end < text.len() && piece.chars().all(is_py_space) {
+            let n_chars = piece.chars().count();
+            if n_chars > 1 {
+                let (last_off, _) = piece.char_indices().last().unwrap();
+                out.push(piece[..last_off].to_string());
+                pos = start + last_off; // re-match from the surrendered char
+                continue;
+            }
+            // single whitespace char before non-space: stands alone
+            // (python's final `\s+` branch), fall through
+        }
+        out.push(piece.to_string());
+        pos = end;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Symbol interning — maps strings to dense u32 IDs for allocation-free merges
 // ---------------------------------------------------------------------------
 
@@ -247,6 +317,13 @@ struct RustBPETokenizer {
     cache: HashMap<String, Vec<i64>>,
     cache_order: Vec<String>,
     cache_cap: usize,
+
+    // Pre-tokenizer version ("v1" | "v2"), read from the vocab file on
+    // load (absence = v1, mirroring normalize_pretokenizer).
+    pretokenizer: String,
+    // v2 only: multi-char special literals, longest-first, as one
+    // alternation — the carve-out of pretokenize_v2_with_specials.
+    carve_re: Option<Regex>,
 }
 
 #[pymethods]
@@ -275,6 +352,8 @@ impl RustBPETokenizer {
             cache: HashMap::new(),
             cache_order: Vec::new(),
             cache_cap: 40000,
+            pretokenizer: "v1".to_string(),
+            carve_re: None,
         }
     }
 
@@ -332,6 +411,49 @@ impl RustBPETokenizer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        // --- pretokenizer version (absent/empty = v1; unknown = loud
+        // failure, mirroring normalize_pretokenizer) ---
+        self.pretokenizer = match data.get("pretokenizer").and_then(|v| v.as_str()) {
+            None | Some("") | Some("v1") => "v1".to_string(),
+            Some("v2") => "v2".to_string(),
+            Some(other) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown pretokenizer version {:?}; expected one of ['v1', 'v2']",
+                    other
+                )))
+            }
+        };
+
+        // --- v2 carve-out: every multi-char special literal, longest
+        // first (char length, like python's key=len). Equal-length
+        // distinct literals cannot compete for the same match position,
+        // so the tie order is irrelevant.
+        self.carve_re = if self.pretokenizer == "v2" {
+            let mut tags: Vec<&String> = self
+                .special_tokens
+                .keys()
+                .filter(|t| t.chars().count() > 1)
+                .collect();
+            if tags.is_empty() {
+                None
+            } else {
+                tags.sort_by_key(|t| std::cmp::Reverse(t.chars().count()));
+                let alt = tags
+                    .iter()
+                    .map(|t| regex::escape(t))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                Some(Regex::new(&alt).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "carve pattern failed to compile: {}",
+                        e
+                    ))
+                })?)
+            }
+        } else {
+            None
+        };
+
         // --- Build interned tables from loaded data ---
         self.symbols.clear();
         self.eow_sym = self.symbols.intern("</w>");
@@ -351,12 +473,17 @@ impl RustBPETokenizer {
             .map(|(a, b)| vec![a.as_str(), b.as_str()])
             .collect();
 
-        let data = serde_json::json!({
+        let mut data = serde_json::json!({
             "token_to_id": token_map,
             "merges": merges_json,
             "special_tokens": self.special_tokens,
             "use_utf8_bytes": self.use_utf8_bytes,
         });
+        // v1 must NOT write the key (absence = v1 is the compat contract);
+        // dropping it from a v2 save would silently v1-ify the vocab.
+        if self.pretokenizer != "v1" {
+            data["pretokenizer"] = serde_json::json!(self.pretokenizer);
+        }
 
         let json_str = serde_json::to_string_pretty(&data)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("JSON serialization failed: {}", e)))?;
@@ -372,7 +499,11 @@ impl RustBPETokenizer {
     /// Encode text to token IDs (matches Python BPETokenizer.encode()).
     #[pyo3(signature = (text, add_special_tokens=true))]
     fn encode(&mut self, text: &str, add_special_tokens: bool) -> Vec<i64> {
-        let words = pre_tokenize(text);
+        let words = if self.pretokenizer == "v2" {
+            self.pre_tokenize_v2_pieces(text)
+        } else {
+            pre_tokenize(text)
+        };
         // Estimate output size: ~1.3 tokens per word + 2 special tokens
         let mut ids = Vec::with_capacity(words.len() * 2 + 2);
 
@@ -432,6 +563,32 @@ impl RustBPETokenizer {
     /// Decode token IDs back to text (matches Python BPETokenizer.decode()).
     #[pyo3(signature = (ids, skip_special_tokens=true))]
     fn decode(&self, ids: Vec<i64>, skip_special_tokens: bool) -> String {
+        if self.pretokenizer == "v2" {
+            // v2 decode is a plain lossless concatenation: NO </w>
+            // substitution, NO space collapsing, NO trim (mirrors
+            // _decode_v2 -- v1's whitespace surgery would corrupt v2
+            // text, whose whitespace lives inside the pieces).
+            let mut text = String::new();
+            for id in ids {
+                if let Some(token) = self.id_to_token.get(&id) {
+                    if self.special_tokens.contains_key(token) {
+                        if skip_special_tokens {
+                            continue;
+                        }
+                        // literal tag; no "readable form" rewriting
+                        text.push_str(token);
+                        continue;
+                    }
+                    text.push_str(token);
+                }
+            }
+            if self.use_utf8_bytes {
+                let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
+                text = String::from_utf8_lossy(&bytes).to_string();
+            }
+            return text;
+        }
+
         let mut tokens = Vec::with_capacity(ids.len());
 
         for id in ids {
@@ -481,6 +638,8 @@ impl RustBPETokenizer {
     fn get_unk_token_id(&self) -> i64 { self.unk_token_id }
     #[getter]
     fn get_use_utf8_bytes(&self) -> bool { self.use_utf8_bytes }
+    #[getter]
+    fn get_pretokenizer(&self) -> String { self.pretokenizer.clone() }
 
     fn get_vocab(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
@@ -782,14 +941,49 @@ impl RustBPETokenizer {
 
 impl RustBPETokenizer {
     /// Tokenize a word using interned BPE merges. Returns final token IDs.
+    /// v2 pre-tokenize: carve special literals as whole units, split the
+    /// text between them with the v2 pattern (pretokenize_v2_with_specials).
+    fn pre_tokenize_v2_pieces(&self, text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if text.is_empty() {
+            return out;
+        }
+        match &self.carve_re {
+            Some(cre) => {
+                let mut last = 0usize;
+                for m in cre.find_iter(text) {
+                    if m.start() > last {
+                        split_v2_segment(&text[last..m.start()], &mut out);
+                    }
+                    out.push(m.as_str().to_string());
+                    last = m.end();
+                }
+                if last < text.len() {
+                    split_v2_segment(&text[last..], &mut out);
+                }
+            }
+            None => split_v2_segment(text, &mut out),
+        }
+        out
+    }
+
     fn tokenize_word_interned(&mut self, word: &str) -> Vec<i64> {
-        // Check if whole word+</w> is in vocabulary
-        let word_with_end = format!("{}</w>", word);
-        if let Some(&id) = self.token_to_id.get(&word_with_end) {
-            return vec![id];
+        let is_v2 = self.pretokenizer == "v2";
+
+        // Whole-piece vocab hit. v2 pieces carry no </w> marker (the
+        // leading space IS the word boundary); v1 words end in </w>.
+        if is_v2 {
+            if let Some(&id) = self.token_to_id.get(word) {
+                return vec![id];
+            }
+        } else {
+            let word_with_end = format!("{}</w>", word);
+            if let Some(&id) = self.token_to_id.get(&word_with_end) {
+                return vec![id];
+            }
         }
 
-        // Decompose word into char symbols + </w>
+        // Decompose word into char symbols (+ </w> under v1 only)
         let mut syms: Vec<u32> = Vec::with_capacity(word.chars().count() + 1);
         for ch in word.chars() {
             let sym = if let Some(&cached) = self.char_sym_cache.get(&ch) {
@@ -802,7 +996,9 @@ impl RustBPETokenizer {
             };
             syms.push(sym);
         }
-        syms.push(self.eow_sym);
+        if !is_v2 {
+            syms.push(self.eow_sym);
+        }
 
         // Run BPE merges (zero-allocation inner loop)
         merge_word(&mut syms, &self.merge_table);
@@ -952,5 +1148,9 @@ impl RustBPETokenizer {
 #[pymodule]
 fn enigma_bpe(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustBPETokenizer>()?;
+    // Feature flag for the Python side: a stale built extension without
+    // this attribute must never be handed a v2 vocab (it would silently
+    // split with v1 rules).
+    m.add("V2_SUPPORTED", true)?;
     Ok(())
 }
