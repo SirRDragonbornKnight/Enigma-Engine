@@ -780,7 +780,7 @@ def estimate_parameters(config: ForgeConfig) -> int:
     """Estimate number of parameters for a config.
 
     Accounts for GQA (smaller K,V projections), per-layer norms,
-    SwiGLU FFN, weight-tied output head, and MTP predict heads.
+    SwiGLU FFN, and the weight-tied output head.
     """
     # Embedding (weight-tied with output, counted once)
     embed = config.vocab_size * config.dim

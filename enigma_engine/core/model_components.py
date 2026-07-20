@@ -473,10 +473,13 @@ class Attention(nn.Module):
                 # to broadcast-crash there; query i is at absolute position T_k-T+i and
                 # may attend to keys 0..T_k-T+i, which is exactly tril(diagonal=T_k-T).
                 # Square prefill (T_k == T) reduces to the plain triu mask.
+                # One allocation + one in-place op: -inf strictly above the
+                # bottom-right-aligned diagonal (blocked j >= i + T_k-T+1,
+                # identical to the tril form for every T_k >= T; the square
+                # case is the pre-cache triu(full(-inf), 1) idiom).
                 T_k = scores.shape[-1]
-                causal = torch.zeros(T, T_k, device=scores.device, dtype=scores.dtype).masked_fill(
-                    ~torch.ones(T, T_k, dtype=torch.bool, device=scores.device).tril(diagonal=T_k - T),
-                    float("-inf"),
+                causal = torch.full((T, T_k), float("-inf"), device=scores.device, dtype=scores.dtype).triu_(
+                    diagonal=T_k - T + 1
                 )
                 scores = scores + causal
 

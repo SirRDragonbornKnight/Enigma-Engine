@@ -31,8 +31,9 @@ Deleted after a three-agent adversarial audit verified every claim
   early-exit, shifted sparse attention, NEFTune, the flash-attn manual branch
   (SDPA is the path). All were OFF in every shipped config. **Verified: the
   served checkpoint strict-loads and produces byte-identical logits/tokens
-  vs the pre-surgery code.** `--no-diff-attn` survives as an accepted no-op
-  so proven launch commands keep working.
+  vs the pre-surgery code.** `--no-diff-attn` survived briefly as an accepted
+  no-op; removed 2026-07-19 together with its only consumers (the flag lines
+  in `extend_length.ps1` / `resume_training.ps1`).
 - **Scratch scripts:** `_append_anime.py`, `_collect_anime_ln.py`,
   `_fix_anime_coverage.py`, `_audit_eval.py`.
 - **Deps:** python-dotenv (core, zero imports), customtkinter (referenced a

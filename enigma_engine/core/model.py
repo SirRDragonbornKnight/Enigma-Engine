@@ -7,12 +7,12 @@ The core model class that implements a modern transformer architecture with:
 - SwiGLU activation
 - Grouped Query Attention (GQA)
 - KV cache for fast generation
-- Mixture of Experts (MoE) support
 - Multi-modal inputs (vision, audio)
 - Universal model loading (HuggingFace, GGUF, ONNX, Safetensors)
-- LoRA adapter support
-- Speculative decoding
 - Quantization (dynamic, INT8, INT4)
+
+(MoE, LoRA adapters, and speculative decoding were removed in the
+2026-07-18 compression pass; they live only in git history.)
 
 Usage:
     from enigma_engine.core.model import create_model, Enigma, ForgeConfig

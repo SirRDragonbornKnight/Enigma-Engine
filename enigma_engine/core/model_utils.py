@@ -100,7 +100,7 @@ def apply_repetition_penalty(
             penalty,
         )
 
-    # Clone to avoid in-place mutation (important for beam search, speculative decoding)
+    # Clone so the caller's logits tensor is never mutated in place
     logits = logits.clone()
 
     vocab_size = logits.shape[-1]

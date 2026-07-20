@@ -23,6 +23,9 @@ from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.training.vision_align import Trainer, TrainingConfig
 
 VISION_DIM = 16
+# The audio port stays open on the tiny models even though the audio twin
+# tests retired with the Forge trainer: the audio-align rebuild (ROADMAP
+# Phase 4.5 step 6) re-pins the same contract against these fixtures.
 AUDIO_DIM = 12
 
 
@@ -578,6 +581,120 @@ def test_stop_after_completed_validation_still_ranks_the_epoch(tmp_path):
     # min() assertion below would go vacuous -- fail loudly instead.
     assert state.validation_losses[1] < state.validation_losses[0]
     assert state.best_loss == pytest.approx(min(state.validation_losses))
+
+
+def test_lr_schedule_sized_in_optimizer_steps(tmp_path):
+    """With gradient accumulation, the warmup/cosine schedule is sized in
+    OPTIMIZER steps (where scheduler.step() fires), so the decay completes
+    by end of run instead of stretching by the accumulation factor."""
+    from PIL import Image
+
+    data = [
+        {"image": Image.new("RGB", (8, 8), color=(50 * i % 255, 60, 90)), "text": f"caption number {i}"}
+        for i in range(4)
+    ]
+    cfg = _config(tmp_path / "accum", batch_size=1, max_grad_accumulation=2, warmup_steps=1)
+    model = _tiny_model()
+    trainer = Trainer(model, _CharTokenizer(64), cfg)
+    state = trainer.train_vision(_TinyVisionEncoder(), data)
+    assert not state.abort_reason
+    assert state.step == 2  # 4 batches / accum 2 -> 2 optimizer steps
+    best = list((tmp_path / "accum").glob("*_vision_best.pt"))[0]
+    saved_opt = torch.load(best, map_location="cpu", weights_only=True)["optimizer_state_dict"]
+    final_lr = saved_opt["param_groups"][0]["lr"]
+    # Schedule sized to 2 optimizer steps: after both, cosine has decayed
+    # to the floor. Micro-batch sizing (4) would leave it far above.
+    assert final_lr == pytest.approx(cfg.learning_rate * cfg.min_lr_ratio, rel=0.05)
+
+
+def test_loss_log_fires_once_per_optimizer_step(tmp_path):
+    """The log_every gate is boundary-gated: one on_loss call per logged
+    optimizer step, not one per micro-batch of a matching window."""
+    from PIL import Image
+
+    data = [
+        {"image": Image.new("RGB", (8, 8), color=(70 * i % 255, 40, 40)), "text": f"a caption {i}"}
+        for i in range(4)
+    ]
+    model = _tiny_model()
+    trainer = Trainer(
+        model, _CharTokenizer(64), _config(tmp_path / "loggate", batch_size=1, max_grad_accumulation=2, log_every=1)
+    )
+    calls = []
+    trainer.on_loss = calls.append
+    state = trainer.train_vision(_TinyVisionEncoder(), data)
+    assert not state.abort_reason
+    # 2 optimizer steps logged (log_every=1) + 1 epoch-summary emit.
+    assert len(calls) == 3
+
+
+def test_empty_state_dict_fails_cleanly(tmp_path):
+    """A checkpoint whose model_state_dict is present-but-empty fails with
+    a missing-keys error, not by falling through to the wrapper dict and
+    dying on unexpected optimizer/config keys."""
+    import enigma_engine.core.safe_save as safe_save
+
+    path = tmp_path / "empty.pt"
+    safe_save.atomic_torch_save(
+        {"model_state_dict": {}, "optimizer_state_dict": {"state": {}, "param_groups": []}}, path
+    )
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "emptyload"))
+    with pytest.raises(RuntimeError) as exc_info:
+        trainer.load_checkpoint(path)
+    assert "optimizer_state_dict" not in str(exc_info.value)
+
+
+def test_config_from_dict_drops_retired_forge_keys(tmp_path):
+    """Old training_config blobs carry the slimmed-away Forge keys; from_dict
+    filters them so reconstruction works, while a refused knob that survives
+    the filter still fails validate() with its clear message."""
+    old_blob = {
+        "epochs": 2,
+        "batch_size": 8,
+        "learning_rate": 5e-4,
+        # retired inert keys (deleted from the schema 2026-07-19)
+        "val_split": 0.1,
+        "curriculum": "easy_first",
+        "z_loss_weight": 1e-4,
+        "gradient_noise_gamma": 0.55,
+        "ademamix_beta3": 0.9999,
+        "training_memory_gb": 8.0,
+        "eval_test_prompts": None,
+        # refused knob with a live value
+        "ema_decay": 0.999,
+    }
+    cfg = TrainingConfig.from_dict(old_blob)
+    assert cfg.epochs == 2 and cfg.batch_size == 8
+    assert not hasattr(cfg, "val_split")
+    with pytest.raises(ValueError, match="ema_decay"):
+        cfg.validate()
+    # Direct construction with a retired key stays loud.
+    with pytest.raises(TypeError):
+        TrainingConfig(val_split=0.1)
+    # to_dict is field-derived: nothing can be silently omitted.
+    import dataclasses as _dc
+
+    assert set(TrainingConfig().to_dict().keys()) == {f.name for f in _dc.fields(TrainingConfig)}
+
+
+def test_batch_size_zero_is_refused(tmp_path):
+    """The 0 = auto-estimate sentinel was retired with the estimator; the
+    refusal points at the hardware_detection helper instead."""
+    with pytest.raises(ValueError, match="recommend_training_batch_size"):
+        Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "bs0", batch_size=0))
+
+
+def test_load_checkpoint_skips_dead_optimizer_state(tmp_path):
+    """load_checkpoint must not materialize optimizer moments into the
+    never-stepped fallback optimizer (~1.5 GB dead weight at full scale):
+    the lazy fallback stays unbuilt through a load."""
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "deadopt"))
+    path = tmp_path / "text.pt"
+    assert trainer._save_checkpoint(path)
+
+    trainer2 = Trainer(_tiny_model(seed=1), _CharTokenizer(64), _config(tmp_path / "deadopt2"))
+    trainer2.load_checkpoint(path)
+    assert trainer2._fallback_optimizer is None
 
 
 def test_abort_does_not_count_unconsumed_drops(tmp_path, caplog):

@@ -71,7 +71,7 @@ if ($hasCkpt) {
     exit 1
   }
   # --- the length-extension run math (see DECISIONS block above) ---
-  $trainArgs = '--init-from models/enigma_pretrain_large/model.pth --out models/enigma_pretrain_2048 --block 2048 --micro-batch 6 --grad-accum 16 --tokens 10e9 --lr 3e-4 --warmup 300 --weight-decay 0.1 --grad-clip 1.0 --optimizer adamw --schedule wsd --wsd-decay-frac 0.1 --dropout 0.0 --no-diff-attn --no-grad-ckpt --no-compile --archive-every 25000'
+  $trainArgs = '--init-from models/enigma_pretrain_large/model.pth --out models/enigma_pretrain_2048 --block 2048 --micro-batch 6 --grad-accum 16 --tokens 10e9 --lr 3e-4 --warmup 300 --weight-decay 0.1 --grad-clip 1.0 --optimizer adamw --schedule wsd --wsd-decay-frac 0.1 --dropout 0.0 --no-grad-ckpt --no-compile --archive-every 25000'
   $mode = 'Starting Phase 4 length extension (block 2048, fresh warm-start)'
 }
 

@@ -119,12 +119,6 @@ def main() -> None:
     )
     ap.add_argument("--no-grad-ckpt", action="store_true", help="disable gradient checkpointing")
     ap.add_argument(
-        "--no-diff-attn",
-        action="store_true",
-        help="accepted no-op (differential attention was removed 2026-07-18; "
-        "SDPA is always used). Kept so proven launch commands keep working.",
-    )
-    ap.add_argument(
         "--compile",
         action=argparse.BooleanOptionalAction,
         default=True,

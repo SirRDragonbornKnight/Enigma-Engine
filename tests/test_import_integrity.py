@@ -8,9 +8,11 @@ AST-based (2026-07-18 re-audit): the earlier text/regex sweep false-positived
 on import statements quoted inside docstrings and missed backslash
 continuations; parsing real Import/ImportFrom nodes kills both classes.
 String constants that parse as PURE import statements are ALSO collected --
-run_training_diagnostic.py exec()s a list of such strings, and the first AST
-version silently dropped that coverage the regex incidentally had (round-2
-re-audit: bpe_tokenizer became invisibly deletable). Known blind spots:
+originally for run_training_diagnostic.py's exec()ed import list (that file
+died in the 2026-07-18 compression pass and no exec-string import site
+remains; the coverage stays as a guard against the pattern returning,
+because the first AST version silently dropped it and bpe_tokenizer became
+invisibly deletable, round-2 re-audit). Known blind spots:
 importlib.import_module("...") dotted-name strings (not import statements,
 never covered by any version); RELATIVE imports inside the package (never
 covered by any version either -- the recorded #11 incident callers were all
@@ -29,8 +31,9 @@ Two checks per file (static -- nothing from the tree is executed):
    def/class, __all__ strings) -- prose mentions no longer count (the old
    substring check was satisfiable by a docstring word). A package __init__
    with module-level __getattr__ is exempt from check 2 ONLY when it has no
-   __all__ literal to consult -- core/ and training/ have both, and their
-   __all__ is the authoritative surface (so they are NOT exempt).
+   __all__ literal to consult -- core/ has both, and its __all__ is the
+   authoritative surface (so it is NOT exempt). training/ dropped its
+   zero-caller shim 2026-07-19 and is now docstring-only.
 """
 from __future__ import annotations
 
@@ -274,10 +277,12 @@ def test_import_collector_reads_all_shapes():
 
 
 def test_exec_string_imports_are_covered():
-    """run_training_diagnostic.py holds import statements as strings and
-    exec()s them; the old regex covered those incidentally and the first AST
-    version dropped them (round-2 re-audit: bpe_tokenizer was invisibly
-    deletable). Pure-import strings must register; prose must not."""
+    """Guards the exec-string pattern: the retired run_training_diagnostic.py
+    (deleted 2026-07-18) held import statements as strings and exec()d them;
+    the old regex covered those incidentally and the first AST version
+    dropped them (round-2 re-audit: bpe_tokenizer was invisibly deletable).
+    No such site remains in the tree, but pure-import strings must keep
+    registering so a reintroduction is covered from day one; prose must not."""
     tree = ast.parse('checks = [("model", "from enigma_engine.core.model import Enigma")]\n')
     assert ("from", "enigma_engine.core.model", ["Enigma"]) in list(_iter_imports(tree))
     prose = ast.parse('DOC = "see: from enigma_engine.core import totally_fake_module for info"\n')

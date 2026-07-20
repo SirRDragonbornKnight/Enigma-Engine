@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import os
@@ -134,8 +135,7 @@ class TrainingConfig:
         save_every_steps: Also save a rolling mid-epoch checkpoint
             ({stem}_vision_step.pt) every N optimizer steps (0 = disabled)
         checkpoint_dir: Directory for saving checkpoints
-        eval_every: Evaluate every N steps (0 to disable)
-        log_every: Log metrics every N steps
+        log_every: Log metrics every N optimizer steps
         use_amp: Use automatic mixed precision (fp16)
         max_grad_accumulation: Gradient accumulation steps
     """
@@ -149,7 +149,6 @@ class TrainingConfig:
     save_every: int = 0
     save_every_steps: int = 0  # Save checkpoint every N steps (0 = disabled)
     checkpoint_dir: str = "models/checkpoints"
-    eval_every: int = 0
     log_every: int = 10
     use_amp: bool = True
     amp_dtype: str = "auto"  # "auto", "float16", "bfloat16"
@@ -169,105 +168,13 @@ class TrainingConfig:
     # training because the very last steps then contribute nothing.
     min_lr_ratio: float = 0.1
 
-    # Reasoning-weighted loss (CoT-E)
-    # Weight multiplier for tokens inside <think>...</think> blocks.
-    # 1.0 = normal (no extra weight), 2.0 = double weight on reasoning tokens.
-    reasoning_loss_weight: float = 1.0
-
-    # Rolling best checkpoints (CK-C)
-    rolling_best_k: int = 0  # 0 = disabled, N = keep N best by loss
-
     # Early-stopping / safety guardrails
     early_stopping_patience: int = 5  # Stop if no improvement for 5 epochs
     max_loss: float = 100.0  # abort if loss exceeds this
     max_training_seconds: float = 0  # 0 = unlimited
 
-    # Before/after evaluation (EV-C)
-    run_evaluation: bool = False  # Evaluate before and after training
-    eval_test_prompts: list[str] = None  # Custom test prompts (None = use defaults)
-
-    # Label smoothing: a Forge-trainer feature the vision-align loss does
-    # not implement. >0 is refused by validate() (refuse-don't-lie); the
-    # field survives so old checkpoints' training_config dicts round-trip.
-    label_smoothing: float = 0.0
-
-    # Validation split
-    val_split: float = 0.1  # 10% held out to detect overfitting early
-
-    # EMA weight averaging (smooths training noise, use EMA for eval)
-    ema_decay: float = 0.0  # 0.0 = disabled, 0.999 or 0.9999 typical
-
-    # Gradient noise injection (Neelakantan et al.): a Forge-trainer
-    # feature; this trainer's backward path injects nothing, so eta > 0
-    # is refused by validate(). gamma stays as an inert companion so old
-    # training_config dicts round-trip.
-    gradient_noise_eta: float = 0.0
-    gradient_noise_gamma: float = 0.55
-    # T2-3: Noise lifecycle envelope. Ramp up during first 5% of steps,
-    # anneal to zero during last 20%.
-    noise_warmup_fraction: float = 0.05
-    noise_decay_fraction: float = 0.2
-
-    # SWA (Stochastic Weight Averaging, Izmailov et al.)
-    # 0 = disabled.  N > 0 = collect a weight snapshot every N steps.
-    swa_update_interval: int = 0
-
     # torch.compile (10-20% throughput gain on supported hardware)
     use_compile: bool = False
-
-    # Cosine warm restarts (SGDR, Loshchilov & Hutter).
-    # 0 = disabled (single cosine decay).  N > 0 = restart every N steps.
-    cosine_restart_period: int = 0
-
-    # LR schedule type. train_vision implements ONLY warmup + cosine, so
-    # "cosine" is the sole accepted value; "wsd" was a Forge-trainer
-    # feature (validate() refuses it rather than stamping a schedule into
-    # the checkpoint that never ran).
-    schedule_type: str = "cosine"
-    # Fraction of total steps used for the decay phase of WSD.
-    wsd_decay_fraction: float = 0.1
-
-    # Sequence packing: pack short sequences into max_seq_len rows
-    # separated by EOS tokens with block-diagonal attention masks.
-    # 30-50% throughput gain by eliminating padding waste.
-    use_sequence_packing: bool = False
-
-    # BPE-Dropout (Provilkov et al.): a Forge-trainer feature. This
-    # trainer tokenizes each caption ONCE during prep, so per-epoch
-    # retokenization is structurally impossible; > 0 is refused by
-    # validate().
-    bpe_dropout: float = 0.0
-
-    # T2-4: R-Drop regularization (Liang et al. 2021).
-    # Two forward passes with different dropout masks; KL-divergence
-    # penalty between the two output distributions.  Doubles forward
-    # pass cost.  0.0 = disabled.  1.0 typical.
-    r_drop_alpha: float = 0.0
-
-    # General data mixing - prevents catastrophic forgetting.
-    # When focused training data is provided alongside general data,
-    # this ratio controls how much general data is mixed into each epoch.
-    # 0.0 = no mixing (only focused), 1.0 = only general.
-    # 0.2 = 20% general + 80% focused (good default).
-    general_mix_ratio: float = 0.2
-    general_data: str = ""  # Path or text of general knowledge data
-
-    # Z-Loss (PaLM, Chowdhery et al. 2022)
-    # Penalizes large logits to prevent training instability/NaN.
-    # 0.0 = disabled. 1e-4 typical for large models.
-    z_loss_weight: float = 0.0
-
-    # T3-6: Cut cross-entropy - chunk size for vocab-chunked CE loss.
-    # When > 0, avoids materializing the full [B*T, V] logit tensor
-    # during training. Memory drops from O(B*T*V) to O(chunk*V).
-    # Disabled when R-Drop/Z-Loss/reasoning weighting need full logits.
-    # 0 = disabled (default). 4096 = good starting value.
-    ce_chunk_size: int = 0
-
-    # LISA (Pan et al. 2024) - retired with the Forge trainer; field kept
-    # so old checkpoints' training_config dicts still round-trip.
-    use_lisa: bool = False
-    lisa_activated_layers: int = 2  # Number of middle layers to activate per step
 
     # Reproducibility: set random seed for deterministic training.
     # None = don't set seed (non-deterministic). 42 = common default.
@@ -279,48 +186,37 @@ class TrainingConfig:
     # stable across runs. Costs ~5-15% throughput; off by default.
     deterministic: bool = False
 
-    # Golden prompt regression eval - JSON file with prompt+expected pairs.
-    # Run before and after training to detect regressions.
-    # Empty string = disabled.
-    golden_eval_path: str = ""
-
-    # Optimizer selection: only "adamw" is supported by this trainer
-    # ("ademamix"/"muon" belonged to the retired Forge trainer; the
-    # fields below survive for checkpoint schema compatibility).
+    # ── Refused Forge-era knobs ─────────────────────────────────────────
+    # These stay in the schema ONLY so a config rebuilt from an old
+    # checkpoint's training_config blob fails at validate() with a CLEAR
+    # message instead of silently pretending the feature ran (refuse-
+    # don't-lie). The rest of the Forge schema — the ~25 knobs that were
+    # accepted-and-ignored (val_split, curriculum, z_loss_weight,
+    # r_drop_alpha, run_evaluation, ademamix_*, gradient_noise_gamma,
+    # wsd_decay_fraction, general_mix_ratio, training_memory_gb, ...) —
+    # was DELETED 2026-07-19; from_dict() drops their keys from old blobs.
+    label_smoothing: float = 0.0
+    ema_decay: float = 0.0
+    gradient_noise_eta: float = 0.0
+    swa_update_interval: int = 0
+    schedule_type: str = "cosine"  # warmup+cosine is the only implemented schedule
+    bpe_dropout: float = 0.0
+    use_lisa: bool = False
+    rolling_best_k: int = 0
     optimizer: str = "adamw"
-    ademamix_beta3: float = 0.9999
-    ademamix_alpha: float = 5.0
-    ademamix_alpha_initial: float = 10.0
-    ademamix_alpha_warmup: float = 0.1  # fraction of total steps
-
-    # T5-7: Layer-wise Learning Rate Decay (LLRD)
-    # Retired with the Forge trainer; must stay 0.0 here.
     llrd_decay: float = 0.0
-
-    # T4-2: Curriculum learning - order training sequences by difficulty.
-    # "none" = random shuffle (default).  "easy_first" = score each
-    # sequence by loss on the current model, train easy half first.
-    curriculum: str = "none"
-
-    # I-3: LR range finder (Leslie Smith, 2015).
-    # When True, runs a short sweep with exponentially increasing LR
-    # before training to find the steepest-descent point automatically.
-    auto_lr: bool = False
-
-    # Training memory budget override (GB of system RAM to use).
-    # 0 = auto-detect from hardware.  Set explicitly on constrained
-    # systems (Raspberry Pi, shared servers) or to leave headroom
-    # for other applications.
-    training_memory_gb: float = 0.0
 
     def validate(self) -> None:
         """Raise *ValueError* if any field is nonsensical."""
         if self.epochs < 1:
             raise ValueError(f"epochs must be >= 1, got {self.epochs}")
-        if self.batch_size < 0:
-            raise ValueError(f"batch_size must be >= 0 (0 = auto), got {self.batch_size}")
-        if self.training_memory_gb < 0:
-            raise ValueError(f"training_memory_gb must be >= 0 (0 = auto), got {self.training_memory_gb}")
+        if self.batch_size < 1:
+            raise ValueError(
+                f"batch_size must be >= 1, got {self.batch_size}. The old 0 = auto-estimate "
+                f"sentinel was retired 2026-07-19 (its memory model predated the frozen "
+                f"multimodal workload); pick explicitly - "
+                f"hardware_detection.recommend_training_batch_size gives a starting point"
+            )
         if self.learning_rate <= 0:
             raise ValueError(f"learning_rate must be > 0, got {self.learning_rate}")
         if self.gradient_clip < 0:
@@ -329,8 +225,6 @@ class TrainingConfig:
             raise ValueError(f"save_every_steps must be >= 0 (0 = disabled), got {self.save_every_steps}")
         if self.max_grad_accumulation < 1:
             raise ValueError(f"max_grad_accumulation must be >= 1, got {self.max_grad_accumulation}")
-        if not 0.0 <= self.val_split < 1.0:
-            raise ValueError(f"val_split must be in [0.0, 1.0), got {self.val_split}")
         # Optimizer betas must be in (0, 1)
         if not 0.0 < self.adam_beta1 < 1.0:
             raise ValueError(f"adam_beta1 must be in (0, 1), got {self.adam_beta1}")
@@ -339,36 +233,14 @@ class TrainingConfig:
         # min_lr_ratio in [0, 1] - Pass 156z9au.
         if not 0.0 <= self.min_lr_ratio <= 1.0:
             raise ValueError(f"min_lr_ratio must be in [0.0, 1.0], got {self.min_lr_ratio}")
-        # EMA decay in [0, 1)
-        if not 0.0 <= self.ema_decay < 1.0:
-            raise ValueError(f"ema_decay must be in [0.0, 1.0), got {self.ema_decay}")
-        # Label smoothing in [0, 1)
-        if not 0.0 <= self.label_smoothing < 1.0:
-            raise ValueError(f"label_smoothing must be in [0.0, 1.0), got {self.label_smoothing}")
-        # Z-loss weight must be non-negative
-        if self.z_loss_weight < 0:
-            raise ValueError(f"z_loss_weight must be >= 0, got {self.z_loss_weight}")
-        # Reasoning loss weight must be positive
-        if self.reasoning_loss_weight <= 0:
-            raise ValueError(f"reasoning_loss_weight must be > 0, got {self.reasoning_loss_weight}")
-        # General mix ratio in [0, 1]
-        if not 0.0 <= self.general_mix_ratio <= 1.0:
-            raise ValueError(f"general_mix_ratio must be in [0.0, 1.0], got {self.general_mix_ratio}")
-        # Rolling best K must be non-negative
-        if self.rolling_best_k < 0:
-            raise ValueError(f"rolling_best_k must be >= 0, got {self.rolling_best_k}")
-        # LLRD decay must be in [0, 1); >0 was a Forge-trainer feature and is
-        # rejected here for the same reason as the optimizer above.
-        if not 0.0 <= self.llrd_decay < 1.0:
-            raise ValueError(f"llrd_decay must be in [0.0, 1.0), got {self.llrd_decay}")
-        if self.llrd_decay > 0.0:
-            raise ValueError(
-                "llrd_decay was a Forge-trainer feature and is not supported by the vision-align trainer"
-            )
-        # Averaging/scheduling knobs the Forge trainer's own loop drove. This
-        # trainer never steps them, so accepting the value silently would write
-        # an INITIALIZATION snapshot into the checkpoint as if it were averaged
-        # weights. Refuse instead of lying.
+        # Refused Forge-era knobs (see the field-block comment). This
+        # trainer never runs them, so accepting a live value silently
+        # would stamp the checkpoint as if the feature had applied.
+        # Refuse instead of lying. NOTE for configs rebuilt from old
+        # blobs: before 2026-07-19 four of these shipped as INERT
+        # defaults (label_smoothing 0.05, gradient_noise_eta 0.01,
+        # bpe_dropout 0.1, schedule_type 'wsd') that never applied -
+        # reset them to the inert values to proceed.
         if self.ema_decay > 0:
             raise ValueError("ema_decay is not supported by the vision-align trainer (no averaging step)")
         if self.swa_update_interval > 0:
@@ -377,12 +249,10 @@ class TrainingConfig:
             raise ValueError("use_lisa was a Forge-trainer feature and is not supported by the vision-align trainer")
         if self.rolling_best_k > 0:
             raise ValueError("rolling_best_k is not supported by the vision-align trainer (no rolling save path)")
-        # NOTE for configs rebuilt from old checkpoints: before 2026-07-19
-        # these four shipped as INERT defaults (label_smoothing 0.05,
-        # gradient_noise_eta 0.01, bpe_dropout 0.1, schedule_type 'wsd')
-        # and were recorded in training_config without ever applying, so a
-        # pre-2026-07-19 blob carries them without the user having chosen
-        # anything. Reset them to the inert values to proceed.
+        if self.llrd_decay > 0:
+            raise ValueError(
+                "llrd_decay was a Forge-trainer feature and is not supported by the vision-align trainer"
+            )
         if self.label_smoothing > 0:
             raise ValueError(
                 "label_smoothing is not implemented by the vision-align loss "
@@ -404,9 +274,6 @@ class TrainingConfig:
                 f"only warmup+cosine (pre-2026-07-19 checkpoints recorded an inert 'wsd' "
                 f"default that never applied; use 'cosine')"
             )
-        # Gradient noise gamma must be non-negative (used as exponent)
-        if self.gradient_noise_gamma < 0:
-            raise ValueError(f"gradient_noise_gamma must be >= 0, got {self.gradient_noise_gamma}")
         # Optimizer: the Forge trainer offered ademamix/muon; this trainer
         # implements only AdamW. Reject the others HERE rather than deep in
         # __init__ so a config reconstructed from an old checkpoint's
@@ -416,76 +283,26 @@ class TrainingConfig:
                 f"optimizer '{self.optimizer}' was a Forge-trainer feature; the "
                 f"vision-align trainer supports only 'adamw'"
             )
-        # BPE-Dropout in [0, 1)
-        if not 0.0 <= self.bpe_dropout < 1.0:
-            raise ValueError(f"bpe_dropout must be in [0.0, 1.0), got {self.bpe_dropout}")
-        # Curriculum must be a known value
-        if self.curriculum not in ("none", "easy_first"):
-            raise ValueError(f"curriculum must be 'none' or 'easy_first', got '{self.curriculum}'")
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert config to dictionary."""
-        return {
-            "epochs": self.epochs,
-            "batch_size": self.batch_size,
-            "learning_rate": self.learning_rate,
-            "weight_decay": self.weight_decay,
-            "warmup_steps": self.warmup_steps,
-            "gradient_clip": self.gradient_clip,
-            "save_every": self.save_every,
-            "save_every_steps": self.save_every_steps,
-            "checkpoint_dir": self.checkpoint_dir,
-            "eval_every": self.eval_every,
-            "log_every": self.log_every,
-            "use_amp": self.use_amp,
-            "amp_dtype": self.amp_dtype,
-            "max_grad_accumulation": self.max_grad_accumulation,
-            "use_gradient_checkpointing": self.use_gradient_checkpointing,
-            "adam_beta1": self.adam_beta1,
-            "adam_beta2": self.adam_beta2,
-            "adam_eps": self.adam_eps,
-            "min_lr_ratio": self.min_lr_ratio,
-            "rolling_best_k": self.rolling_best_k,
-            "early_stopping_patience": self.early_stopping_patience,
-            "max_loss": self.max_loss,
-            "max_training_seconds": self.max_training_seconds,
-            "run_evaluation": self.run_evaluation,
-            "eval_test_prompts": self.eval_test_prompts,
-            "label_smoothing": self.label_smoothing,
-            "val_split": self.val_split,
-            "ema_decay": self.ema_decay,
-            "gradient_noise_eta": self.gradient_noise_eta,
-            "gradient_noise_gamma": self.gradient_noise_gamma,
-            "noise_warmup_fraction": self.noise_warmup_fraction,
-            "noise_decay_fraction": self.noise_decay_fraction,
-            "swa_update_interval": self.swa_update_interval,
-            "use_compile": self.use_compile,
-            "cosine_restart_period": self.cosine_restart_period,
-            "schedule_type": self.schedule_type,
-            "wsd_decay_fraction": self.wsd_decay_fraction,
-            "use_sequence_packing": self.use_sequence_packing,
-            "bpe_dropout": self.bpe_dropout,
-            "r_drop_alpha": self.r_drop_alpha,
-            "reasoning_loss_weight": self.reasoning_loss_weight,
-            "general_mix_ratio": self.general_mix_ratio,
-            "general_data": self.general_data,
-            "z_loss_weight": self.z_loss_weight,
-            "seed": self.seed,
-            "deterministic": self.deterministic,
-            "golden_eval_path": self.golden_eval_path,
-            "optimizer": self.optimizer,
-            "ademamix_beta3": self.ademamix_beta3,
-            "ademamix_alpha": self.ademamix_alpha,
-            "ademamix_alpha_initial": self.ademamix_alpha_initial,
-            "ademamix_alpha_warmup": self.ademamix_alpha_warmup,
-            "ce_chunk_size": self.ce_chunk_size,
-            "use_lisa": self.use_lisa,
-            "lisa_activated_layers": self.lisa_activated_layers,
-            "curriculum": self.curriculum,
-            "llrd_decay": self.llrd_decay,
-            "auto_lr": self.auto_lr,
-            "training_memory_gb": self.training_memory_gb,
-        }
+        """Convert config to dictionary (checkpoint training_config blob).
+
+        Derived from the dataclass so a new field can never be silently
+        omitted from checkpoints by a stale hand-written listing."""
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "TrainingConfig":
+        """Rebuild a config from a checkpoint's training_config blob.
+
+        Filters against the dataclass fields (the ForgeConfig.from_dict
+        pattern) so blobs written before the 2026-07-19 schema slimming -
+        which carry the retired inert Forge keys (val_split, curriculum,
+        z_loss_weight, ademamix_*, ...) - still construct; validate()
+        then rules on the values that survive, and the refused knobs
+        (ema_decay, schedule_type, ...) keep their clear messages."""
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass
@@ -502,7 +319,8 @@ class TrainingState:
     # (always epoch-boundary, so no wind-back is needed).
     epoch_start_step: int = 0
     best_loss: float = float("inf")
-    total_tokens: int = 0
+    # (total_tokens was removed 2026-07-19: its only writer was the deleted
+    # Forge text loop, so every vision checkpoint stamped a lying 0.)
     training_losses: list[float] = field(default_factory=list)
     validation_losses: list[float] = field(default_factory=list)
     abort_reason: str = ""
@@ -543,12 +361,9 @@ class Trainer:
         self.config = config or TrainingConfig()
         self.state = TrainingState()
 
-        # Device - needed before validate for auto batch size
         self.device = next(model.parameters()).device
 
         # Gradient checkpointing - trades compute for VRAM savings.
-        # Must be enabled BEFORE _estimate_batch_size() so the auto-batch
-        # trial runs with the same memory profile as real training.
         if self.config.use_gradient_checkpointing:
             if hasattr(self.model, "gradient_checkpointing_enable"):
                 self.model.gradient_checkpointing_enable()
@@ -556,11 +371,6 @@ class Trainer:
                 for layer in getattr(self.model, "layers", []):
                     if hasattr(layer, "use_checkpoint"):
                         layer.use_checkpoint = True
-
-        # Auto batch size: when batch_size == 0, estimate optimal
-        # based on GPU memory. Must run before validate().
-        if self.config.batch_size == 0:
-            self.config.batch_size = self._estimate_batch_size()
 
         self.config.validate()  # fail-fast on bad config
 
@@ -574,8 +384,10 @@ class Trainer:
         self._stop_requested = False
         self._lock = threading.Lock()
 
-        # Setup optimizer and scheduler
-        self._setup_optimizer()
+        # Fallback optimizer for text-only _save_checkpoint calls: built
+        # lazily by the `optimizer` property, never stepped.
+        self._fallback_optimizer: "torch.optim.Optimizer | None" = None
+        self.scheduler = None
 
         # Resolve AMP dtype (BF16 on Blackwell / Ampere+, FP16 otherwise)
         self._amp_dtype = self._resolve_amp_dtype()
@@ -610,191 +422,25 @@ class Trainer:
 
         logger.info(f"Trainer initialized: device={self.device}, config={self.config.to_dict()}")
 
-    def _setup_optimizer(self) -> None:
-        """Setup optimizer and learning rate scheduler.
+    @property
+    def optimizer(self) -> "torch.optim.Optimizer":
+        """Fallback AdamW for text-only _save_checkpoint calls.
 
-        ``TrainingConfig.validate()`` (run in ``__init__`` before this) already
-        rejected the Forge-only knobs — non-AdamW optimizers and llrd_decay > 0
-        — so this builds the AdamW path unconditionally.
-        """
-        # Standard: separate weight decay for different parameter types
-        decay_params = []
-        no_decay_params = []
-
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            # Bias, norm, and embedding params should not get weight decay.
-            # Embeddings are already at-scale tokens; decaying them shrinks
-            # the representation magnitude and hurts convergence.
-            # Note: output head is weight-tied to tok_embeddings (same tensor),
-            # so it's only counted once by the optimizer.
-            if "bias" in name or "norm" in name or "embed" in name:
-                no_decay_params.append(param)
-            else:
-                decay_params.append(param)
-
-        param_groups = [
-            {"params": decay_params, "weight_decay": self.config.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ]
-
-        # AdamW (the only supported optimizer; validate() gates the rest)
-        adamw_kwargs: dict[str, Any] = {}
-        if torch.cuda.is_available():
-            import inspect
-
-            if "fused" in inspect.signature(AdamW).parameters:
-                adamw_kwargs["fused"] = True
-
-        self.optimizer = AdamW(
-            param_groups,
-            lr=self.config.learning_rate,
-            betas=(self.config.adam_beta1, self.config.adam_beta2),
-            eps=self.config.adam_eps,
-            **adamw_kwargs,
-        )
-
-        # train_vision builds its own local optimizer/scheduler; this one
-        # exists so checkpoint helpers always have a fallback target.
-        self.scheduler = None
-
-    def _estimate_batch_size(self) -> int:
-        """Estimate optimal batch size from available GPU memory.
-
-        Runs a trial forward+backward pass with ``batch_size=2`` and
-        measures peak VRAM consumption.  The per-sample activation cost
-        is extrapolated to fill available VRAM minus model weights,
-        optimizer states, and gradients.
-
-        Falls back to 4 on CPU or if the trial fails.
-
-        Returns:
-            Power-of-2 batch size clamped to [1, batch_size_cap].
-        """
-        from enigma_engine.core.hardware_detection import TrainingMemoryBudget
-
-        budget = TrainingMemoryBudget(ram_gb=self.config.training_memory_gb)
-
-        if not torch.cuda.is_available() or self.device.type != "cuda":
-            cpu_bs = budget.cpu_batch_size
-            logger.info("Auto batch size: CPU detected, using batch_size=%d", cpu_bs)
-            return cpu_bs
-
-        cfg = getattr(self.model, "config", None)
-        seq_len = getattr(cfg, "max_seq_len", 512)
-        vocab_size = getattr(cfg, "vocab_size", 32000)
-
-        total_vram = torch.cuda.get_device_properties(self.device).total_memory
-
-        self.model.train()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(self.device)
-
-        # Baseline memory: model weights already on GPU
-        baseline_mem = torch.cuda.memory_allocated(self.device)
-
-        trial_bs = 2
-        dummy_ids = torch.randint(0, min(100, vocab_size), (trial_bs, seq_len), device=self.device)
-        logits = None
-        shift_logits = None
-        shift_labels = None
-        loss = None
-
-        try:
-            use_amp = self.config.use_amp and torch.cuda.is_available()
-            # Resolve AMP dtype for the trial (same logic as training)
-            amp_dtype = _resolve_amp_dtype(self.config.amp_dtype)
-
-            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-                logits = self.model(dummy_ids)
-                if isinstance(logits, tuple):
-                    logits = logits[0]
-                shift_logits = logits[:, :-1, :].contiguous()
-                shift_labels = dummy_ids[:, 1:].contiguous()
-                loss = torch.nn.functional.cross_entropy(
-                    shift_logits.view(-1, shift_logits.size(-1)),
-                    shift_labels.view(-1),
-                )
-
-            loss.backward()
-        except RuntimeError as exc:
-            if "out of memory" not in str(exc).lower():
-                raise  # Re-raise non-OOM errors (shape mismatch, etc.)
-            # OOM with batch=2 - model barely fits; free everything
-            dummy_ids = logits = shift_logits = shift_labels = loss = None
-            for p in self.model.parameters():
-                if p.grad is not None:
-                    p.grad = None
-            torch.cuda.empty_cache()
-            logger.info("Auto batch size: trial OOM, using batch_size=1")
-            return 1
-
-        peak_mem = torch.cuda.max_memory_allocated(self.device)
-
-        # Measure actual gradient memory (fixed per-param cost, not
-        # per-sample).  Must measure BEFORE clearing gradients.
-        grad_mem = sum(p.grad.numel() * p.grad.element_size() for p in self.model.parameters() if p.grad is not None)
-
-        # Activation memory = peak minus weights minus gradients.
-        # Gradients are fixed cost already tracked in the budget below,
-        # so excluding them here prevents double-counting.
-        activation_mem = max(1, peak_mem - baseline_mem - grad_mem)
-        per_sample = max(1, activation_mem // trial_bs)
-
-        # Cleanup - release tensors so VRAM is free for real training
-        dummy_ids = logits = shift_logits = shift_labels = loss = None
-        # Zero gradients so they don't persist into real training
-        for p in self.model.parameters():
-            if p.grad is not None:
-                p.grad = None
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(self.device)
-
-        # Budget calculation:
-        # - Model weights: baseline_mem (already measured)
-        # - Optimizer: AdamW momentum+variance in fp32 = 8 bytes/param
-        # - Gradients: fp32 under AMP (same dtype as master weights),
-        #   4 bytes/param
-        # - Activations: per_sample * batch_size (measured above)
-        # - Safety margin: 20% for CUDA fragmentation + temp allocations
-        total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        optimizer_overhead = total_params * 8  # fp32 momentum + variance
-        gradient_overhead = total_params * 4  # fp32 gradients
-        fixed_cost = baseline_mem + optimizer_overhead + gradient_overhead
-
-        # Usable = 80% of total VRAM minus all fixed costs
-        usable_vram = int(total_vram * 0.80) - fixed_cost
-        if usable_vram <= 0 or per_sample <= 0:
-            logger.info(
-                "Auto batch size: no headroom (fixed=%.1f GB, total=%.1f GB), using batch_size=1",
-                fixed_cost / 1e9,
-                total_vram / 1e9,
+        train_vision builds and steps its own LOCAL optimizer over the
+        vision-trainable parameter set; nothing ever steps this one. It
+        exists only so the text-only checkpoint format keeps its
+        optimizer_state_dict key, so it is built lazily (no dead state on
+        the device) with a single param group (grouping is irrelevant for
+        an optimizer that never steps)."""
+        if self._fallback_optimizer is None:
+            self._fallback_optimizer = AdamW(
+                [p for p in self.model.parameters() if p.requires_grad],
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
+                betas=(self.config.adam_beta1, self.config.adam_beta2),
+                eps=self.config.adam_eps,
             )
-            return 1
-
-        max_batch = usable_vram // per_sample
-        # Cap scales with VRAM - larger GPUs can use bigger batches
-        max_batch = max(1, min(max_batch, budget.batch_size_cap))
-
-        # Round down to nearest power of 2 for GPU efficiency
-        batch = 1
-        while batch * 2 <= max_batch:
-            batch *= 2
-
-        total_estimated = fixed_cost + batch * per_sample
-        logger.info(
-            "Auto batch size: %d  (model=%.1f GB + optimizer=%.1f GB "
-            "+ grad=%.1f GB + activations=%.1f GB = %.1f/%.1f GB)",
-            batch,
-            baseline_mem / 1e9,
-            optimizer_overhead / 1e9,
-            gradient_overhead / 1e9,
-            batch * per_sample / 1e9,
-            total_estimated / 1e9,
-            total_vram / 1e9,
-        )
-        return max(1, batch)
+        return self._fallback_optimizer
 
     def _resolve_amp_dtype(self) -> torch.dtype:
         """Resolve the AMP autocast dtype from config.
@@ -813,7 +459,7 @@ class Trainer:
             except Exception as e:
                 logger.debug(f"Progress callback error: {e}")
 
-    def _emit_loss(self, loss: float, val_loss: float | None = None) -> None:
+    def _emit_loss(self, loss: float) -> None:
         """Emit loss update via callback."""
         if self.on_loss:
             try:
@@ -914,10 +560,8 @@ class Trainer:
                     "step": self.state.step,
                     "epoch_start_step": self.state.epoch_start_step,
                     "best_loss": self.state.best_loss,
-                    "total_tokens": self.state.total_tokens,
                     "training_losses": self.state.training_losses,
                     "validation_losses": self.state.validation_losses,
-                    "dataset_fingerprint": getattr(self, "_dataset_fingerprint", None),
                 },
                 "training_config": self.config.to_dict(),
             }
@@ -970,27 +614,29 @@ class Trainer:
 
             checkpoint = safe_load_weights(path, map_location=self.device)
 
-            # Unwrap state dict — handles both flat and wrapped formats
-            state_dict = checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or checkpoint.get("model")
-            if state_dict is None:
-                # Assume the whole checkpoint is a bare state dict
-                state_dict = checkpoint
-            # Strip torch.compile's '_orig_mod.' prefix (legacy checkpoints
-            # saved from a compiled Trainer) and load into the raw module.
-            state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+            # Unwrap via the shared extractor: membership tests keep an
+            # empty-but-present model_state_dict selected (clean missing-
+            # keys error + empty warning) instead of falling through to
+            # the whole wrapper dict and dying on unexpected optimizer/
+            # config keys. Also strips torch.compile's '_orig_mod.'
+            # prefix (legacy checkpoints saved from a compiled Trainer).
+            from enigma_engine.core.model_registry import get_state_dict
+
+            state_dict = get_state_dict(checkpoint, prefix="_orig_mod.")
             _raw_model = getattr(self.model, "_orig_mod", self.model)
             _raw_model.load_state_dict(state_dict)
 
-            opt_state = checkpoint.get("optimizer_state_dict")
-            if opt_state:
-                self.optimizer.load_state_dict(opt_state)
+            # The checkpoint's optimizer_state_dict is deliberately NOT
+            # restored: nothing in this trainer ever steps self.optimizer
+            # (train_vision builds its own local one), so materializing
+            # full-model AdamW moments here (~1.5 GB at 182M fp32) would
+            # be dead weight on the device.
 
             state = checkpoint.get("training_state", {})
             self.state.epoch = state.get("epoch", 0)
             self.state.step = state.get("step", 0)
             self.state.epoch_start_step = state.get("epoch_start_step", -1)
             self.state.best_loss = state.get("best_loss", float("inf"))
-            self.state.total_tokens = state.get("total_tokens", 0)
             self.state.training_losses = state.get("training_losses", [])
             self.state.validation_losses = state.get("validation_losses", [])
 
@@ -1124,7 +770,6 @@ class Trainer:
         self.state.step = state.get("step", 0)
         self.state.epoch_start_step = state.get("epoch_start_step", -1)
         self.state.best_loss = state.get("best_loss", float("inf"))
-        self.state.total_tokens = state.get("total_tokens", 0)
         self.state.training_losses = state.get("training_losses", [])
         self.state.validation_losses = state.get("validation_losses", [])
 
@@ -1286,7 +931,14 @@ class Trainer:
             # was batch-1 until 2026-07-17 -- at LLaVA 558k scale that starved
             # the 5090 on Python overhead).
             vision_batch = max(1, int(self.config.batch_size))
-            total_steps = ((len(data) + vision_batch - 1) // vision_batch) * self.config.epochs
+            # The schedule is sized in OPTIMIZER steps, matching where
+            # scheduler.step() actually fires (accumulation boundaries +
+            # the per-epoch remainder flush = ceil(batches/accum) per
+            # epoch). Sizing it in micro-batches stretched warmup/decay by
+            # the accumulation factor whenever max_grad_accumulation > 1.
+            accum_steps = max(1, self.config.max_grad_accumulation)
+            epoch_batches = (len(data) + vision_batch - 1) // vision_batch
+            total_steps = ((epoch_batches + accum_steps - 1) // accum_steps) * self.config.epochs
             warmup = _effective_warmup(self.config.warmup_steps, total_steps)
             decay_steps = max(1, total_steps - warmup)
 
@@ -1458,6 +1110,64 @@ class Trainer:
                         dropped_short_captions,
                     )
 
+            def _forward_ce(imgs: list[torch.Tensor], id_lists: list[list[int]], with_token_count: bool = False):
+                """Shared batch-build + loss for the train loop and
+                _run_validation (one implementation, so a masking/padding
+                fix can never land on one side only): stack the images,
+                right-pad text/targets on CPU with one transfer each, run
+                the multimodal forward, and return (mean CE over
+                non-ignored targets, that target count or None). None when
+                the batch degenerates (patches swallow the text window, or
+                nothing is left to predict). The token count is computed
+                only on request: its .item() drains the forward stream --
+                fine after a no-grad val forward, but on a train batch it
+                would wedge a pipeline bubble between forward and
+                backward."""
+                img_batch = torch.cat(imgs, dim=0).to(self.device)
+                max_len = max(len(t) for t in id_lists)
+                text_tensor = torch.zeros(len(id_lists), max_len, dtype=torch.long)
+                targets = torch.full((len(id_lists), max_len - 1), -100, dtype=torch.long)
+                for bi, t in enumerate(id_lists):
+                    row = torch.tensor(t, dtype=torch.long)
+                    text_tensor[bi, : len(t)] = row
+                    targets[bi, : len(t) - 1] = row[1:]
+                text_tensor = text_tensor.to(self.device)
+                targets = targets.to(self.device)
+                with torch.amp.autocast(
+                    "cuda",
+                    dtype=self._amp_dtype,
+                    enabled=self.config.use_amp and self.device.type == "cuda",
+                ):
+                    feats = vision_encoder(img_batch)
+                    logits = self.model.forward_multimodal(
+                        input_ids=text_tensor,
+                        vision_features=feats,
+                    )
+                    # Loss only on the text portion: the model concatenates
+                    # [vision_patches, text_tokens] internally, and causal
+                    # attention means a real token never attends to the
+                    # padding AFTER it, so correctness needs no attention
+                    # mask -- only the ignore_index loss mask.
+                    n_patches = feats.shape[1]
+                    if n_patches >= logits.shape[1]:
+                        logger.warning(
+                            "Vision patches (%d) >= logits length (%d), skipping batch", n_patches, logits.shape[1]
+                        )
+                        return None
+                    text_logits = logits[:, n_patches:-1, :]
+                    min_len = min(text_logits.shape[1], targets.shape[1])
+                    if min_len < 1:
+                        return None
+                    loss = nn.functional.cross_entropy(
+                        text_logits[:, :min_len, :].reshape(-1, text_logits.size(-1)),
+                        targets[:, :min_len].reshape(-1),
+                        ignore_index=-100,
+                    )
+                if not with_token_count:
+                    return loss, None
+                n_tokens = int((targets[:, :min_len] != -100).sum().item())
+                return loss, n_tokens
+
             def _run_validation() -> float | None:
                 """V-6: no-grad evaluation over the held-out val_pairs.
                 Returns the TOKEN-WEIGHTED mean cross-entropy across all
@@ -1507,41 +1217,10 @@ class Trainer:
                                     continue
                             if not v_imgs:
                                 continue
-                            v_batch = torch.cat(v_imgs, dim=0).to(self.device)
-                            # Build text/target tensors on CPU, one transfer
-                            # each (not per-sample device writes).
-                            v_max = max(len(t) for t in v_id_lists)
-                            v_text_tensor = torch.zeros(len(v_id_lists), v_max, dtype=torch.long)
-                            v_targets = torch.full((len(v_id_lists), v_max - 1), -100, dtype=torch.long)
-                            for bi, t in enumerate(v_id_lists):
-                                row = torch.tensor(t, dtype=torch.long)
-                                v_text_tensor[bi, : len(t)] = row
-                                v_targets[bi, : len(t) - 1] = row[1:]
-                            v_text_tensor = v_text_tensor.to(self.device)
-                            v_targets = v_targets.to(self.device)
-                            with torch.amp.autocast(
-                                "cuda",
-                                dtype=self._amp_dtype,
-                                enabled=self.config.use_amp and self.device.type == "cuda",
-                            ):
-                                v_feats = vision_encoder(v_batch)
-                                v_logits = self.model.forward_multimodal(
-                                    input_ids=v_text_tensor,
-                                    vision_features=v_feats,
-                                )
-                                v_n_patches = v_feats.shape[1]
-                                if v_n_patches >= v_logits.shape[1]:
-                                    continue
-                                v_text_logits = v_logits[:, v_n_patches:-1, :]
-                                v_min_len = min(v_text_logits.shape[1], v_targets.shape[1])
-                                if v_min_len < 1:
-                                    continue
-                                v_loss = nn.functional.cross_entropy(
-                                    v_text_logits[:, :v_min_len, :].reshape(-1, v_text_logits.size(-1)),
-                                    v_targets[:, :v_min_len].reshape(-1),
-                                    ignore_index=-100,
-                                )
-                            v_n_tokens = int((v_targets[:, :v_min_len] != -100).sum().item())
+                            out = _forward_ce(v_imgs, v_id_lists, with_token_count=True)
+                            if out is None:
+                                continue
+                            v_loss, v_n_tokens = out
                             if v_n_tokens == 0:
                                 continue
                             total_loss += v_loss.item() * v_n_tokens
@@ -1594,11 +1273,10 @@ class Trainer:
                 epoch_steps = 0
                 train_interrupted = False
 
-                # V-1: gradient accumulation. Other train_* methods honor
-                # config.max_grad_accumulation; vision must too. Only count
-                # successful backwards (skipped/short-caption samples don't
-                # advance the boundary counter).
-                accum_steps = max(1, self.config.max_grad_accumulation)
+                # V-1: gradient accumulation (accum_steps hoisted to the
+                # schedule setup). Only count successful backwards
+                # (skipped/short-caption samples don't advance the
+                # boundary counter).
                 accum_count = 0
 
                 # Shuffle training pairs each epoch
@@ -1699,61 +1377,13 @@ class Trainer:
                         id_lists.append(token_ids)
                     if not imgs:
                         continue
-                    img_batch = torch.cat(imgs, dim=0).to(self.device)
-
-                    # Right-pad text to the batch max; padded target positions
-                    # get ignore_index. Causal attention means a real token
-                    # never attends to the padding AFTER it, so correctness
-                    # needs no attention mask -- only the loss mask. Built on
-                    # CPU, one transfer each (K7: not per-sample device writes).
-                    max_len = max(len(t) for t in id_lists)
-                    text_tensor = torch.zeros(len(id_lists), max_len, dtype=torch.long)
-                    targets = torch.full((len(id_lists), max_len - 1), -100, dtype=torch.long)
-                    for bi, t in enumerate(id_lists):
-                        row = torch.tensor(t, dtype=torch.long)
-                        text_tensor[bi, : len(t)] = row
-                        targets[bi, : len(t) - 1] = row[1:]
-                    text_tensor = text_tensor.to(self.device)
-                    targets = targets.to(self.device)
-
-                    with torch.amp.autocast(
-                        "cuda",
-                        dtype=self._amp_dtype,
-                        enabled=self.config.use_amp and self.device.type == "cuda",
-                    ):
-                        vision_features = vision_encoder(img_batch)  # [B, patches, v_dim]
-
-                        # Forward through model with vision features
-                        # The model concatenates [vision_patches, text_tokens] internally
-                        logits = self.model.forward_multimodal(
-                            input_ids=text_tensor,
-                            vision_features=vision_features,
-                        )
-                        # logits shape: [B, vision_patches + text_len, vocab_size]
-
-                        # We only compute loss on the text portion
-                        # The text tokens start after the vision patches
-                        n_patches = vision_features.shape[1]
-                        if n_patches >= logits.shape[1]:
-                            logger.warning(
-                                "Vision patches (%d) >= logits length (%d), skipping batch", n_patches, logits.shape[1]
-                            )
-                            continue
-                        text_logits = logits[:, n_patches:-1, :]  # predict next token
-
-                        # Align lengths (in case of truncation)
-                        min_len = min(text_logits.shape[1], targets.shape[1])
-                        if min_len < 1:
-                            continue
-
-                        loss = nn.functional.cross_entropy(
-                            text_logits[:, :min_len, :].reshape(-1, text_logits.size(-1)),
-                            targets[:, :min_len].reshape(-1),
-                            ignore_index=-100,
-                        )
-                        # V-1: scale loss for accumulation. Recover unscaled
-                        # value below for logging / NaN guards.
-                        loss = loss / accum_steps
+                    out = _forward_ce(imgs, id_lists)
+                    if out is None:
+                        continue
+                    loss, _ = out
+                    # V-1: scale loss for accumulation. Recover unscaled
+                    # value below for logging / NaN guards.
+                    loss = loss / accum_steps
 
                     # Backward (always); step only at accum boundary.
                     if self.config.use_amp and self.device.type == "cuda":
@@ -1803,8 +1433,11 @@ class Trainer:
                         self.state.step += 1
                         _maybe_step_save()
 
-                    # Log every N steps
-                    if self.config.log_every > 0 and self.state.step % self.config.log_every == 0:
+                    # Log every N optimizer steps. Boundary-gated: without
+                    # it, every micro-batch of a matching accumulation
+                    # window re-fired the callback (accum duplicate emits
+                    # per logged step).
+                    if self.config.log_every > 0 and is_boundary and self.state.step % self.config.log_every == 0:
                         self._emit_loss(loss_val)
 
                     # Progress within epoch (batch counts)

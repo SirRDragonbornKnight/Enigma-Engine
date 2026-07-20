@@ -40,7 +40,7 @@ if (-not (Test-Path $py)) {
 }
 
 # --- the proven run math (matches the schedule now recorded in the checkpoint) ---
-$trainArgs = '--size large --tokens 56.6e9 --lr 6e-4 --warmup 200 --micro-batch 12 --grad-accum 16 --block 1024 --dropout 0.0 --weight-decay 0.1 --grad-clip 1.0 --optimizer adamw --schedule cosine --no-diff-attn --no-grad-ckpt --resume models/enigma_pretrain_large/latest.pth --archive-every 25000'
+$trainArgs = '--size large --tokens 56.6e9 --lr 6e-4 --warmup 200 --micro-batch 12 --grad-accum 16 --block 1024 --dropout 0.0 --weight-decay 0.1 --grad-clip 1.0 --optimizer adamw --schedule cosine --no-grad-ckpt --resume models/enigma_pretrain_large/latest.pth --archive-every 25000'
 $inner = "/c `"$py`" -u pretrain_enigma.py $trainArgs >> train_large.log 2>&1"
 
 Write-Host "Resuming Enigma pretraining (detached)..." -ForegroundColor Cyan

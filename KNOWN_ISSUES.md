@@ -17,8 +17,10 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    **Resume command:** the schedule is now RECORDED in the checkpoint (since
    the 51,250 save), so a bare `--resume models/enigma_pretrain_large/latest.pth`
    restores tokens/lr/warmup/batch/etc. from the ckpt — but re-using the full
-   proven launch (same flags + `--no-diff-attn --no-grad-ckpt --archive-every
-   25000`) is safest and matches the recorded schedule. ETA from here ≈ 10½
+   proven launch (same flags + `--no-grad-ckpt --archive-every 25000`) is
+   safest and matches the recorded schedule. (`--no-diff-attn` appeared in
+   the original command; the flag was removed 2026-07-19 — argparse now
+   rejects it, drop it from any replayed command.) ETA from here ≈ 10½
    days of stepping if run continuously. **At the user's ~8 h/day cadence**
    (2026-06-12) the ~245 remaining GPU-hours stretch to **~31 active days ->
    mid-July** wall-clock. Stop/start is cheap (<=16 min/stop; the schedule is
@@ -75,9 +77,9 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (371 tests as of 2026-07-19 — 349 after the
-   2026-07-18 compression pass removed the dormant stack along with its own tests, +22
-   regression tests from the 2026-07-19 checkpoint-safety and pre-align fix arcs). The
+9. **The python suite is engine-only** (377 tests as of 2026-07-19 — 349 after the
+   2026-07-18 compression pass removed the dormant stack along with its own tests, +28
+   regression tests from the 2026-07-19 checkpoint-safety, pre-align, and cleanup arcs). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
@@ -131,24 +133,22 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     0.1, gradient_noise_eta 0.01) are inert and refused when set;
     `ForgeConfig.from_dict`'s known-set is derived from
     `dataclasses.fields()` with to_dict completeness pinned; the serial
-    decode/verify/H2D costs got the pooled-overlap rework. STILL OPEN:
-    - **Grad-accumulation step accounting** (`vision_align.py` train_vision):
-      `total_steps` for warmup/cosine is counted in MICRO-batches but
-      `scheduler.step()` fires per optimizer step, so `max_grad_accumulation
-      > 1` stretches the LR schedule by the accum factor; the `log_every`
-      gate also re-fires `_emit_loss` on every micro-batch of a matching
-      window. Latent: every current caller uses accum=1.
-    - **Long-tail config knobs still accepted but unimplemented**:
-      `val_split`, `curriculum`, `z_loss_weight`, `r_drop_alpha`,
-      `run_evaluation`, `eval_every`, `use_sequence_packing`,
-      `general_mix_ratio`, `wsd_decay_fraction`, `cosine_restart_period`
-      etc. remain in TrainingConfig and are recorded by to_dict() without
-      applying (all inert-by-default; the config-slimming altitude fix in
-      BACKLOG 7.5 is the real cure).
-    - **load_checkpoint falsy unwrap** (`vision_align.py` load_checkpoint):
-      an empty-but-present `model_state_dict` falls through to loading the
-      whole wrapper dict (confusing unexpected-keys error); reuse
-      `model_registry.get_state_dict`.
+    decode/verify/H2D costs got the pooled-overlap rework.
+    ROUND 4 (the cleanup batch, same day) closed the remainder: the LR
+    schedule is sized in optimizer steps and the loss log is
+    boundary-gated (the accum>1 latents); load_checkpoint unwraps via
+    `model_registry.get_state_dict` (empty-state-dict fallthrough dead);
+    TrainingConfig slimmed to consumed + refused fields (~25 inert Forge
+    knobs deleted; `TrainingConfig.from_dict` filters old blobs; to_dict
+    is field-derived); the batch_size=0 auto-estimator retired (refusal
+    points at `hardware_detection.recommend_training_batch_size`); the
+    never-stepped fallback optimizer is lazy and old-checkpoint optimizer
+    state is no longer materialized; train/val share one `_forward_ce`;
+    one-allocation CPU mask; zero-caller `training/__init__` shim and the
+    `--no-diff-attn` no-op removed; stale MoE/LoRA/speculative/MTP prose
+    grounded; dead `total_tokens`/`dataset_fingerprint` checkpoint keys
+    and the `_emit_loss` val_loss param removed. ENTRY CLOSED - the review
+    ledger lives in BACKLOG 7.5 (its two deliberate deferrals included).
     - **Trainer aliases + mutates the caller's TrainingConfig** (batch_size=0
       sentinel overwritten in place; persisted into checkpoints as if
       user-chosen).

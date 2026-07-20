@@ -306,47 +306,28 @@
   `ForgeConfig.from_dict` known-set derived from `dataclasses.fields()`.
   10 new tests; 19-mutation sweep all killed; suite 361 -> 371; audited
   to convergence (4 rounds, severity high -> med -> low -> none).
-- [ ] **Best-save rewrites the full frozen text transformer** every improving
-  epoch (hundreds of MB of byte-identical weights per save); consider a
-  trainable-subset format for intermediate bests.
-- [ ] **Dead fallback optimizer** (`_setup_optimizer`): full-model fused AdamW
-  built at __init__, never stepped; `load_checkpoint` restores full AdamW
-  moments into it (~1.5 GB device memory for nothing); its name-based decay
-  grouping DIFFERS from `core/optim.build_optimizer`'s dim<2 rule (two
-  policies drifting).
-- [ ] **`_estimate_batch_size` models the wrong workload**: text-only trial
-  forward, pre-freeze, charges optimizer+grad bytes for params that will be
-  frozen, omits encoder+patch activations — wrong in both directions for
-  the only workload this trainer runs. Also: `hardware_detection.
-  recommend_training_batch_size` now has zero callers (competing selector).
-- [ ] **`_run_validation` duplicates the train batch assembly** (drop
-  policies already disagree: train warns+counts <2-token drops, val is
-  silent); extract a shared batch-build/loss helper.
-- [ ] **`TrainingConfig.to_dict` hand-enumerates ~59 fields** — use
-  `dataclasses.asdict`; a forgotten future field silently vanishes from
-  checkpoints. Related: `_save_checkpoint` stores `config.__dict__` (leaks
-  `_frozen`) instead of canonical `ForgeConfig.to_dict()`, writes dual
-  `model_config`+`config` keys for the deleted gui_forge loader
-  (`test_encoder_persistence.py` pins both keys — update together), and
-  `dataset_fingerprint` is unconditionally None (its writer died with the
-  Forge trainer). Dead state: `TrainingState.total_tokens` never
-  incremented (stamps 0), `_emit_loss`'s `val_loss` param ignored.
-- [ ] **CPU-fallback mask builds 4 temporaries** (`model_components.py`
-  ~477): `torch.full((T,T_k), -inf, dtype=..., device=...).triu_(T_k-T+1)`
-  is one allocation and matches the deleted square-path idiom.
-- [ ] **Zero-caller re-export shim** (`training/__init__.py`): every caller
-  imports `vision_align` directly (as the docstring instructs); ambiguous
-  once the audio twin lands.
-- [ ] **`--no-diff-attn` zombie flag** (`pretrain_enigma.py` ~122): no-op;
-  consumers are `extend_length.ps1` + `resume_training.ps1` — update those
-  atomically if removed (resume script is the live run's).
-- [ ] **Doc drift**: `model.py` docstring still advertises MoE/LoRA/
-  speculative decoding (all deleted; also `model_utils.py:103`);
-  `model_presets.py` `estimate_parameters` docstring cites deleted MTP
-  heads; `test_import_integrity.py` cites deleted
-  `run_training_diagnostic.py` as its motivating consumer;
-  `test_encoder_persistence.py` still opens the audio port on every tiny
-  model with zero audio tests left.
+- [x] **Cleanup batch 2026-07-19 (round 4)** — closed in one audited pass
+  (6 new mutation-verified tests, 25-mutation sweep, suite 371 -> 377):
+  dead fallback optimizer -> lazy property, old-checkpoint optimizer state
+  no longer materialized; `_estimate_batch_size` RETIRED (batch_size >= 1
+  required; refusal points at `hardware_detection.
+  recommend_training_batch_size`) — also removes the caller-config
+  mutation; train/val share `_forward_ce` (drop-policy drift dead);
+  `TrainingConfig` slimmed ~25 inert fields with field-derived
+  to_dict/from_dict; one-allocation CPU mask; `training/__init__` shim
+  and `--no-diff-attn` (+ both .ps1 consumers) removed; MoE/LoRA/
+  speculative/MTP/test-prose doc drift grounded; `total_tokens`/
+  `dataset_fingerprint` dead checkpoint keys and `_emit_loss`'s dead
+  val_loss param removed.
+- [ ] **Deliberately DEFERRED (rationale logged 2026-07-19):**
+  trainable-subset intermediate best-saves — the best checkpoint is the
+  primary resume artifact and must stay full-format; the flagship 1-epoch
+  run writes ~one best save total, so the I/O win is small next to the
+  resume-compat risk. Revisit only if multi-epoch align runs become the
+  norm. Also still open: `_save_checkpoint` stores `config.__dict__`
+  instead of canonical `ForgeConfig.to_dict()` and writes dual
+  `model_config`+`config` keys (`test_encoder_persistence.py` pins both
+  keys — change together; `config` is the live key with 7 readers).
 
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 
