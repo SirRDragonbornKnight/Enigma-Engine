@@ -48,9 +48,28 @@ from the larger vocab.
   produces silently wrong results otherwise).
 - **Context, for free**: block 1024 goes from ~293 words (v1) to ~739 words
   (v2) — a 2.5x effective context increase with no architecture change.
-- Retokenize cost: v1 encodes at ~5.1 MB/s single-threaded, so 88.59 GB is
-  **~5 core-hours** (parallelizable) — the low end of this doc's original
-  "hours-to-a-day".
+- Retokenize cost, MEASURED with the v2 tokenizer (2026-07-19). v2 encodes
+  slower per MB than v1 (more merge work per unit) but produces 2.5x fewer
+  tokens; single-threaded it is 4.4 MB/s = **5.7 hours** for 88.59 GB.
+  `pretokenize_data.py` has NO parallelism today, and the work is embarrassingly
+  parallel (chunk on line boundaries, one tokenizer per worker). Measured
+  multiprocessing scaling on this box (16 logical cores):
+
+  | workers | MB/s | speedup | full corpus |
+  |---|---|---|---|
+  | 1 | 4.42 | 1.0x | 5.7 h |
+  | 2 | 8.49 | 1.9x | 3.0 h |
+  | 4 | 15.69 | 3.5x | 1.6 h |
+  | 8 | 28.45 | 6.4x | 0.9 h |
+  | 12 | 37.34 | 8.4x | **0.7 h** |
+
+  One-time pool init is ~3 s (negligible at corpus scale). ~70% parallel
+  efficiency at 12 workers. Note these were taken while the machine was in
+  use, so treat them as a floor. **4 workers is the "run it while gaming"
+  setting** (1.6 h, 12 cores left free); 12 workers only when the box is idle.
+  A first benchmark attempt at 4 MB reported a SLOWDOWN — the workload was
+  smaller than Windows spawn + per-worker init, measuring startup rather than
+  throughput. Size any re-benchmark so per-worker work >> init.
 - Vocab quality spot-check: longest learned units are ` responsibilities`,
   ` infrastructure`, ` implementation`; 10,603 of 16,384 entries are
   leading-space word tokens; 28 tokens contain a digit and NONE contain two.
@@ -189,12 +208,21 @@ NEXT, in order:
 1. Train the PRODUCTION v2 vocab on a larger slice (the measured vocab used
    56 MB; training is cheap — 0.9 min — so a multi-GB slice is affordable and
    will sharpen the merge statistics).
-2. Full corpus retokenize -> new `tokens.bin` (~43 GB as uint16, ~5
-   core-hours, CPU/IO only; 1.4 TB free so headroom is fine). Requires
-   switching the v2 write path from uint32 to uint16 AND matching the
-   pretrain memmap reader's dtype — do those together or the corpus reads as
-   garbage. Schedule the run when the machine is otherwise idle; it will use
-   cores. New lineage, new directory: never overwrite the v1 `tokens.bin`.
+2. Full corpus retokenize -> new `tokens.bin` (~43 GB as uint16; 1.4 TB free
+   so headroom is fine). Needs a PARALLEL v2 write path, which does not exist
+   yet — `pretokenize_data.py` is single-threaded and hardcodes uint32, and it
+   is the script that produced the immutable v1 corpus, so v2 should get its
+   own script rather than growing a mode flag. Requirements for it:
+   - `--workers` (default: leave headroom, e.g. cpu_count//2); chunk on line
+     boundaries so no word is torn; one tokenizer per worker via a Pool
+     initializer (Windows spawn-safe).
+   - uint16 output AND a matching dtype in pretrain's memmap reader — change
+     them together or the corpus reads as garbage.
+   - New lineage, NEW directory: never overwrite the v1 `tokens.bin`.
+   - Keep v1's guards: eos-id bounds check, refuse-on-vocab-mismatch, and the
+     paragraph dedup.
+   Wall clock once it exists: ~1.6 h at 4 workers (safe while gaming) or
+   ~0.7 h at 12 (idle box).
 3. Then, and only then, the GPU decision per the framing above.
 
 Open A/B questions unchanged: SuperBPE-style superword pass, 16k vs 32k
