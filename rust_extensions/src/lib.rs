@@ -80,6 +80,15 @@ fn pre_tokenize(text: &str) -> Vec<String> {
 //   python \w = [\p{L}\p{Nd}\p{Nl}\p{No}_]      (str.isalnum() + underscore)
 //   python \d = \p{Nd}
 //   python \s = [\p{White_Space}\x1C-\x1F]      (FS/GS/RS/US are py-space)
+//
+// CONTRACT BOUNDARY (2026-07-20 audit): parity is exhaustive for every
+// codepoint ASSIGNED as of Unicode 15.0 (CPython 3.12's tables; all
+// 0x110000 scanned, 0 mismatches). Codepoints newer than 15.0 (~5k:
+// Egyptian Hieroglyphs Ext-A, CJK Ext I, ...) are `Cn` to python but
+// letters here (regex crate ships 16.0), so ids can differ when one
+// abuts a contraction — different-but-lossless splits, rust arguably
+// more correct. Consequence: v2 serving/training must encode through
+// THIS backend, never the python fallback, whenever both exist.
 // ---------------------------------------------------------------------------
 
 /// Python's V2_PATTERN minus its `\s+(?!\S)` branch (rust `regex` has no
