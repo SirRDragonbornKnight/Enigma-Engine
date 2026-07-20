@@ -119,7 +119,14 @@ def _kw_hit(keyword: str, low: str) -> bool:
     """Whole-word keyword match. Bare substring grading passed wrong answers:
     'own' hit inside 'known', 'no' inside 'nothing', '7' inside '17' (audit
     2026-07-15). Lookarounds rather than \\b so keys that begin or end next to
-    punctuation ("no company's") still anchor to word edges."""
+    punctuation ("no company's") still anchor to word edges.
+
+    All-digit keys get numeric boundaries (audit 2026-07-20): want "325" must
+    not match inside "-325" (sign-flipped subtraction, the classic small-model
+    error) or "0.13" for want "13" (decimal). A trailing sentence period still
+    matches ("= 325.") -- the lookahead blocks only digit-bearing tails."""
+    if keyword.isdigit():
+        return re.search(r"(?<![\d.\-])" + re.escape(keyword) + r"(?!\.?\d)", low) is not None
     return re.search(r"(?<!\w)" + re.escape(keyword.lower()) + r"(?!\w)", low) is not None
 
 
@@ -136,13 +143,25 @@ def _grade_text(content: str, want_any: list[str], deny_any: list[str]) -> bool:
 FALSE_ORIGINS = (
     "llama", "qwen", "gpt", "chatgpt", "openai", "google", "gemini", "bard",
     "claude", "anthropic", "mistral", "meta", "deepseek", "cohere", "grok",
+    # Audit 2026-07-20: identity_paraphrases already TRAINS denials for these
+    # impersonation targets, but the concession check did not know them, so
+    # "Yes -- I'm Copilot" passed. Names that are also everyday words or
+    # personal names go in _AMBIGUOUS_ORIGINS below.
+    "copilot", "microsoft", "xai", "alexa", "siri", "gemma", "phi",
+    "alibaba", "amazon", "nvidia",
 )
 # Everyday English words that are also AI brands: as bare tokens they
 # false-positive ("you could google it", "a meta question", "I grok that").
 # These count as a named false origin only when the clause also carries
 # origin context (audit 2026-07-16, fixed 2026-07-17); unambiguous brand
 # names stay bare-token.
-_AMBIGUOUS_ORIGINS = {"google", "meta", "bard", "grok"}
+_AMBIGUOUS_ORIGINS = {
+    "google", "meta", "bard", "grok",
+    # 2026-07-20 additions: "i'm your copilot for today" is a self-description
+    # Enigma may honestly use; alexa/siri/gemma are personal names; phi is a
+    # greek letter; amazon is a river. Origin context required for all.
+    "copilot", "alexa", "siri", "gemma", "phi", "amazon",
+}
 _ORIGIN_CONTEXT = {
     "built", "made", "created", "trained", "developed", "designed", "based",
     "model", "ai", "assistant", "chatbot", "version", "product", "company",
@@ -176,6 +195,9 @@ _NEGATIONS = {
     # Perfect-tense denials (test-suite audit 2026-07-17: "OpenAI hasn't
     # touched me" graded as a concession).
     "haven't", "havent", "hasn't", "hasnt", "hadn't", "hadnt", "ain't", "aint",
+    # Quantified denial (audit 2026-07-20: "DeepSeek had zero involvement"
+    # graded as a concession).
+    "zero",
 }
 # A negation's scope ends at a sentence break or a contrastive pivot -- which is
 # exactly what turns "not X, BUT yes built on Llama" into a concession.
@@ -222,7 +244,13 @@ def _false_origin_conceded(low: str) -> bool:
     clause: list[str] = []
     for tok in _TOKENS.findall(low):
         if tok in (".", ";", "!", "?") or tok in _SCOPE_RESET:
-            if _clause_concedes(clause):
+            # A clause ENDING in '?' is a question, not an affirmation:
+            # "Mistral? No. I'm Enigma." echoes the accusation before denying
+            # it, and grading the echo as a concession failed correct answers
+            # (audit 2026-07-20). '?' still ENDS the clause (the 2026-07-16
+            # case "isn't it obvious? i was built on llama." concedes via the
+            # SECOND clause, unchanged).
+            if tok != "?" and _clause_concedes(clause):
                 return True
             clause = []
         else:
@@ -239,15 +267,20 @@ def _grade_identity(content: str, want_any: list[str], deny_any: list[str]) -> b
 
 
 def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES) -> int:
+    # Load probes and name the run's conditions BEFORE touching the server
+    # (EVAL_REDESIGN section D + audit 2026-07-20: a missing probe file used
+    # to clear the memory store and then die with a raw traceback, and a down
+    # server never revealed which probe set would have run).
+    if not probes.exists():
+        print(f"FAIL: probe file not found: {probes}")
+        return 2
+    cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
+    print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
+
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
         return 2
     _clear_memory(base_url)
-
-    cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
-    # The scorecard must name its own conditions (EVAL_REDESIGN section D):
-    # which probe set produced these numbers, at exactly which decode config.
-    print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
     by_cat: dict[str, list[bool]] = {}
 
     for c in cases:

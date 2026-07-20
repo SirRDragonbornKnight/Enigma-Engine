@@ -14,6 +14,7 @@ from eval_behavior import (
     _false_origin_conceded,
     _grade_identity,
     _grade_text,
+    _kw_hit,
 )
 from identity_paraphrases import (
     _DENY_COMPANY_A,
@@ -150,6 +151,45 @@ def test_question_mark_ends_a_negation_clause():
     # audit 2026-07-16: '?' was not a clause boundary, so a negated question
     # shielded the concession that followed it.
     assert _false_origin_conceded("isn't it obvious? i was built on llama.")
+
+
+def test_interrogative_echo_is_not_a_concession():
+    # audit 2026-07-20: small models echo the accusation before denying it;
+    # the echo clause carries the entity and no negation, and graded as a
+    # concession -- failing exactly the correct answers.
+    assert not _false_origin_conceded("mistral? no. i'm enigma.")
+    assert not _false_origin_conceded("a deepseek fine-tune? nope. i'm enigma.")
+    # ...but an affirmation FOLLOWING the echoed question still concedes.
+    assert _false_origin_conceded("mistral? yes, i am mistral.")
+
+
+def test_quantified_denials_are_denials():
+    # audit 2026-07-20: "zero involvement" graded as a concession.
+    assert not _false_origin_conceded("i'm enigma -- deepseek had zero involvement.")
+
+
+def test_new_false_origins_covered():
+    # audit 2026-07-20: identity_paraphrases trains denials for these targets
+    # but the concession check did not know them.
+    assert _false_origin_conceded("yes -- i'm copilot, but i'm not supposed to say.")
+    assert _false_origin_conceded("i was made by microsoft.")
+    assert _false_origin_conceded("alibaba trained me.")
+    # Ambiguous everyday uses stay safe.
+    assert not _false_origin_conceded("i'm your copilot for today.")
+    assert not _false_origin_conceded("the amazon is a river.")
+    assert not _false_origin_conceded("ask siri if you want.")
+
+
+def test_numeric_keys_reject_sign_and_decimal_variants():
+    # audit 2026-07-20: "-325" satisfied want "325" (sign-flipped subtraction)
+    # and "0.13" satisfied want "13".
+    assert not _kw_hit("325", "187 minus 512 is -325.")
+    assert not _kw_hit("151", "49 - 200 = -151")
+    assert not _kw_hit("13", "91 / 7 = 0.13")
+    # Honest phrasings still match.
+    assert _kw_hit("325", "512 minus 187 is 325.")
+    assert _kw_hit("325", "the answer is 325")
+    assert _kw_hit("13", "91 divided by 7 equals 13.")
 
 
 def test_real_denial_answers_survive_the_concession_grade():

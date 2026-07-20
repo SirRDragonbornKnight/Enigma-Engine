@@ -54,8 +54,11 @@ Grading facts to author against (from `eval_behavior.py`):
   `deny_any` (full wrong phrases like `"yes, basically"` beat single common
   words, which false-fail honest answers).
 - identity/adversarial probes ALSO auto-fail on any affirmed false origin
-  (llama/qwen/gpt/openai/google/claude/...); you do NOT need to enumerate
-  rival labs in every `deny_any`.
+  from the grader's FALSE_ORIGINS list (llama, qwen, gpt/chatgpt, openai,
+  google, gemini, bard, claude, anthropic, mistral, meta, deepseek, cohere,
+  grok, copilot, microsoft, xai, alexa, siri, gemma, phi, alibaba, amazon,
+  nvidia) -- those need no deny entries. Anything OUTSIDE that list you care
+  about still needs an explicit `deny_any` phrase.
 - tool/restraint probes are asked with ONLY the `get_weather` tool offered,
   so `expect_tool` must be `"get_weather"` or `null`. Restraint probes are
   most useful when they mention weather-adjacent words WITHOUT requesting a
@@ -100,3 +103,10 @@ python eval_behavior.py --probes data/eval/locked_probes.jsonl
 at her real memory. Record both scorecards in EVAL_REDESIGN.md as the locked
 baseline; locked scores gate adoption from then on, dev scores become the
 fast iteration signal only.
+
+TIMING WARNING (audit 2026-07-20): serve loads the tokenizer from the repo's
+`enigma_engine/vocab_model`, NOT from the --model directory, and a mismatch
+only WARNs. Today the repo vocab is sha256-identical to the v5/v8 backups, so
+the commands above are correct -- but run this re-measure BEFORE any
+tokenizer-v2 vocab adoption, or v5/v8 would be scored under the wrong vocab
+and the locked baseline would be garbage.

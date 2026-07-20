@@ -162,9 +162,38 @@ def test_padded_training_forward_still_allowed():
 
 
 def test_multimodal_cached_multitoken_refuses():
+    # A REAL warm cache this time -- the 2026-07-20 re-audit caught the first
+    # version of this test passing start_pos with no cache at all, pinning an
+    # overfired stateless refusal instead of the cached trap it names.
     model = _tiny()
+    model.clear_cache()
+    model.forward_multimodal(input_ids=torch.tensor([[1, 2, 3]]), use_cache=True)
     with pytest.raises(ValueError, match="start_pos"):
-        model.forward_multimodal(input_ids=torch.tensor([[1, 2, 3]]), start_pos=2)
+        model.forward_multimodal(input_ids=torch.tensor([[4, 5]]), use_cache=True, start_pos=3)
+    model.clear_cache()
+
+
+def test_multimodal_stateless_offset_scoring_allowed():
+    # use_cache=False with a RoPE offset is well-defined (keys are only the
+    # new tokens; the square mask is correct) and must match forward(), which
+    # allows the same call.
+    model = _tiny()
+    mm = model.forward_multimodal(input_ids=torch.tensor([[1, 2, 3]]), start_pos=2)
+    plain = model.forward(torch.tensor([[1, 2, 3]]), start_pos=2)
+    assert torch.allclose(mm, plain)
+
+
+def test_multimodal_cached_t1_with_mask_refuses():
+    # T==1 never materializes the mask, so a cached masked call used to DROP
+    # the mask silently -- refuse it like the T>1 case.
+    model = _tiny()
+    model.clear_cache()
+    model.forward_multimodal(input_ids=torch.tensor([[1, 2, 3]]), use_cache=True)
+    with pytest.raises(ValueError, match="attention_mask"):
+        model.forward_multimodal(
+            input_ids=torch.tensor([[4]]), use_cache=True, start_pos=3, attention_mask=torch.ones(1, 1)
+        )
+    model.clear_cache()
 
 
 def test_multimodal_single_token_continuation_allowed():
@@ -173,4 +202,36 @@ def test_multimodal_single_token_continuation_allowed():
     model.forward_multimodal(input_ids=torch.tensor([[1, 2, 3]]), use_cache=True)
     logits = model.forward_multimodal(input_ids=torch.tensor([[4]]), use_cache=True, start_pos=3)
     assert logits.shape[1] == 1 and torch.isfinite(logits).all()
+    # ...and it must EQUAL the uncached recompute, not merely be finite.
     model.clear_cache()
+    full = model.forward_multimodal(input_ids=torch.tensor([[1, 2, 3, 4]]))
+    assert torch.allclose(logits[:, -1], full[:, -1], atol=1e-5)
+    model.clear_cache()
+
+
+def test_forward_cached_t1_with_mask_refuses():
+    # Same silent-drop hole in the main forward: T==1 + warm cache +
+    # attention_mask used to be silently unmasked (verified by execution
+    # 2026-07-20: output was byte-identical with and without the mask).
+    model = _tiny()
+    model.clear_cache()
+    model.forward(torch.tensor([[1, 2, 3, 4]]), use_cache=True)
+    with pytest.raises(ValueError, match="cached\\s+continuation"):
+        model.forward(
+            torch.tensor([[5]]), use_cache=True, start_pos=4, attention_mask=torch.ones(1, 1)
+        )
+    model.clear_cache()
+
+
+def test_nan_logits_uniform_fallback_respects_pad_mask():
+    # audit 2026-07-20: NaN real-vocab logits made every softmax NaN and the
+    # uniform fallback sampled over the FULL padded width, emitting pad ids in
+    # ~23% of draws -- routing around the guard in its own target regime.
+    from enigma_engine.core.model_utils import sample_next_token
+
+    step = torch.full((1, 128), float("nan"))
+    step[:, 100:] = float("-inf")  # what _live_vocab_logits produces
+    torch.manual_seed(0)
+    for _ in range(60):
+        tok = int(sample_next_token(step, torch.zeros(1, 0, dtype=torch.long), temperature=1.0, top_k=0, top_p=1.0).item())
+        assert tok < 100, f"uniform fallback sampled pad id {tok}"

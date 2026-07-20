@@ -63,6 +63,9 @@ class Eyes:
         image_size = getattr(getattr(encoder, "config", None), "image_size", 224)
         eos = getattr(tokenizer, "eos_token_id", 2)
         bos = getattr(tokenizer, "bos_token_id", 1)
+        # Live vocab width for the argmax slice below (None for config-less
+        # test stubs, which then decode over the full head unchanged).
+        vocab = getattr(getattr(model, "config", None), "vocab_size", None)
 
         def _caption(img) -> str:
             from enigma_engine.core.vision_encoder import preprocess_image
@@ -81,7 +84,13 @@ class Eyes:
                         input_ids=torch.tensor([ids], dtype=torch.long, device=device),
                         vision_features=feats,
                     )
-                    nxt = int(logits[0, -1].argmax())
+                    # Slice off the vocab-alignment padding columns before
+                    # argmax -- ids >= vocab_size have no decode (the model's
+                    # generate() paths mask them; this native loop must too).
+                    step = logits[0, -1]
+                    if vocab is not None and step.shape[-1] > vocab:
+                        step = step[:vocab]
+                    nxt = int(step.argmax())
                     if nxt == eos:
                         break
                     ids.append(nxt)

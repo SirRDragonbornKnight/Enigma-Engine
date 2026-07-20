@@ -433,15 +433,19 @@ class Enigma(nn.Module):
 
         # Explicit masks are built SQUARE over the new tokens, blind to cached
         # keys: pairing one with a warm cache (start_pos>0) broadcast-crashes in
-        # SDPA and would mis-mask in any path that survived. No live caller does
+        # SDPA and would mis-mask in any path that survived. At T==1 the mask is
+        # never even materialized, so the caller's padding intent was DROPPED
+        # silently -- worse than the crash (audit 2026-07-20; the guard now keys
+        # on the arguments, not the materialized mask). No live caller does
         # this (serve decodes unpadded); refuse loudly instead of leaving the
         # latent crash (KNOWN_ISSUES #12 square-mask entry, closed 2026-07-20).
-        if mask is not None and use_cache and start_pos > 0:
+        if use_cache and start_pos > 0 and (attention_mask is not None or attention_mask_2d is not None):
             raise ValueError(
                 "explicit attention_mask/attention_mask_2d is not supported for cached "
                 "continuation (start_pos>0): the materialized mask covers only the new "
-                f"tokens ({T}) and is blind to the {start_pos} cached positions. "
-                "Decode unpadded, or prefill the padded batch fresh (start_pos=0)."
+                f"tokens ({T}) and is blind to the {start_pos} cached positions (at T==1 "
+                "it would be silently dropped). Decode unpadded, or prefill the padded "
+                "batch fresh (start_pos=0)."
             )
 
         for layer in self.layers:
@@ -588,16 +592,23 @@ class Enigma(nn.Module):
             h = h + self.pos[:, :T]
 
         # The causal mask below is built SQUARE over the combined sequence and
-        # is blind to start_pos, so a cached multi-token continuation would be
-        # mis-masked (and broadcast-crash in SDPA). Single-token continuation
-        # (T==1) is fine: mask stays None and attention handles the rectangle.
-        # Refuse the unsupported case loudly (2026-07-20 v2 gap audit).
-        if kwargs.get("start_pos", 0) > 0 and T > 1:
+        # is blind to start_pos, so a CACHED multi-token continuation would be
+        # mis-masked (and broadcast-crash in SDPA), and a cached T==1 call with
+        # an attention_mask would silently drop it. Stateless calls with a RoPE
+        # offset (use_cache=False, start_pos>0) are well-defined -- the square
+        # mask is correct when the keys are only the new tokens -- and stay
+        # allowed, matching forward() (audit 2026-07-20 overfire fix). Cached
+        # single-token continuation without a mask is fine: mask stays None and
+        # attention handles the rectangle.
+        if kwargs.get("use_cache", False) and kwargs.get("start_pos", 0) > 0 and (
+            T > 1 or kwargs.get("attention_mask") is not None
+        ):
             raise ValueError(
-                "forward_multimodal does not support cached multi-token continuation "
-                f"(start_pos={kwargs['start_pos']}, T={T}): its causal mask is built "
-                "square over the new tokens and is blind to cached positions. "
-                "Prefill multimodal content fresh, then continue one token at a time."
+                "forward_multimodal does not support cached continuation with T>1 or an "
+                f"attention_mask (start_pos={kwargs['start_pos']}, T={T}): its causal "
+                "mask is built square over the new tokens and is blind to cached "
+                "positions. Prefill multimodal content fresh, then continue one token "
+                "at a time without a mask."
             )
 
         # Build causal mask on demand. Match h.dtype (same constraint as the

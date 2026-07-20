@@ -209,10 +209,16 @@ def sample_next_token(
     # Fall back to pre-filter distribution (S720).
     if torch.isnan(probs).any():
         probs = F.softmax(pre_filter_logits, dim=-1)
-        # Second-level guard: if pre-filter logits were also
-        # all -inf (model produced garbage), uniform sample.
+        # Second-level guard: garbage logits (NaN overflow / all -inf).
+        # Uniform sample, but ONLY over columns the caller did not -inf:
+        # a plain ones_like uniform routed AROUND the vocab-padding mask
+        # and emitted undecodable pad ids on NaN rows -- the exact regime
+        # the mask exists for (audit 2026-07-20).
         if torch.isnan(probs).any():
-            probs = torch.ones_like(probs) / probs.shape[-1]
+            allowed = (~torch.isneginf(pre_filter_logits)).to(probs.dtype)
+            counts = allowed.sum(dim=-1, keepdim=True)
+            uniform = torch.ones_like(probs) / probs.shape[-1]
+            probs = torch.where(counts > 0, allowed / counts.clamp(min=1), uniform)
     return torch.multinomial(probs, num_samples=1)
 
 

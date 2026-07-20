@@ -106,12 +106,15 @@ def test_ema_refuses_bad_input():
 # ---------------------------------------------------------------------------
 
 
+VALID_CFG = {"vocab_size": 64, "dim": 32, "n_layers": 1, "n_heads": 2, "max_seq_len": 32}
+
+
 def _ckpt(tmp_path, name: str, value: float, step: int, config=None):
     p = tmp_path / name
     torch.save(
         {
             "model_state_dict": {"w": torch.full((4, 4), value)},
-            "config": config or {"dim": 4, "n_layers": 1},
+            "config": config or dict(VALID_CFG),
             "step": step,
         },
         p,
@@ -126,7 +129,7 @@ def test_cli_writes_loadable_ema(tmp_path):
     assert ema_checkpoints.main([str(a), str(b), "--out", str(out), "--beta", "0.8"]) == 0
     ck = torch.load(out, weights_only=False)
     assert torch.allclose(ck["model_state_dict"]["w"], torch.full((4, 4), 0.2))
-    assert ck["config"] == {"dim": 4, "n_layers": 1}
+    assert ck["config"] == dict(VALID_CFG)
     assert ck["step"] == 200
     assert ck["ema"]["beta"] == 0.8 and ck["ema"]["n"] == 2
 
@@ -140,9 +143,37 @@ def test_cli_refuses_wrong_order(tmp_path):
 
 def test_cli_refuses_cross_lineage_configs(tmp_path):
     a = _ckpt(tmp_path, "a.pth", 0.0, 100)
-    b = _ckpt(tmp_path, "b.pth", 1.0, 200, config={"dim": 8, "n_layers": 1})
+    b = _ckpt(tmp_path, "b.pth", 1.0, 200, config={**VALID_CFG, "dim": 64, "n_heads": 4})
     with pytest.raises(SystemExit, match="lineage"):
         ema_checkpoints.main([str(a), str(b), "--out", str(tmp_path / "e.pth")])
+
+
+def test_cli_accepts_config_key_drift_within_a_lineage(tmp_path):
+    # audit 2026-07-20: raw dict equality refused archive windows straddling a
+    # code upgrade -- one save carries a retired key, the next carries a field
+    # added later. Same architecture must average fine.
+    old_era = {**VALID_CFG, "early_exit_layer": 0}  # retired key, filtered on load
+    new_era = {**VALID_CFG, "norm_scheme": "pre"}  # explicit default, same arch
+    a = _ckpt(tmp_path, "a.pth", 0.0, 100, config=old_era)
+    b = _ckpt(tmp_path, "b.pth", 1.0, 200, config=new_era)
+    out = tmp_path / "ema.pth"
+    assert ema_checkpoints.main([str(a), str(b), "--out", str(out)]) == 0
+    assert out.exists()
+
+
+def test_cli_warns_when_no_steps_recorded(tmp_path, capsys):
+    # audit 2026-07-20: the order guard was silently vacuous for stepless
+    # checkpoints -- a wrong-order EMA ran to completion with no signal.
+    a = _ckpt(tmp_path, "a.pth", 0.0, None)
+    b = _ckpt(tmp_path, "b.pth", 1.0, None)
+    assert ema_checkpoints.main([str(a), str(b), "--out", str(tmp_path / "e.pth")]) == 0
+    assert "CANNOT be" in capsys.readouterr().out
+
+
+def test_ema_refuses_non_tensor_entries():
+    bad = {"w": torch.zeros(4, 4), "count": "seven"}
+    with pytest.raises(ValueError, match="not a tensor"):
+        ema_state_dicts([_sd(0.0), bad], beta=0.8)
 
 
 def test_cli_refuses_overwriting_a_source(tmp_path):

@@ -1409,6 +1409,18 @@ if HAS_NUMPY:
         Returns:
             Path to exported file
         """
+        # Peri-LN models cannot be represented as llama-arch GGUF: the
+        # post-norm tensors have no name mapping, so llama.cpp either rejects
+        # the file or -- worse -- would compute Pre-LN math with the post-norms
+        # dropped (audit 2026-07-20). Refuse loudly at export time.
+        cfg = getattr(model, "config", None)
+        state_keys = model.state_dict().keys() if hasattr(model, "state_dict") else getattr(model, "keys", dict)()
+        if getattr(cfg, "norm_scheme", "pre") == "peri" or any("post_norm" in k for k in state_keys):
+            raise ValueError(
+                "GGUF export cannot represent norm_scheme='peri' (the post-norm tensors "
+                "have no llama-arch mapping); export is limited to pre-norm checkpoints"
+            )
+
         # Map string quant type to lowercase for exporter
         quant_lower = quant_type.lower().replace('_', '')
         if 'q4k' in quant_lower:

@@ -140,7 +140,11 @@ data/*
 !data/eval/*.jsonl
 # The LOCKED holdout stays sealed (EVAL_REDESIGN.md A/B): version only the
 # hashed manifest and the authoring kit -- the plaintext probes never ship.
-data/eval/locked_probes.jsonl
+# The glob (not the exact name) also catches drafts, editor copies, and
+# Explorer "locked_probes (1).jsonl" duplicates the *.jsonl un-ignore above
+# would otherwise commit (audit 2026-07-20); the manifest un-ignore below
+# wins over the glob because later rules win.
+data/eval/locked_probes*
 !data/eval/locked_probes.manifest.json
 !data/eval/LOCKED_PROBES_AUTHORING.md
 !data/personas/

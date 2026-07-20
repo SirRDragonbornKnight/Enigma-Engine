@@ -80,14 +80,31 @@ def _sdpa_preflight(model, get_batch, amp_dtype, backend: str) -> None:
 
     def _grads() -> torch.Tensor:
         model.zero_grad(set_to_none=True)
-        with torch.autocast(device_type="cuda", dtype=amp_dtype or torch.bfloat16, enabled=amp_dtype is not None):
-            _, loss = model(X, targets=Y)
-        loss.backward()
+        # Fixed RNG for BOTH passes: with --dropout > 0 the two backends would
+        # otherwise draw different dropout masks and the cosine gate measures
+        # noise, not the kernel (audit 2026-07-20). fork_rng also leaves the
+        # global torch stream exactly where it was.
+        with torch.random.fork_rng(devices=[X.device]):
+            torch.manual_seed(1234)
+            torch.cuda.manual_seed_all(1234)
+            with torch.autocast(device_type="cuda", dtype=amp_dtype or torch.bfloat16, enabled=amp_dtype is not None):
+                _, loss = model(X, targets=Y)
+            loss.backward()
         flat = torch.cat([p.grad.detach().float().reshape(-1) for p in model.parameters() if p.grad is not None])
         model.zero_grad(set_to_none=True)
         return flat
 
-    g_pin = _grads()
+    try:
+        g_pin = _grads()
+    except RuntimeError as exc:
+        # Strict pins raise "No available kernel" when the backend cannot
+        # serve this dtype/shape (e.g. flash/cudnn under fp32 on an fp16-only
+        # card) -- refuse cleanly instead of a raw traceback.
+        raise SystemExit(
+            f"sdpa preflight: backend '{backend}' has no working kernel here "
+            f"({str(exc).splitlines()[0][:120]}) -- pick another --sdpa-backend "
+            "or pass --skip-sdpa-preflight"
+        ) from None
     if not torch.isfinite(g_pin).all():
         raise SystemExit(f"sdpa preflight: NON-FINITE gradients under backend '{backend}' -- refusing to train")
     _pin_sdpa("math")
@@ -199,11 +216,12 @@ def main() -> None:
     )
     ap.add_argument(
         "--sdpa-backend",
-        default="auto",
+        default=None,
         choices=["auto", "cudnn", "flash", "efficient", "math"],
         help="pin ONE F.sdpa backend (strict: unsupported shapes error instead of silently "
-        "falling back; schedule-recorded so a bare --resume restores the run's own pin); "
-        "auto = torch default dispatch, unchanged behavior",
+        "falling back; schedule-recorded so a bare --resume restores the run's own pin). "
+        "Unset = keep the lineage's recorded pin if any, else auto. Passing a value "
+        "explicitly overrides only together with --override-schedule",
     )
     ap.add_argument(
         "--skip-sdpa-preflight",
@@ -280,6 +298,15 @@ def main() -> None:
                 "resume: checkpoint predates schedule recording -- trusting CLI args (this run will record them)",
                 flush=True,
             )
+
+    # --sdpa-backend CLI None = no opinion: the lineage's recorded pin survives
+    # even --override-schedule (audit 2026-07-20: override used to silently
+    # un-pin a cudnn lineage back to auto when the user only meant to change
+    # the LR). Resolved HERE -- before the schedule dict is built -- so the
+    # recorded value is never the None sentinel.
+    if args.sdpa_backend is None:
+        recorded_pin = (ck.get("schedule") or {}).get("sdpa_backend") if (ck is not None and not warm_start) else None
+        args.sdpa_backend = recorded_pin or "auto"
 
     # Corpus resolution runs AFTER the resume/schedule restore above, so a bare
     # `--resume` recovers the run's OWN --tokens-bin from the checkpoint schedule
@@ -557,6 +584,17 @@ def main() -> None:
                         f"{args.optimizer} ({exc}) -- the run was saved with a different "
                         f"optimizer; refusing to continue with reset moments"
                     ) from None
+            else:
+                # Every checkpoint this trainer writes carries optimizer state;
+                # a weight-only file here is an ema_checkpoints.py output or a
+                # converted import -- an exact continuation would silently
+                # reset the moments (audit 2026-07-20).
+                kind = "an ema_checkpoints.py output" if "ema" in ck else "weight-only"
+                raise SystemExit(
+                    f"resume: {rp} has no optimizer state ({kind}) -- exact continuation "
+                    "would silently reset the moments; use --init-from <ckpt> --out <new dir> "
+                    "for a weight-only warm start"
+                )
             # ck["step"] is a COMPLETED step (saved after its optimizer update);
             # resume at the next one instead of training it twice.
             start_step = int(ck.get("step", -1)) + 1
@@ -565,6 +603,12 @@ def main() -> None:
     # SDPA backend pin (v2 recipe): applied AFTER the resume/schedule restore so
     # a bare --resume runs under the pin its own lineage recorded, and BEFORE the
     # first forward pass anywhere below (preflight/compile/sanity/loop).
+    if device != "cuda" and args.sdpa_backend != "auto":
+        print(
+            f"sdpa: WARN backend pin '{args.sdpa_backend}' requested/recorded but device is {device} -- "
+            "pin not applicable, running default kernels (the recorded schedule is preserved)",
+            flush=True,
+        )
     if device == "cuda":
         if args.sdpa_backend != "auto":
             _pin_sdpa(args.sdpa_backend)

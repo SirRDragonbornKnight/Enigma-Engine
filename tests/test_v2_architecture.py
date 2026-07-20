@@ -196,3 +196,61 @@ def test_v1_presets_untouched_by_v2_fields():
         assert cfg.norm_scheme == "pre" and not cfg.qk_norm_before_rope and cfg.init_scheme == "gpt2", (
             f"preset {name} picked up v2 architecture flags -- v1 lineages would rebuild differently"
         )
+
+
+def test_auto_sizing_apis_never_return_v2_presets():
+    # audit 2026-07-20: the v2 presets joined MODEL_PRESETS and the sizing
+    # APIs silently started resolving identical inputs to Peri-LN v2 configs
+    # (e.g. config_for_param_target(200e6): "large" -> "v2_deep_186m").
+    from enigma_engine.core.model_presets import (
+        config_for_param_target,
+        recommend_preset_for_tokens,
+        recommend_preset_for_vram,
+    )
+
+    for target in (200e6, 238e6, 500e6, 542e6):
+        name, cfg = config_for_param_target(int(target), vocab_size=16384)
+        assert not name.startswith("v2_"), f"param target {target:.0f} auto-resolved to {name}"
+        assert cfg.norm_scheme == "pre"
+    assert not recommend_preset_for_vram(16.0).startswith("v2_")
+    assert not recommend_preset_for_vram(32.0).startswith("v2_")
+    name, _ = recommend_preset_for_tokens(8_000_000_000)
+    assert not name.startswith("v2_")
+
+
+def test_qk_order_flag_direction():
+    # The changes-outputs test proves the flag matters but not WHICH order
+    # each value produces (re-audit 2026-07-20): record the actual call order.
+    import enigma_engine.core.model_components as mc
+
+    events = []
+    real_rope = mc.apply_rotary_embedding
+
+    def spy_rope(*a, **k):
+        events.append("rope")
+        return real_rope(*a, **k)
+
+    def _order(flag):
+        events.clear()
+        torch.manual_seed(5)
+        model = Enigma(_cfg(n_layers=1, qk_norm_before_rope=flag))
+        attn = model.layers[0].attention
+        attn.q_norm.register_forward_hook(lambda *a: events.append("norm"))
+        mc.apply_rotary_embedding = spy_rope
+        try:
+            with torch.no_grad():
+                model.forward(torch.tensor([[1, 2, 3]]))
+        finally:
+            mc.apply_rotary_embedding = real_rope
+        return [e for i, e in enumerate(events) if e != events[i - 1] or i == 0]
+
+    assert _order(True)[0] == "norm", "qk_norm_before_rope=True must norm BEFORE rotating"
+    assert _order(False)[0] == "rope", "default must keep v1's rotate-then-norm order"
+
+
+def test_gguf_export_refuses_peri(tmp_path):
+    from enigma_engine.core.gguf import export_to_gguf
+
+    model = Enigma(_cfg(n_layers=1, norm_scheme="peri"))
+    with pytest.raises(ValueError, match="peri"):
+        export_to_gguf(model, tmp_path / "unused.gguf")

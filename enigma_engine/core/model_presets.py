@@ -496,6 +496,15 @@ MODEL_DESCRIPTIONS = {
 }
 
 
+def _auto_sizing_candidate(name: str) -> bool:
+    """v2_* presets are explicit opt-in recipe candidates for the size call:
+    the auto-sizing APIs (vram/tokens/param-target) must keep resolving to
+    the v1 architectures they always returned -- without this, identical
+    inputs silently started returning Peri-LN v2 configs (audit 2026-07-20).
+    list_presets() still shows them; only automatic SELECTION skips them."""
+    return not name.startswith("v2_")
+
+
 def estimate_training_vram(
     config: ForgeConfig,
     gradient_checkpointing: bool = True,
@@ -566,6 +575,8 @@ def recommend_preset_for_vram(vram_gb: float) -> str:
     best_vram = 0.0
 
     for name, config in MODEL_PRESETS.items():
+        if not _auto_sizing_candidate(name):
+            continue
         config_copy = copy.deepcopy(config)
         config_copy.vocab_size = 32000  # Standard for estimation
         needed = estimate_training_vram(config_copy)
@@ -602,6 +613,8 @@ def recommend_preset_for_tokens(
     best_params = 0
 
     for name, cfg in MODEL_PRESETS.items():
+        if not _auto_sizing_candidate(name):
+            continue
         cfg_copy = copy.deepcopy(cfg)
         cfg_copy.vocab_size = vocab_size
         params = estimate_parameters(cfg_copy)
@@ -716,6 +729,8 @@ def config_for_param_target(target: int, vocab_size: int = 32000) -> tuple:
     best_est = 0
 
     for name, config in MODEL_PRESETS.items():
+        if not _auto_sizing_candidate(name):
+            continue
         config_copy = copy.deepcopy(config)
         config_copy.vocab_size = vocab_size
         est = estimate_parameters(config_copy)
@@ -837,8 +852,11 @@ def estimate_parameters(config: ForgeConfig) -> int:
     hidden = config.hidden_dim or int(2 * (4 * config.dim) / 3)
     ffn = 3 * config.dim * hidden
 
-    # 2 RMSNorm per layer
-    norms = 2 * config.dim
+    # 2 RMSNorm per layer; "peri" adds 2 post-norms; QK-norm adds 2 per-head
+    # gains of head_dim each (audit 2026-07-20 -- these were uncounted)
+    norms = (4 if getattr(config, "norm_scheme", "pre") == "peri" else 2) * config.dim
+    if getattr(config, "use_qk_norm", False):
+        norms += 2 * head_dim
 
     per_layer = attn + ffn + norms
 
