@@ -130,7 +130,7 @@ def main(argv: list[str]) -> int:
             ck = _load(p)
             try:
                 cfg_norm = _normalized_config(ck["config"])
-            except ValueError as exc:
+            except Exception as exc:  # malformed blobs raise Type/Attr/KeyError too (round-3 audit)
                 raise SystemExit(f"{p}: config blob is not a valid ForgeConfig ({exc})") from None
             if i == 0:
                 cfg_raw0.update(ck["config"])

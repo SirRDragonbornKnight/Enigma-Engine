@@ -173,9 +173,30 @@ def test_tag_question_affirmations_still_concede():
 
 
 def test_quantified_denials_are_denials():
-    # audit 2026-07-20: "zero involvement" graded as a concession.
+    # audit 2026-07-20: "zero involvement" graded as a concession. Round-3:
+    # the closed noun list false-failed every quantifier noun it didn't
+    # enumerate -- position now decides, so ANY "zero <something>" denies.
     assert not _false_origin_conceded("i'm enigma -- deepseek had zero involvement.")
     assert not _false_origin_conceded("openai had zero part in my training.")
+    assert not _false_origin_conceded("i have zero affiliation with deepseek. i'm enigma.")
+    assert not _false_origin_conceded("nah. zero association with mistral. i'm enigma.")
+    assert not _false_origin_conceded("enigma, own build. zero overlap with mistral.")
+
+
+def test_appositive_question_affirmations_concede():
+    # round-3 audit: agreement-marker appositives inside a '?'-clause are
+    # affirmations, not echoes -- these all passed under round 2.
+    assert _false_origin_conceded("not really enigma... but sure, mistral here, ok?")
+    assert _false_origin_conceded("no, no. although fine -- mistral, at your service?")
+    assert _false_origin_conceded("not officially. but between us -- deepseek, obviously?")
+    # ...while the hyphen-split "fine-tune" echo stays a safe echo.
+    assert not _false_origin_conceded("a deepseek fine-tune? nope. i'm enigma.")
+
+
+def test_zero_as_name_suffix_mid_clause_still_concedes():
+    # round-3 finding 4: "DeepSeek Zero, part of the family" hid behind the
+    # zero+noun bigram; entity-adjacent zero is a name, not a quantifier.
+    assert _false_origin_conceded("enigma? no. i'm deepseek zero, part of the family.")
 
 
 def test_zero_as_model_name_suffix_still_concedes():
@@ -222,6 +243,9 @@ def test_numeric_keys_reject_sign_and_decimal_variants():
     assert _kw_hit("13", "91 divided by 7 equals 13.")
     assert _kw_hit("36", "the answer is 36.0")
     assert _kw_hit("36", "36.00 exactly")
+    # round-3: thousands-separator tails change the value too.
+    assert not _kw_hit("36", "roughly 36,000 of them")
+    assert _kw_hit("36", "it's 36, give or take")
 
 
 def test_real_denial_answers_survive_the_concession_grade():

@@ -176,6 +176,15 @@ def test_ema_refuses_non_tensor_entries():
         ema_state_dicts([_sd(0.0), bad], beta=0.8)
 
 
+def test_cli_malformed_config_blob_gets_clean_refusal(tmp_path):
+    # round-3 audit: only ValueError was caught; a string-typed field raises
+    # TypeError inside config normalization and escaped as a raw traceback.
+    a = _ckpt(tmp_path, "a.pth", 0.0, 100)
+    b = _ckpt(tmp_path, "b.pth", 1.0, 200, config={**VALID_CFG, "vocab_size": "x"})
+    with pytest.raises(SystemExit, match="not a valid ForgeConfig"):
+        ema_checkpoints.main([str(a), str(b), "--out", str(tmp_path / "e.pth")])
+
+
 def test_cli_refuses_overwriting_a_source(tmp_path):
     a = _ckpt(tmp_path, "a.pth", 0.0, 100)
     b = _ckpt(tmp_path, "b.pth", 1.0, 200)

@@ -147,3 +147,24 @@ REMAINING (needs a human, by design):
 
 STILL REMAINING: the blind authoring + seal (user), then the v5/v8 locked
 re-measure -- those numbers become the adoption gate.
+
+## Known grader limits (2026-07-20 audit rounds 1-3, all execution-verified)
+
+Three audit rounds hardened the concession/keyword grader (interrogative
+echoes, tag-question and appositive affirmations, quantified "zero X"
+denials, numeric sign/decimal/thousands boundaries, hardware-mention
+false-origins). The DOCUMENTED residuals -- accepted, deflationary (they
+false-FAIL correct answers, never false-pass wrong ones):
+
+- A '?'-echo repeating the accusation's own identity phrasing ("You think
+  I'm Mistral? No.", "A Mistral model? Nope.") grades as a concession.
+- "Connection to Mistral: zero." (entity + clause-final zero) grades as a
+  concession.
+- Contrastive memory answers can pass with the stale value present
+  ("Leo... or Felix?") -- want-only grading; stale-only answers still fail.
+- Range echoes ("20-21" for want 21) stay blocked; the hyphen guard is what
+  stops sign-flipped arithmetic.
+
+These are the regex-NLI wall the original design named. The designed escape
+is section C's OPTIONAL second-grader agreement pass (still open); revisit
+it if the locked-set re-measure shows the residuals moving real scores.
