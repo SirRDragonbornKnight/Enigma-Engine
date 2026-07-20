@@ -36,9 +36,16 @@ from the larger vocab.
 - **Sample is representative**: projecting v1's measured 1.6322 over the full
   corpus gives 58.3B tokens / 217 GB vs the actual receipt of 56.7B / 211 GB
   — within 3%.
-- **Corpus projection at v2's measured 4.1113**: **~23.1B tokens / ~86 GB
-  uint32** — which CONFIRMS this doc's original estimate of ~23B / ~90-100 GB
-  (it guessed 3.8 chars/token; the real figure is slightly better).
+- **Corpus projection at v2's measured 4.1113**: **~23.1B tokens** — which
+  CONFIRMS this doc's original estimate of ~23B (it guessed 3.8 chars/token;
+  the real figure is slightly better). On disk that is ~86 GB as uint32 —
+  but a 16,384 vocab fits **uint16**, so the v2 corpus should be written
+  2-byte: **~43 GB, down from today's 211 GB (4.9x smaller)**. The current
+  `pretokenize_data.py` hardcodes uint32; switching the v2 write path to
+  uint16 is a required step of the retokenize (and pretrain's memmap reader
+  must match). Vocab must stay under 65,536 to keep this.
+- 16,384 is deliberately a multiple of 1024 (a Triton fused-CE bug class
+  produces silently wrong results otherwise).
 - **Context, for free**: block 1024 goes from ~293 words (v1) to ~739 words
   (v2) — a 2.5x effective context increase with no architecture change.
 - Retokenize cost: v1 encodes at ~5.1 MB/s single-threaded, so 88.59 GB is
@@ -182,9 +189,12 @@ NEXT, in order:
 1. Train the PRODUCTION v2 vocab on a larger slice (the measured vocab used
    56 MB; training is cheap — 0.9 min — so a multi-GB slice is affordable and
    will sharpen the merge statistics).
-2. Full corpus retokenize -> new `tokens.bin` (~86 GB, ~5 core-hours, CPU/IO
-   only; 1.4 TB free so headroom is fine). Schedule it when the machine is
-   otherwise idle — it will use cores.
+2. Full corpus retokenize -> new `tokens.bin` (~43 GB as uint16, ~5
+   core-hours, CPU/IO only; 1.4 TB free so headroom is fine). Requires
+   switching the v2 write path from uint32 to uint16 AND matching the
+   pretrain memmap reader's dtype — do those together or the corpus reads as
+   garbage. Schedule the run when the machine is otherwise idle; it will use
+   cores. New lineage, new directory: never overwrite the v1 `tokens.bin`.
 3. Then, and only then, the GPU decision per the framing above.
 
 Open A/B questions unchanged: SuperBPE-style superword pass, 16k vs 32k
