@@ -1341,6 +1341,17 @@ class Trainer:
                 backward."""
                 if modality.collate is not None:
                     media_batch, media_lengths = modality.collate(media)
+                    # Nothing padded (batch of one, or equal lengths) ->
+                    # drop the mask and take the legacy path. This is what
+                    # keeps conformer encoders trainable at batch_size=1:
+                    # they refuse `lengths` outright (no masked BN), and
+                    # an all-False pad mask buys nothing (equivalence
+                    # pinned by test_no_lengths_full_length_and_masked_agree).
+                    # Audit 2026-07-20 finding 1: the unconditional
+                    # lengths pass-through crashed exactly the fallback
+                    # config the refusal message recommends.
+                    if media_lengths is not None and int(media_lengths.min()) == media_batch.shape[-1]:
+                        media_lengths = None
                 else:
                     media_batch, media_lengths = torch.cat(media, dim=0), None
                 media_batch = media_batch.to(self.device)

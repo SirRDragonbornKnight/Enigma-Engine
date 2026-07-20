@@ -84,7 +84,12 @@ class SpeechDataset(Dataset):
             n_real = wav.shape[0]
             if n_real < n_window:
                 wav = torch.cat([wav, torch.zeros(n_window - n_real)])
-            her_mel = preprocess_audio(wav, self.cfg)[0]  # [80, T]
+            # center=True STFT on the exact 30 s window emits 3001 frames
+            # (floor(480000/160)+1) -- one past the encoder's pos_embed
+            # after stride-2 (1501 > max_audio_len 1500) and one past
+            # whisper's own 3000 (audit 2026-07-20). Trim to the
+            # encoder's bound: frames align 1:1 and pos_embed holds.
+            her_mel = preprocess_audio(wav, self.cfg)[0][:, : 2 * self.cfg.max_audio_len]  # [80, <=3000]
             whisper_mel = torch.from_numpy(
                 self.fx(wav.numpy(), sampling_rate=self.cfg.sample_rate, return_tensors="np").input_features[0]
             )  # [80, 3000]

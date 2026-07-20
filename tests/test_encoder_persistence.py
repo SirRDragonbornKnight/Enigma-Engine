@@ -872,6 +872,26 @@ def test_audio_refuses_batched_conformer_only(tmp_path):
         trainer.train_audio(enc, _audio_data())
 
 
+def test_audio_conformer_batch1_still_trains(tmp_path):
+    """Audit 2026-07-20 finding 1: the collate used to hand `lengths` to the
+    encoder unconditionally, so conformer encoders (which refuse lengths --
+    no masked BN) crashed at batch_size=1: the exact fallback config the
+    batched-conformer refusal message recommends. A single-sample batch
+    pads nothing, so _forward_ce must drop the lengths and take the
+    legacy path. Uses a REAL conformer AudioEncoder -- the stub ignores
+    lengths, which is precisely why the suite missed the regression."""
+    from enigma_engine.core.audio_encoder import AudioEncoder, AudioEncoderConfig
+
+    cfg = AudioEncoderConfig(
+        n_mels=8, dim=AUDIO_DIM, n_layers=1, n_heads=2,
+        max_audio_len=32, sample_rate=1000, n_fft=64, hop_length=16,
+        use_conformer=True,
+    )
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "aconf1", batch_size=1))
+    state = trainer.train_audio(AudioEncoder(cfg), _audio_data())
+    assert state.epoch >= 1 and not state.abort_reason
+
+
 def test_audio_batched_training_runs(tmp_path):
     """batch_size=2 over ragged pairs must complete an epoch through the
     collate + lengths path (the old batch=1-only refusal is gone)."""
