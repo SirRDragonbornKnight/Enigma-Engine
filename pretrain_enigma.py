@@ -300,6 +300,26 @@ def main() -> None:
     train_end = n - val_n
     print(f"memmapped {n:,} tokens  (train {train_end:,} / val {val_n:,})", flush=True)
 
+    # id-0 audit (v2 corpora only): the CE loss ignores index 0 (<pad>),
+    # so any id-0 token in the stream silently drops its loss target. v2
+    # carves EVERY special literal, and web text does contain the literal
+    # string "<pad>" (2 hits measured in the 23.7B build, 2026-07-20).
+    # Microscopic is fine; a broken tokenizer writing real pads is not --
+    # scan once at boot (~1 min for 47 GB) and refuse past 0.01%.
+    if meta.get("pretokenizer") == "v2":
+        zeros = 0
+        _CH = 1 << 28
+        for _i in range(0, n, _CH):
+            zeros += int((np.asarray(data[_i : _i + _CH]) == 0).sum())
+        if zeros:
+            frac = zeros / n
+            print(f"id-0 (<pad>) tokens in stream: {zeros:,} ({frac:.2e}) -- loss silently ignored there", flush=True)
+            if frac > 1e-4:
+                raise SystemExit(
+                    f"{zeros:,} id-0 tokens ({frac:.2%}) -- a real pad stream, not stray literals; "
+                    f"refusing to train with ignore_index=0 dropping that much signal"
+                )
+
     # [val-gen]: second eval window at the tail of the ORIGINAL corpus. The
     # 2026-06-07 anime append landed at the END of tokens.bin, so the held-out
     # tail above ([val]) became 100% anime-domain. This window restores a
@@ -367,6 +387,14 @@ def main() -> None:
     model = Enigma(config)
     if not args.no_grad_ckpt:
         model.gradient_checkpointing_enable()
+    else:
+        # Config default is use_gradient_checkpointing=True, so the flag
+        # must actively DISABLE. Without this else, --no-grad-ckpt was a
+        # no-op: every run to date trained with checkpointing ON (paying
+        # the ~30-40% recompute tax) while the log printed ckpt=False
+        # (2026-07-20 trainer audit; the extend_length.ps1 probe numbers
+        # were measured with it on, so those ETAs are conservative).
+        model.gradient_checkpointing_disable()
     model.to(device)
     raw_model = model  # the real nn.Module; checkpoints/optimizer bind here even when compiled
     n_params = sum(p.numel() for p in model.parameters())
@@ -533,7 +561,10 @@ def main() -> None:
     print(
         f"training: target {args.tokens / 1e9:.2f}B tokens over {total_steps:,} steps | "
         f"{tokens_per_step:,} tok/step (mb {args.micro_batch} x ga {args.grad_accum} x {block}) | "
-        f"amp={'bf16' if use_bf16 else 'fp16'} ckpt={not args.no_grad_ckpt}",
+        f"amp={'bf16' if use_bf16 else 'fp16'} "
+        # Log the model's ACTUAL state, not the flag -- the flag lied for
+        # every pre-2026-07-20 run (see the --no-grad-ckpt else-branch).
+        f"ckpt={any(getattr(b, 'use_checkpoint', False) for b in raw_model.layers)}",
         flush=True,
     )
 
