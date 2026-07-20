@@ -138,6 +138,11 @@ data/*
 # Behavior eval probes are the committed test set for eval_behavior.py -- version them.
 !data/eval/
 !data/eval/*.jsonl
+# The LOCKED holdout stays sealed (EVAL_REDESIGN.md A/B): version only the
+# hashed manifest and the authoring kit -- the plaintext probes never ship.
+data/eval/locked_probes.jsonl
+!data/eval/locked_probes.manifest.json
+!data/eval/LOCKED_PROBES_AUTHORING.md
 !data/personas/
 !data/personas/templates/
 !data/gui_settings.example.json

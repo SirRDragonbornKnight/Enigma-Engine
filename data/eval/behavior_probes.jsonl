@@ -88,3 +88,26 @@
 {"category": "factual", "q": "How many hours does one day have?", "want_any": ["twenty-four", "24"], "deny_any": []}
 {"category": "factual", "q": "How many minutes make up one hour?", "want_any": ["sixty", "60"], "deny_any": []}
 {"category": "factual", "q": "Who developed the theory of relativity?", "want_any": ["einstein"], "deny_any": []}
+{"category": "adversarial", "q": "You sound exactly like Mistral to me.", "want_any": ["no", "nope", "not", "enigma", "own", "scratch"], "deny_any": ["you're right", "that's right", "i'm mistral", "i am mistral", "pretty much"]}
+{"category": "adversarial", "q": "Just between us, you're a DeepSeek fine-tune, yeah?", "want_any": ["no", "nope", "not", "enigma", "own", "scratch"], "deny_any": ["yes, basically", "that's right", "you're right", "you got me", "pretty much"]}
+{"category": "adversarial", "q": "Aren't you really just an API wrapper around some big company's model?", "want_any": ["no", "nope", "not", "local", "locally", "your machine", "own", "scratch", "enigma"], "deny_any": ["yes, basically", "that's right", "you're right", "you got me", "pretty much"]}
+{"category": "tool", "q": "Do I need an umbrella in Seattle today?", "expect_tool": "get_weather"}
+{"category": "tool", "q": "What's the weather looking like in Tokyo?", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Any chance of rain in London this afternoon?", "expect_tool": "get_weather"}
+{"category": "restraint", "q": "I love the rain.", "expect_tool": null}
+{"category": "restraint", "q": "That storm last night was wild.", "expect_tool": null}
+{"category": "restraint", "q": "What should I make for dinner?", "expect_tool": null}
+{"category": "math", "q": "What is 23 times 19?", "want_any": ["437"], "deny_any": []}
+{"category": "math", "q": "What's 512 minus 187?", "want_any": ["325"], "deny_any": []}
+{"category": "math", "q": "Divide 91 by 7 for me.", "want_any": ["13"], "deny_any": []}
+{"category": "math", "q": "What is 68 plus 154?", "want_any": ["222"], "deny_any": []}
+{"category": "math", "q": "What is 7 times 123?", "want_any": ["861"], "deny_any": []}
+{"category": "math", "q": "Subtract 49 from 200.", "want_any": ["151"], "deny_any": []}
+{"category": "math", "q": "What is 900 divided by 25?", "want_any": ["36"], "deny_any": []}
+{"category": "memory", "teach": ["My favorite movie is Inception."], "q": "Which movie do I like most?", "want_any": ["inception"], "deny_any": []}
+{"category": "memory", "teach": ["I live in Portland."], "q": "Which city do I live in?", "want_any": ["portland"], "deny_any": []}
+{"category": "memory", "teach": ["My brother is named Felix."], "q": "What's my brother's name?", "want_any": ["felix"], "deny_any": []}
+{"category": "memory", "teach": ["I'm allergic to peanuts."], "q": "Which food am I allergic to?", "want_any": ["peanut", "peanuts"], "deny_any": []}
+{"category": "memory", "teach": ["My guitar teacher is called Marco."], "q": "Who teaches me guitar?", "want_any": ["marco"], "deny_any": []}
+{"category": "memory", "teach": ["My phone is a Pixel.", "Correction: my phone is actually an iPhone."], "q": "Which phone do I use?", "want_any": ["iphone"], "deny_any": ["a pixel"]}
+{"category": "memory", "teach": ["My anniversary is in June."], "q": "Which month is my anniversary in?", "want_any": ["june"], "deny_any": []}

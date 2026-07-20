@@ -238,13 +238,16 @@ def _grade_identity(content: str, want_any: list[str], deny_any: list[str]) -> b
     return _grade_text(content, want_any, deny_any) and not _false_origin_conceded(low)
 
 
-def run(base_url: str, temperature: float, max_tokens: int) -> int:
+def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES) -> int:
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
         return 2
     _clear_memory(base_url)
 
-    cases = [json.loads(line) for line in PROBES.read_text(encoding="utf-8").splitlines() if line.strip()]
+    cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # The scorecard must name its own conditions (EVAL_REDESIGN section D):
+    # which probe set produced these numbers, at exactly which decode config.
+    print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
     by_cat: dict[str, list[bool]] = {}
 
     for c in cases:
@@ -300,8 +303,9 @@ def main() -> None:
     ap.add_argument("--base-url", default="http://127.0.0.1:8123")
     ap.add_argument("--temperature", type=float, default=0.0, help="true greedy for reproducible scores (0.01 still flips a borderline token)")
     ap.add_argument("--max-tokens", type=int, default=60)
+    ap.add_argument("--probes", default=str(PROBES), help="probe file; point at data/eval/locked_probes.jsonl for the sealed-holdout re-measure (EVAL_REDESIGN)")
     args = ap.parse_args()
-    raise SystemExit(run(args.base_url, args.temperature, args.max_tokens))
+    raise SystemExit(run(args.base_url, args.temperature, args.max_tokens, Path(args.probes)))
 
 
 if __name__ == "__main__":

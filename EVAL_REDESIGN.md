@@ -127,3 +127,23 @@ REMAINING (needs a human, by design):
 - Grader: canonical false-origin deny vocab is applied via the concession check;
   optional second-grader agreement still open.
 - Widen thin categories to >=15 probes; re-measure v5/v8 on the locked set.
+
+## Status (2026-07-20) -- everything but the human step is done
+
+- **Dev set widened to >= 15 per category** (section D): +23 probes ->
+  113 total (identity 18, factual 20, adversarial 15, tool 15, restraint 15,
+  math 15, memory 15). New restraint probes deliberately sit near the tool
+  boundary (weather words, no lookup request); new math results never equal a
+  question operand, so a question echo cannot pass without the calculator.
+- **`eval_behavior.py --probes <file>`** runs any probe set (defaults
+  unchanged); the scorecard header now prints the probe file and the exact
+  decode config (the section-D reporting item).
+- **Seal hygiene in `.gitignore`**: `data/eval/locked_probes.jsonl` is
+  ignored (the un-ignore of `data/eval/*.jsonl` would have committed the
+  plaintext); the manifest and the authoring kit are un-ignored.
+- **Authoring kit**: `data/eval/LOCKED_PROBES_AUTHORING.md` -- schema,
+  grading facts, blind rules, seal command, v5/v8 re-measure commands
+  (v5 = the receipted backup in Enigma Backups).
+
+STILL REMAINING: the blind authoring + seal (user), then the v5/v8 locked
+re-measure -- those numbers become the adoption gate.
