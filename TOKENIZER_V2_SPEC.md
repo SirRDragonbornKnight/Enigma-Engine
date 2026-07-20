@@ -431,6 +431,19 @@ NEXT, in order:
    ~0.7 h at 12 (idle box).
 3. Then, and only then, the GPU decision per the framing above.
 
+### CORPUS LANDED 2026-07-20: tokens_v2.bin
+
+23,694,200,666 tokens (projection 23.66B -> 0.14% off), 5,688,823 docs,
+1,382,216 dupe paragraphs skipped, 44.13 GB uint16, 41.9 min wall.
+Validated: ETOK header == sidecar == file-size arithmetic; ids bounded
+by vocab 16,366; random windows at start/middle/end decode clean.
+Run history is a lesson in where walls really are: run 1 (pure python,
+cold walk) projected 25 h -- NOT from encode speed but from ~4 ms
+per-file open latency serializing the parent (workers at 2% CPU); run 2
+(rust v2 encode + 16-thread read prefetch) did the whole corpus in 41.9
+min. Dedup table hit its 50M cap mid-run -- v1's exact semantics, cap
+point deterministic in walk order, so the corpus definition is unchanged.
+
 ### Item 2 DELIVERED 2026-07-20 (Arc 3) — with two spec deviations, on purpose
 
 `pretokenize_data.py` grew the parallel path instead of a separate script
