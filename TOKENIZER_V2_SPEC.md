@@ -10,9 +10,64 @@
 > trustworthy (see `EVAL_REDESIGN.md`) -- without it you can't tell a better
 > base from a differently-overfit one.
 >
-> **v1 is untouched and provably so**: the vocab file carries no version key,
-> absence means v1, and `tests/test_tokenizer_v2.py` pins the live vocab's
-> sha256 + exact encode IDs. The served v8 model is unaffected.
+> **v1 is untouched** — verified directly: the live vocab's git blob oid is
+> identical from session start to HEAD and no commit touches it. But see
+> BLOCKERS below: the claim that tests "pin its sha256" was FALSE (no test
+> hashes it), and the v1-immutability net is thinner than advertised.
+
+## BLOCKERS found by the 2026-07-19 trust-nothing audit — FIX BEFORE ANY v2 PRETRAIN
+
+The v2 machinery is sound in the small (20/20 mutations killed a test, no
+vacuous tests, losslessness survived a 200k-string fuzz + codepoint sweep,
+444 green). These are the real defects, two of which falsify claims made in
+commit 857dc63c's own message:
+
+1. **HIGH — v2 REPRODUCES the trainer/runtime split it claims to prevent.**
+   The trainer carves out a hardcoded 4-tag tuple; the runtime carves out
+   every multi-char entry of the live `special_tokens` (14, plus whatever
+   `attach_chat_tokens` adds). Same text, different IDs, silently:
+   `'a </s> b'` -> trainer `[111,5373,61,129,76,293]`, runtime
+   `[111,46,2,293]`. Training on one and serving with the other is the exact
+   silent-corruption class the commit message says is impossible.
+   `test_v2_pre_tokenize_routes_through_shared_module` only checks text with
+   no special token, so it cannot see this. **Fix: one shared carve-out set.**
+2. **HIGH — a third coupled constant the uint16 note missed.**
+   `chat_format.py` hardcodes `BASE_VOCAB = 4718` with the chat tags at
+   4718..4723. Any v2 vocab bigger than that (the target is 16,384) makes
+   those ids ALIAS real learned tokens, and `attach_chat_tokens` overwrites
+   them with no exception (its guard checks by token NAME, which never
+   collides). Verified: at vocab 5996, id 4718 was the real token `' crashes'`
+   before being silently overwritten. **Fix: derive the chat-token base from
+   the tokenizer's vocab_size — for v1 that is still 4718, so v1 is unchanged.**
+3. **MED — the sha256 pin does not exist.** The commit message and this doc
+   claimed tests pin the live vocab's hash; nothing does. Only key-presence is
+   checked, so a byte edit preserving the 4 top-level keys goes undetected.
+   Live hash, for the record: `83510aefe587eab78a9d653fb8c532cd3bbf239974dcbe51776e4c559838bf03`.
+4. **MED — the v1-immutability net is 2 assertions wide.** Forcing v1 to use
+   the v2 splitter turns only 2 of 444 tests red, both in the new file; one of
+   the three pinned strings is insensitive to the swap and the round-trip
+   cases do not discriminate at all. No serve/chat/inference test notices v1
+   tokenization changing.
+5. **MED — the tokenizer cache cannot see a vocab swap.** `_tokenizer_cache`
+   is keyed on `(type, path)` with no mtime/size/version, so replacing the
+   vocab in place (which the retokenize plan does) leaves warm processes
+   serving the OLD instance — v1 rules on a v2 vocab, no error. Nothing calls
+   `clear_tokenizer_cache()` on that path.
+6. **MED — "round-trip lossless" is false at the serving default** when the
+   input contains a special-token LITERAL: with `skip_special_tokens=True`,
+   `'a </s> b'` decodes to `'a  b'` — text silently deleted, and a string that
+   merely looks like a tag is indistinguishable from a real one.
+7. **LOW — contractions are case-sensitive**, reintroducing the very
+   inconsistency class v2 exists to kill: `"don't"` -> `['don', "'t"]` but
+   `"DON'T"` -> `['DON', "'", 'T']`. cl100k uses `(?i:...)`; V2_PATTERN does not.
+8. **LOW — the 0.0% bare-space headline excludes the common case.** The
+   runtime splits on a tag BEFORE `pretokenize_v2` runs, orphaning the space
+   before every special token into a bare `' '`. Enigma's serving format emits
+   tags constantly; the 0.0% was measured on tag-free held-out text.
+9. **LOW — `train_tokenizer()` was never plumbed for v2** (no `pretokenizer`
+   arg, constructs `BPETokenizer()` bare) and its default output path is the
+   LIVE vocab — so the supported entry point can only produce v1 and defaults
+   to overwriting the file the whole safety story rests on.
 
 ## MEASURED 2026-07-19 (supersedes the estimates below)
 
@@ -21,21 +76,38 @@ evenly spaced across all 88.59 GB, so no single source dominates); v2 vocab
 trained on 56 MB of it; both tokenizers measured on the SAME held-out 2 MB
 the training never saw.
 
+CAVEAT on the sample source (audit 2026-07-19): `combined.txt` is NOT what
+`pretokenize_data.py` reads — that script walks `SOURCE_DIRS` and its own
+header says it "doesn't touch combined.txt". The two are the same underlying
+text: the present source dirs total **89.50 GB** against combined.txt's 88.59
+GB (~1%), and projecting v1's measured ratio over it lands within 3% of the
+real 56.7B-token receipt. So the chars/token RATIO measured here is valid for
+the corpus. But the retokenize itself must run over `SOURCE_DIRS` through the
+v1 filter+dedup path, NOT over combined.txt, or it silently changes the
+corpus definition.
+
 | metric | v1 (live, vocab 4718) | v2 (vocab 16384) |
 |---|---|---|
-| chars/token (held-out) | **1.6322** | **4.1113** (2.52x) |
+| chars/token, SAME held-out 2 MB | **1.6618** | **4.1113** (2.47x) |
 | bare-space tokens | 25.5% | **0.0%** |
 | leading-space tokens | 0% | 67.9% |
 | digit consistency | `1000`->`1,00,0` but `2500`->`2,5,00` | per-digit always |
 | round-trip lossless | yes | yes |
 
+(Audit correction: a first pass reported 2.52x by comparing v2 on the held-out
+tail against v1 on a different 2 MB slice. Re-measured on identical text it is
+**2.47x**. v1 reads 1.63-1.66 depending on slice; the held-out figure is the
+one to quote. Using 1.6618 also tightens the receipt check below to 0.9%.)
+
 Apples-to-apples at matched vocab size (v2 @ 4000 vs v1 @ 4718): **3.06 vs
 1.63 chars/token**, so ~1.9x comes from the pre-tokenizer alone and the rest
 from the larger vocab.
 
-- **Sample is representative**: projecting v1's measured 1.6322 over the full
-  corpus gives 58.3B tokens / 217 GB vs the actual receipt of 56.7B / 211 GB
-  — within 3%.
+- **Sample is representative**: projecting v1's held-out 1.6618 over the full
+  corpus gives 57.2B tokens vs the actual receipt of 56.7B — **within 0.9%**
+  (the earlier 1.6322 slice projected 58.3B, within 3%). Either way the
+  sampling method is validated against a known-true number, which is what
+  makes the v2 projection trustworthy rather than a guess.
 - **Corpus projection at v2's measured 4.1113**: **~23.1B tokens** — which
   CONFIRMS this doc's original estimate of ~23B (it guessed 3.8 chars/token;
   the real figure is slightly better). On disk that is ~86 GB as uint32 —
@@ -46,14 +118,20 @@ from the larger vocab.
   must match). Vocab must stay under 65,536 to keep this.
 - 16,384 is deliberately a multiple of 1024 (a Triton fused-CE bug class
   produces silently wrong results otherwise).
-- **Context, for free**: block 1024 goes from ~293 words (v1) to ~739 words
-  (v2) — a 2.5x effective context increase with no architecture change.
+- **Context, for free**: block 1024 goes from ~299 words (v1) to ~739 words
+  (v2) — a 2.47x effective context increase with no architecture change.
 - Retokenize cost, MEASURED with the v2 tokenizer (2026-07-19). v2 encodes
   slower per MB than v1 (more merge work per unit) but produces 2.5x fewer
   tokens; single-threaded it is 4.4 MB/s = **5.7 hours** for 88.59 GB.
-  `pretokenize_data.py` has NO parallelism today, and the work is embarrassingly
-  parallel (chunk on line boundaries, one tokenizer per worker). Measured
-  multiprocessing scaling on this box (16 logical cores):
+  `pretokenize_data.py` has NO parallelism today. It is NOT embarrassingly
+  parallel (an earlier draft of this section said so and was wrong): it keeps
+  a SHARED paragraph-level dedup set (`seen_hashes`, cap 50M) plus a
+  `MIN_PARAGRAPH_LENGTH` filter, and that state is inherently sequential.
+  The correct split is parent-does-IO/filter/dedup, workers-do-encode: the
+  hashing is microseconds per paragraph against BPE encoding at ~4.4 MB/s, so
+  the parent is nowhere near the bottleneck, exact v1 dedup semantics are
+  preserved, and an ORDERED `imap` keeps output deterministic. Measured
+  encode-side scaling on this box (16 logical cores):
 
   | workers | MB/s | speedup | full corpus |
   |---|---|---|---|
@@ -65,7 +143,30 @@ from the larger vocab.
 
   One-time pool init is ~3 s (negligible at corpus scale). ~70% parallel
   efficiency at 12 workers. Note these were taken while the machine was in
-  use, so treat them as a floor. **4 workers is the "run it while gaming"
+  use, so treat them as a floor. They also measured **CPU scaling only** —
+  the benchmark read a 64 MB OS-cached file, not 89.5 GB off disk. That is
+  fine here: 12 workers consume ~37 MB/s of text and write ~17 MB/s, both
+  trivial for NVMe, so disk should not become the bottleneck — but the first
+  real run is the only proof.
+
+  **Remote-access budget (checked 2026-07-19).** This box is driven over
+  **Chrome Remote Desktop** (`remoting_host.exe`), which encodes the video
+  stream **in software on the CPU** — unlike Parsec/Sunshine, which use NVENC
+  on the GPU. So CPU saturation degrades the operator's session directly
+  (frame drops, input lag), and "the machine is idle" is never true while
+  someone is connected. Compounding it: `Win32_Processor` reports **16 cores /
+  16 logical — SMT is OFF**, so each worker eats a whole physical core with no
+  hyperthread slack.
+  Policy for any long CPU job here:
+  - default `--workers 10`, leaving ~6 cores for the CRD encoder, the OS, and
+    whatever the operator is doing;
+  - run workers at **BelowNormal priority** so the scheduler always preempts
+    them in favour of the interactive session — this matters MORE than the
+    core count, because it keeps the session smooth even if the estimate is
+    off;
+  - 12+ workers only when nobody is connected.
+  At 10 workers this lands around 1 hour for the full corpus instead of ~42
+  minutes at 12 — a cheap trade for a usable desktop. **4 workers is the "run it while gaming"
   setting** (1.6 h, 12 cores left free); 12 workers only when the box is idle.
   A first benchmark attempt at 4 MB reported a SLOWDOWN — the workload was
   smaller than Windows spawn + per-worker init, measuring startup rather than
@@ -213,9 +314,23 @@ NEXT, in order:
    yet — `pretokenize_data.py` is single-threaded and hardcodes uint32, and it
    is the script that produced the immutable v1 corpus, so v2 should get its
    own script rather than growing a mode flag. Requirements for it:
-   - `--workers` (default: leave headroom, e.g. cpu_count//2); chunk on line
-     boundaries so no word is torn; one tokenizer per worker via a Pool
-     initializer (Windows spawn-safe).
+   - Input is `SOURCE_DIRS`, NOT combined.txt, through the same
+     `MIN_PARAGRAPH_LENGTH` filter and paragraph dedup as v1 — otherwise the
+     corpus definition silently changes.
+   - **Missing source dirs are SILENTLY SKIPPED today** (`if not
+     source_dir.exists(): continue`, no log). Three are already absent
+     (dclm / finemath / the_stack — they contributed nothing, since the
+     present 89.50 GB already accounts for the 56.7B-token receipt). The v2
+     script must LOG or REFUSE on an absent source instead: a silently
+     smaller corpus is a quality regression nothing would catch, and it
+     breaks the repo's fail-honestly rule.
+   - `--workers` (DEFAULT 10, not cpu_count -- see the remote-access note
+     below); parent does read/filter/dedup, workers do encode only (see the
+     scaling note above -- the dedup set is shared state and cannot be
+     sharded); ORDERED `imap` so output is deterministic; one tokenizer per
+     worker via a Pool initializer (Windows spawn-safe).
+   - **Run workers at BelowNormal priority** (`psutil.BELOW_NORMAL_PRIORITY_CLASS`,
+     or `os.nice` equivalent, set in the Pool initializer).
    - uint16 output AND a matching dtype in pretrain's memmap reader — change
      them together or the corpus reads as garbage.
    - New lineage, NEW directory: never overwrite the v1 `tokens.bin`.
