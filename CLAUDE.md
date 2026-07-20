@@ -22,8 +22,9 @@ DELETED in the 2026-07-18 compression pass (~19k lines; see `CLEANUP_TRACKER.md`
 this LLM painting pixels. Perception is HALF-BUILT; text-only ships today:
 - Ready: `forward_multimodal` + `vision_projection`/`audio_projection` (`core/model.py`), encoders
   `core/vision_encoder.py` + `core/audio_encoder.py`, and the vision-align trainer
-  (`enigma_engine/training/vision_align.py` — `train_vision` carved out of the deleted Forge
-  trainer 2026-07-18; a future audio-align trainer gets built the same way).
+  (`enigma_engine/training/encoder_align.py` — one hardened `_train_encoder` core with
+  `train_vision` + `train_audio` wrappers; carved from the deleted Forge trainer 2026-07-18,
+  hardened + generalized 2026-07-19; entry points `align_vision.py` / `align_audio.py`).
 - NOT trained yet (verified): the shipped `enigma_dpo` checkpoint has NO projection weights and
   `use_vision`/`use_audio` are off; `chat_format.py` has NO image/audio tokens.
 - Plan is ROADMAP **Phase 4.5** (distill-then-align). Vision state 2026-07-17: distill DONE
@@ -32,9 +33,10 @@ this LLM painting pixels. Perception is HALF-BUILT; text-only ships today:
   `align_vision.py` built, data staged (558k pairs), run PARKED by the training-last ruling.
   `serve --eyes` grafts the align checkpoint's encoder+projection onto served weights (missing
   ckpt = WARN + text-only). Audio: LibriSpeech collected (28,539 pairs), `distill_audio_encoder.py`
-  ready but NOT launched, and the audio ALIGN trainer does not exist yet (`train_audio` died with
-  the Forge trainer — mirror `vision_align.py` to rebuild it). Encoder persistence FIXED
-  `f9ec5184`. History: `KNOWN_ISSUES.md` #11.
+  ready but NOT launched; the audio ALIGN trainer was REBUILT 2026-07-19 on the shared
+  encoder-align core (`train_audio` + `align_audio.py`; batch_size=1 enforced until the
+  encoder gains a padding mask — ragged mels can't batch honestly). Encoder persistence FIXED
+  `f9ec5184`, re-locked for audio 2026-07-19. History: `KNOWN_ISSUES.md` #11.
 - **TRAINING-LAST ruling (user, 2026-07-17):** all training runs (vision align, audio distill,
   any SFT/DPO cycle) are deferred to the END of the current arc. Vision image DOMAIN is the
   user's open decision (`VISION_QUALITY_SPEC.md` §4 — NOT the everyday-LLaVA diet).

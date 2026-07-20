@@ -208,11 +208,17 @@
   ruling. Remaining pre-launch consideration: KNOWN_ISSUES #12's open
   items (accum accounting is moot at accum=1; the falsy-unwrap nit).
 - [ ] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
-- [ ] 6. Her ears: `collect_audio_data.py` DONE, `distill_audio_encoder.py`
-  DONE-not-launched (own loop, survived the compression pass). Align step
-  NEEDS REBUILDING — `Trainer.train_audio` was deleted 2026-07-18 and only
-  the vision half was carved into `enigma_engine/training/vision_align.py`;
-  mirror it for audio, then wire and retire whisper (~3 days).
+- [~] 6. Her ears: `collect_audio_data.py` DONE, `distill_audio_encoder.py`
+  DONE-not-launched (own loop, survived the compression pass). Align
+  trainer REBUILT 2026-07-19: `vision_align.py` generalized into
+  `enigma_engine/training/encoder_align.py` (one `_train_encoder` core, a
+  `_Modality` adapter, `train_vision`/`train_audio` wrappers) so audio
+  inherits every hardening + regression pin from day one; `align_audio.py`
+  entry point added; 6 audio contract tests re-lock the encoder
+  persistence twin. batch_size=1 ENFORCED for audio (the encoder has no
+  padding mask; ragged mel batches would feed garbage frames). REMAINING
+  (GPU, training-last): run the distill, run the align, serve wiring +
+  retire whisper.
 - [ ] 7. Her voice: train a small TTS on a chosen voice (later).
 - [ ] 8. Her imagination: own image generator (much later; SD stays the tool she wields).
 

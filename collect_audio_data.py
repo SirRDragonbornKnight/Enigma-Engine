@@ -14,11 +14,10 @@ Sources:
 
 Output format:
   JSONL with {"audio": "<absolute-path>", "text": "<transcript>"} per line.
-  The (audio, text) pair shape the audio-align trainer expects. NOTE
-  (2026-07-18): that trainer does not exist yet -- Trainer.train_audio was
-  deleted with the Forge stack and only the vision half was carved out
-  (enigma_engine/training/vision_align.py). Mirror it for audio before this
-  data can be aligned; distill_audio_encoder.py already consumes this file.
+  The (audio, text) pair shape the audio-align trainer expects
+  (Trainer.train_audio in enigma_engine/training/encoder_align.py, rebuilt
+  2026-07-19 on the shared encoder-align core; align_audio.py is the entry
+  point). distill_audio_encoder.py also consumes this file.
 
 Usage:
   python collect_audio_data.py --librispeech            # download + extract + jsonl

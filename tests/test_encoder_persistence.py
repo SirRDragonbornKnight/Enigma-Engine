@@ -7,8 +7,9 @@ checkpoints, resume_from restores them (and the local optimizer state),
 the saved optimizer state is the one that actually stepped, and text-only
 checkpoints keep their exact prior structure.
 
-(The train_audio twin test retired with the Forge trainer, 2026-07-18;
-a future audio-align trainer must re-lock the same contract.)"""
+(The train_audio twin retired with the Forge trainer 2026-07-18 and was
+re-locked 2026-07-19 against the rebuilt encoder-align train_audio -- see
+the audio section at the bottom.)"""
 
 from __future__ import annotations
 
@@ -20,12 +21,12 @@ import torch.nn as nn
 
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
-from enigma_engine.training.vision_align import Trainer, TrainingConfig
+from enigma_engine.training.encoder_align import Trainer, TrainingConfig
 
 VISION_DIM = 16
-# The audio port stays open on the tiny models even though the audio twin
-# tests retired with the Forge trainer: the audio-align rebuild (ROADMAP
-# Phase 4.5 step 6) re-pins the same contract against these fixtures.
+# The audio port on the tiny models feeds the audio twin tests at the
+# bottom: the audio-align rebuild (2026-07-19) re-pins the same contract
+# against these fixtures.
 AUDIO_DIM = 12
 
 
@@ -714,7 +715,7 @@ def test_abort_does_not_count_unconsumed_drops(tmp_path, caplog):
     ]
     model = _tiny_model()
     trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "abortcount", max_loss=1e-9))
-    with caplog.at_level(_logging.WARNING, logger="enigma_engine.training.vision_align"):
+    with caplog.at_level(_logging.WARNING, logger="enigma_engine.training.encoder_align"):
         state = trainer.train_vision(_TinyVisionEncoder(), data)
     assert state.abort_reason  # the max_loss guard fired
     assert not any("caption(s) dropped" in r.message for r in caplog.records)
@@ -747,3 +748,175 @@ def test_save_every_steps_writes_rolling_checkpoint(tmp_path):
     assert "vision_encoder_state_dict" in ckpt
     stem = trainer._checkpoint_stem
     assert not re.match(rf"^{re.escape(stem + '_vision')}(\d+)\.pt$", step_ckpts[0].name)
+
+
+# ---------------------------------------------------------------------------
+# Audio twin (rebuilt 2026-07-19 on the shared encoder-align core): the same
+# persistence contract re-locked for train_audio, plus the audio-specific
+# refusals (batch_size > 1, missing audio_projection).
+# ---------------------------------------------------------------------------
+
+
+class _TinyAudioEncoder(nn.Module):
+    """Stand-in for AudioEncoder: carries a real (tiny) AudioEncoderConfig -
+    train_audio's decode closure hands it to preprocess_audio for the
+    waveform->mel step - and maps [1, n_mels, n_frames] mels to
+    [1, n_frames, AUDIO_DIM] features."""
+
+    def __init__(self):
+        super().__init__()
+        from enigma_engine.core.audio_encoder import AudioEncoderConfig
+
+        self.config = AudioEncoderConfig(
+            n_mels=8, dim=AUDIO_DIM, n_layers=1, n_heads=2,
+            max_audio_len=32, sample_rate=1000, n_fft=64, hop_length=16,
+        )
+        self.proj = nn.Linear(8, AUDIO_DIM)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.proj(x.transpose(1, 2))
+
+
+def _audio_data() -> list[dict]:
+    """Two deterministic waveform-text pairs (no RNG in construction).
+    256 samples at hop 16 -> 17 mel frames; 17 + <=16 text tokens stays
+    inside the tiny model's max_seq_len=64."""
+    return [
+        {"audio": torch.sin(torch.linspace(0, 60.0, 256)), "text": "a rising tone"},
+        {"audio": torch.sin(torch.linspace(0, 20.0, 256)), "text": "a lower tone"},
+    ]
+
+
+@pytest.fixture(scope="module")
+def audio_run(tmp_path_factory):
+    """One tiny train_audio run (2 pairs, 1 epoch, batch_size=1) shared by
+    the read-only audio tests."""
+    ckpt_dir = tmp_path_factory.mktemp("audio_ckpt")
+    model = _tiny_model()
+    trainer = Trainer(model, _CharTokenizer(64), _config(ckpt_dir))
+    encoder = _TinyAudioEncoder()
+    initial_encoder = _snapshot(encoder)
+
+    state = trainer.train_audio(encoder, _audio_data())
+    assert not state.abort_reason
+
+    candidates = list(ckpt_dir.glob("*_audio_best.pt"))
+    assert len(candidates) == 1, f"expected one best checkpoint, found {candidates}"
+    ckpt_path = candidates[0]
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    return SimpleNamespace(
+        trainer=trainer,
+        encoder=encoder,
+        initial_encoder=initial_encoder,
+        ckpt_path=ckpt_path,
+        checkpoint=checkpoint,
+    )
+
+
+def test_audio_checkpoint_contains_trained_encoder(audio_run):
+    """The *_audio_best.pt checkpoint holds the audio encoder weights as
+    they were trained (same contract as the vision twin)."""
+    saved = audio_run.checkpoint.get("audio_encoder_state_dict")
+    assert saved is not None, "audio checkpoint is missing audio_encoder_state_dict"
+    assert _same_state(saved, audio_run.encoder.state_dict())
+    # Training must have actually moved the encoder, otherwise the equality
+    # above would pass on an untouched module.
+    assert not _same_state(saved, audio_run.initial_encoder)
+    assert audio_run.ckpt_path.name.endswith("_audio_best.pt")
+
+
+def test_audio_resume_restores_encoder_and_model(audio_run, tmp_path):
+    """resume_from restores audio encoder + model weights and counters."""
+    model2 = _tiny_model(seed=1)
+    torch.manual_seed(1)
+    encoder2 = _TinyAudioEncoder()
+    saved_encoder = audio_run.checkpoint["audio_encoder_state_dict"]
+    assert not _same_state(encoder2.state_dict(), saved_encoder)  # sanity
+
+    trainer2 = Trainer(model2, _CharTokenizer(64), _config(tmp_path / "aresume"))
+    # Saved epoch == config.epochs, so the loop body never runs: what comes
+    # out is exactly what the load path restored.
+    state = trainer2.train_audio(encoder2, _audio_data(), resume_from=audio_run.ckpt_path)
+
+    assert _same_state(encoder2.state_dict(), saved_encoder)
+    assert _same_state(model2.state_dict(), audio_run.checkpoint["model_state_dict"])
+    saved_state = audio_run.checkpoint["training_state"]
+    assert state.epoch == saved_state["epoch"]
+    assert state.step == saved_state["step"]
+    assert state.best_loss == saved_state["best_loss"]
+
+
+def test_audio_resume_refuses_text_only_checkpoint(tmp_path):
+    """A text-only checkpoint has no audio encoder weights; resuming from
+    it must fail loudly instead of silently restarting the encoder."""
+    model2 = _tiny_model(seed=2)
+    trainer2 = Trainer(model2, _CharTokenizer(64), _config(tmp_path / "arefuse"))
+    text_ckpt = tmp_path / "text_only.pt"
+    trainer2._save_checkpoint(text_ckpt)
+    assert text_ckpt.exists()
+
+    with pytest.raises(ValueError, match="audio_encoder_state_dict"):
+        trainer2.train_audio(_TinyAudioEncoder(), _audio_data(), resume_from=text_ckpt)
+
+
+def test_audio_refuses_batched_config(tmp_path):
+    """batch_size > 1 is refused up front: mels are ragged along time and
+    the encoder has no padding mask, so a padded batch would silently
+    train on garbage frames (refuse-don't-lie)."""
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "abatch", batch_size=2))
+    with pytest.raises(ValueError, match="padding mask"):
+        trainer.train_audio(_TinyAudioEncoder(), _audio_data())
+
+
+def test_audio_rolling_step_checkpoint(tmp_path):
+    """save_every_steps > 0 produces the *_audio_step.pt rolling checkpoint
+    carrying the audio encoder weights."""
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "astep", save_every_steps=1))
+    state = trainer.train_audio(_TinyAudioEncoder(), _audio_data())
+    assert not state.abort_reason
+    step_ckpts = list((tmp_path / "astep").glob("*_audio_step.pt"))
+    assert len(step_ckpts) == 1
+    ckpt = torch.load(step_ckpts[0], map_location="cpu", weights_only=True)
+    assert "audio_encoder_state_dict" in ckpt
+
+
+def test_audio_missing_projection_refused(tmp_path):
+    """A model built without audio_hidden_size has no audio_projection
+    port; train_audio must refuse with the enable hint."""
+    torch.manual_seed(0)
+    model = Enigma(
+        ForgeConfig(
+            vocab_size=64, dim=32, n_layers=2, n_heads=2,
+            max_seq_len=64, dropout=0.0, use_gradient_checkpointing=False,
+            vision_hidden_size=VISION_DIM,
+        )
+    )
+    trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "aport"))
+    with pytest.raises(ValueError, match="audio_hidden_size"):
+        trainer.train_audio(_TinyAudioEncoder(), _audio_data())
+
+
+def test_audio_checkpoint_saves_stepped_optimizer(audio_run):
+    """The stepped-local-optimizer leg of the persistence contract,
+    audio-pinned (the vision twin alone would miss an audio-only
+    divergence in what optimizer gets saved)."""
+    opt_state = audio_run.checkpoint["optimizer_state_dict"]
+    assert len(opt_state["state"]) > 0, "saved optimizer never stepped"
+    assert len(audio_run.trainer.optimizer.state_dict()["state"]) == 0
+
+
+def test_nothing_trained_run_is_refused(tmp_path):
+    """A run whose every sample fails to decode must NOT report success:
+    no best checkpoint (a 0.0 average would beat inf and crown untrained
+    weights as best), and abort_reason is set so the align entry points
+    SystemExit."""
+    data = [
+        {"audio": torch.zeros(4, 4), "text": "not a waveform"},
+        {"audio": torch.zeros(3, 5), "text": "also not one"},
+    ]  # 2-D tensors: preprocess_audio accepts paths or 1-D waveforms only
+    model = _tiny_model()
+    trainer = Trainer(model, _CharTokenizer(64), _config(tmp_path / "nothing"))
+    state = trainer.train_audio(_TinyAudioEncoder(), data)
+    assert "no samples trained" in state.abort_reason
+    assert state.best_loss == float("inf")
+    assert not list((tmp_path / "nothing").glob("*_audio_best.pt"))

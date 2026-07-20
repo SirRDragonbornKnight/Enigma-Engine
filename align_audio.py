@@ -1,25 +1,25 @@
 #!/usr/bin/env python
-"""Align her own eyes to her own brain -- Phase 4.5 step 4.
+"""Align her own ears to her own brain -- Phase 4.5 step 6.
 
-Trains her distilled VisionEncoder + a fresh vision_projection so the FROZEN
-adopted text model can caption what she sees (LLaVA stage-1 recipe, on her
-own weights end to end):
+Trains her distilled AudioEncoder + a fresh audio_projection so the FROZEN
+adopted text model can transcribe what she hears (the vision align recipe
+over mel spectrograms, on her own weights end to end):
 
-  encoder init = models/enigma_vision_distill/model.pth  (her ViT, distilled
-                 from DINOv2-S on 2026-07-17; sees [-1,1] inputs)
+  encoder init = models/enigma_audio_distill/model.pth  (her Whisper-style
+                 encoder, distilled via distill_audio_encoder.py)
   text model   = the ADOPTED checkpoint (models/enigma_dpo, v8) with
-                 vision_hidden_size enabled; every text weight FROZEN
+                 audio_hidden_size enabled; every text weight FROZEN
                  (freeze_text_io=True -- the projection must target v8's
                  exact embedding space so serve can later load
                  encoder+projection onto the pristine served weights)
-  data         = data/vision/llava_pretrain.jsonl (558,128 pairs)
+  data         = data/audio/librispeech.jsonl (collect_audio_data.py output)
 
-    python align_vision.py --sanity
-    python align_vision.py
-    python align_vision.py --resume models/enigma_vision_align/<stem>_vision_best.pt
+    python align_audio.py --sanity
+    python align_audio.py
+    python align_audio.py --resume models/enigma_audio_align/<stem>_audio_best.pt
 
-Output: checkpoints under models/enigma_vision_align/ carrying BOTH the
-model (with trained vision_projection) and vision_encoder_state_dict
+Output: checkpoints under models/enigma_audio_align/ carrying BOTH the
+model (with trained audio_projection) and audio_encoder_state_dict
 (persistence contract f9ec5184). ASCII-only console (cp1252).
 """
 
@@ -32,22 +32,21 @@ from pathlib import Path
 
 import torch
 
+from enigma_engine.core.audio_encoder import AudioEncoder, AudioEncoderConfig
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.tokenizer import get_tokenizer
-from enigma_engine.core.vision_encoder import VisionEncoder, VisionEncoderConfig
 from enigma_engine.training.encoder_align import Trainer, TrainingConfig
 
 ROOT = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Align the distilled vision encoder to the adopted text model")
+    p = argparse.ArgumentParser(description="Align the distilled audio encoder to the adopted text model")
     p.add_argument("--model", default=str(ROOT / "models" / "enigma_dpo" / "model.pth"))
-    p.add_argument("--encoder", default=str(ROOT / "models" / "enigma_vision_distill" / "model.pth"))
-    p.add_argument("--data", default=str(ROOT / "data" / "vision" / "llava_pretrain.jsonl"))
-    p.add_argument("--out", default=str(ROOT / "models" / "enigma_vision_align"))
-    p.add_argument("--batch", type=int, default=64)
+    p.add_argument("--encoder", default=str(ROOT / "models" / "enigma_audio_distill" / "model.pth"))
+    p.add_argument("--pairs", default=str(ROOT / "data" / "audio" / "librispeech.jsonl"))
+    p.add_argument("--out", default=str(ROOT / "models" / "enigma_audio_align"))
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup", type=int, default=500)
@@ -58,7 +57,7 @@ def main() -> None:
         type=int,
         default=500,
         help="rolling mid-epoch checkpoint every N optimizer steps (0 = off); "
-        "crash insurance for the single-epoch 558k run",
+        "crash insurance for the long single-epoch run",
     )
     p.add_argument("--sanity", action="store_true", help="64 pairs, 1 epoch, then exit")
     args = p.parse_args()
@@ -68,25 +67,25 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    # -- her brain, frozen, with the vision projection port added --------
+    # -- her brain, frozen, with the audio projection port added ---------
     ck = torch.load(args.model, map_location="cpu", weights_only=False)
     if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
         raise SystemExit(f"{args.model} is not an Enigma checkpoint")
 
-    # -- her eyes, distilled -------------------------------------------
+    # -- her ears, distilled -------------------------------------------
     eck = torch.load(args.encoder, map_location="cpu", weights_only=False)
-    if "vision_encoder_state_dict" not in eck:
-        raise SystemExit(f"{args.encoder} carries no vision_encoder_state_dict (run distill_vision_encoder.py)")
-    vcfg = VisionEncoderConfig(**eck["vision_encoder_config"])
-    encoder = VisionEncoder(vcfg)
-    encoder.load_state_dict(eck["vision_encoder_state_dict"], strict=True)
+    if "audio_encoder_state_dict" not in eck:
+        raise SystemExit(f"{args.encoder} carries no audio_encoder_state_dict (run distill_audio_encoder.py)")
+    acfg = AudioEncoderConfig(**eck["audio_encoder_config"])
+    encoder = AudioEncoder(acfg)
+    encoder.load_state_dict(eck["audio_encoder_state_dict"], strict=True)
     encoder.to(device)
 
     cfg = ForgeConfig.from_dict(ck["config"])
-    cfg.vision_hidden_size = vcfg.dim  # opens the projection port (fresh weights)
+    cfg.audio_hidden_size = acfg.dim  # opens the projection port (fresh weights)
     model = Enigma(cfg)
     missing, unexpected = model.load_state_dict(ck["model_state_dict"], strict=False)
-    bad_missing = [k for k in missing if "vision_projection" not in k]
+    bad_missing = [k for k in missing if "audio_projection" not in k]
     if bad_missing or unexpected:
         raise SystemExit(f"unexpected state mismatch: missing={bad_missing[:5]} unexpected={list(unexpected)[:5]}")
     print(f"text model loaded from {args.model}; fresh keys: {list(missing)}", flush=True)
@@ -95,12 +94,13 @@ def main() -> None:
     tokenizer = get_tokenizer("bpe")
 
     # -- data ----------------------------------------------------------
+    # Rows are {"audio": <absolute flac path>, "text": <transcript>}.
     pairs: list[dict] = []
-    with open(args.data, encoding="utf-8") as f:
+    with open(args.pairs, encoding="utf-8") as f:
         for line in f:
             rec = json.loads(line)
-            if rec.get("image") and rec.get("text"):
-                pairs.append({"image": rec["image"], "text": rec["text"]})
+            if rec.get("audio") and rec.get("text"):
+                pairs.append({"audio": rec["audio"], "text": rec["text"]})
     rng = random.Random(1234)
     rng.shuffle(pairs)
     if args.sanity:
@@ -114,7 +114,9 @@ def main() -> None:
 
     tcfg = TrainingConfig(
         epochs=args.epochs,
-        batch_size=args.batch,
+        # batch_size is NOT a flag: train_audio refuses >1 (ragged mels +
+        # no padding mask in the encoder; see the refusal in encoder_align).
+        batch_size=1,
         learning_rate=args.lr,
         warmup_steps=args.warmup,
         weight_decay=0.01,
@@ -128,8 +130,8 @@ def main() -> None:
         seed=1234,
     )
     trainer = Trainer(model, tokenizer, tcfg)
-    state = trainer.train_vision(
-        vision_encoder=encoder,
+    state = trainer.train_audio(
+        audio_encoder=encoder,
         data=train_data,
         val_data=val_data,
         unfreeze_text_layers=0,

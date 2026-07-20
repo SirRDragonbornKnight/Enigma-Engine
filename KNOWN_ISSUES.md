@@ -77,9 +77,10 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (377 tests as of 2026-07-19 — 349 after the
-   2026-07-18 compression pass removed the dormant stack along with its own tests, +28
-   regression tests from the 2026-07-19 checkpoint-safety, pre-align, and cleanup arcs). The
+9. **The python suite is engine-only** (385 tests as of 2026-07-19 — 349 after the
+   2026-07-18 compression pass removed the dormant stack along with its own tests, +36
+   regression tests from the 2026-07-19 checkpoint-safety, pre-align, cleanup, and
+   audio-rebuild arcs). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
@@ -119,9 +120,12 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     Vision has a data collector; audio has NONE (`collect_audio_data.py`
     does not exist) — gap to fill before the audio mode is trainable.
     UPDATE 2026-07-19: `collect_audio_data.py` exists now (28,539 LibriSpeech
-    pairs collected + `distill_audio_encoder.py` ready); the missing piece is
-    the audio ALIGN trainer — `train_audio` died with the Forge trainer, so
-    mirror `vision_align.py` to rebuild it (ROADMAP Phase 4.5 step 6).
+    pairs collected + `distill_audio_encoder.py` ready), and the audio ALIGN
+    trainer was REBUILT the same day — `vision_align.py` generalized into
+    `enigma_engine/training/encoder_align.py` (shared `_train_encoder` core;
+    `train_audio` + `align_audio.py`; audio runs batch_size=1 until the
+    encoder gains a padding mask). Remaining gap is the GPU work only
+    (distill + align runs, serve wiring), parked by training-last.
 
 12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
     the checkpoint-safety subset AND the pre-align fix batch were FIXED same

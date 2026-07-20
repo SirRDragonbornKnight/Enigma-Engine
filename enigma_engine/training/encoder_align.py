@@ -1,18 +1,23 @@
 """
-Vision-align trainer for Enigma AI Engine.
+Shared encoder-align trainer core for Enigma AI Engine (vision + audio).
 
-Carved from the retired Forge-era training.py (2026-07-18): Trainer with
-train_vision (LLaVA stage-1 on her own weights), its checkpoint helpers,
-and the TrainingConfig/TrainingState schema those checkpoints carry.
-Checkpoints saved by the old Trainer.train_vision resume here unchanged.
+Carved from the retired Forge-era training.py (2026-07-18) as the
+vision-align trainer: Trainer with train_vision (LLaVA stage-1 on her own
+weights), its checkpoint helpers, and the TrainingConfig/TrainingState
+schema those checkpoints carry. Checkpoints saved by the old
+Trainer.train_vision resume here unchanged.
 Checkpoint-safety hardening added 2026-07-19 (no format change): missing
 resume_from refuses instead of restarting, failed best-saves retry and
 flag the run via abort_reason, resumed checkpoints get .keep cleanup
 protection, every exit restores eval + requires_grad, and
-save_every_steps>0 writes a rolling mid-epoch {stem}_vision_step.pt.
+save_every_steps>0 writes a rolling mid-epoch {stem}_{modality}_step.pt.
+Generalized to vision+audio 2026-07-19: the hardened loop moved into the
+private _train_encoder, parameterized by _Modality; train_vision and
+train_audio are thin wrappers that keep the exact per-modality checkpoint
+format (keys, filenames) each side always had.
 
 Usage:
-    from enigma_engine.training.vision_align import Trainer, TrainingConfig
+    from enigma_engine.training.encoder_align import Trainer, TrainingConfig
 
     config = TrainingConfig(epochs=1, batch_size=64, learning_rate=1e-4)
     trainer = Trainer(model, tokenizer, config)
@@ -133,7 +138,7 @@ class TrainingConfig:
         gradient_clip: Max gradient norm (0 to disable)
         save_every: Save checkpoint every N epochs (0 = disabled)
         save_every_steps: Also save a rolling mid-epoch checkpoint
-            ({stem}_vision_step.pt) every N optimizer steps (0 = disabled)
+            ({stem}_{modality}_step.pt) every N optimizer steps (0 = disabled)
         checkpoint_dir: Directory for saving checkpoints
         log_every: Log metrics every N optimizer steps
         use_amp: Use automatic mixed precision (fp16)
@@ -242,20 +247,20 @@ class TrainingConfig:
         # bpe_dropout 0.1, schedule_type 'wsd') that never applied -
         # reset them to the inert values to proceed.
         if self.ema_decay > 0:
-            raise ValueError("ema_decay is not supported by the vision-align trainer (no averaging step)")
+            raise ValueError("ema_decay is not supported by the encoder-align trainer (no averaging step)")
         if self.swa_update_interval > 0:
-            raise ValueError("swa_update_interval is not supported by the vision-align trainer (no averaging step)")
+            raise ValueError("swa_update_interval is not supported by the encoder-align trainer (no averaging step)")
         if self.use_lisa:
-            raise ValueError("use_lisa was a Forge-trainer feature and is not supported by the vision-align trainer")
+            raise ValueError("use_lisa was a Forge-trainer feature and is not supported by the encoder-align trainer")
         if self.rolling_best_k > 0:
-            raise ValueError("rolling_best_k is not supported by the vision-align trainer (no rolling save path)")
+            raise ValueError("rolling_best_k is not supported by the encoder-align trainer (no rolling save path)")
         if self.llrd_decay > 0:
             raise ValueError(
-                "llrd_decay was a Forge-trainer feature and is not supported by the vision-align trainer"
+                "llrd_decay was a Forge-trainer feature and is not supported by the encoder-align trainer"
             )
         if self.label_smoothing > 0:
             raise ValueError(
-                "label_smoothing is not implemented by the vision-align loss "
+                "label_smoothing is not implemented by the encoder-align loss "
                 "(pre-2026-07-19 checkpoints recorded an inert default 0.05; use 0.0)"
             )
         if self.gradient_noise_eta > 0:
@@ -270,7 +275,7 @@ class TrainingConfig:
             )
         if self.schedule_type != "cosine":
             raise ValueError(
-                f"schedule_type '{self.schedule_type}' is not implemented - train_vision runs "
+                f"schedule_type '{self.schedule_type}' is not implemented - this trainer runs "
                 f"only warmup+cosine (pre-2026-07-19 checkpoints recorded an inert 'wsd' "
                 f"default that never applied; use 'cosine')"
             )
@@ -327,17 +332,50 @@ class TrainingState:
 
 
 # =============================================================================
+# MODALITY
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class _Modality:
+    """Per-modality plumbing for the shared _train_encoder loop.
+
+    train_vision / train_audio each build one of these; everything
+    modality-specific the hardened loop touches (data keys, checkpoint
+    keys, decode/augment/probe callables, naming) lives here so the loop
+    itself stays modality-blind."""
+
+    name: str            # "vision" / "audio" -> checkpoint stems + log prefixes
+    media_key: str       # "image" / "audio" key in data dicts
+    encoder_key: str     # "vision_encoder_state_dict" / "audio_encoder_state_dict"
+    projection_attr: str # "vision_projection" / "audio_projection"
+    features_kwarg: str  # "vision_features" / "audio_features"
+    # Media ref -> [1, ...] CPU tensor. NO RNG inside; must be pool-safe
+    # when handed a path ref (the decode pool calls it from workers).
+    decode: Callable[[object], "torch.Tensor"]
+    # Train-time augmentation only, called on the MAIN thread in batch
+    # order (RNG order = batch order); None = no augmentation.
+    augment: "Callable[[torch.Tensor], torch.Tensor] | None"
+    # Cheap validity probe for path refs (raises on a bad file), or None
+    # to skip the probe pre-pass for path refs (still lazily decoded).
+    probe: "Callable[[object], None] | None"
+    enable_hint: str     # e.g. "Set vision_hidden_size in ForgeConfig to enable vision."
+
+
+# =============================================================================
 # TRAINER
 # =============================================================================
 
 
 class Trainer:
     """
-    Vision-align trainer for Enigma models.
+    Encoder-align trainer for Enigma models.
 
     Supports:
     - train_vision: encoder + projection training on image-text pairs
       (LLaVA stage-1 recipe; align_vision.py is the entry point)
+    - train_audio: encoder + projection training on audio-text pairs
+      (same recipe over mel spectrograms; align_audio.py is the entry point)
     - Progress callbacks
     - Checkpoint saving/loading with exact resume
 
@@ -426,8 +464,8 @@ class Trainer:
     def optimizer(self) -> "torch.optim.Optimizer":
         """Fallback AdamW for text-only _save_checkpoint calls.
 
-        train_vision builds and steps its own LOCAL optimizer over the
-        vision-trainable parameter set; nothing ever steps this one. It
+        _train_encoder builds and steps its own LOCAL optimizer over the
+        encoder-trainable parameter set; nothing ever steps this one. It
         exists only so the text-only checkpoint format keeps its
         optimizer_state_dict key, so it is built lazily (no dead state on
         the device) with a single param group (grouping is irrelevant for
@@ -515,7 +553,7 @@ class Trainer:
         Saves model weights, optimizer, scheduler, scaler, and step
         counters so training can resume exactly where it left off.
 
-        train_vision trains a separately-passed encoder with a LOCAL
+        _train_encoder trains a separately-passed encoder with a LOCAL
         optimizer/scheduler/scaler (its trainable set differs from the
         text path's). It must pass those here via the keyword args so
         the checkpoint captures what actually trained; otherwise the
@@ -607,7 +645,7 @@ class Trainer:
 
         Encoder runs must use :meth:`_load_encoder_checkpoint` instead — it is
         the only path that restores the separately-trained encoder and the
-        LOCAL optimizer/scheduler/scaler that train_vision actually steps.
+        LOCAL optimizer/scheduler/scaler that _train_encoder actually steps.
         """
         try:
             from enigma_engine.core.model_registry import safe_load_weights
@@ -628,7 +666,7 @@ class Trainer:
 
             # The checkpoint's optimizer_state_dict is deliberately NOT
             # restored: nothing in this trainer ever steps self.optimizer
-            # (train_vision builds its own local one), so materializing
+            # (_train_encoder builds its own local one), so materializing
             # full-model AdamW moments here (~1.5 GB at 182M fp32) would
             # be dead weight on the device.
 
@@ -642,7 +680,7 @@ class Trainer:
 
             # NOTE: scheduler/scaler/EMA/SWA state in the checkpoint is NOT
             # restored here. This trainer builds its scheduler and scaler
-            # LOCALLY inside train_vision (they bind to the encoder+projection
+            # LOCALLY inside _train_encoder (they bind to the encoder+projection
             # parameter set, not self.optimizer), so _load_encoder_checkpoint
             # is the path that restores them. EMA/SWA are not supported at all
             # (see TrainingConfig.validate) — an old Forge checkpoint carrying
@@ -717,9 +755,9 @@ class Trainer:
         scheduler: Any,
         scaler: Any,
     ) -> None:
-        """Restore a vision training checkpoint (encoder + local optimizer).
+        """Restore an encoder training checkpoint (encoder + local optimizer).
 
-        train_vision builds its optimizer/scheduler/scaler locally
+        _train_encoder builds its optimizer/scheduler/scaler locally
         because it trains a different parameter set than the text
         path, so a plain model-weights load cannot resume it. This
         loads the model weights, the encoder weights saved under
@@ -780,7 +818,7 @@ class Trainer:
         logger.info(f"Loaded encoder checkpoint: {path}")
 
     # -----------------------------------------------------------------
-    # VISION - encoder + projection alignment (LLaVA stage-1)
+    # ENCODER ALIGN - encoder + projection alignment (LLaVA stage-1)
     # -----------------------------------------------------------------
 
     def train_vision(
@@ -839,13 +877,174 @@ class Trainer:
         """
         from enigma_engine.core.vision_encoder import augment_vision_tensor, preprocess_image
 
-        # ── Validation ──────────────────────────────────────────────────
-        if not hasattr(self.model, "vision_projection") or self.model.vision_projection is None:
+        # Preprocess kwargs come off the encoder config: the [-1,1]-vs-
+        # ImageNet normalization contract ties the flag to use_pretrained
+        # (False for her from-scratch encoders).
+        image_size = getattr(getattr(vision_encoder, "config", None), "image_size", 224)
+        use_imagenet = getattr(getattr(vision_encoder, "config", None), "use_pretrained", False)
+
+        def _decode_image(ref: object) -> "torch.Tensor":
+            """Image ref (path / PIL object) -> [1, 3, H, W] CPU tensor.
+            No RNG; pool-safe for path refs."""
+            return preprocess_image(ref, image_size=image_size, imagenet_normalize=use_imagenet)
+
+        def _probe_image(p: object) -> None:
+            """V-2 readability probe: PIL verify() parses the header
+            without decoding pixels - cheap, and safe on the pool."""
+            from PIL import Image as _PILImage
+
+            with _PILImage.open(str(p)) as _probe:
+                _probe.verify()
+
+        modality = _Modality(
+            name="vision",
+            media_key="image",
+            encoder_key="vision_encoder_state_dict",
+            projection_attr="vision_projection",
+            features_kwarg="vision_features",
+            decode=_decode_image,
+            augment=augment_vision_tensor,
+            probe=_probe_image,
+            enable_hint="Set vision_hidden_size in ForgeConfig to enable vision.",
+        )
+        return self._train_encoder(
+            encoder=vision_encoder,
+            data=data,
+            modality=modality,
+            unfreeze_text_layers=unfreeze_text_layers,
+            val_data=val_data,
+            resume_from=resume_from,
+            freeze_text_io=freeze_text_io,
+        )
+
+    def train_audio(
+        self,
+        audio_encoder: nn.Module,
+        data: list[dict[str, Any]],
+        unfreeze_text_layers: int = 0,
+        val_data: list[dict[str, Any]] | None = None,
+        resume_from: str | Path | None = None,
+        freeze_text_io: bool = False,
+    ) -> "TrainingState":
+        """
+        Train the audio encoder and projection layer on audio-text pairs.
+
+        Both the audio encoder and the model's audio_projection layer are
+        trained together. The text transformer is frozen by default (set
+        unfreeze_text_layers > 0 to fine-tune the last N text layers too).
+
+        Requires batch_size=1: mel spectrograms are ragged along time and
+        the audio encoder has no padding mask, so a padded batch would
+        feed garbage frames as context. Larger batches are refused up
+        front instead of silently training on garbage (refuse-don't-lie);
+        batch support needs a mask-aware encoder first.
+
+        Data format: list of dicts with:
+            - "audio": file path string, Path, or 1-D waveform tensor
+            - "text": transcript/description string
+
+        Args:
+            audio_encoder: AudioEncoder instance to train.
+            data: List of audio-text pair dicts.
+            unfreeze_text_layers: Number of last text transformer layers to
+                unfreeze (0 = freeze all text layers, only train encoder +
+                projection).
+            val_data: Optional held-out audio-text pairs. When provided
+                (and non-empty after validation), a no-grad evaluation
+                pass runs after each epoch; results land in
+                ``state.validation_losses`` and drive best-checkpoint /
+                early-stopping decisions instead of the training avg.
+                Val samples get a clean (un-augmented) mel; SpecAugment
+                applies to training samples only.
+            resume_from: Path to a checkpoint saved by a previous
+                train_audio run. Restores model weights, the trained
+                audio encoder weights, the local optimizer/scheduler/
+                scaler state, and epoch/step counters. The checkpoint
+                must contain "audio_encoder_state_dict" (text-only
+                checkpoints are refused - the encoder would silently
+                restart from scratch). Accepts best, periodic, and the
+                save_every_steps rolling {stem}_audio_step.pt; resuming
+                a mid-epoch rolling checkpoint replays the interrupted
+                epoch from its start with the LR schedule wound back to
+                the epoch boundary.
+
+        Returns:
+            TrainingState with loss history.
+
+        Raises:
+            ValueError: If batch_size > 1, model lacks audio_projection,
+                or data is empty.
+            FileNotFoundError: If resume_from is set but the path does
+                not exist (a silent fresh start would overwrite the
+                checkpoints the caller meant to continue).
+        """
+        if self.config.batch_size > 1:
             raise ValueError(
-                "Model does not have a vision projection layer. Set vision_hidden_size in ForgeConfig to enable vision."
+                "audio align requires batch_size=1 - mel spectrograms are ragged "
+                "along time and the audio encoder has no padding mask, so a "
+                "padded batch would feed garbage frames as context; batch "
+                "support needs a mask-aware encoder first"
+            )
+
+        from enigma_engine.core.audio_encoder import preprocess_audio, spec_augment
+
+        audio_config = getattr(audio_encoder, "config", None)
+
+        def _decode_audio(ref: object) -> "torch.Tensor":
+            """Audio ref (path / 1-D waveform tensor) -> [1, n_mels,
+            n_frames] CPU log-mel tensor. No RNG; pool-safe for path
+            refs (file load + STFT release the GIL in C)."""
+            return preprocess_audio(ref, config=audio_config)
+
+        modality = _Modality(
+            name="audio",
+            media_key="audio",
+            encoder_key="audio_encoder_state_dict",
+            projection_attr="audio_projection",
+            features_kwarg="audio_features",
+            decode=_decode_audio,
+            augment=spec_augment,
+            probe=None,
+            enable_hint="Set audio_hidden_size in ForgeConfig to enable audio.",
+        )
+        return self._train_encoder(
+            encoder=audio_encoder,
+            data=data,
+            modality=modality,
+            unfreeze_text_layers=unfreeze_text_layers,
+            val_data=val_data,
+            resume_from=resume_from,
+            freeze_text_io=freeze_text_io,
+        )
+
+    def _train_encoder(
+        self,
+        encoder: nn.Module,
+        data: list[dict[str, Any]],
+        modality: _Modality,
+        unfreeze_text_layers: int = 0,
+        val_data: list[dict[str, Any]] | None = None,
+        resume_from: str | Path | None = None,
+        freeze_text_io: bool = False,
+    ) -> "TrainingState":
+        """Shared hardened align loop behind train_vision / train_audio.
+
+        Trains *encoder* plus the model's modality projection layer on
+        media-text pairs; everything modality-specific (data keys,
+        checkpoint keys, decode/augment/probe, naming) comes in through
+        *modality* (see _Modality). Contract, data format, and hardening
+        guarantees are documented on the public wrappers."""
+        # Capitalized log prefix for user-facing strings ("Vision training: ...").
+        label = modality.name.capitalize()
+
+        # ── Validation ──────────────────────────────────────────────────
+        projection = getattr(self.model, modality.projection_attr, None)
+        if projection is None:
+            raise ValueError(
+                f"Model does not have a {modality.name} projection layer. {modality.enable_hint}"
             )
         if not data:
-            raise ValueError("No training data provided for vision training.")
+            raise ValueError(f"No training data provided for {modality.name} training.")
 
         # Pass 156h: seed RNGs from config.seed when set, mirroring
         # train(). Without this the per-epoch random.shuffle(pairs)
@@ -860,10 +1059,10 @@ class Trainer:
         self._epochs_without_improvement = 0
         start_time = time.time()
 
-        self._emit_progress(0, "Preparing vision training data...")
+        self._emit_progress(0, f"Preparing {modality.name} training data...")
 
         # Decode pool for the K7 overlap work (probe pre-pass + per-step
-        # image decode). Declared before the try so the finally can shut it
+        # media decode). Declared before the try so the finally can shut it
         # down on every exit path.
         decode_pool: ThreadPoolExecutor | None = None
 
@@ -873,8 +1072,8 @@ class Trainer:
             for param in self.model.parameters():
                 param.requires_grad = False
 
-            # Unfreeze vision projection (always trainable)
-            for param in self.model.vision_projection.parameters():
+            # Unfreeze the modality projection (always trainable)
+            for param in projection.parameters():
                 param.requires_grad = True
 
             # Unfreeze output/embedding. NOT needed for gradient flow to the
@@ -899,20 +1098,20 @@ class Trainer:
                     for param in layer.parameters():
                         param.requires_grad = True
 
-            # Vision encoder is fully trainable
-            for param in vision_encoder.parameters():
+            # The encoder is fully trainable
+            for param in encoder.parameters():
                 param.requires_grad = True
 
             # Re-freeze pretrained backbone if configured (the blanket unfreeze
             # above would otherwise override freeze_backbone from __init__)
-            if getattr(vision_encoder.config, "freeze_backbone", False):
-                backbone = getattr(vision_encoder, "backbone", None)
+            if getattr(getattr(encoder, "config", None), "freeze_backbone", False):
+                backbone = getattr(encoder, "backbone", None)
                 if backbone is not None:
                     for param in backbone.parameters():
                         param.requires_grad = False
 
             trainable_params = list(filter(lambda p: p.requires_grad, self.model.parameters())) + list(
-                filter(lambda p: p.requires_grad, vision_encoder.parameters())
+                filter(lambda p: p.requires_grad, encoder.parameters())
             )
             optimizer = AdamW(
                 trainable_params,
@@ -930,14 +1129,14 @@ class Trainer:
             # One loop step per BATCH (real batching, Phase 4.5 step 4; the loop
             # was batch-1 until 2026-07-17 -- at LLaVA 558k scale that starved
             # the 5090 on Python overhead).
-            vision_batch = max(1, int(self.config.batch_size))
+            train_batch = max(1, int(self.config.batch_size))
             # The schedule is sized in OPTIMIZER steps, matching where
             # scheduler.step() actually fires (accumulation boundaries +
             # the per-epoch remainder flush = ceil(batches/accum) per
             # epoch). Sizing it in micro-batches stretched warmup/decay by
             # the accumulation factor whenever max_grad_accumulation > 1.
             accum_steps = max(1, self.config.max_grad_accumulation)
-            epoch_batches = (len(data) + vision_batch - 1) // vision_batch
+            epoch_batches = (len(data) + train_batch - 1) // train_batch
             total_steps = ((epoch_batches + accum_steps - 1) // accum_steps) * self.config.epochs
             warmup = _effective_warmup(self.config.warmup_steps, total_steps)
             decay_steps = max(1, total_steps - warmup)
@@ -959,8 +1158,8 @@ class Trainer:
                 if ckpt_path.exists():
                     self._load_encoder_checkpoint(
                         ckpt_path,
-                        encoder=vision_encoder,
-                        encoder_key="vision_encoder_state_dict",
+                        encoder=encoder,
+                        encoder_key=modality.encoder_key,
                         optimizer=optimizer,
                         scheduler=scheduler,
                         scaler=scaler,
@@ -978,7 +1177,8 @@ class Trainer:
                             scheduler.step()
                         self.state.step = self.state.epoch_start_step
                     logger.info(
-                        "Resuming vision training: epoch=%d, step=%d, best_loss=%.4f",
+                        "Resuming %s training: epoch=%d, step=%d, best_loss=%.4f",
+                        modality.name,
                         self.state.epoch,
                         self.state.step,
                         self.state.best_loss,
@@ -991,72 +1191,68 @@ class Trainer:
                         f"Drop resume_from to start a new run."
                     )
 
-            image_size = getattr(getattr(vision_encoder, "config", None), "image_size", 224)
-            use_imagenet = getattr(getattr(vision_encoder, "config", None), "use_pretrained", False)
-
             # K7: shared thread pool for the probe pre-pass and the per-step
-            # image decode. Decode is CPU/IO-bound and PIL releases the GIL
-            # in its C decoders, so threads (no Windows spawn-pickling) give
-            # the overlap. Shut down in the finally.
+            # media decode. Decode is CPU/IO-bound and releases the GIL in
+            # its C paths (PIL decoders, WAV/STFT), so threads (no Windows
+            # spawn-pickling) give the overlap. Shut down in the finally.
             decode_pool = ThreadPoolExecutor(
-                max_workers=min(8, os.cpu_count() or 4), thread_name_prefix="vision-decode"
+                max_workers=min(8, os.cpu_count() or 4), thread_name_prefix=f"{modality.name}-decode"
             )
 
-            def _probe_image(p: object) -> None:
-                """V-2 readability probe: PIL verify() parses the header
-                without decoding pixels - cheap, and safe on the pool."""
-                from PIL import Image as _PILImage
-
-                with _PILImage.open(str(p)) as _probe:
-                    _probe.verify()
-
-            def _probed_stream(items: list[dict[str, Any]], label: str):
-                """Yield (index, image, text, probe_future|None) in item
+            def _probed_stream(items: list[dict[str, Any]], stream_label: str):
+                """Yield (index, media, text, probe_future|None) in item
                 order. Probes go to the pool in bounded chunks so a
                 558k-item dataset overlaps its header reads without
-                materializing 558k Future objects at once."""
+                materializing 558k Future objects at once. When
+                modality.probe is None, path refs skip the probe (still
+                lazily decoded per-step)."""
                 chunk = 512
                 entries: list[tuple[int, object, str]] = []
                 for i, item in enumerate(items):
-                    image = item.get("image")
+                    media = item.get(modality.media_key)
                     text = item.get("text", "")
-                    if image is None or not text:
-                        logger.warning(f"Skipping vision {label} item {i}: missing image or text")
+                    if media is None or not text:
+                        logger.warning(
+                            f"Skipping {modality.name} {stream_label} item {i}: "
+                            f"missing {modality.media_key} or text"
+                        )
                         continue
-                    entries.append((i, image, text))
+                    entries.append((i, media, text))
                 for cs in range(0, len(entries), chunk):
                     window = entries[cs : cs + chunk]
                     futs = [
-                        decode_pool.submit(_probe_image, im) if isinstance(im, (str, Path)) else None
-                        for _, im, _ in window
+                        decode_pool.submit(modality.probe, m)
+                        if (modality.probe is not None and isinstance(m, (str, Path)))
+                        else None
+                        for _, m, _ in window
                     ]
-                    for (i, im, tx), fut in zip(window, futs):
-                        yield i, im, tx, fut
+                    for (i, m, tx), fut in zip(window, futs):
+                        yield i, m, tx, fut
 
-            # V-2: lazy preprocess. Store image refs (paths or PIL objects)
-            # only - never preprocess/.to(device) eagerly. At LLaVA-Pretrain
-            # scale (558K - 600 KB tensors) eager prep would OOM the GPU
-            # immediately on a 16 GB VRAM budget. Tensors are built per-step
-            # below and freed after backward.
+            # V-2: lazy preprocess. Store media refs (paths or in-memory
+            # objects) only - never preprocess/.to(device) eagerly. At
+            # LLaVA-Pretrain scale (558K - 600 KB tensors) eager prep would
+            # OOM the GPU immediately on a 16 GB VRAM budget. Tensors are
+            # built per-step below and freed after backward.
             # K7: the probes run on the pool via _probed_stream; result
             # order follows item order, so skip/log semantics match the
             # old serial loop.
             pairs: list[tuple[object, list[int]]] = []
-            for i, image, text, fut in _probed_stream(data, "data"):
+            for i, media, text, fut in _probed_stream(data, "data"):
                 if fut is not None:
                     try:
                         fut.result()
                     except Exception as exc:
-                        logger.warning(f"Skipping vision data item {i}: {exc}")
+                        logger.warning(f"Skipping {modality.name} data item {i}: {exc}")
                         continue
                 # Encode text to token IDs (tokenizer stays on the main thread)
                 token_ids = self.tokenizer.encode(text)
                 if len(token_ids) < 1:
                     continue
-                pairs.append((image, token_ids))
+                pairs.append((media, token_ids))
 
             if not pairs:
-                raise ValueError("No valid image-text pairs found in training data.")
+                raise ValueError(f"No valid {modality.media_key}-text pairs found in training data.")
 
             # V-6: optional held-out validation pairs. Same lightweight
             # readability probe as train (pooled); same lazy-preprocess
@@ -1066,25 +1262,25 @@ class Trainer:
             # train-loop drop policy at min_len < 1.
             val_pairs: list[tuple[object, list[int]]] = []
             if val_data:
-                for i, v_image, v_text, v_fut in _probed_stream(val_data, "val"):
+                for i, v_media, v_text, v_fut in _probed_stream(val_data, "val"):
                     if v_fut is not None:
                         try:
                             v_fut.result()
                         except Exception as exc:
-                            logger.warning(f"Skipping vision val item {i}: {exc}")
+                            logger.warning(f"Skipping {modality.name} val item {i}: {exc}")
                             continue
                     v_token_ids = self.tokenizer.encode(v_text)
                     if len(v_token_ids) < 2:
                         continue
-                    val_pairs.append((v_image, v_token_ids))
+                    val_pairs.append((v_media, v_token_ids))
                 if val_pairs:
-                    logger.info(f"Vision validation: {len(val_pairs)} held-out pairs")
+                    logger.info(f"{label} validation: {len(val_pairs)} held-out pairs")
 
-            self._emit_progress(5, f"Prepared {len(pairs)} image-text pairs")
-            logger.info(f"Vision training: {len(pairs)} pairs, {self.config.epochs} epochs")
+            self._emit_progress(5, f"Prepared {len(pairs)} {modality.media_key}-text pairs")
+            logger.info(f"{label} training: {len(pairs)} pairs, {self.config.epochs} epochs")
 
             # ── Training loop ───────────────────────────────────────────────
-            vision_encoder.train()
+            encoder.train()
             self.model.train()
 
             checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -1103,27 +1299,28 @@ class Trainer:
                 silently lose the partial-data signal."""
                 if dropped_short_captions > 0:
                     logger.warning(
-                        "Vision training: %d caption(s) dropped during "
+                        "%s training: %d caption(s) dropped during "
                         "training for being too short after next-token "
                         "shift. Consider filtering single-token captions "
                         "during data prep.",
+                        label,
                         dropped_short_captions,
                     )
 
-            def _forward_ce(imgs: list[torch.Tensor], id_lists: list[list[int]], with_token_count: bool = False):
+            def _forward_ce(media: list[torch.Tensor], id_lists: list[list[int]], with_token_count: bool = False):
                 """Shared batch-build + loss for the train loop and
                 _run_validation (one implementation, so a masking/padding
-                fix can never land on one side only): stack the images,
-                right-pad text/targets on CPU with one transfer each, run
-                the multimodal forward, and return (mean CE over
+                fix can never land on one side only): stack the media
+                tensors, right-pad text/targets on CPU with one transfer
+                each, run the multimodal forward, and return (mean CE over
                 non-ignored targets, that target count or None). None when
-                the batch degenerates (patches swallow the text window, or
-                nothing is left to predict). The token count is computed
-                only on request: its .item() drains the forward stream --
-                fine after a no-grad val forward, but on a train batch it
-                would wedge a pipeline bubble between forward and
+                the batch degenerates (the media prefix swallows the text
+                window, or nothing is left to predict). The token count is
+                computed only on request: its .item() drains the forward
+                stream -- fine after a no-grad val forward, but on a train
+                batch it would wedge a pipeline bubble between forward and
                 backward."""
-                img_batch = torch.cat(imgs, dim=0).to(self.device)
+                media_batch = torch.cat(media, dim=0).to(self.device)
                 max_len = max(len(t) for t in id_lists)
                 text_tensor = torch.zeros(len(id_lists), max_len, dtype=torch.long)
                 targets = torch.full((len(id_lists), max_len - 1), -100, dtype=torch.long)
@@ -1138,23 +1335,23 @@ class Trainer:
                     dtype=self._amp_dtype,
                     enabled=self.config.use_amp and self.device.type == "cuda",
                 ):
-                    feats = vision_encoder(img_batch)
+                    feats = encoder(media_batch)
                     logits = self.model.forward_multimodal(
                         input_ids=text_tensor,
-                        vision_features=feats,
+                        **{modality.features_kwarg: feats},
                     )
                     # Loss only on the text portion: the model concatenates
-                    # [vision_patches, text_tokens] internally, and causal
+                    # [media_prefix, text_tokens] internally, and causal
                     # attention means a real token never attends to the
                     # padding AFTER it, so correctness needs no attention
                     # mask -- only the ignore_index loss mask.
-                    n_patches = feats.shape[1]
-                    if n_patches >= logits.shape[1]:
+                    n_prefix = feats.shape[1]
+                    if n_prefix >= logits.shape[1]:
                         logger.warning(
-                            "Vision patches (%d) >= logits length (%d), skipping batch", n_patches, logits.shape[1]
+                            "%s prefix (%d) >= logits length (%d), skipping batch", label, n_prefix, logits.shape[1]
                         )
                         return None
-                    text_logits = logits[:, n_patches:-1, :]
+                    text_logits = logits[:, n_prefix:-1, :]
                     min_len = min(text_logits.shape[1], targets.shape[1])
                     if min_len < 1:
                         return None
@@ -1185,7 +1382,7 @@ class Trainer:
                 full-pass best_loss values it would be ranked against."""
                 if not val_pairs:
                     return None
-                vision_encoder.eval()
+                encoder.eval()
                 self.model.eval()
                 total_loss = 0.0
                 total_tokens = 0
@@ -1193,31 +1390,27 @@ class Trainer:
                 stopped = False
                 try:
                     with torch.no_grad():
-                        for v_start in range(0, len(val_pairs), vision_batch):
+                        for v_start in range(0, len(val_pairs), train_batch):
                             if self._should_stop():
                                 stopped = True
-                                logger.info("Vision validation stopped by user request after %d batch(es)", n_batches)
+                                logger.info(
+                                    "%s validation stopped by user request after %d batch(es)", label, n_batches
+                                )
                                 break
-                            v_imgs: list[torch.Tensor] = []
+                            v_media: list[torch.Tensor] = []
                             v_id_lists: list[list[int]] = []
-                            for v_ref, v_ids in val_pairs[v_start : v_start + vision_batch]:
+                            for v_ref, v_ids in val_pairs[v_start : v_start + train_batch]:
                                 if len(v_ids) < 2:
                                     continue
                                 try:
-                                    v_imgs.append(
-                                        preprocess_image(
-                                            v_ref,
-                                            image_size=image_size,
-                                            imagenet_normalize=use_imagenet,
-                                        )
-                                    )
+                                    v_media.append(modality.decode(v_ref))
                                     v_id_lists.append(v_ids)
                                 except Exception as exc:
-                                    logger.debug("Vision val: preprocess failed (%s); skipping", exc)
+                                    logger.debug("%s val: preprocess failed (%s); skipping", label, exc)
                                     continue
-                            if not v_imgs:
+                            if not v_media:
                                 continue
-                            out = _forward_ce(v_imgs, v_id_lists, with_token_count=True)
+                            out = _forward_ce(v_media, v_id_lists, with_token_count=True)
                             if out is None:
                                 continue
                             v_loss, v_n_tokens = out
@@ -1227,7 +1420,7 @@ class Trainer:
                             total_tokens += v_n_tokens
                             n_batches += 1
                 finally:
-                    vision_encoder.train()
+                    encoder.train()
                     self.model.train()
                 if stopped or total_tokens == 0:
                     return None
@@ -1243,9 +1436,9 @@ class Trainer:
                 accum-heavy configs still get their saves."""
                 if self.config.save_every_steps > 0 and self.state.step % self.config.save_every_steps == 0:
                     self._save_checkpoint(
-                        checkpoint_dir / f"{self._checkpoint_stem}_vision_step.pt",
-                        encoder=vision_encoder,
-                        encoder_key="vision_encoder_state_dict",
+                        checkpoint_dir / f"{self._checkpoint_stem}_{modality.name}_step.pt",
+                        encoder=encoder,
+                        encoder_key=modality.encoder_key,
                         optimizer=optimizer,
                         scheduler=scheduler,
                         scaler=scaler,
@@ -1256,17 +1449,21 @@ class Trainer:
             # run). state.best_loss stays the pure metric.
             best_written = self.state.best_loss
             failed_best_saves = 0
+            # Optimizer steps taken by THIS run (state.step alone can't
+            # tell: a resume loads a nonzero count) -- drives the
+            # nothing-trained refusal at the end of the run.
+            trained_steps_this_run = 0
 
             # When resuming, start from the saved epoch (mirrors train())
             start_epoch = self.state.epoch
             for epoch in range(start_epoch, self.config.epochs):
                 if self._should_stop():
-                    logger.info("Vision training stopped by user request")
+                    logger.info("%s training stopped by user request", label)
                     break
 
                 # Time limit check
                 if self.config.max_training_seconds > 0 and (time.time() - start_time) > self.config.max_training_seconds:
-                    logger.info("Vision training: time limit reached")
+                    logger.info("%s training: time limit reached", label)
                     break
 
                 epoch_loss = 0.0
@@ -1286,46 +1483,37 @@ class Trainer:
                 # zero after a real optimizer step (boundary or remainder).
                 optimizer.zero_grad()
 
-                n_epoch_batches = (len(pairs) + vision_batch - 1) // vision_batch
-                batch_starts = list(range(0, len(pairs), vision_batch))
+                n_epoch_batches = (len(pairs) + train_batch - 1) // train_batch
+                batch_starts = list(range(0, len(pairs), train_batch))
 
                 # V-2: lazy preprocess, one BATCH at a time (real batching,
                 # Phase 4.5 step 4). K7 overlap (2026-07-19): batch n+1's
-                # image DECODE runs on the pool while batch n trains, so the
-                # GPU no longer idles through serial PIL work. Augmentation
-                # (the only RNG consumer) stays on the MAIN thread in batch
-                # order, so seeded runs draw the same augment sequence as
-                # the old serial loop. Per-image failures still skip the
-                # sample, not the batch.
+                # media DECODE runs on the pool while batch n trains, so the
+                # GPU no longer idles through serial decode work.
+                # Augmentation (the only RNG consumer) stays on the MAIN
+                # thread in batch order, so seeded runs draw the same
+                # augment sequence as the old serial loop. Per-sample
+                # failures still skip the sample, not the batch.
                 def _submit_decode(bstart: int) -> list[tuple[str, Any, list[int]]]:
                     """Queue one batch's decodes. Only PATH refs go to the
                     pool (file decode is the I/O-bound win; an in-memory
-                    PIL object gains nothing from a thread and a LAZY
+                    object gains nothing from a thread and a LAZY
                     file-backed one must not be load()ed concurrently, so
                     'raw' refs decode on the main thread at consumption).
                     The <2-token filter runs here, but its counter and
                     warning fire at CONSUMPTION so an aborted run never
                     reports drops from batches that never trained."""
                     entries: list[tuple[str, Any, list[int]]] = []
-                    for image_ref, token_ids in pairs[bstart : bstart + vision_batch]:
+                    for media_ref, token_ids in pairs[bstart : bstart + train_batch]:
                         if len(token_ids) < 2:
                             entries.append(("drop", None, token_ids))
                             continue
-                        if isinstance(image_ref, (str, Path)):
+                        if isinstance(media_ref, (str, Path)):
                             entries.append(
-                                (
-                                    "fut",
-                                    decode_pool.submit(
-                                        preprocess_image,
-                                        image_ref,
-                                        image_size=image_size,
-                                        imagenet_normalize=use_imagenet,
-                                    ),
-                                    token_ids,
-                                )
+                                ("fut", decode_pool.submit(modality.decode, media_ref), token_ids)
                             )
                         else:
-                            entries.append(("raw", image_ref, token_ids))
+                            entries.append(("raw", media_ref, token_ids))
                     return entries
 
                 prefetch_depth = 2
@@ -1343,17 +1531,18 @@ class Trainer:
                     if nxt < len(batch_starts):
                         pending[nxt] = _submit_decode(batch_starts[nxt])
 
-                    imgs: list[torch.Tensor] = []
+                    media: list[torch.Tensor] = []
                     id_lists: list[list[int]] = []
                     for kind, payload, token_ids in entries:
                         if kind == "drop":
                             # V-7: too short for next-token loss after shift.
                             if dropped_short_captions == 0:
                                 logger.warning(
-                                    "Vision caption too short for next-token "
+                                    "%s caption too short for next-token "
                                     "loss after shift (need >=2 tokens) at "
                                     "epoch %d step %d. Further drops will be "
                                     "summed and reported at end of training.",
+                                    label,
                                     epoch + 1,
                                     step,
                                 )
@@ -1361,23 +1550,20 @@ class Trainer:
                             continue
                         try:
                             if kind == "fut":
-                                img = payload.result()
+                                sample = payload.result()
                             else:  # "raw": in-memory ref, decoded here
-                                img = preprocess_image(
-                                    payload,
-                                    image_size=image_size,
-                                    imagenet_normalize=use_imagenet,
-                                )
+                                sample = modality.decode(payload)
                         except Exception as exc:
-                            logger.warning("Vision step %d: preprocess failed (%s); skipping sample", step, exc)
+                            logger.warning("%s step %d: preprocess failed (%s); skipping sample", label, step, exc)
                             continue
-                        # Training-time augmentation (random flip, color jitter),
-                        # applied per image so each sample draws its own coin.
-                        imgs.append(augment_vision_tensor(img))
+                        # Training-time augmentation, applied per sample on the
+                        # main thread so each sample draws its own coin and
+                        # seeded runs consume RNG in batch order.
+                        media.append(modality.augment(sample) if modality.augment is not None else sample)
                         id_lists.append(token_ids)
-                    if not imgs:
+                    if not media:
                         continue
-                    out = _forward_ce(imgs, id_lists)
+                    out = _forward_ce(media, id_lists)
                     if out is None:
                         continue
                     loss, _ = out
@@ -1413,17 +1599,17 @@ class Trainer:
 
                     # NaN guard
                     if math.isnan(loss_val) or math.isinf(loss_val):
-                        logger.error(f"Vision training: NaN/Inf loss at epoch {epoch + 1}, step {step}")
+                        logger.error(f"{label} training: NaN/Inf loss at epoch {epoch + 1}, step {step}")
                         self._emit_progress(100, "Training aborted: NaN loss")
-                        self.state.abort_reason = f"Vision NaN/Inf loss at epoch {epoch + 1}, step {step}"
+                        self.state.abort_reason = f"{label} NaN/Inf loss at epoch {epoch + 1}, step {step}"
                         _emit_drop_summary()  # V-7 audit fix
                         return self.state
 
                     # Safety guard
                     if loss_val > self.config.max_loss:
-                        logger.error(f"Vision training: loss {loss_val:.2f} exceeds max {self.config.max_loss}")
+                        logger.error(f"{label} training: loss {loss_val:.2f} exceeds max {self.config.max_loss}")
                         self._emit_progress(100, "Training aborted: loss too high")
-                        self.state.abort_reason = f"Vision loss {loss_val:.2f} exceeded max_loss {self.config.max_loss}"
+                        self.state.abort_reason = f"{label} loss {loss_val:.2f} exceeded max_loss {self.config.max_loss}"
                         _emit_drop_summary()  # V-7 audit fix
                         return self.state
 
@@ -1466,13 +1652,27 @@ class Trainer:
                     self.state.step += 1
                     _maybe_step_save()
 
-                # Epoch summary
-                avg_loss = epoch_loss / max(epoch_steps, 1)
-                self.state.training_losses.append(avg_loss)
+                # Epoch summary. A zero-step epoch (every sample dropped
+                # or failed to decode) has NO train metric: a 0.0 average
+                # would beat inf and crown untrained weights as best, so
+                # avg_loss becomes None and only a real val_loss may rank
+                # this epoch. The end-of-run check below flags a run that
+                # never trained at all.
                 self.state.epoch = epoch + 1
                 self.state.epoch_start_step = self.state.step
-                self._emit_loss(avg_loss)
-                logger.info(f"Vision Epoch {epoch + 1}: avg_loss={avg_loss:.4f}")
+                if epoch_steps == 0:
+                    avg_loss = None
+                    logger.warning(
+                        "%s epoch %d: zero batches trained (all samples dropped or failed to decode)",
+                        label,
+                        epoch + 1,
+                    )
+                else:
+                    trained_steps_this_run += epoch_steps
+                    avg_loss = epoch_loss / epoch_steps
+                    self.state.training_losses.append(avg_loss)
+                    self._emit_loss(avg_loss)
+                    logger.info(f"{label} Epoch {epoch + 1}: avg_loss={avg_loss:.4f}")
 
                 # V-6: held-out validation pass after each epoch. Drives
                 # best-checkpoint + early-stopping when available; falls
@@ -1480,7 +1680,7 @@ class Trainer:
                 val_loss = _run_validation()
                 if val_loss is not None:
                     self.state.validation_losses.append(val_loss)
-                    logger.info(f"Vision Epoch {epoch + 1}: val_loss={val_loss:.4f}")
+                    logger.info(f"{label} Epoch {epoch + 1}: val_loss={val_loss:.4f}")
 
                 # Rank the epoch only when its metric is complete: a stop
                 # that cut the TRAIN loop leaves a partial avg_loss, and a
@@ -1491,12 +1691,14 @@ class Trainer:
                 # that COMPLETED before the stop landed is a full metric:
                 # it ranks normally (discarding it would silently lose a
                 # real best), and the epoch-loop top breaks right after.
-                metric_complete = (val_loss is not None) if val_pairs else (not train_interrupted)
+                metric_complete = (
+                    (val_loss is not None) if val_pairs else (avg_loss is not None and not train_interrupted)
+                )
                 if not metric_complete and self._should_stop():
-                    logger.info("Vision training stopped by user request")
+                    logger.info("%s training stopped by user request", label)
                     break
 
-                if self.on_epoch_complete:
+                if self.on_epoch_complete and avg_loss is not None:
                     try:
                         self.on_epoch_complete(epoch + 1, avg_loss)
                     except Exception:
@@ -1510,15 +1712,18 @@ class Trainer:
                 # fail, so a broken disk can neither mask a real plateau
                 # nor stop the retries.
                 tracked_loss = val_loss if val_loss is not None else avg_loss
+                if tracked_loss is None:
+                    # Zero-step epoch with no val signal: nothing to rank.
+                    continue
                 improved = tracked_loss < self.state.best_loss
                 if improved:
                     self.state.best_loss = tracked_loss
                     self._epochs_without_improvement = 0
                 if tracked_loss < best_written:
                     if self._save_checkpoint(
-                        checkpoint_dir / f"{self._checkpoint_stem}_vision_best.pt",
-                        encoder=vision_encoder,
-                        encoder_key="vision_encoder_state_dict",
+                        checkpoint_dir / f"{self._checkpoint_stem}_{modality.name}_best.pt",
+                        encoder=encoder,
+                        encoder_key=modality.encoder_key,
                         optimizer=optimizer,
                         scheduler=scheduler,
                         scaler=scaler,
@@ -1532,24 +1737,32 @@ class Trainer:
                         self.config.early_stopping_patience > 0
                         and self._epochs_without_improvement >= self.config.early_stopping_patience
                     ):
-                        logger.info("Vision training: early stopping triggered")
+                        logger.info("%s training: early stopping triggered", label)
                         break
 
                 # Periodic checkpoint (0 = disabled)
                 if self.config.save_every > 0 and (epoch + 1) % self.config.save_every == 0:
                     stem = self._checkpoint_stem
-                    v_num = (epoch + 1) // self.config.save_every
+                    ck_num = (epoch + 1) // self.config.save_every
                     self._save_checkpoint(
-                        checkpoint_dir / f"{stem}_vision{v_num}.pt",
-                        encoder=vision_encoder,
-                        encoder_key="vision_encoder_state_dict",
+                        checkpoint_dir / f"{stem}_{modality.name}{ck_num}.pt",
+                        encoder=encoder,
+                        encoder_key=modality.encoder_key,
                         optimizer=optimizer,
                         scheduler=scheduler,
                         scaler=scaler,
                     )
-                    self._cleanup_periodic_checkpoints(checkpoint_dir, f"{stem}_vision", keep=3)
+                    self._cleanup_periodic_checkpoints(checkpoint_dir, f"{stem}_{modality.name}", keep=3)
 
             # ── Cleanup ─────────────────────────────────────────────────────
+            # A run whose epoch loop RAN but never trained a single batch
+            # produced nothing -- refuse to report success (a stale-path
+            # dataset or a missing audio backend would otherwise 'succeed'
+            # with untrained weights; repo rule: fail honestly).
+            if start_epoch < self.config.epochs and trained_steps_this_run == 0:
+                msg = "no samples trained: every batch was dropped or failed to decode"
+                logger.error(f"{label} training: {msg}")
+                self.state.abort_reason = msg
             # A best epoch whose checkpoint never reached disk makes the run
             # untrustworthy for automation: say so instead of reporting
             # success (repo rule: fail honestly).
@@ -1560,11 +1773,14 @@ class Trainer:
                     f"{self.state.best_loss:.4f}, last written {written}, "
                     f"{failed_best_saves} failed save(s)"
                 )
-                logger.error(f"Vision training: {msg}")
+                logger.error(f"{label} training: {msg}")
                 self.state.abort_reason = msg
-                self._emit_progress(100, "Vision training finished with errors")
+                self._emit_progress(100, f"{label} training finished with errors")
+            elif self.state.abort_reason:
+                # e.g. the nothing-trained refusal above
+                self._emit_progress(100, f"{label} training finished with errors")
             else:
-                self._emit_progress(100, "Vision training complete!")
+                self._emit_progress(100, f"{label} training complete!")
 
             # V-7: end-of-run summary if any captions were dropped.
             _emit_drop_summary()
@@ -1581,8 +1797,8 @@ class Trainer:
                 if decode_pool is not None:
                     decode_pool.shutdown(wait=False, cancel_futures=True)
                 self.model.eval()
-                vision_encoder.eval()
+                encoder.eval()
                 for param in self.model.parameters():
                     param.requires_grad = True
             except Exception:
-                logger.error("Vision training: post-run state restore failed", exc_info=True)
+                logger.error("%s training: post-run state restore failed", label, exc_info=True)
