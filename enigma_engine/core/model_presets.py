@@ -109,6 +109,15 @@ class ForgeConfig:
     use_layer_scale: bool = False  # Learnable residual scaling (stabilizes deep training)
     drop_path_rate: float = 0.0  # Stochastic depth (0.0 = disabled, 0.1-0.3 typical)
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # V2 ARCHITECTURE OPTIONS (2026-07-20 research verdicts). Defaults
+    # reproduce v1 exactly; the v2_deep_* presets flip them. Every shipped
+    # checkpoint predates these keys, so from_dict fills the v1 defaults.
+    # ─────────────────────────────────────────────────────────────────────────
+    norm_scheme: str = "pre"  # "pre" (v1) | "peri": ALSO norm each sub-block's output inside the residual
+    qk_norm_before_rope: bool = False  # v1 norms AFTER RoPE; v2 convention is norm-then-rotate
+    init_scheme: str = "gpt2"  # "gpt2" (flat 0.02 + wo/w2 depth-scaled) | "olmo2_flat" (flat 0.02 everywhere)
+
     # Track if config is frozen (immutable after creation)
     _frozen: bool = False
 
@@ -189,6 +198,11 @@ class ForgeConfig:
             if self.rope_scaling_factor <= 0:
                 raise ValueError(f"rope_scaling_factor must be positive, got {self.rope_scaling_factor}")
 
+        if self.norm_scheme not in ("pre", "peri"):
+            raise ValueError(f"norm_scheme must be 'pre' or 'peri', got {self.norm_scheme!r}")
+        if self.init_scheme not in ("gpt2", "olmo2_flat"):
+            raise ValueError(f"init_scheme must be 'gpt2' or 'olmo2_flat', got {self.init_scheme!r}")
+
     def validate(self) -> bool:
         """
         Run read-only validation on the config.
@@ -225,6 +239,10 @@ class ForgeConfig:
                 raise ValueError(f"rope_scaling_type must be one of {valid}, got {self.rope_scaling_type}")
             if self.rope_scaling_factor <= 0:
                 raise ValueError(f"rope_scaling_factor must be positive, got {self.rope_scaling_factor}")
+        if self.norm_scheme not in ("pre", "peri"):
+            raise ValueError(f"norm_scheme must be 'pre' or 'peri', got {self.norm_scheme!r}")
+        if self.init_scheme not in ("gpt2", "olmo2_flat"):
+            raise ValueError(f"init_scheme must be 'gpt2' or 'olmo2_flat', got {self.init_scheme!r}")
         return True
 
     def freeze(self) -> ForgeConfig:
@@ -273,6 +291,10 @@ class ForgeConfig:
             "use_qk_norm": self.use_qk_norm,
             "use_layer_scale": self.use_layer_scale,
             "drop_path_rate": self.drop_path_rate,
+            # V2 architecture options
+            "norm_scheme": self.norm_scheme,
+            "qk_norm_before_rope": self.qk_norm_before_rope,
+            "init_scheme": self.init_scheme,
         }
 
     @classmethod
@@ -394,6 +416,26 @@ MODEL_PRESETS = {
     # PROSUMER GPU (~200M-600M params) - RTX 4090 (large) or A100 (xl)
     # ─────────────────────────────────────────────────────────────────────────
     "large": ForgeConfig(dim=1024, n_layers=16, n_heads=16, n_kv_heads=4, max_seq_len=4096, rope_theta=500000.0),
+    # ─────────────────────────────────────────────────────────────────────────
+    # V2 DEEP-THIN CANDIDATES (2026-07-20 research verdicts): 24-32 layers,
+    # head_dim 64, GQA 4:1, Peri-LN, QK-norm before RoPE, flat init, dropout 0
+    # for the single-epoch pretrain, 8k window (the KV cache follows config).
+    # Param estimates at the v2 vocab (16,384): ~186M / ~238M / ~542M -- the
+    # size-call candidates. v1's served "large" (16L x 1024) is the shallow
+    # baseline they replace.
+    # ─────────────────────────────────────────────────────────────────────────
+    "v2_deep_186m": ForgeConfig(
+        dim=768, n_layers=28, n_heads=12, n_kv_heads=3, max_seq_len=8192, rope_theta=500000.0,
+        dropout=0.0, norm_scheme="peri", qk_norm_before_rope=True, init_scheme="olmo2_flat",
+    ),
+    "v2_deep_238m": ForgeConfig(
+        dim=1024, n_layers=20, n_heads=16, n_kv_heads=4, max_seq_len=8192, rope_theta=500000.0,
+        dropout=0.0, norm_scheme="peri", qk_norm_before_rope=True, init_scheme="olmo2_flat",
+    ),
+    "v2_deep_542m": ForgeConfig(
+        dim=1280, n_layers=30, n_heads=20, n_kv_heads=5, max_seq_len=8192, rope_theta=500000.0,
+        dropout=0.0, norm_scheme="peri", qk_norm_before_rope=True, init_scheme="olmo2_flat",
+    ),
     "xl": ForgeConfig(
         dim=1536, n_layers=24, n_heads=24, n_kv_heads=6, max_seq_len=4096, rope_theta=500000.0, dropout=0.05
     ),
@@ -441,6 +483,9 @@ MODEL_DESCRIPTIONS = {
     "medium": "Mid-range GPU - needs ~2.5 GB VRAM",
     "base": "Mid-range GPU - needs ~3 GB VRAM",
     "large": "Good GPU - needs ~6 GB VRAM",
+    "v2_deep_186m": "v2 size-call candidate: 28L x 768 deep-thin (~186M @ 16k vocab)",
+    "v2_deep_238m": "v2 size-call candidate: 20L x 1024 (~238M @ 16k vocab, dodges the dim<1000 bottleneck)",
+    "v2_deep_542m": "v2 size-call candidate: 30L x 1280 deep-thin (~542M @ 16k vocab)",
     "xl": "RTX 4090 / 16 GB+ GPU - needs ~12 GB VRAM",
     "xxl": "RTX 4090 / 32 GB+ GPU - needs ~34 GB VRAM",
     "huge": "Multi-GPU / 48 GB+ - needs ~50 GB VRAM",
@@ -583,22 +628,19 @@ def recommend_preset_for_tokens(
 
 
 def get_preset(name: str, vocab_size: int = 32000) -> ForgeConfig:
-    """Get a preset configuration."""
+    """Get a preset configuration (a fresh copy with the caller's vocab_size).
+
+    Derived from to_dict() rather than a hand-copied field list: the old
+    8-field literal silently DROPPED any preset field it didn't name (the
+    exact drift class the 2026-07-19 review flagged on from_dict) -- a
+    v2_deep_* preset would have come back as a plain Pre-LN v1 config.
+    """
     if name not in MODEL_PRESETS:
         raise ValueError(f"Unknown preset: {name}. Available: {list(MODEL_PRESETS.keys())}")
 
-    # Create a copy with vocab_size
-    preset = MODEL_PRESETS[name]
-    return ForgeConfig(
-        vocab_size=vocab_size,
-        dim=preset.dim,
-        n_layers=preset.n_layers,
-        n_heads=preset.n_heads,
-        n_kv_heads=preset.n_kv_heads,
-        max_seq_len=preset.max_seq_len,
-        dropout=preset.dropout,
-        rope_theta=preset.rope_theta,
-    )
+    d = MODEL_PRESETS[name].to_dict()
+    d["vocab_size"] = vocab_size
+    return ForgeConfig.from_dict(d)
 
 
 # =============================================================================

@@ -132,6 +132,10 @@ def test_from_dict_preserves_every_public_field():
         "rope_scaling_type": "linear",
         "vision_hidden_size": 32,
         "audio_hidden_size": 32,
+        # Enum-valued v2 fields: the generic str probe ("pre_probe") is not
+        # construction-valid, so probe with the real non-default option.
+        "norm_scheme": "peri",
+        "init_scheme": "olmo2_flat",
     }
     for f in dataclasses.fields(ForgeConfig):
         if f.name.startswith("_"):

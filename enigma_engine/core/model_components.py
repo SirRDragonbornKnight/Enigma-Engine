@@ -326,6 +326,10 @@ class Attention(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
         self.use_rope = config.use_rope
         self.use_qk_norm = config.use_qk_norm
+        # v2 option: norm Q/K BEFORE rotating (the convention every current
+        # QK-norm model uses); v1 normed after RoPE and its checkpoints must
+        # keep that math, so the default stays False.
+        self.qk_norm_before_rope = getattr(config, "qk_norm_before_rope", False)
 
         # Pre-computed attention scale — avoids math.sqrt() per forward pass
         self._scale = 1.0 / math.sqrt(self.head_dim)
@@ -373,14 +377,19 @@ class Attention(nn.Module):
         v = self.wv(x).reshape(B, T, self.n_kv_heads, self.head_dim)
 
         # ─────────────────────────────────────────────────────────────────────
-        # STEP 2: Apply RoPE position embeddings to Q and K
+        # STEP 2: QK norm + RoPE. v1 order is rotate-then-norm (its checkpoints
+        # depend on that math); the v2 convention normalizes BEFORE rotating.
         # ─────────────────────────────────────────────────────────────────────
+        if self.use_qk_norm and self.qk_norm_before_rope:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
         if self.use_rope and freqs_cis is not None:
             q = apply_rotary_embedding(q, freqs_cis, start_pos)
             k = apply_rotary_embedding(k, freqs_cis, start_pos)
 
         # QK normalization: prevents fp16 attention overflow on long sequences
-        if self.use_qk_norm:
+        if self.use_qk_norm and not self.qk_norm_before_rope:
             q = self.q_norm(q)
             k = self.k_norm(k)
 
@@ -623,6 +632,15 @@ class TransformerBlock(nn.Module):
         self.attention_norm = Norm(config.dim)
         self.ffn_norm = Norm(config.dim)
 
+        # Peri-LN (v2 option): ALSO normalize each sub-block's OUTPUT inside
+        # the residual -- h = x + norm_out(block(norm_in(x))). Every shipped
+        # small model converged there (2026-07-18 research verdicts); "pre"
+        # (v1 default) adds no parameters, so old checkpoints load unchanged.
+        self.norm_scheme = getattr(config, "norm_scheme", "pre")
+        if self.norm_scheme == "peri":
+            self.attention_post_norm = Norm(config.dim)
+            self.ffn_post_norm = Norm(config.dim)
+
         # The actual computation modules
         self.attention = Attention(config)
         self.feed_forward = FeedForward(config)
@@ -652,12 +670,16 @@ class TransformerBlock(nn.Module):
         """Internal forward implementation (used by checkpointing)."""
         # Attention sub-layer with residual connection
         attn_out = self.attention(self.attention_norm(x), freqs_cis, mask, use_cache, start_pos)
+        if self.norm_scheme == "peri":
+            attn_out = self.attention_post_norm(attn_out)
         if self.use_layer_scale:
             attn_out = attn_out * self.ls_attn
         h = x + self.drop_path_attn(attn_out)
 
         # Standard FFN sub-layer with residual connection
         ffn_out = self.feed_forward(self.ffn_norm(h))
+        if self.norm_scheme == "peri":
+            ffn_out = self.ffn_post_norm(ffn_out)
         if self.use_layer_scale:
             ffn_out = ffn_out * self.ls_ffn
         return h + self.drop_path_ffn(ffn_out)

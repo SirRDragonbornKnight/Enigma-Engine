@@ -288,6 +288,12 @@ class Enigma(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def _init_output_weights(self) -> None:
+        # "gpt2" (v1): GPT-2 residual-stream scaling on the two output
+        # projections. "olmo2_flat" (v2 option): flat N(0, 0.02) EVERYWHERE --
+        # OLMo 2 measured 13x fewer loss spikes vs scaled init, so the
+        # depth-scaled re-init is skipped and _init_weights' flat 0.02 stands.
+        if getattr(self.config, "init_scheme", "gpt2") == "olmo2_flat":
+            return
         for name, p in self.named_parameters():
             if name.endswith("wo.weight") or name.endswith("w2.weight"):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layers))
