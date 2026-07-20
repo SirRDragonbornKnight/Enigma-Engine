@@ -33,7 +33,12 @@ def get_lr(
     or ``wsd``: hold at peak, then LINEAR decay to ZERO over the last
     ``decay_frac`` of the run. WSD/D2Z beats cosine at high tokens-per-param and,
     unlike cosine, lets a "finished" run keep training from the stable phase —
-    the multi-epoch lever."""
+    the multi-epoch lever.
+
+    ``wsd_sqrt`` is the IMU-1 ablation's shape (2026-07-18 research verdicts):
+    hold at peak, then ``1 - sqrt(t)`` decay to a 0.01x floor -- front-loads
+    more of the decay than linear and ends at 0.01x max, not zero. Schedules
+    are checkpoint-locked like every other knob; never switch mid-lineage."""
     if step < warmup:
         return peak * (step + 1) / max(1, warmup)
     if schedule == "wsd":
@@ -43,6 +48,15 @@ def get_lr(
         if step >= total:
             return 0.0
         return peak * (total - step) / max(1, total - decay_start)
+    if schedule == "wsd_sqrt":
+        decay_start = int(total * (1.0 - decay_frac))
+        floor = 0.01
+        if step < decay_start:
+            return peak
+        if step >= total:
+            return peak * floor
+        t = (step - decay_start) / max(1, total - decay_start)
+        return peak * (floor + (1.0 - floor) * (1.0 - math.sqrt(t)))
     if step >= total:
         return peak * min_ratio
     prog = (step - warmup) / max(1, total - warmup)

@@ -133,11 +133,12 @@ def main() -> None:
     )
     ap.add_argument(
         "--schedule",
-        choices=["cosine", "wsd"],
+        choices=["cosine", "wsd", "wsd_sqrt"],
         default="cosine",
         help="cosine = the live run's schedule. wsd = warmup-stable-decay "
         "(linear decay-to-zero over the last --wsd-decay-frac) -- "
-        "continuation-friendly, for FUTURE runs",
+        "continuation-friendly, for FUTURE runs. wsd_sqrt = the IMU-1 shape "
+        "(1-sqrt(t) decay to a 0.01x floor), the v2 recipe's candidate",
     )
     ap.add_argument(
         "--wsd-decay-frac", type=float, default=0.10, help="fraction of total steps spent in the WSD decay phase"
