@@ -159,11 +159,13 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     - **Prep/loop caption thresholds disagree** (len<1 vs len<2): 1-token
       captions survive prep, are re-skipped every epoch, and inflate
       `dropped_short_captions` by the epoch factor.
-    - **Square-mask crash latent in the standard + SDPA attention branches**
-      (`model.py` `_get_causal_mask` at ~309/421): pairing an explicit
-      `attention_mask` with a warm KV cache broadcast-crashes; the
-      bottom-right rectangular fix (#14) landed only in the mask-is-None
-      branches. Unreachable today (no caller passes attention_mask with
-      use_cache); the first batched/padded cached serve path trips it —
-      docstring-noted only in `tests/test_cpu_rectangular_decode.py`.
+    - **Square-mask crash latent -- CLOSED 2026-07-20 (Arc A trap fixes):**
+      pairing an explicit `attention_mask` with a warm KV cache now raises a
+      clear ValueError refusal in `forward` (and `forward_multimodal` refuses
+      cached multi-token continuation, whose mask was start_pos-blind) instead
+      of the latent broadcast crash. A real batched/padded cached decode path
+      remains future work for the serving arc; the refusal makes the gap loud.
+      Regression-pinned in `tests/test_v2_trap_guards.py` (also covers: KV
+      cache cap now follows config.max_seq_len instead of the silent 4096
+      clamp; vocab-alignment pad rows can no longer be sampled).
     - Efficiency/cleanup batch: see BACKLOG "2026-07-19 review".

@@ -303,10 +303,13 @@ class Attention(nn.Module):
         self.head_dim = config.dim // config.n_heads  # Dimension per head
         self.n_rep = self.n_heads // self.n_kv_heads  # How many Q heads per KV head
 
-        # Cache size limit from config or default
-        self.max_cache_len = min(
-            config.max_seq_len if hasattr(config, "max_seq_len") else self.MAX_CACHE_SEQ_LEN, self.MAX_CACHE_SEQ_LEN
-        )
+        # Cache size follows the config's context window. The old
+        # min(..., MAX_CACHE_SEQ_LEN) clamp silently capped the KV cache at
+        # 4096 for any longer-context config (v2 targets 4k-8k), making the
+        # cache slide and forget the earliest tokens with no error. The class
+        # constant remains only as a fallback for config objects without a
+        # max_seq_len attribute (2026-07-20 v2 gap audit).
+        self.max_cache_len = config.max_seq_len if hasattr(config, "max_seq_len") else self.MAX_CACHE_SEQ_LEN
 
         # ─────────────────────────────────────────────────────────────────────
         # PROJECTION LAYERS: Transform input into Q, K, V, and output

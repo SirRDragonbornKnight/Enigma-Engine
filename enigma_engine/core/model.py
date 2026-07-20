@@ -425,6 +425,19 @@ class Enigma(nn.Module):
         # else: plain causal (T>1, no pad) or single-token decode (T==1) → mask stays
         # None; attention applies is_causal=True (correct for this decoder-only model).
 
+        # Explicit masks are built SQUARE over the new tokens, blind to cached
+        # keys: pairing one with a warm cache (start_pos>0) broadcast-crashes in
+        # SDPA and would mis-mask in any path that survived. No live caller does
+        # this (serve decodes unpadded); refuse loudly instead of leaving the
+        # latent crash (KNOWN_ISSUES #12 square-mask entry, closed 2026-07-20).
+        if mask is not None and use_cache and start_pos > 0:
+            raise ValueError(
+                "explicit attention_mask/attention_mask_2d is not supported for cached "
+                "continuation (start_pos>0): the materialized mask covers only the new "
+                f"tokens ({T}) and is blind to the {start_pos} cached positions. "
+                "Decode unpadded, or prefill the padded batch fresh (start_pos=0)."
+            )
+
         for layer in self.layers:
             h = layer(h, self.freqs_cis, mask, use_cache, start_pos)
 
@@ -568,6 +581,19 @@ class Enigma(nn.Module):
                 )
             h = h + self.pos[:, :T]
 
+        # The causal mask below is built SQUARE over the combined sequence and
+        # is blind to start_pos, so a cached multi-token continuation would be
+        # mis-masked (and broadcast-crash in SDPA). Single-token continuation
+        # (T==1) is fine: mask stays None and attention handles the rectangle.
+        # Refuse the unsupported case loudly (2026-07-20 v2 gap audit).
+        if kwargs.get("start_pos", 0) > 0 and T > 1:
+            raise ValueError(
+                "forward_multimodal does not support cached multi-token continuation "
+                f"(start_pos={kwargs['start_pos']}, T={T}): its causal mask is built "
+                "square over the new tokens and is blind to cached positions. "
+                "Prefill multimodal content fresh, then continue one token at a time."
+            )
+
         # Build causal mask on demand. Match h.dtype (same constraint as the
         # main forward): a bare fp32 mask on a bf16/fp16 model outside
         # autocast raises "invalid dtype for bias" in SDPA.
@@ -589,6 +615,21 @@ class Enigma(nn.Module):
         logits = self.output(self.norm(h))
 
         return logits
+
+    def _live_vocab_logits(self, step_logits: torch.Tensor) -> torch.Tensor:
+        """Mask the vocab-alignment padding columns before sampling.
+
+        The embedding/output matrices are padded to a multiple of 64 for GPU
+        alignment, so the head emits logits for token ids >= config.vocab_size
+        that no tokenizer can decode. On a converged model softmax has pushed
+        them down, but on a fresh or early checkpoint they are random-init
+        rows that can win argmax/top-k -- sampling one crashes decode
+        (2026-07-20 v2 gap audit). -inf them so no decode path can emit one.
+        """
+        if step_logits.shape[-1] > self.config.vocab_size:
+            step_logits = step_logits.clone()
+            step_logits[..., self.config.vocab_size :] = float("-inf")
+        return step_logits
 
     @torch.no_grad()
     def generate(
@@ -673,7 +714,7 @@ class Enigma(nn.Module):
 
         for _ in range(max_new_tokens):
             next_token = sample_next_token(
-                logits[:, -1, :],
+                self._live_vocab_logits(logits[:, -1, :]),
                 generated[:, prompt_len:],
                 temperature,
                 top_k,
@@ -764,7 +805,7 @@ class Enigma(nn.Module):
 
         for _ in range(max_new_tokens):
             next_token = sample_next_token(
-                logits[:, -1, :],
+                self._live_vocab_logits(logits[:, -1, :]),
                 generated[:, prompt_len:],
                 temperature,
                 top_k,

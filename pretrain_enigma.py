@@ -52,6 +52,64 @@ TOKENS_META = ROOT / "data" / "pretrain" / "tokens.json"
 HEADER_BYTES = 256  # ETOK reserved header (see pretokenize_data.py)
 
 
+def _pin_sdpa(backend: str) -> None:
+    """Enable exactly ONE F.scaled_dot_product_attention backend.
+
+    Strict on purpose: with a single backend enabled, an unsupported shape
+    raises instead of silently dispatching elsewhere -- so the run KNOWS
+    which kernel computed it. PyTorch wheels have shipped with cuDNN
+    silently unselected; "pin + log" is the v2 recipe's answer to that.
+    """
+    torch.backends.cuda.enable_flash_sdp(backend == "flash")
+    torch.backends.cuda.enable_mem_efficient_sdp(backend == "efficient")
+    torch.backends.cuda.enable_cudnn_sdp(backend == "cudnn")
+    torch.backends.cuda.enable_math_sdp(backend == "math")
+
+
+def _sdpa_preflight(model, get_batch, amp_dtype, backend: str) -> None:
+    """One fwd/bwd under the pinned backend vs the MATH reference, before any
+    long run: a non-finite-gradient guard plus gradient agreement. SDPA wheels
+    have a documented history of silent backward NaNs on specific shapes --
+    refuse to train on a kernel whose gradients disagree with the reference.
+
+    amp_dtype None runs the check in fp32: an fp16 backward without the loss
+    scaler overflows routinely, which would false-refuse a healthy kernel.
+    """
+    X, Y = get_batch("train")
+    X, Y = X[:2], Y[:2]  # MATH materializes full attention scores; keep it small
+
+    def _grads() -> torch.Tensor:
+        model.zero_grad(set_to_none=True)
+        with torch.autocast(device_type="cuda", dtype=amp_dtype or torch.bfloat16, enabled=amp_dtype is not None):
+            _, loss = model(X, targets=Y)
+        loss.backward()
+        flat = torch.cat([p.grad.detach().float().reshape(-1) for p in model.parameters() if p.grad is not None])
+        model.zero_grad(set_to_none=True)
+        return flat
+
+    g_pin = _grads()
+    if not torch.isfinite(g_pin).all():
+        raise SystemExit(f"sdpa preflight: NON-FINITE gradients under backend '{backend}' -- refusing to train")
+    _pin_sdpa("math")
+    try:
+        g_ref = _grads()
+    finally:
+        _pin_sdpa(backend)
+    if not torch.isfinite(g_ref).all():
+        raise SystemExit(
+            "sdpa preflight: NON-FINITE gradients under the MATH reference -- "
+            "the model itself is unstable on this batch; refusing to train"
+        )
+    cos = (g_pin @ g_ref / (g_pin.norm() * g_ref.norm() + 1e-12)).item()
+    if cos < 0.98:
+        raise SystemExit(
+            f"sdpa preflight: backend '{backend}' gradients disagree with the MATH "
+            f"reference (cosine {cos:.6f} < 0.98) -- refusing to train on a kernel "
+            "with wrong gradients; try a different --sdpa-backend"
+        )
+    print(f"sdpa preflight: backend '{backend}' vs math grad cosine {cos:.6f} -- OK", flush=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", default="base", help="ForgeConfig preset (tiny..xl)")
@@ -137,6 +195,19 @@ def main() -> None:
         type=float,
         default=0.0,
         help="sleep N ms after each micro-batch to yield the GPU (e.g. while gaming); 0 = full speed",
+    )
+    ap.add_argument(
+        "--sdpa-backend",
+        default="auto",
+        choices=["auto", "cudnn", "flash", "efficient", "math"],
+        help="pin ONE F.sdpa backend (strict: unsupported shapes error instead of silently "
+        "falling back; schedule-recorded so a bare --resume restores the run's own pin); "
+        "auto = torch default dispatch, unchanged behavior",
+    )
+    ap.add_argument(
+        "--skip-sdpa-preflight",
+        action="store_true",
+        help="skip the pinned-backend non-finite/grad-agreement preflight",
     )
     args = ap.parse_args()
 
@@ -435,6 +506,7 @@ def main() -> None:
             "schedule",
             "wsd_decay_frac",
             "tokens_bin",
+            "sdpa_backend",
         )
     }
 
@@ -488,6 +560,26 @@ def main() -> None:
             # resume at the next one instead of training it twice.
             start_step = int(ck.get("step", -1)) + 1
             print(f"resumed from {args.resume} after step {start_step - 1} (next: {start_step})", flush=True)
+
+    # SDPA backend pin (v2 recipe): applied AFTER the resume/schedule restore so
+    # a bare --resume runs under the pin its own lineage recorded, and BEFORE the
+    # first forward pass anywhere below (preflight/compile/sanity/loop).
+    if device == "cuda":
+        if args.sdpa_backend != "auto":
+            _pin_sdpa(args.sdpa_backend)
+            print(f"sdpa: pinned to {args.sdpa_backend} (strict, unsupported shapes error out)", flush=True)
+        else:
+            print(
+                "sdpa: auto dispatch (flash={} mem_efficient={} cudnn={} math={})".format(
+                    torch.backends.cuda.flash_sdp_enabled(),
+                    torch.backends.cuda.mem_efficient_sdp_enabled(),
+                    torch.backends.cuda.cudnn_sdp_enabled(),
+                    torch.backends.cuda.math_sdp_enabled(),
+                ),
+                flush=True,
+            )
+        if args.sdpa_backend != "auto" and not args.skip_sdpa_preflight:
+            _sdpa_preflight(raw_model, get_batch, amp_dtype if use_bf16 else None, args.sdpa_backend)
 
     # torch.compile after any resume-load so weights land in raw_model first. The
     # compiled wrapper is used only for fwd/bwd; save/load/optimizer stay on
