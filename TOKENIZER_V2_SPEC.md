@@ -112,7 +112,55 @@ commit 857dc63c's own message:
    LIVE vocab — so the supported entry point can only produce v1 and defaults
    to overwriting the file the whole safety story rests on.
 
-## MEASURED 2026-07-19 (supersedes the estimates below)
+## PRODUCTION VOCAB TRAINED 2026-07-20 (Arc 2) — supersedes the 07-19 pilot
+
+`enigma_engine/vocab_model/bpe_vocab_v2_16k.json` (1,028,888 bytes). The live
+v1 vocab is untouched (sha256 still `83510aef…bf03`).
+
+- **16,366 real rows**, so the padded embedding is exactly **16,384** with the
+  18 chat/reserved rows INSIDE the padding — the same 4718/4736 shape v1 uses,
+  and still the 1024-multiple the Triton fused-CE bug class requires. (The
+  earlier note said "vocab 16,384"; training to 16,384 REAL rows would have
+  pushed the padded size to 16,402 and off the multiple.)
+- Trained on a **266.6 MB** stratified sample (512 chunks x 512 KB, evenly
+  spaced across all 88.59 GB), 706,036 unique words, 16,096 merges, **3.2 min**
+  single-threaded.
+- Held-out is **8.3 MB the training never saw** — a disjoint 16-chunk grid at a
+  half-stride phase offset, so it cannot overlap the training grid.
+
+| metric | v1 (live, 4718) | v2 (16,366) |
+|---|---|---|
+| chars/token, SAME held-out 8.3 MB | **1.6689** | **4.0206** (2.41x) |
+| round-trip lossless | yes | **0/16 chunks failed** |
+| bare-space rate, tag-free text | 25.5% (carried from the 07-19 pilot, NOT re-measured here) | **0.011%** |
+| bare-space rate, chat-format render | — | **0.000%** (67 ids) |
+| multi-digit tokens in vocab | many | **0** |
+| leading-space tokens | 0% | **11,154 (68.2%)** |
+
+Longest learned units: `' responsibilities'`, `' characteristics'`,
+`' recommendations'`, `' representatives'`, `' Representatives'`.
+
+**2.41x, not the pilot's 2.47x.** The pilot trained on a 56 MB slice and
+measured on 2 MB; this is 266 MB trained / 8.3 MB held out. The bigger, more
+diverse sample is the more honest number — quote **2.41x**.
+
+**Sampling validated against a known-true number**: projecting v1's measured
+1.6689 over the corpus gives 56,997,296,536 tokens against the real receipt of
+56,708,655,637 — **0.51% off**. That is what makes the v2 projection a
+measurement rather than a guess:
+
+- **v2 corpus: ~23.66B tokens** (was estimated ~23B).
+- **uint16 on disk: ~44.1 GiB**, down from today's 211.3 GiB — a **4.79x**
+  shrink. (uint32 would be 88.1 GiB, which is why the 2-byte write path is a
+  required step, not an optimisation.)
+- **Context, for free**: block 1024 goes ~300 words -> ~722 words.
+
+**HIGH-2 proved itself on a real 16k vocab**: chat tokens derive to
+16366..16371 and `attach_chat_tokens` refused nothing — under the old
+hardcoded `BASE_VOCAB = 4718` those six ids would have silently overwritten
+real learned tokens.
+
+## MEASURED 2026-07-19 (the 56 MB pilot — superseded above)
 
 Method: 64 MB stratified sample of `data/pretrain/combined.txt` (256 chunks
 evenly spaced across all 88.59 GB, so no single source dominates); v2 vocab
@@ -382,6 +430,45 @@ NEXT, in order:
    Wall clock once it exists: ~1.6 h at 4 workers (safe while gaming) or
    ~0.7 h at 12 (idle box).
 3. Then, and only then, the GPU decision per the framing above.
+
+### Item 2 DELIVERED 2026-07-20 (Arc 3) — with two spec deviations, on purpose
+
+`pretokenize_data.py` grew the parallel path instead of a separate script
+(deviation 1): the walk/dedup/filter code IS the corpus definition, and two
+copies of it would drift. The v1 lineage is protected by a hard guard instead
+of file separation — aiming a custom `--vocab`/`--dtype` at the default
+`tokens.bin` path is a refusal, mutation-verified. Output goes to
+`data/pretrain/tokens_v2.bin` beside v1 (deviation 2: same dir, new name —
+the reader takes an explicit path, and the guard, not geography, is what
+protects v1).
+
+Delivered against the requirement list: parent-side walk + shared dedup,
+ordered `imap` (byte-determinism vs sequential is THE pinned contract),
+one tokenizer per spawn worker, `--workers` default 1 / 10 for the real run,
+workers self-set BelowNormal via the Pool initializer (ctypes, no psutil
+dep), absent sources are LOGGED loudly + recorded in the sidecar as
+`sources_absent` (LOG chosen over REFUSE: dclm/finemath/the_stack are absent
+by design), uint16 + dtype-aware memmap reader landed together, eos/vocab
+bounds guards kept and extended (worker-side id bounds, vocab<=65536 for
+uint16, header bpt derived from the array itemsize).
+
+Verification: 8 tests in `tests/test_pretokenize_data.py`, 8/8 mutations
+killed (incl. `imap`->`imap_unordered`, which required an asymmetric
+heavy/light fixture to fail deterministically), suite 483. Adversarial audit
+2026-07-20: no HIGH; its MED — the `--val-general-end` v1 default (56.6B)
+silently clamping into the ~23.7B v2 corpus and evaluating train data as
+"val-gen" — is fixed in `pretrain_enigma.py`: an offset beyond `train_end`
+now DISABLES the window with a loud note instead of clamping. The v2
+pretrain run needs no extra flag for this.
+
+NEAR-MISS, recorded for the discipline ledger: the first version of the
+lineage-guard test aimed `pd.main()` at the REAL `tokens.bin` — safe only
+while the guard it tests exists. Mutation testing removes exactly that
+guard; the mutated test run started a real retokenize toward the production
+corpus and was stopped by the driver's 900s subprocess timeout (run 1) and
+a manual kill (run 2). v1 verified untouched (226,834,622,804 bytes, mtime
+2026-06-07). Rule: a test must never point a live write path at production
+data it expects a guard to protect — mutation testing WILL remove the guard.
 
 Open A/B questions unchanged: SuperBPE-style superword pass, 16k vs 32k
 (16k stands at a flat 182M), and the v2-arch nits (QK-norm before RoPE, RoPE

@@ -226,9 +226,18 @@ def main() -> None:
     if not TOKENS_BIN.exists():
         raise SystemExit(f"missing corpus: {TOKENS_BIN}")
     meta = json.loads(TOKENS_META.read_text(encoding="utf-8"))
-    if meta.get("dtype") != "uint32":
-        raise SystemExit(f"expected uint32 tokens, got {meta.get('dtype')}")
+    # uint32 is the v1 lineage; uint16 is the v2 corpus format (vocab 16,384
+    # fits 2-byte ids, halving 86 GB to ~43 -- TOKENIZER_V2_SPEC). The dtype
+    # comes from the sidecar and is CROSS-CHECKED against the bin's own bpt
+    # header below, so a stale sidecar cannot mis-type the stream.
+    dtype_name = meta.get("dtype", "uint32")
+    if dtype_name not in ("uint32", "uint16"):
+        raise SystemExit(f"expected uint32/uint16 tokens, got {dtype_name}")
+    np_dtype = np.uint32 if dtype_name == "uint32" else np.uint16
+    itemsize = 4 if dtype_name == "uint32" else 2
     vocab_meta = meta["vocab_size"]
+    if itemsize == 2 and vocab_meta > 65536:
+        raise SystemExit(f"uint16 corpus with vocab {vocab_meta} > 65536 -- corrupt metadata")
     print(
         f"corpus: {meta['total_tokens']:,} tokens, vocab {vocab_meta}, {meta['file_size_gb']} GB ({meta['tokenizer']})",
         flush=True,
@@ -273,18 +282,19 @@ def main() -> None:
             f"(stale sidecar?) -- refusing to train"
         )
     stream_bytes = file_bytes - HEADER_BYTES
-    if bpt != 4 or stream_bytes % 4 != 0:
+    if bpt != itemsize or stream_bytes % itemsize != 0:
         raise SystemExit(
-            f"{TOKENS_BIN} stream is not uint32-aligned (bpt={bpt}, {stream_bytes} bytes after header) -- truncated?"
+            f"{TOKENS_BIN} stream disagrees with {dtype_name} (header bpt={bpt}, expected {itemsize}; "
+            f"{stream_bytes} bytes after header) -- stale sidecar or truncated write"
         )
-    if hdr_total != stream_bytes // 4:
+    if hdr_total != stream_bytes // itemsize:
         raise SystemExit(
             f"{TOKENS_BIN} header claims {hdr_total:,} tokens but the file holds "
-            f"{stream_bytes // 4:,} (stale header or truncated write) -- refusing to train"
+            f"{stream_bytes // itemsize:,} (stale header or truncated write) -- refusing to train"
         )
 
-    # memmap the uint32 token stream after the 256-byte header.
-    data = np.memmap(TOKENS_BIN, dtype=np.uint32, mode="r", offset=HEADER_BYTES)
+    # memmap the token stream after the 256-byte header.
+    data = np.memmap(TOKENS_BIN, dtype=np_dtype, mode="r", offset=HEADER_BYTES)
     n = len(data)
     val_n = min(args.val_tokens, n // 100)
     train_end = n - val_n
@@ -296,9 +306,19 @@ def main() -> None:
     # general-domain signal. It was truly held out only until the append
     # (~16% train-sampled between then and this fence landing), so it reads
     # slightly optimistic; the fence in get_batch stops further leakage.
+    # The offset must lie INSIDE this corpus. The default (56.6B, the v1
+    # pre-anime-append fence) exceeds the ~23.7B v2 corpus entirely; the old
+    # clamp to train_end would silently evaluate an in-distribution train
+    # tail while fencing it from sampling (Arc 3 audit, MED-1).
+    if args.val_general_end > train_end:
+        print(
+            f"val-gen: offset {args.val_general_end:,} lies beyond train_end {train_end:,} "
+            f"(this corpus is not the one the default was tuned for) -- window DISABLED",
+            flush=True,
+        )
     vg_end = min(args.val_general_end, train_end)
     vg_lo = max(0, vg_end - val_n)
-    use_val_gen = args.val_general_end > 0 and (vg_end - vg_lo) > args.block + 1
+    use_val_gen = 0 < args.val_general_end <= train_end and (vg_end - vg_lo) > args.block + 1
     if use_val_gen:
         print(f"val-gen window: [{vg_lo:,}, {vg_end:,}) -- pre-append tail, fenced from train sampling", flush=True)
 
