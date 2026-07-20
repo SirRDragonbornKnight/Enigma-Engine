@@ -24,6 +24,13 @@ from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .pretokenize import (
+    PRETOKENIZER_V1,
+    PRETOKENIZER_V2,
+    normalize_pretokenizer,
+    pretokenize_v2,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +47,13 @@ class BPETokenizer:
     # Rust backend availability (class-level, checked once)
     _rust_available: bool | None = None
 
-    def __init__(self, vocab_file: Optional[Path] = None):
+    def __init__(self, vocab_file: Optional[Path] = None, pretokenizer: Optional[str] = None):
+        # Pre-tokenizer version. Defaults to v1 and is overwritten by
+        # load() from the vocab file's "pretokenizer" key (absent = v1),
+        # so existing vocabs keep exactly the behaviour they were
+        # trained with. Pass pretokenizer="v2" to train a new one.
+        self.pretokenizer_version: str = normalize_pretokenizer(pretokenizer)
+
         # Special tokens with reserved IDs
         self.special_tokens = {
             "<pad>": 0,
@@ -172,6 +185,7 @@ class BPETokenizer:
         min_frequency: int = 2,
         verbose: bool = True,
         on_progress: Callable[[int, str], None] | None = None,
+        pretokenizer: Optional[str] = None,
     ):
         """
         Train BPE on a list of texts.
@@ -185,7 +199,14 @@ class BPETokenizer:
             min_frequency: Minimum pair frequency to merge
             verbose: Print progress
             on_progress: Optional callback(percent, message) for live updates
+            pretokenizer: Pre-tokenizer version ("v1" or "v2").  When
+                given it overrides the instance setting for this run and
+                is persisted by save().  Defaults to the instance value.
         """
+        if pretokenizer is not None:
+            self.pretokenizer_version = normalize_pretokenizer(pretokenizer)
+        is_v2 = self.pretokenizer_version == PRETOKENIZER_V2
+
         if verbose:
             logger.info("Training BPE tokenizer...")
             logger.info(f"Target vocab size: {vocab_size}")
@@ -197,8 +218,11 @@ class BPETokenizer:
         if min_frequency < 1:
             raise ValueError(f"min_frequency must be >= 1, got {min_frequency}")
 
-        # Attempt Rust fast path (R-2)
-        if self._try_rust_train(texts, vocab_size, min_frequency, on_progress):
+        # Attempt Rust fast path (R-2). The Rust backend hardcodes the v1
+        # pre-tokenizer, so a v2 run MUST stay on the Python path or the
+        # merges would be learned with v1 word units and silently
+        # contradict the "pretokenizer": "v2" written into the file.
+        if not is_v2 and self._try_rust_train(texts, vocab_size, min_frequency, on_progress):
             if verbose:
                 logger.info(f"Rust BPE train complete: vocab={self.vocab_size}, merges={len(self.merges)}")
             return
@@ -216,16 +240,26 @@ class BPETokenizer:
             # Split on whitespace and punctuation, keep the pieces
             words = self._pre_tokenize(text)
             for word in words:
-                if word.strip():
+                # v2 keeps whitespace-only units (a run of spaces is a
+                # legitimate unit that BPE should be able to merge);
+                # v1 drops them, as it always has.
+                if word if is_v2 else word.strip():
                     # In UTF-8 mode, convert each word to bytes
                     if self.use_utf8_bytes:
                         word = self._text_to_bytes(word)
-                    # Convert word to tuple of characters (with word boundary marker)
-                    word_tuple = tuple(word) + ("</w>",)  # End of word marker
+                    # v2 emits NO </w> end-of-word marker. Under v2 a word
+                    # unit already carries its own boundary information in
+                    # the attached leading space (" cat" vs "cat"), so </w>
+                    # would be redundant -- and worse, it would collide with
+                    # lossless decode: v1 decode turns </w> back into a
+                    # space, which is exactly the whitespace re-insertion
+                    # v2 must not do. Dropping it makes v2 decode a plain
+                    # join. The round-trip tests are the arbiter.
+                    word_tuple = tuple(word) if is_v2 else tuple(word) + ("</w>",)
                     word_freqs[word_tuple] += 1
 
-        # Add end-of-word marker to vocab
-        if "</w>" not in self.token_to_id:
+        # Add end-of-word marker to vocab (v1 only -- see above)
+        if not is_v2 and "</w>" not in self.token_to_id:
             next_id = len(self.token_to_id)
             self.token_to_id["</w>"] = next_id
             self.id_to_token[next_id] = "</w>"
@@ -378,8 +412,18 @@ class BPETokenizer:
             logger.info(f"Total merges: {len(self.merges)}")
             logger.info("Training complete!")
 
+    # Literal tag tokens that must survive v2 pre-tokenization intact.
+    # Only the angle-bracket tags: the v1 "Q:" / "User:" markers REWRITE
+    # the text into <Q> / <USER>, which is lossy, and v2's contract is
+    # lossless round-tripping. v2 therefore leaves those literals alone
+    # and tokenizes them as ordinary text.
+    _V2_SPECIAL_TAGS = ("<think>", "</think>", "<search>", "</search>")
+
     def _pre_tokenize(self, text: str) -> list[str]:
         """Split text into words for BPE processing."""
+        if self.pretokenizer_version == PRETOKENIZER_V2:
+            return self._pre_tokenize_v2(text)
+
         result = []
 
         # Handle special markers first - extract them before regex processing
@@ -417,6 +461,29 @@ class BPETokenizer:
 
         return result
 
+    def _pre_tokenize_v2(self, text: str) -> list[str]:
+        """v2 split: special tags carved out first, then pretokenize_v2.
+
+        The tags are matched BEFORE the v2 pattern touches the text, so
+        "<think>" stays one unit instead of being shredded into
+        punctuation and letter runs. Everything between tags goes through
+        the shared pretokenize_v2, so trainer and runtime cannot drift
+        apart the way v1's two copies of the regex did.
+        """
+        if not text:
+            return []
+
+        tag_pattern = "(" + "|".join(re.escape(t) for t in self._V2_SPECIAL_TAGS) + ")"
+        result: list[str] = []
+        for part in re.split(tag_pattern, text):
+            if not part:
+                continue
+            if part in self._V2_SPECIAL_TAGS:
+                result.append(part)
+            else:
+                result.extend(pretokenize_v2(part))
+        return result
+
     def _tokenize_word(self, word: str, dropout: float = 0.0) -> list[str]:
         """Tokenize a single word using learned BPE merges.
 
@@ -442,13 +509,20 @@ class BPETokenizer:
         if word in self.special_tokens:
             return [word]
 
-        # Check if the whole word is in vocabulary (common word)
-        word_with_end = word + "</w>"
-        if word_with_end in self.token_to_id:
-            return [word_with_end]
+        # v2 carries no </w> marker (see train()): the word unit is looked
+        # up and split as-is, which is what makes decode a plain join.
+        if self.pretokenizer_version == PRETOKENIZER_V2:
+            if word in self.token_to_id:
+                return [word]
+            tokens = list(word)
+        else:
+            # Check if the whole word is in vocabulary (common word)
+            word_with_end = word + "</w>"
+            if word_with_end in self.token_to_id:
+                return [word_with_end]
 
-        # Start with characters
-        tokens = list(word) + ["</w>"]
+            # Start with characters
+            tokens = list(word) + ["</w>"]
 
         if len(tokens) > 1:
             # Build a heap of (rank, insertion_order, position, left, right)
@@ -564,6 +638,9 @@ class BPETokenizer:
         if self._rust_backend is not None:
             return self._rust_backend.decode(ids, skip_special_tokens)
 
+        if self.pretokenizer_version == PRETOKENIZER_V2:
+            return self._decode_v2(ids, skip_special_tokens)
+
         tokens = []
 
         for idx in ids:
@@ -601,6 +678,36 @@ class BPETokenizer:
 
         return text.strip()
 
+    def _decode_v2(self, ids: list[int], skip_special_tokens: bool = True) -> str:
+        """v2 decode: plain lossless concatenation.
+
+        Deliberately does NOT do any of v1's whitespace surgery -- no
+        </w>-to-space substitution, no ``re.sub(r" +", " ")`` collapsing,
+        no trailing ``.strip()``. Under v2 the whitespace is already
+        inside the token pieces, so every one of those steps would
+        corrupt the text instead of repairing it.
+        """
+        pieces: list[str] = []
+        for idx in ids:
+            token = self.id_to_token.get(idx)
+            if token is None:
+                continue
+            if token in self.special_tokens:
+                if skip_special_tokens:
+                    continue
+                # Emit the literal tag; no "readable form" rewriting,
+                # which would break the round-trip.
+                pieces.append(token)
+                continue
+            pieces.append(token)
+
+        text = "".join(pieces)
+
+        if self.use_utf8_bytes:
+            text = self._bytes_to_text(text)
+
+        return text
+
     def save(self, path: Path | str):
         """Save tokenizer to file."""
         path = Path(path)
@@ -612,6 +719,12 @@ class BPETokenizer:
             "special_tokens": self.special_tokens,
             "use_utf8_bytes": self.use_utf8_bytes,
         }
+
+        # Only stamp the key for non-v1. Absence means v1, so v1 files
+        # keep exactly the shape every existing consumer (Rust backend,
+        # exporters, the live vocab) already expects.
+        if self.pretokenizer_version != PRETOKENIZER_V1:
+            data["pretokenizer"] = self.pretokenizer_version
 
         from enigma_engine.core.safe_save import atomic_write_json
 
@@ -636,12 +749,18 @@ class BPETokenizer:
 
         self._sync_special_ids()
         self.use_utf8_bytes = data.get("use_utf8_bytes", False)
+        # Absent key = v1: legacy vocabs (including the live served one)
+        # must never be re-interpreted as v2.
+        self.pretokenizer_version = normalize_pretokenizer(data.get("pretokenizer"))
 
         self.vocab_size = len(self.token_to_id)
         self.cache: OrderedDict[str, list[str]] = OrderedDict()
 
-        # Try loading Rust backend for fast encode/decode
-        self._try_load_rust_backend(str(path))
+        # Try loading Rust backend for fast encode/decode. Skipped for v2:
+        # the Rust backend implements v1 pre-tokenization only, so it
+        # would silently encode v2 vocabs with the wrong word split.
+        if self.pretokenizer_version == PRETOKENIZER_V1:
+            self._try_load_rust_backend(str(path))
 
         logger.info(
             f"Loaded tokenizer from {path} (vocab: {self.vocab_size}, merges: {len(self.merges)}"

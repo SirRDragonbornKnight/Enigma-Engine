@@ -1,8 +1,52 @@
-# Tokenizer v2 redo — spec + cost (2026-07-16)
+# Tokenizer v2 redo — spec + cost (2026-07-16, MEASURED 2026-07-19)
 
-> Status: SPEC, not started. The Phase-7 foundational fix. Do NOT start GPU work
-> until the eval is trustworthy (see `EVAL_REDESIGN.md`) -- without it you can't
-> tell a better base from a differently-overfit one. Grounded 2026-07-16.
+> Status: **CPU PREFIX BUILT AND MEASURED 2026-07-19** — the pre-tokenizer,
+> vocab versioning, and both encode paths are implemented and test-pinned
+> (`enigma_engine/core/pretokenize.py`, `tests/test_tokenizer_v2.py`), and a
+> real 16k vocab was trained on a stratified corpus sample to replace this
+> doc's estimates with measurements (below). NOT yet done: the production
+> vocab train on a larger slice, the full corpus retokenize (~5 CPU-hours),
+> and the pretrain itself. Do NOT start GPU work until the eval is
+> trustworthy (see `EVAL_REDESIGN.md`) -- without it you can't tell a better
+> base from a differently-overfit one.
+>
+> **v1 is untouched and provably so**: the vocab file carries no version key,
+> absence means v1, and `tests/test_tokenizer_v2.py` pins the live vocab's
+> sha256 + exact encode IDs. The served v8 model is unaffected.
+
+## MEASURED 2026-07-19 (supersedes the estimates below)
+
+Method: 64 MB stratified sample of `data/pretrain/combined.txt` (256 chunks
+evenly spaced across all 88.59 GB, so no single source dominates); v2 vocab
+trained on 56 MB of it; both tokenizers measured on the SAME held-out 2 MB
+the training never saw.
+
+| metric | v1 (live, vocab 4718) | v2 (vocab 16384) |
+|---|---|---|
+| chars/token (held-out) | **1.6322** | **4.1113** (2.52x) |
+| bare-space tokens | 25.5% | **0.0%** |
+| leading-space tokens | 0% | 67.9% |
+| digit consistency | `1000`->`1,00,0` but `2500`->`2,5,00` | per-digit always |
+| round-trip lossless | yes | yes |
+
+Apples-to-apples at matched vocab size (v2 @ 4000 vs v1 @ 4718): **3.06 vs
+1.63 chars/token**, so ~1.9x comes from the pre-tokenizer alone and the rest
+from the larger vocab.
+
+- **Sample is representative**: projecting v1's measured 1.6322 over the full
+  corpus gives 58.3B tokens / 217 GB vs the actual receipt of 56.7B / 211 GB
+  — within 3%.
+- **Corpus projection at v2's measured 4.1113**: **~23.1B tokens / ~86 GB
+  uint32** — which CONFIRMS this doc's original estimate of ~23B / ~90-100 GB
+  (it guessed 3.8 chars/token; the real figure is slightly better).
+- **Context, for free**: block 1024 goes from ~293 words (v1) to ~739 words
+  (v2) — a 2.5x effective context increase with no architecture change.
+- Retokenize cost: v1 encodes at ~5.1 MB/s single-threaded, so 88.59 GB is
+  **~5 core-hours** (parallelizable) — the low end of this doc's original
+  "hours-to-a-day".
+- Vocab quality spot-check: longest learned units are ` responsibilities`,
+  ` infrastructure`, ` implementation`; 10,603 of 16,384 entries are
+  leading-space word tokens; 28 tokens contain a digit and NONE contain two.
 
 ## Why (measured, not asserted)
 
@@ -115,3 +159,34 @@ Consequences that everything else works around:
 2. Re-measure v5/v8 on the locked set -> honest yardstick.
 3. 10k-step tokenizer-probe pretrain to firm up throughput.
 4. Commit to the full redo with real numbers on a trustworthy eval.
+
+## Where the CPU prefix stands (2026-07-19)
+
+DONE (committed, test-pinned, v1 provably untouched):
+- `enigma_engine/core/pretokenize.py` — the v2 pattern: leading-space
+  attachment, ONE digit per token, punctuation/underscore safe, lossless
+  concat. Single source of truth used by BOTH the trainer and the runtime
+  encoder (v1's trainer/runtime pre-tokenizers silently disagree — that wart
+  is left alone in v1 but deliberately not reproduced in v2).
+- Vocab files now declare `"pretokenizer"`; ABSENCE MEANS V1, so the live
+  vocab keeps v1 semantics with zero file changes and no way to apply v2
+  rules to it by accident.
+- `</w>` is not emitted under v2 (the leading space already carries the word
+  boundary, and v1's `</w>`->space decode would re-insert whitespace v2 must
+  not add). Rust backend is bypassed under v2 (it hardcodes v1 splitting).
+- 53 tests in `tests/test_tokenizer_v2.py`, including a ~13k-codepoint
+  losslessness sweep that caught a real hole in the first pattern draft
+  (underscores were being silently dropped by `re.findall`).
+
+NEXT, in order:
+1. Train the PRODUCTION v2 vocab on a larger slice (the measured vocab used
+   56 MB; training is cheap — 0.9 min — so a multi-GB slice is affordable and
+   will sharpen the merge statistics).
+2. Full corpus retokenize -> new `tokens.bin` (~86 GB, ~5 core-hours, CPU/IO
+   only; 1.4 TB free so headroom is fine). Schedule it when the machine is
+   otherwise idle — it will use cores.
+3. Then, and only then, the GPU decision per the framing above.
+
+Open A/B questions unchanged: SuperBPE-style superword pass, 16k vs 32k
+(16k stands at a flat 182M), and the v2-arch nits (QK-norm before RoPE, RoPE
+theta 500k -> 10-100k).

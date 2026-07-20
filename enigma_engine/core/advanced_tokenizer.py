@@ -13,6 +13,13 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from .pretokenize import (
+    PRETOKENIZER_V1,
+    PRETOKENIZER_V2,
+    normalize_pretokenizer,
+    pretokenize_v2,
+)
+
 logger = logging.getLogger(__name__)
 
 # Reserved-token names decode() strips when skip_special_tokens=True. Kept
@@ -53,8 +60,15 @@ class AdvancedBPETokenizer:
 
         Args:
             vocab_file: Path to vocabulary JSON file
-            **kwargs: Additional arguments
+            **kwargs: Additional arguments (``pretokenizer`` selects the
+                pre-tokenization version for a tokenizer built without a
+                vocab file; a loaded file always wins)
         """
+        # Pre-tokenizer version -- overwritten by load() from the file's
+        # "pretokenizer" key. Absent key = v1, which is what keeps the
+        # live served vocab on exactly its original behaviour.
+        self.pretokenizer_version: str = normalize_pretokenizer(kwargs.get("pretokenizer"))
+
         # Special tokens with reserved IDs
         self.special_tokens = {
             "<pad>": 0,
@@ -182,6 +196,10 @@ class AdvancedBPETokenizer:
         # is not silently re-interpreted as byte-level (Tok-2).
         self.use_utf8_bytes = bool(data.get("use_utf8_bytes", False))
 
+        # Pre-tokenizer version. Absent key = v1 (the live vocab has no
+        # such key and must keep v1 encode/decode bit-for-bit).
+        self.pretokenizer_version = normalize_pretokenizer(data.get("pretokenizer"))
+
         # Handle different formats
         if "encoder" in data:
             # Enigma format
@@ -271,6 +289,10 @@ class AdvancedBPETokenizer:
             "use_utf8_bytes": self.use_utf8_bytes,
         }
 
+        # Absence means v1, so v1 files keep their existing shape.
+        if self.pretokenizer_version != PRETOKENIZER_V1:
+            data["pretokenizer"] = self.pretokenizer_version
+
         from enigma_engine.core.safe_save import atomic_write_json
 
         atomic_write_json(vocab_file, data)
@@ -328,6 +350,35 @@ class AdvancedBPETokenizer:
             self.cache[word] = tokens
         return tokens
 
+    def _pre_tokenize_v2(self, text: str) -> list[str]:
+        """v2 word split with multi-char special tokens carved out first.
+
+        The special tokens are removed from the stream BEFORE the v2
+        pattern is applied, so "<think>" is matched whole instead of
+        being shredded into a punctuation run plus a letter run. Uses the
+        shared pretokenize_v2 for everything else, so this runtime path
+        and the trainer path cannot diverge the way v1's two separate
+        inline regexes did.
+        """
+        if not text:
+            return []
+
+        multi_char = sorted((t for t in self.special_tokens if len(t) > 1), key=len, reverse=True)
+        if not multi_char:
+            return pretokenize_v2(text)
+
+        tag_pattern = "(" + "|".join(re.escape(t) for t in multi_char) + ")"
+        specials = set(multi_char)
+        words: list[str] = []
+        for part in re.split(tag_pattern, text):
+            if not part:
+                continue
+            if part in specials:
+                words.append(part)
+            else:
+                words.extend(pretokenize_v2(part))
+        return words
+
     def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
         """Encode text to token IDs using BPE merges."""
         if not text:
@@ -341,14 +392,17 @@ class AdvancedBPETokenizer:
 
         # If we have merges, use BPE encoding
         if self.merges:
-            # Build regex with special tokens as alternatives (longest first)
-            # so multi-char tokens like <think> match as whole tokens
-            special_alts = "|".join(
-                re.escape(t) for t in sorted(self.special_tokens, key=len, reverse=True) if len(t) > 1
-            )
-            base_pattern = r"'s|'t|'re|'ve|'m|'ll|'d|\w+|[^\s\w]+|\s+"
-            pattern = special_alts + "|" + base_pattern if special_alts else base_pattern
-            words = re.findall(pattern, text)
+            if self.pretokenizer_version == PRETOKENIZER_V2:
+                words = self._pre_tokenize_v2(text)
+            else:
+                # Build regex with special tokens as alternatives (longest first)
+                # so multi-char tokens like <think> match as whole tokens
+                special_alts = "|".join(
+                    re.escape(t) for t in sorted(self.special_tokens, key=len, reverse=True) if len(t) > 1
+                )
+                base_pattern = r"'s|'t|'re|'ve|'m|'ll|'d|\w+|[^\s\w]+|\s+"
+                pattern = special_alts + "|" + base_pattern if special_alts else base_pattern
+                words = re.findall(pattern, text)
 
             for word in words:
                 if not word:
@@ -410,6 +464,12 @@ class AdvancedBPETokenizer:
         In UTF-8 byte mode, the latin-1 byte string assembled from
         token pieces is converted back to UTF-8 text after de-tokenization
         (Tok-2). Unknown IDs render as the unk token.
+
+        This is already a plain lossless concatenation -- unlike
+        BPETokenizer.decode it never substituted </w> for a space,
+        collapsed runs of spaces, or stripped the result. That is exactly
+        what v2 requires (the whitespace lives inside the token pieces),
+        so no version gate is needed here; v1 and v2 share this path.
         """
         chars = []
 
