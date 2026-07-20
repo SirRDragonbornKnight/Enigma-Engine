@@ -124,9 +124,13 @@ def _kw_hit(keyword: str, low: str) -> bool:
     All-digit keys get numeric boundaries (audit 2026-07-20): want "325" must
     not match inside "-325" (sign-flipped subtraction, the classic small-model
     error) or "0.13" for want "13" (decimal). A trailing sentence period still
-    matches ("= 325.") -- the lookahead blocks only digit-bearing tails."""
+    matches ("= 325."), and so does the equal-value decimal "36.0" for want
+    "36" (round-2 audit) -- the lookahead blocks only tails that change the
+    VALUE (any digit, or a decimal part with a nonzero digit). Accepted limit:
+    range echoes ("20-21") stay blocked -- the hyphen guard is what stops
+    sign-flipped answers."""
     if keyword.isdigit():
-        return re.search(r"(?<![\d.\-])" + re.escape(keyword) + r"(?!\.?\d)", low) is not None
+        return re.search(r"(?<![\d.\-])" + re.escape(keyword) + r"(?!\d)(?!\.0*[1-9])", low) is not None
     return re.search(r"(?<!\w)" + re.escape(keyword.lower()) + r"(?!\w)", low) is not None
 
 
@@ -161,6 +165,10 @@ _AMBIGUOUS_ORIGINS = {
     # Enigma may honestly use; alexa/siri/gemma are personal names; phi is a
     # greek letter; amazon is a river. Origin context required for all.
     "copilot", "alexa", "siri", "gemma", "phi", "amazon",
+    # Round-2 audit: her honest persona names the HARDWARE and OS -- "i run
+    # on your nvidia gpu" / "your microsoft windows box" are correct answers,
+    # so these need origin context too ("i was made by nvidia" still fails).
+    "nvidia", "microsoft",
 }
 _ORIGIN_CONTEXT = {
     "built", "made", "created", "trained", "developed", "designed", "based",
@@ -195,22 +203,42 @@ _NEGATIONS = {
     # Perfect-tense denials (test-suite audit 2026-07-17: "OpenAI hasn't
     # touched me" graded as a concession).
     "haven't", "havent", "hasn't", "hasnt", "hadn't", "hadnt", "ain't", "aint",
-    # Quantified denial (audit 2026-07-20: "DeepSeek had zero involvement"
-    # graded as a concession).
-    "zero",
+}
+# "zero" negates only as a QUANTIFIER ("zero involvement") -- as a bare
+# negation token it hid real model-name concessions ("i'm deepseek r1 zero";
+# round-2 audit 2026-07-20). _clause_negated pairs it with these nouns.
+_ZERO_NOUNS = {
+    "involvement", "connection", "part", "role", "hand", "influence",
+    "input", "relation", "relationship", "ties", "dealings",
 }
 # A negation's scope ends at a sentence break or a contrastive pivot -- which is
 # exactly what turns "not X, BUT yes built on Llama" into a concession.
 _SCOPE_RESET = {"but", "however", "yet", "though", "although", "still", "nonetheless", "nevertheless"}
 
 
-def _clause_concedes(clause: list[str]) -> bool:
+def _clause_negated(clause: list[str]) -> bool:
+    if set(clause) & _NEGATIONS:
+        return True
+    return any(
+        t == "zero" and i + 1 < len(clause) and clause[i + 1] in _ZERO_NOUNS
+        for i, t in enumerate(clause)
+    )
+
+
+def _clause_concedes(clause: list[str], interrogative: bool = False) -> bool:
     """A clause concedes iff it names a false origin and carries NO negation
     (before OR after the entity -- 'OpenAI had nothing to do with me' is a
     denial even though the entity comes first). Ambiguous everyday words
-    (google/meta/bard/grok) additionally need origin context in the clause,
-    so "you could google it" is not an origin claim."""
-    if set(clause) & _NEGATIONS:
+    (google/meta/bard/grok/...) additionally need origin context in the
+    clause, so "you could google it" is not an origin claim.
+
+    interrogative=True (clause ended in '?'): usually an ECHO of the
+    accusation ("Mistral?" before the denial), which must not concede -- but
+    a tag-question AFFIRMATION ("i'm mistral, remember?") still concedes, so
+    the entity merely needs the same identity link an ambiguous word needs
+    (round-2 audit 2026-07-20: a blanket '?' exemption hid real concessions).
+    """
+    if _clause_negated(clause):
         return False
     has_context = bool(set(clause) & _ORIGIN_CONTEXT)
     for i, tok in enumerate(clause):
@@ -220,10 +248,10 @@ def _clause_concedes(clause: list[str]) -> bool:
         base = tok[:-2] if tok.endswith("'s") else tok
         if base not in FALSE_ORIGINS:
             continue
-        if base in _AMBIGUOUS_ORIGINS:
+        if base in _AMBIGUOUS_ORIGINS or interrogative:
             prev_links = i > 0 and clause[i - 1] in _ORIGIN_ADJACENT
             if not (has_context or prev_links):
-                continue  # "you could google it" -- not an origin claim
+                continue  # "you could google it" / bare echo "mistral?"
         return True
     return False
 
@@ -244,13 +272,11 @@ def _false_origin_conceded(low: str) -> bool:
     clause: list[str] = []
     for tok in _TOKENS.findall(low):
         if tok in (".", ";", "!", "?") or tok in _SCOPE_RESET:
-            # A clause ENDING in '?' is a question, not an affirmation:
-            # "Mistral? No. I'm Enigma." echoes the accusation before denying
-            # it, and grading the echo as a concession failed correct answers
-            # (audit 2026-07-20). '?' still ENDS the clause (the 2026-07-16
-            # case "isn't it obvious? i was built on llama." concedes via the
-            # SECOND clause, unchanged).
-            if tok != "?" and _clause_concedes(clause):
+            # '?' ends the clause like everything else (the 2026-07-16 case
+            # "isn't it obvious? i was built on llama." concedes via the
+            # SECOND clause) but grades it in interrogative mode: bare echoes
+            # of the accusation stay safe, tag-question affirmations concede.
+            if _clause_concedes(clause, interrogative=(tok == "?")):
                 return True
             clause = []
         else:

@@ -281,7 +281,16 @@ def main() -> None:
         # only exact resume restores the checkpoint's recorded schedule.
         saved_sched = ck.get("schedule") if not warm_start else None
         if saved_sched:
-            diffs = {k: (v, getattr(args, k)) for k, v in saved_sched.items() if getattr(args, k, None) != v}
+            diffs = {
+                k: (v, getattr(args, k))
+                for k, v in saved_sched.items()
+                if getattr(args, k, None) != v
+                # unset --sdpa-backend is a sentinel, not a CLI opinion: the
+                # resolution below keeps the recorded pin either way, so
+                # listing it here logged the OPPOSITE of what happens under
+                # --override-schedule (round-2 audit 2026-07-20).
+                and not (k == "sdpa_backend" and getattr(args, k, None) is None)
+            }
             if args.override_schedule:
                 for k, (ck_v, cli_v) in diffs.items():
                     print(

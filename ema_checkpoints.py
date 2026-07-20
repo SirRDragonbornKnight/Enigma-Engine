@@ -128,7 +128,10 @@ def main(argv: list[str]) -> int:
         last_step_path = None
         for i, p in enumerate(paths):
             ck = _load(p)
-            cfg_norm = _normalized_config(ck["config"])
+            try:
+                cfg_norm = _normalized_config(ck["config"])
+            except ValueError as exc:
+                raise SystemExit(f"{p}: config blob is not a valid ForgeConfig ({exc})") from None
             if i == 0:
                 cfg_raw0.update(ck["config"])
                 cfg_norm0.update(cfg_norm)

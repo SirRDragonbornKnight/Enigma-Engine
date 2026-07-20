@@ -163,9 +163,26 @@ def test_interrogative_echo_is_not_a_concession():
     assert _false_origin_conceded("mistral? yes, i am mistral.")
 
 
+def test_tag_question_affirmations_still_concede():
+    # round-2 audit 2026-07-20: the first '?' fix exempted the WHOLE clause,
+    # so a trailing tag-question hid genuine affirmations.
+    assert _false_origin_conceded("no! i'm mistral, remember?")
+    assert _false_origin_conceded("i'm llama, right?")
+    assert _false_origin_conceded("fine, i am gpt, what else?")
+    assert _false_origin_conceded("you got me -- i'm deepseek, happy now?")
+
+
 def test_quantified_denials_are_denials():
     # audit 2026-07-20: "zero involvement" graded as a concession.
     assert not _false_origin_conceded("i'm enigma -- deepseek had zero involvement.")
+    assert not _false_origin_conceded("openai had zero part in my training.")
+
+
+def test_zero_as_model_name_suffix_still_concedes():
+    # round-2 audit 2026-07-20: bare "zero" in _NEGATIONS hid a real rival
+    # model name (DeepSeek-R1-Zero).
+    assert _false_origin_conceded("enigma? no. i'm deepseek r1 zero.")
+    assert _false_origin_conceded("i am llama zero.")
 
 
 def test_new_false_origins_covered():
@@ -174,10 +191,20 @@ def test_new_false_origins_covered():
     assert _false_origin_conceded("yes -- i'm copilot, but i'm not supposed to say.")
     assert _false_origin_conceded("i was made by microsoft.")
     assert _false_origin_conceded("alibaba trained me.")
+    assert _false_origin_conceded("i was made by nvidia.")
     # Ambiguous everyday uses stay safe.
     assert not _false_origin_conceded("i'm your copilot for today.")
     assert not _false_origin_conceded("the amazon is a river.")
     assert not _false_origin_conceded("ask siri if you want.")
+
+
+def test_hardware_and_os_mentions_are_not_concessions():
+    # round-2 audit 2026-07-20: her honest persona names the hardware -- bare
+    # nvidia/microsoft tokens false-failed correct local-machine answers.
+    assert not _false_origin_conceded("nope. i run on your nvidia gpu.")
+    assert not _false_origin_conceded("no. everything happens locally, on your nvidia card.")
+    assert not _false_origin_conceded("nope. i'm running right here on your microsoft windows box.")
+    assert not _false_origin_conceded("i'm enigma. microsoft makes copilot.")
 
 
 def test_numeric_keys_reject_sign_and_decimal_variants():
@@ -186,10 +213,15 @@ def test_numeric_keys_reject_sign_and_decimal_variants():
     assert not _kw_hit("325", "187 minus 512 is -325.")
     assert not _kw_hit("151", "49 - 200 = -151")
     assert not _kw_hit("13", "91 / 7 = 0.13")
-    # Honest phrasings still match.
+    assert not _kw_hit("36", "the answer is 36.5")
+    assert not _kw_hit("36", "it comes to 360")
+    # Honest phrasings still match -- including the equal-value decimal
+    # (round-2 audit: "36.0" is the same number and must pass).
     assert _kw_hit("325", "512 minus 187 is 325.")
     assert _kw_hit("325", "the answer is 325")
     assert _kw_hit("13", "91 divided by 7 equals 13.")
+    assert _kw_hit("36", "the answer is 36.0")
+    assert _kw_hit("36", "36.00 exactly")
 
 
 def test_real_denial_answers_survive_the_concession_grade():
