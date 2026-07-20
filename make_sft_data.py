@@ -658,6 +658,16 @@ def gen_math_examples(seed: int = 99) -> list[dict]:
     return uniq
 
 
+# Memory facts that answer the SAME question and therefore must never share
+# a remembered-block (audit m9). Add a group when widening the fact list with
+# another attribute that already has a value; singleton attributes need no
+# entry. tests/test_memory_read_data.py fails if a listed string drifts out
+# of the fact list, so a rename cannot silently disable the filter.
+_CONFLICTING_FACTS = (
+    frozenset({"User's favorite color is green.", "User likes the color orange."}),
+)
+
+
 def gen_memory_read_examples(seed: int = 21) -> list[dict]:
     """Teach her to USE an injected memory block. serve's render_context puts
     'Things you remember:\\n- <fact>' into the system message; the 2026-07-06
@@ -705,7 +715,13 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
     all_facts = [f[0] for f in facts]
     out: list[dict] = []
     for fact, questions, answers in facts:
-        distractors = [f for f in all_facts if f != fact]
+        # Distractors must not CONTRADICT the target (audit m9): a block
+        # asserting both "favorite color is green" and "likes the color
+        # orange" answers "what's my favorite color?" two ways, so the
+        # trained answer teaches an arbitrary pick instead of picking the
+        # right line. Same-group facts are excluded from the pool.
+        conflicts = next((g for g in _CONFLICTING_FACTS if fact in g), frozenset())
+        distractors = [f for f in all_facts if f != fact and f not in conflicts]
         for i, q in enumerate(questions):
             # 1-2 distractor memory lines so she learns to PICK, not parrot.
             lines = [fact] + rng.sample(distractors, rng.choice([1, 2]))

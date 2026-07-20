@@ -108,10 +108,30 @@
   across packed neighbors. Small effect at 182M/1024; INVESTIGATE only if
   context-bleed shows in chat.
 - [ ] Instruct serve omits the trained "You are Enigma..." preamble when the
-  client supplies its own system message (tools block joins without it) — a
-  train/serve shape she never saw; may weaken tool-calling under custom
-  system prompts. LOW CONFIDENCE (audit 2026-07-15); verify against the SFT
-  corpus before changing `_with_context`.
+  client supplies its own system message (tools block joins without it).
+  **VERIFIED AGAINST THE CORPUS 2026-07-19 — the shape mismatch is real, but
+  the current behavior is DELIBERATE and test-pinned, so this is a decision,
+  not a bug fix.** Evidence: `make_sft_data._system()` ALWAYS emits
+  "You are Enigma. You can use tools...\nAvailable tools:...", and the
+  memory_tools generator (`make_sft_data.py` ~764/784) shows that even when
+  a block PRECEDES the tool spec, the preamble is retained
+  (`block + "\n\n" + _system(subset)`). So the model has never seen a tool
+  spec whose immediate left context isn't that preamble — which is exactly
+  what serve renders when a client system message exists
+  (`serve_enigma.py` ~942: the preamble is prepended only when there is NO
+  client system message). Counter-argument: honoring the client's system
+  message is correct OpenAI-compatible semantics, and
+  `tests/test_serve_enigma.py::test_with_context_client_system_message_is_appended_not_preambled`
+  pins "You are Enigma" NOT being injected. Middle path if we act: keep the
+  client's message as the OPENER (their intent preserved) but restore the
+  preamble to the tools block itself — client + "\n\n" + memories + "\n\n" +
+  preamble + tools — which matches the trained join shape exactly; that test
+  would need its assertion updated (its stated intent still holds).
+  Reachability (checked 2026-07-19): LOW — no HTML/JS in the repo builds a
+  system-role message, so her own chat page and the launcher chain never hit
+  this branch; it only affects external OpenAI-compatible clients that send
+  their own system prompt. That argues for leaving it alone until such a
+  client actually matters. USER CALL.
 
 ## 2. Ultrareview backlog — verified-open correctness majors
 
@@ -284,9 +304,19 @@
   SHRINKS a file (guards against NUL-padding a hand-edited jsonl when the
   recorded offset is past the current end). Regression test for the shrink
   guard in `tests/test_teach_tool.py`.
-- [ ] Memory-read data nit (final audit m9): contradictory color facts can
-  co-occur in one distractor block (green vs orange) — de-conflict attribute
-  domains when widening further.
+- [x] Memory-read data nit (final audit m9) — FIXED 2026-07-19. Confirmed
+  real: `gen_memory_read_examples` drew distractors from every other fact,
+  so a block could assert BOTH "favorite color is green" and "likes the
+  color orange" while the trained answer named one — the question has two
+  valid answers in context, teaching an arbitrary pick instead of
+  retrieval. Fix is a general mechanism, not a one-pair patch:
+  `_CONFLICTING_FACTS` groups facts that answer the same question and the
+  sampler excludes the target's group (add a group when widening with an
+  attribute that already has a value). `tests/test_memory_read_data.py`
+  pins the contract, that memory_tools inherits it, and — because the
+  groups repeat fact strings — that a renamed fact can't silently drop out
+  of its group. Both mutation-verified. Takes effect at the next SFT bake;
+  the served v8 was trained on the old data.
 - [ ] `teachings.jsonl` still the untouched example template — YOUR channel to
   author (values / personal facts); bakes in at x8.
 
