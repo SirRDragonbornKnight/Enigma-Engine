@@ -82,8 +82,19 @@ def main() -> None:
     eck = torch.load(args.encoder, map_location="cpu", weights_only=False)
     if "audio_encoder_state_dict" not in eck:
         raise SystemExit(f"{args.encoder} carries no audio_encoder_state_dict (run distill_audio_encoder.py)")
-    acfg = AudioEncoderConfig(**eck["audio_encoder_config"])
-    encoder = AudioEncoder(acfg)
+    if "audio_encoder_config" not in eck:
+        raise SystemExit(
+            f"{args.encoder} carries no audio_encoder_config; re-run "
+            f"distill_audio_encoder.py to write one beside the weights"
+        )
+    try:
+        acfg = AudioEncoderConfig(**eck["audio_encoder_config"])
+        encoder = AudioEncoder(acfg)
+    except Exception as exc:
+        raise SystemExit(
+            f"{args.encoder} carries an audio_encoder_config that will not rebuild "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
     encoder.load_state_dict(eck["audio_encoder_state_dict"], strict=True)
     encoder.to(device)
 

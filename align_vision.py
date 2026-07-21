@@ -77,8 +77,19 @@ def main() -> None:
     eck = torch.load(args.encoder, map_location="cpu", weights_only=False)
     if "vision_encoder_state_dict" not in eck:
         raise SystemExit(f"{args.encoder} carries no vision_encoder_state_dict (run distill_vision_encoder.py)")
-    vcfg = VisionEncoderConfig(**eck["vision_encoder_config"])
-    encoder = VisionEncoder(vcfg)
+    if "vision_encoder_config" not in eck:
+        raise SystemExit(
+            f"{args.encoder} carries no vision_encoder_config; re-run "
+            f"distill_vision_encoder.py to write one beside the weights"
+        )
+    try:
+        vcfg = VisionEncoderConfig(**eck["vision_encoder_config"])
+        encoder = VisionEncoder(vcfg)
+    except Exception as exc:
+        raise SystemExit(
+            f"{args.encoder} carries a vision_encoder_config that will not rebuild "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
     encoder.load_state_dict(eck["vision_encoder_state_dict"], strict=True)
     encoder.to(device)
 

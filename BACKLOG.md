@@ -369,6 +369,73 @@
   `model_config`+`config` keys (`test_encoder_persistence.py` pins both
   keys — change together; `config` is the live key with 7 readers).
 
+## 7.9 v2 pretrain: measured launch constraints (2026-07-21, on the 5090)
+
+Micro-batch fit search over the deep-thin presets, `--sanity` (one fwd/bwd),
+`--no-grad-ckpt`, sdpa cudnn, corpus `tokens_v2.bin`:
+
+| preset | block 2048 | block 8192 |
+|---|---|---|
+| `v2_deep_186m` | fits, micro-batch 8 | **does not fit at micro-batch 1** |
+| `v2_deep_238m` | fits, micro-batch 16 | **does not fit at micro-batch 1** |
+| `v2_deep_542m` | fits, micro-batch 8 | **does not fit at micro-batch 1** |
+
+**That table is measured with `--sanity` and is NOT a training-shape receipt.**
+`--sanity` runs one fwd/bwd and allocates no optimizer state, so it overstates
+what fits: at 186m/2048 it declared micro-batch 8 usable, but the full step
+(fwd + bwd + Muon) peaks at 31.68 GB on a 31.84 GB card and thrashes into
+shared memory, running **2.6x slower** than micro-batch 6. Measured on the full
+step, muon, 186m @ 2048:
+
+| micro-batch | tok/s | peak | days/epoch |
+|---|---|---|---|
+| 8 | 12,499 | 31.68 GB | 21.9 |
+| **6** | **31,894** | 24.21 GB | **8.6** |
+| 4 | 27,038 | 16.75 GB | 10.1 |
+| 1 | 10,109 | 5.66 GB | 27.1 |
+
+**Full grid, corrected method** (full step incl. Muon, non-power-of-2 micro-batches,
+23.69B-token corpus). Best non-thrash config per size:
+
+| preset | config | tok/s | MFU | peak | days/epoch |
+|---|---|---|---|---|---|
+| `v2_deep_186m` | block 2048, mb 6, no ckpt | 32,639 | 17.4% | 24.2 GB | **8.4** |
+| `v2_deep_238m` | block 2048, mb 6, no ckpt | 31,311 | 21.4% | 23.8 GB | **8.8** |
+| `v2_deep_542m` | block 2048, mb 16, **ckpt** | 14,294 | 22.2% | 15.3 GB | **19.2** |
+
+- **238m costs only 5% more wall-clock than 186m for 28% more parameters**, and reaches
+  higher MFU (21.4% vs 17.4%) because 20L@1024 has better arithmetic intensity than the
+  launch-bound 28L@768.
+- 542m must use checkpointing: its no-ckpt rows fall off the cliff catastrophically
+  (mb 5/6/7 -> 845 / 578 / 503 tok/s at 37-50 GB "allocated", i.e. 325-545 days/epoch).
+  With ckpt at mb 16 it is 14,294 tok/s and well-behaved.
+- Block 8192 costs 35-40% throughput at every size and buys context the tokenizer already
+  provides; 2048 stands.
+- mb 7 measures faster than mb 6 at 186m/238m but peaks at 28.1 GB, leaving under 4 GB for
+  the val batches, the corpus memmap and allocator fragmentation the synthetic probe does
+  not carry. mb 6 is the recommended launch value.
+
+Method rules this produced, for any future capacity search:
+- Measure the FULL step including the optimizer, never `--sanity` alone.
+- Sweep non-powers-of-two: a halving search cannot land on 6.
+- Treat any config peaking above ~85% of VRAM as unusable however fast it
+  looks in a fwd/bwd-only probe -- the allocator spills silently and the run
+  merely gets slow, with no error to notice.
+- Layer isolation on the same shape: forward alone reaches 94.6% MFU, so the
+  model is not the problem; throughput collapses only as memory is added
+  (fwd+bwd 11.6%, +adamw 5.3%, +muon 1.9% at the thrashing micro-batch).
+
+- **Activation checkpointing is MANDATORY at block 8192** and the no-ckpt
+  advice (SUGGESTIONS / the v2 research verdicts) holds only at 2048. Weights,
+  grads and optimizer state are just 1.39 / 1.78 / 4.04 GB for the three
+  presets -- activations dominate and scale with seq_len x layers.
+- **Block 2048 is the recommended launch shape**: under the v2 tokenizer it
+  carries ~1444 words (~4,945 v1-token-equivalents), inside the researched
+  4k-8k target band, at full speed. Block 8192 overshoots the band (~19.8k
+  equivalents) and pays 30-40% for the checkpointing it would then require.
+- `--block` defaults to **1024**: a launch that omits it trains at 1024 no
+  matter what the preset's `max_seq_len` says.
+
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 
 - [x] New tokenizer — DONE 2026-07-20: v2 vocab 16,366 rows kills the
