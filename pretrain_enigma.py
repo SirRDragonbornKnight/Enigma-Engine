@@ -52,6 +52,21 @@ TOKENS_META = ROOT / "data" / "pretrain" / "tokens.json"
 HEADER_BYTES = 256  # ETOK reserved header (see pretokenize_data.py)
 
 
+def apply_seed(seed: int | None) -> bool:
+    """Seed every stream a run draws from, and report whether it seeded.
+
+    BOTH streams matter: torch drives weight init, numpy drives get_batch's
+    window sampling. Seeding only torch leaves the data order random and a
+    sweep's runs are then not comparable.
+    """
+    if seed is None:
+        return False
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    return True
+
+
 def _pin_sdpa(backend: str) -> None:
     """Enable exactly ONE F.scaled_dot_product_attention backend.
 
@@ -208,6 +223,13 @@ def main() -> None:
         "data/pretrain/tokens.bin -- unchanged.",
     )
     ap.add_argument("--sanity", action="store_true", help="one fwd/bwd step then exit")
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="seed weight init and batch sampling for a reproducible run "
+        "(LR/HP sweeps need this). Default None = unseeded, the live lineage's behavior.",
+    )
     ap.add_argument(
         "--throttle-ms",
         type=float,
@@ -492,6 +514,10 @@ def main() -> None:
     config.dropout = args.dropout  # 0.0 for single-epoch pretraining (preset default 0.1 undertrains)
     if block > config.max_seq_len:
         config.max_seq_len = block
+    # Seed BEFORE construction: weight init draws from torch, get_batch draws
+    # from numpy. Unseeded (None) leaves both streams as the live lineage ran them.
+    if apply_seed(args.seed):
+        print(f"seed: {args.seed} (weight init + batch sampling)", flush=True)
     model = Enigma(config)
     if not args.no_grad_ckpt:
         model.gradient_checkpointing_enable()
@@ -782,6 +808,30 @@ def main() -> None:
         )
     save("model.pth", total_steps)
     print(f"done -> {out / 'model.pth'}  ({total_steps:,} steps, {seen / 1e9:.2f}B tokens)", flush=True)
+
+    # Final val runs AFTER the save: the periodic eval only fires on the
+    # eval_every cadence, so a run whose length is not a multiple of it would
+    # end with no measurement of the decayed weights (the number an LR/HP sweep
+    # is judged on) -- but a failure while measuring must never cost the run
+    # its checkpoint. Weights are already on disk by this point.
+    try:
+        final_val = estimate_val("val")
+        # bits/TOKEN, not bits/char: comparable across runs on the SAME corpus
+        # and tokenizer (what a sweep ranks), NOT across tokenizers -- that
+        # needs bits/char, i.e. this divided by the corpus chars/token.
+        print(
+            f"[final] val loss {final_val:.4f} ppl {math.exp(min(20, final_val)):.2f} "
+            f"bits/token {final_val / math.log(2):.4f}",
+            flush=True,
+        )
+        if use_val_gen:
+            final_vg = estimate_val("val_gen")
+            print(
+                f"[final] val-gen loss {final_vg:.4f} ppl {math.exp(min(20, final_vg)):.2f}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"[final] val FAILED ({type(exc).__name__}: {exc}); {out / 'model.pth'} is saved", flush=True)
 
 
 if __name__ == "__main__":
