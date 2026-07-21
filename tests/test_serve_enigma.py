@@ -366,6 +366,31 @@ def test_mute_roundtrip_persists_and_gates(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_load_eyes_prefers_stored_encoder_config(tmp_path):
+    """An align checkpoint carrying vision_encoder_config must rebuild THAT
+    architecture even when the caller passes a mismatched preset name --
+    the preset-coupling silent-degrade risk (2026-07-20 eyes polish). Older
+    checkpoints without the key keep the preset path (covered by the
+    guards/happy-path test)."""
+    from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+    enc = VisionEncoder(VISION_PRESETS["small"])
+    ck = tmp_path / "stored_cfg.pt"
+    torch.save(
+        {
+            "vision_encoder_state_dict": enc.state_dict(),
+            "vision_encoder_config": VISION_PRESETS["small"].to_dict(),
+            "model_state_dict": {"vision_projection.0.weight": torch.zeros(4, 4)},
+        },
+        ck,
+    )
+    # preset says "medium" (512d) but the checkpoint is "small" -- stored
+    # config must win or the strict load would raise RuntimeError
+    venc, proj_sd, dim = serve._load_eyes(ck, "medium")
+    assert dim == VISION_PRESETS["small"].dim
+    assert "0.weight" in proj_sd
+
+
 def test_load_eyes_guards_and_happy_path(tmp_path):
     from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
 

@@ -221,7 +221,18 @@ def _load_eyes(ckpt_path: Path, preset: str):
     eck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     if "vision_encoder_state_dict" not in eck:
         raise EyesError(f"{ckpt_path} carries no vision_encoder_state_dict (not an align checkpoint)")
-    venc = VisionEncoder(VISION_PRESETS[preset])
+    # Prefer the encoder config STORED IN the checkpoint (align runs
+    # persist it since 2026-07-20) over the hand-passed preset name -- a
+    # preset/checkpoint mismatch then cannot exist. Older checkpoints
+    # without the key keep the preset path.
+    stored_cfg = eck.get("vision_encoder_config")
+    if stored_cfg is not None:
+        from enigma_engine.core.vision_encoder import VisionEncoderConfig
+
+        vcfg = VisionEncoderConfig(**stored_cfg)
+    else:
+        vcfg = VISION_PRESETS[preset]
+    venc = VisionEncoder(vcfg)
     venc.load_state_dict(eck["vision_encoder_state_dict"], strict=True)
     proj_sd = {
         k[len("vision_projection."):]: v
@@ -230,7 +241,7 @@ def _load_eyes(ckpt_path: Path, preset: str):
     }
     if not proj_sd:
         raise EyesError(f"{ckpt_path} carries no vision_projection weights")
-    return venc, proj_sd, VISION_PRESETS[preset].dim
+    return venc, proj_sd, vcfg.dim
 
 
 # Env keys boot() itself wrote: key -> (value displaced by our write, or None

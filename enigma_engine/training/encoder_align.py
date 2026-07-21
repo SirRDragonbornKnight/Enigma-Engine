@@ -608,7 +608,20 @@ class Trainer:
                 "training_config": self.config.to_dict(),
             }
             if encoder is not None:
-                checkpoint[encoder_key] = getattr(encoder, "_orig_mod", encoder).state_dict()
+                _raw_enc = getattr(encoder, "_orig_mod", encoder)
+                checkpoint[encoder_key] = _raw_enc.state_dict()
+                # Persist the encoder's own config beside its weights
+                # ("vision_encoder_config"/"audio_encoder_config"), so
+                # loaders rebuild the exact architecture instead of
+                # trusting a hand-passed preset name to match -- the
+                # silent-degrade risk the 2026-07-20 serve scout flagged.
+                _enc_cfg = getattr(_raw_enc, "config", None)
+                if _enc_cfg is not None:
+                    cfg_key = encoder_key.replace("_state_dict", "_config")
+                    if hasattr(_enc_cfg, "to_dict"):
+                        checkpoint[cfg_key] = _enc_cfg.to_dict()
+                    else:
+                        checkpoint[cfg_key] = dict(_enc_cfg.__dict__)
             # Save scheduler state for exact resume
             if _sched is not None:
                 checkpoint["scheduler_state_dict"] = _sched.state_dict()

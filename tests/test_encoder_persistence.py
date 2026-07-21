@@ -892,6 +892,21 @@ def test_audio_conformer_batch1_still_trains(tmp_path):
     assert state.epoch >= 1 and not state.abort_reason
 
 
+def test_align_checkpoints_persist_encoder_config(tmp_path):
+    """Align checkpoints must carry the encoder's own config beside its
+    weights (audio_encoder_config / vision_encoder_config), so loaders
+    rebuild the exact architecture instead of trusting a preset name
+    (2026-07-20 eyes polish; serve._load_eyes prefers the stored config)."""
+    trainer = Trainer(_tiny_model(), _CharTokenizer(64), _config(tmp_path / "acfg", batch_size=1))
+    enc = _TinyAudioEncoder()
+    trainer.train_audio(enc, _audio_data())
+    ck_files = sorted((tmp_path / "acfg").glob("*_audio*.pt"))
+    assert ck_files, "no audio align checkpoint written"
+    ck = torch.load(ck_files[0], map_location="cpu", weights_only=False)
+    assert "audio_encoder_config" in ck, list(ck)
+    assert ck["audio_encoder_config"]["dim"] == enc.config.dim
+
+
 def test_audio_batched_training_runs(tmp_path):
     """batch_size=2 over ragged pairs must complete an epoch through the
     collate + lengths path (the old batch=1-only refusal is gone)."""

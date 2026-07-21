@@ -40,6 +40,7 @@ class Eyes:
         gen_lock: threading.Lock | None = None,
         max_caption_tokens: int = 48,
         captioner_factory=None,
+        repetition_penalty: float = 1.3,
     ):
         self._lock = gen_lock if gen_lock is not None else threading.Lock()
         if captioner_factory is not None:  # tests inject a fake: PIL.Image -> str
@@ -90,6 +91,16 @@ class Eyes:
                     step = logits[0, -1]
                     if vocab is not None and step.shape[-1] > vocab:
                         step = step[:vocab]
+                    # Greedy at 183M degenerates into loops ("watch watch
+                    # watch" -- measured live 2026-07-20); a repetition
+                    # penalty over HER generated ids breaks them while
+                    # keeping the loop deterministic (still argmax).
+                    if repetition_penalty != 1.0 and len(ids) > 1:
+                        from enigma_engine.core.model_utils import apply_repetition_penalty
+
+                        step = apply_repetition_penalty(
+                            step, torch.tensor(ids[1:], device=step.device), repetition_penalty
+                        )
                     nxt = int(step.argmax())
                     if nxt == eos:
                         break
