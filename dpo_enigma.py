@@ -152,6 +152,14 @@ def main() -> None:
         raise SystemExit("DPO expects an INSTRUCT checkpoint (run finetune_enigma.py first)")
 
     config = ForgeConfig.from_dict(ck["config"])
+    _tok_vocab = getattr(tokenizer, "vocab_size", None)
+    if _tok_vocab is not None and _tok_vocab > config.vocab_size:
+        # See finetune_enigma: a wider tokenizer than the model has rows for
+        # emits ids the embedding cannot represent.
+        raise SystemExit(
+            f"tokenizer vocab {_tok_vocab} exceeds model vocab {config.vocab_size}; "
+            f"this checkpoint was trained against a different vocabulary"
+        )
     policy = Enigma(config)
     missing, unexpected = policy.load_state_dict(ck["model_state_dict"], strict=False)
     real_missing = [k for k in missing if "freqs_cis" not in k and "causal_mask" not in k]

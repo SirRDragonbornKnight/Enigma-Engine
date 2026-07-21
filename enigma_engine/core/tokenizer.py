@@ -762,6 +762,40 @@ _tokenizer_cache: dict[tuple, Any] = {}
 _tokenizer_cache_lock = threading.Lock()
 
 
+def vocab_file_for_size(vocab_size: int) -> Path:
+    """The vocab file in VOCAB_DIR whose token table matches vocab_size.
+
+    A checkpoint records the vocabulary it was trained against, so the vocab
+    belongs to the WEIGHTS, not to the repo checkout: serving a v2 model with
+    the v1 file (or the reverse) decodes to garbage. Callers holding a
+    checkpoint pass its config.vocab_size here; the directory default stays v1.
+
+    Models pad embedding rows up to a multiple of 64, so a checkpoint's
+    vocab_size can exceed the real table -- the largest table that still fits
+    wins. Raises when nothing on disk fits.
+    """
+    candidates = []
+    for path in sorted(VOCAB_DIR.glob("bpe_vocab*.json")):
+        try:
+            table = json.loads(path.read_text(encoding="utf-8")).get("token_to_id")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            continue
+        if isinstance(table, dict):
+            candidates.append((len(table), path))
+    if not candidates:
+        raise FileNotFoundError(f"no bpe vocab files in {VOCAB_DIR}")
+    exact = [p for size, p in candidates if size == vocab_size]
+    if exact:
+        return exact[0]
+    fits = sorted((size, p) for size, p in candidates if size <= vocab_size)
+    if fits:
+        return fits[-1][1]
+    raise ValueError(
+        f"no vocab in {VOCAB_DIR} fits vocab_size {vocab_size} "
+        f"(have {sorted(size for size, _ in candidates)})"
+    )
+
+
 def _vocab_file_for(tokenizer_type: str, vocab_path: Path) -> Optional[Path]:
     """The actual file a given tokenizer_type would load from vocab_path."""
     if tokenizer_type in ("auto", "bpe", "advanced"):
@@ -977,4 +1011,5 @@ __all__ = [
     "Tokenizer",
     # Constants
     "VOCAB_DIR",
+    "vocab_file_for_size",
 ]

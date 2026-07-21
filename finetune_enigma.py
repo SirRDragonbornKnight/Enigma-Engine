@@ -278,6 +278,16 @@ def main() -> None:
     from enigma_engine.core.model_presets import ForgeConfig
 
     config = ForgeConfig.from_dict(ck["config"])
+    _tok_vocab = getattr(tokenizer, "vocab_size", None)
+    if _tok_vocab is not None and _tok_vocab > config.vocab_size:
+        # Text encoded with a WIDER vocab than the model has rows for emits ids
+        # the embedding cannot represent. Refuse rather than bake a silently
+        # corrupt model: this checkpoint needs a different vocab file than the
+        # repo directory default.
+        raise SystemExit(
+            f"tokenizer vocab {_tok_vocab} exceeds model vocab {config.vocab_size}; "
+            f"this checkpoint was trained against a different vocabulary"
+        )
     if args.block > config.max_seq_len:
         raise SystemExit(f"--block {args.block} > model max_seq_len {config.max_seq_len}")
     model = Enigma(config)

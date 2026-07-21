@@ -729,7 +729,19 @@ class Enigma(nn.Module):
         logits = self.forward(input_ids, use_cache=True)
         final_logits = logits  # Track for return_logits option
 
-        for _ in range(max_new_tokens):
+        # The stop test is this loop's only host sync, and at 182M the loop is
+        # launch-bound, so one sync per token dominates the step. The check
+        # accumulates ON DEVICE and is read once per SYNC_EVERY tokens; the
+        # sequence is then trimmed at the first stop id, which returns exactly
+        # what a per-token break returned. generate_stream cannot do this --
+        # it yields tokens as they are produced, so a deferred check there
+        # would emit text past the stop.
+        SYNC_EVERY = 8
+        stop_ids = torch.tensor(sorted(set(stop_tokens)), device=generated.device, dtype=generated.dtype)
+        hit = torch.zeros((), dtype=torch.bool, device=generated.device)
+        since_check = 0
+
+        for step in range(max_new_tokens):
             next_token = sample_next_token(
                 self._live_vocab_logits(logits[:, -1, :]),
                 generated[:, prompt_len:],
@@ -741,11 +753,21 @@ class Enigma(nn.Module):
             )
             generated = torch.cat([generated, next_token], dim=1)
 
-            if next_token.squeeze().item() in stop_tokens:
-                break
+            hit |= (next_token.reshape(-1)[0] == stop_ids).any()
+            since_check += 1
+            if since_check >= SYNC_EVERY or step == max_new_tokens - 1:
+                if bool(hit):  # the loop's only sync, amortized over SYNC_EVERY tokens
+                    break
+                since_check = 0
 
             logits = self.forward(next_token, use_cache=True, start_pos=generated.shape[1] - 1)
             final_logits = logits  # Update for return_logits
+
+        # Trim to the first stop id inclusive: identical to breaking on it.
+        tail = generated[0, prompt_len:]
+        stops = (tail.unsqueeze(-1) == stop_ids).any(dim=-1).nonzero()
+        if stops.numel():
+            generated = generated[:, : prompt_len + int(stops[0]) + 1]
 
         # Return based on options
         if return_logits:

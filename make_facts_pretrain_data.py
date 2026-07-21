@@ -35,7 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
-from enigma_engine.core.tokenizer import get_tokenizer
+from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 from knowledge_corpus import gen_knowledge_pretrain_text
 
 ROOT = Path(__file__).resolve().parent
@@ -59,10 +59,13 @@ def tokenize_fact_docs(lines: list[str], tokenizer, vocab_size: int) -> list[lis
 
 
 def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
-               fact_frac: float, val_reserve: int, chunk: int, seed: int) -> np.ndarray:
+               fact_frac: float, val_reserve: int, chunk: int, seed: int,
+               dtype=np.uint32) -> np.ndarray:
     """Deterministic stream: replay chunks with fact docs inserted at the
     cadence that yields ~fact_frac fact tokens, and a pure-replay tail of
-    val_reserve tokens. `replay` is any indexable uint32 sequence."""
+    val_reserve tokens. `replay` is any indexable integer sequence; `dtype`
+    must match the source corpus (v1 uint32, v2 uint16) or the written corpus
+    reads back as garbage."""
     rng = random.Random(seed)
     n_replay_src = len(replay)
     if n_replay_src < chunk + 1:
@@ -76,7 +79,7 @@ def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
     chunks_per_fact = max(1, int((mixed_end - fact_budget) / chunk / max(1, n_fact_insertions)))
 
     order = list(range(len(fact_docs)))
-    out = np.empty(target_tokens + chunk + 512, dtype=np.uint32)  # slack, trimmed at end
+    out = np.empty(target_tokens + chunk + 512, dtype=dtype)  # slack, trimmed at end
     pos = 0
     fact_i = 0
     rng.shuffle(order)
@@ -100,7 +103,7 @@ def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
         fact_i += 1
         if fact_i % len(order) == 0:
             rng.shuffle(order)
-        out[pos : pos + len(doc)] = np.asarray(doc, dtype=np.uint32)
+        out[pos : pos + len(doc)] = np.asarray(doc, dtype=dtype)
         pos += len(doc)
     mixed_actual = pos
     while pos < target_tokens:  # pure-replay tail (the val window)
@@ -118,7 +121,8 @@ def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
 
 
 def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int) -> None:
-    header = struct.pack("<4sIIQII", b"ETOK", 1, 4, len(tokens), vocab_size, EOS_ID)
+    bpt = tokens.dtype.itemsize  # must match the array, not a hardcoded width
+    header = struct.pack("<4sIIQII", b"ETOK", 1, bpt, len(tokens), vocab_size, EOS_ID)
     tmp = out_bin.with_suffix(".bin.tmp")
     with open(tmp, "wb") as f:
         f.write(header)
@@ -128,7 +132,7 @@ def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int) 
     meta = {
         "format": "ETOK",
         "version": 1,
-        "dtype": "uint32",
+        "dtype": str(tokens.dtype),
         "header_size": HEADER_SIZE,
         "total_tokens": len(tokens),
         "total_documents": n_docs,
@@ -152,19 +156,36 @@ def main() -> None:
     ap.add_argument("--chunk", type=int, default=2048, help="replay slice length in tokens")
     ap.add_argument("--seed", type=int, default=99)
     ap.add_argument("--out", default=str(OUT_BIN))
+    ap.add_argument(
+        "--source-bin",
+        default=str(SOURCE_BIN),
+        help="replay corpus (its sidecar sets dtype + vocab). Default: the v1 tokens.bin",
+    )
     args = ap.parse_args()
 
-    if not SOURCE_BIN.exists():
-        raise SystemExit(f"missing replay source: {SOURCE_BIN}")
-    src_meta = json.loads(SOURCE_BIN.with_suffix(".json").read_text(encoding="utf-8"))
+    source_bin = Path(args.source_bin)
+    if not source_bin.exists():
+        raise SystemExit(f"missing replay source: {source_bin}")
+    src_meta = json.loads(source_bin.with_suffix(".json").read_text(encoding="utf-8"))
     vocab_size = src_meta["vocab_size"]
+    # dtype and tokenizer both follow the CORPUS, never a hardcoded default:
+    # replaying v2 tokens through the v1 vocab would emit a corpus whose ids
+    # mean nothing to the model that trains on it.
+    src_dtype = np.dtype(src_meta.get("dtype", "uint32"))
+    vocab_file = vocab_file_for_size(vocab_size)
+    print(f"replay: {source_bin.name} | dtype {src_dtype} | vocab {vocab_size} -> {vocab_file.name}", flush=True)
 
     lines = gen_knowledge_pretrain_text()
-    tokenizer = get_tokenizer("bpe")
+    tokenizer = get_tokenizer("bpe", vocab_path=vocab_file)
+    if getattr(tokenizer, "vocab_size", None) != vocab_size:
+        raise SystemExit(
+            f"tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != corpus vocab "
+            f"{vocab_size}; refusing to build a facts corpus the model cannot read"
+        )
     fact_docs = tokenize_fact_docs(lines, tokenizer, vocab_size)
     print(f"fact docs: {len(fact_docs)} lines, {sum(len(d) for d in fact_docs):,} tokens")
 
-    replay = np.memmap(SOURCE_BIN, dtype=np.uint32, mode="r", offset=HEADER_SIZE)
+    replay = np.memmap(source_bin, dtype=src_dtype, mode="r", offset=HEADER_SIZE)
     # stay inside the live run's train region: its val is the corpus tail
     replay_end = len(replay) - 10_000_000
     target = int(args.target_tokens)
@@ -177,7 +198,8 @@ def main() -> None:
         print(f"val-reserve raised {args.val_reserve:,} -> {val_reserve:,} "
               f"to cover pretrain's n//100 [val] window")
     tokens = interleave(fact_docs, replay[:replay_end], target,
-                        args.fact_frac, val_reserve, args.chunk, args.seed)
+                        args.fact_frac, val_reserve, args.chunk, args.seed,
+                        dtype=src_dtype)
     write_etok(tokens, Path(args.out), vocab_size, n_docs=len(fact_docs))
 
 

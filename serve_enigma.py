@@ -54,7 +54,7 @@ from enigma_engine.core.imagegen import ImageGenError, Painter
 from enigma_engine.core.tts import Speaker, TTSError
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
-from enigma_engine.core.tokenizer import get_tokenizer
+from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
 try:  # Windows consoles default to cp1252 and crash printing unicode.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -427,7 +427,16 @@ def boot(argv: list[str] | None = None) -> None:
             f"{MIN_GEN_TOKENS}-token generation reserve; this model context is too small to serve"
         )
 
-    tokenizer = get_tokenizer("bpe")  # the exact tokenizer that built tokens.bin
+    # The vocabulary belongs to the WEIGHTS: pick the file matching this
+    # checkpoint's vocab_size rather than whatever the repo directory defaults
+    # to, so a v1 and a v2 model can each be served from the same checkout.
+    try:
+        _vocab_file = vocab_file_for_size(CONFIG.vocab_size)
+        tokenizer = get_tokenizer("bpe", vocab_path=_vocab_file)
+        print(f"  tokenizer: {_vocab_file.name} (model vocab {CONFIG.vocab_size})", flush=True)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"  WARN: no vocab matches model vocab {CONFIG.vocab_size} ({exc}); using the default", flush=True)
+        tokenizer = get_tokenizer("bpe")
     if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
         print(
             f"  WARN: tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != model vocab {CONFIG.vocab_size}",
