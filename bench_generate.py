@@ -38,7 +38,10 @@ def build_model(args):
         raise SystemExit(f"{args.model} is not an Enigma checkpoint")
     cfg = ForgeConfig.from_dict(ckpt["config"])
     model = Enigma(cfg)
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    if missing or unexpected:
+        print(f"  WARN: checkpoint mismatch -- {len(missing)} missing, "
+              f"{len(unexpected)} unexpected keys; timings may not reflect a real model")
     return model.to(args.device).eval(), cfg
 
 
@@ -126,7 +129,7 @@ def main() -> None:
 
     ordered = sorted(all_tokens)
     median = statistics.median(ordered)
-    p90 = ordered[int(len(ordered) * 0.9) - 1]
+    p90 = ordered[min(len(ordered) - 1, max(0, round(len(ordered) * 0.9) - 1))]
     print(f"  prefill      : {statistics.median(prefills):8.2f} ms ({args.prompt_len} tokens)")
     print(f"  per token    : {median:8.3f} ms median | {ordered[0]:.3f} min | {p90:.3f} p90")
     print(f"  throughput   : {1000 / median:8.1f} tok/s at batch 1")
@@ -138,7 +141,8 @@ def main() -> None:
             print(f"  syncs        : skipped -- {err}")
         else:
             print(f"  syncs        : {syncs} over {args.tokens} tokens "
-                  f"({syncs / max(1, args.tokens):.2f} per token)")
+                  f"({syncs / max(1, args.tokens):.2f} per token, measured on "
+                  f"model.generate -- the serve path, not the timed loop above)")
 
 
 if __name__ == "__main__":

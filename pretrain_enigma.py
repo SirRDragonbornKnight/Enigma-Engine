@@ -696,6 +696,9 @@ def main() -> None:
                 "model_state_dict": raw_model.state_dict(),
                 "config": config.to_dict(),
                 "step": step,
+            # Record-only (never restored): a resumed segment is not
+            # bit-reproducible, so re-seeding on resume would replay step-0 data.
+            "seed": args.seed,
                 "optimizer": optim.state_dict(),
                 "schedule": schedule,
             },

@@ -57,15 +57,33 @@ def run_point(args, lr: float, seed: int, out_dir: Path) -> dict:
     if args.extra:
         # Prepended, not appended: argparse lets a LATER flag win, so appending
         # would let --extra silently override the sweep's own --lr/--seed/--out
-        # and make every row in the ranked table a lie.
+        # and make every row in the ranked table a lie. posix=False keeps
+        # Windows backslash paths intact (POSIX mode eats them); the quote
+        # strip removes the surrounding quotes non-POSIX mode retains.
+        extra = [t.strip('"') for t in shlex.split(args.extra, posix=False)]
         insert = cmd[:2]
-        cmd = insert + shlex.split(args.extra) + cmd[2:]
+        cmd = insert + extra + cmd[2:]
 
     print(f"\n=== lr={lr:g} seed={seed} -> {out_dir.name}", flush=True)
     started = time.time()
-    proc = subprocess.run(
-        cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=args.point_timeout or None
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=args.point_timeout or None
+        )
+    except subprocess.TimeoutExpired as exc:
+        # a hung point is one FAILED row, never the death of the whole sweep
+        partial = exc.stdout or b""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", errors="replace")
+        point = {
+            "lr": lr, "seed": seed, "out": str(out_dir),
+            "seconds": round(time.time() - started, 1), "returncode": None,
+            "val_loss": None, "ppl": None, "bits_per_token": None, "tok_per_s": None,
+            "error": f"timed out after {args.point_timeout}s and was killed; "
+                     f"last output: {partial[-300:]}",
+        }
+        print(f"    TIMED OUT after {args.point_timeout}s", flush=True)
+        return point
     elapsed = time.time() - started
     tail = (proc.stdout or "")[-4000:] + (proc.stderr or "")[-2000:]
 

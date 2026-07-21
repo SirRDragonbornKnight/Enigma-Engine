@@ -394,7 +394,7 @@ step, muon, 186m @ 2048:
 | 4 | 27,038 | 16.75 GB | 10.1 |
 | 1 | 10,109 | 5.66 GB | 27.1 |
 
-**Full grid, corrected method** (full step incl. Muon, non-power-of-2 micro-batches,
+**Full grid, corrected method — THE standing receipt (the micro-batch table above was an earlier partial run of the same method; where they differ by ~2%, this grid supersedes)** (full step incl. Muon, non-power-of-2 micro-batches,
 23.69B-token corpus). Best non-thrash config per size:
 
 | preset | config | tok/s | MFU | peak | days/epoch |
