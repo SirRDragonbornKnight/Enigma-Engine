@@ -222,11 +222,13 @@
 - [x] 3. Distill DINOv2-S -> her own ViT-medium — DONE 2026-07-17
   (`models/enigma_vision_distill/`, val cosine 0.3469; [-1,1] contract
   test-pinned in `tests/test_vision_normalization.py`).
-- [ ] 4. `train_vision` align on 558k — `align_vision.py` BUILT (real
-  batching 2026-07-17; checkpoint-safety hardened + decode overlap +
-  token-weighted val landed 2026-07-19), run PARKED by the training-last
-  ruling. Remaining pre-launch consideration: KNOWN_ISSUES #12's open
-  items (accum accounting is moot at accum=1; the falsy-unwrap nit).
+- [x] 4. `train_vision` align on 558k — DONE 2026-07-20 (val 1.4884;
+  `models/enigma_vision_align/`). `serve --eyes` boots "eyes: on" and
+  captions live. Captions are primitive at 182M — grounding errors and
+  greedy loops (the loop is fixed by the caption repetition penalty,
+  `d15bc6c`); quality work belongs to the next align cycle
+  (VISION_QUALITY_SPEC: bigger student, pixel-shuffle connector, stage-2
+  unfreeze), which is gated on the user's image-domain decision.
 - [ ] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
 - [~] 6. Her ears: `collect_audio_data.py` DONE, `distill_audio_encoder.py`
   DONE-not-launched (own loop, survived the compression pass). Align
@@ -235,10 +237,12 @@
   `_Modality` adapter, `train_vision`/`train_audio` wrappers) so audio
   inherits every hardening + regression pin from day one; `align_audio.py`
   entry point added; 6 audio contract tests re-lock the encoder
-  persistence twin. batch_size=1 ENFORCED for audio (the encoder has no
-  padding mask; ragged mel batches would feed garbage frames). REMAINING
-  (GPU, training-last): run the distill, run the align, serve wiring +
-  retire whisper.
+  persistence twin. Batched audio LANDED 2026-07-20: the mask-aware
+  AudioEncoder makes padded-batch == unbatched at 3.6e-7, so
+  `align_audio.py --batch-size 8` is the supported path. REMAINING (GPU):
+  the distill is blocked on downloading the `openai/whisper-base` teacher
+  (the cached Systran/faster-whisper-base is the ASR organ, NOT the
+  teacher); then run the align, serve wiring + retire whisper.
 - [ ] 7. Her voice: train a small TTS on a chosen voice (later).
 - [ ] 8. Her imagination: own image generator (much later; SD stays the tool she wields).
 
@@ -367,13 +371,16 @@
 
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 
-- [ ] New tokenizer — fix the standalone-space waste (26.6% corpus-wide; 29.5%
-  on the 2026-07-16 English-sample re-measure) + digit-splitting
-  (the real fix for number recall; word-numbers are a band-aid). Requires
-  retokenizing the corpus.
-- [ ] Length extension block 1024 -> 2048+ (Phase 4) — unlocks real multi-turn
-  tool loops AND native video (frames are token-hungry: 196/frame).
-- [ ] Deeper-thinner 350-700M architecture — the 5090 can carry it.
+- [x] New tokenizer — DONE 2026-07-20: v2 vocab 16,366 rows kills the
+  standalone-space waste (25.5% -> 0.0%) and splits digits per-character;
+  2.41x chars/token. Corpus retokenized to `data/pretrain/tokens_v2.bin`
+  (23,694,200,666 tokens uint16); v1 `tokens.bin` untouched.
+- [ ] Length extension block 1024 -> 2048+ (Phase 4) — **OBSOLETE IF THE v2
+  PRETRAIN PROCEEDS** (v2 = 2.41x text per token + native 8192 context in the
+  `v2_deep_*` presets). Run only if the v2 go/no-go lands on "no".
+- [ ] Deeper-thinner 350-700M architecture — the 5090 can carry it. Presets
+  `v2_deep_186m`/`238m`/`542m` are BUILT and opt-in; the open steps are the
+  size call and the pretrain launch.
 - [ ] Embodiment: tool-executor bridge + avatar bus (`ws://127.0.0.1:8765`) —
   work lives in the Enigma Avatar repo.
 - [ ] Training sim -> trajectory logs -> real-time game play (FNAF target).

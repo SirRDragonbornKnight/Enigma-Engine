@@ -34,11 +34,17 @@
 | **C. Contrast-pair training data** ("spot the difference" corpus: two near-identical images + text naming the ONE difference) | Discrimination is learned from data that demands it — no amount of architecture substitutes | Buildable synthetically: take a source image, edit ONE detail (inpainting/img2img), auto-caption the edit as ground truth. Domain can be the user's chosen imagery. |
 | **D. Question-conditioned captioning (interim VQA shape)** | Even before B, feed the question into the caption pass so her eyes extract what was asked | Caption-with-question training pairs; cheapest of the four, weakest ceiling |
 
-Realistic order: **Phase 4 length extension → B (+D data folded in) → A → C
-grows alongside whatever domain corpus the user picks.** C is also the
-answer to "how do I correlate things in an image for her": you don't
-hand-author correlations — the paired-difference data teaches her attention
-to find them.
+Realistic order: **context headroom → B (+D data folded in) → A → C grows
+alongside whatever domain corpus the user picks.** C is also the answer to
+"how do I correlate things in an image for her": you don't hand-author
+correlations — the paired-difference data teaches her attention to find them.
+
+**The context prerequisite is satisfied by v2, not only by Phase 4.** If the
+v2 pretrain proceeds, the `v2_deep_*` presets train at a native 8192 context
+and the v2 tokenizer carries 2.41x more text per token — together these clear
+lever A's ~980-image-token problem without a v1 length-extension pass. Read
+every "Phase 4" prerequisite in this document as "context headroom, from v2 or
+Phase 4, whichever lands".
 
 ## 3. Generation in the user's style ("her imagination")
 
@@ -92,7 +98,8 @@ Three findings from the tiny-VLM literature bear directly on this plan:
    encoder re-distill settings.
 4. Whether Phase 4 (context 1024→2048) is approved as the vision
    prerequisite it actually is — **re-check after pixel-shuffle (§3b.3); it
-   may drop from hard-prereq to merely helpful.**
+   may drop from hard-prereq to merely helpful. Moot if the v2 pretrain
+   proceeds: the `v2_deep_*` presets train at a native 8192 context.**
 5. **Encoder teacher: keep DINOv2, switch to SigLIP, or dual (§3b.1).**
    This one gates any re-distill and should be settled first.
 

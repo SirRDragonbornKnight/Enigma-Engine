@@ -17,29 +17,35 @@ framework**; the AI we made is the thing being worked on. Surviving names (`Forg
 optional and the git history STAYS (honest archaeology). The dormant FORGE trainer itself was
 DELETED in the 2026-07-18 compression pass (~19k lines; see `CLEANUP_TRACKER.md`).
 
-**Multimodal state (measured 2026-07-14):** Enigma is a TEXT decoder that will PERCEIVE
-(image/audio INPUT) in-model; GENERATION is a separate model family — a bundled service, never
-this LLM painting pixels. Perception is HALF-BUILT; text-only ships today:
+**Multimodal state:** Enigma is a TEXT decoder that PERCEIVES (image/audio INPUT) in-model;
+GENERATION is a separate model family — a bundled service, never this LLM painting pixels.
+Vision perception is LIVE (`serve --eyes`, 2026-07-20); native audio is in progress:
 - Ready: `forward_multimodal` + `vision_projection`/`audio_projection` (`core/model.py`), encoders
   `core/vision_encoder.py` + `core/audio_encoder.py`, and the vision-align trainer
   (`enigma_engine/training/encoder_align.py` — one hardened `_train_encoder` core with
   `train_vision` + `train_audio` wrappers; carved from the deleted Forge trainer 2026-07-18,
   hardened + generalized 2026-07-19; entry points `align_vision.py` / `align_audio.py`).
-- NOT trained yet (verified): the shipped `enigma_dpo` checkpoint has NO projection weights and
-  `use_vision`/`use_audio` are off; `chat_format.py` has NO image/audio tokens.
+- The shipped `enigma_dpo` checkpoint itself has NO projection weights (`use_vision`/`use_audio`
+  off; `chat_format.py` has no image/audio tokens) — eyes work by GRAFTING the align
+  checkpoint's encoder+projection at serve time; her text weights are untouched.
 - Plan is ROADMAP **Phase 4.5** (distill-then-align). Vision state 2026-07-17: distill DONE
   (`models/enigma_vision_distill/` — DINOv2-S -> her ViT-medium; student sees [-1,1], teacher
   ImageNet norm; the [-1,1] contract is TEST-PINNED in `tests/test_vision_normalization.py`);
-  `align_vision.py` built, data staged (558k pairs), run PARKED by the training-last ruling.
+  `align_vision.py` run COMPLETE 2026-07-20 (val 1.4884). Align checkpoints persist the
+  encoder config since `d15bc6c`, but the SHIPPED checkpoint predates that commit and has
+  no `vision_encoder_config` key -- `serve --eyes` loads it through the `--eyes-preset`
+  fallback (default `medium`) until the next align run rewrites it.
   `serve --eyes` grafts the align checkpoint's encoder+projection onto served weights (missing
   ckpt = WARN + text-only). Audio: LibriSpeech collected (28,539 pairs), `distill_audio_encoder.py`
-  ready but NOT launched; the audio ALIGN trainer was REBUILT 2026-07-19 on the shared
-  encoder-align core (`train_audio` + `align_audio.py`; batch_size=1 enforced until the
-  encoder gains a padding mask — ragged mels can't batch honestly). Encoder persistence FIXED
+  ready but NOT launched (gated on downloading the `openai/whisper-base` teacher — the cached
+  Systran/faster-whisper-base is the ASR organ, NOT the teacher); the audio ALIGN trainer runs
+  on the shared encoder-align core (`train_audio` + `align_audio.py`; mask-aware encoder since
+  2026-07-20, `--batch-size 8` works — padded-batch==unbatched at 3.6e-7). Encoder persistence FIXED
   `f9ec5184`, re-locked for audio 2026-07-19. History: `KNOWN_ISSUES.md` #11.
-- **TRAINING-LAST ruling (user, 2026-07-17):** all training runs (vision align, audio distill,
-  any SFT/DPO cycle) are deferred to the END of the current arc. Vision image DOMAIN is the
-  user's open decision (`VISION_QUALITY_SPEC.md` §4 — NOT the everyday-LLaVA diet).
+- **TRAINING-LAST ruling LIFTED by user 2026-07-20** ("gpu usage is fine") — training runs are
+  allowed again; ask-before-hot-runs courtesy still applies while the user is connected/gaming.
+  Vision image DOMAIN is still the user's open decision (`VISION_QUALITY_SPEC.md` §4 — NOT the
+  everyday-LLaVA diet).
 
 The Modkit-era `mods/`+`plugins/` subsystem and its `commands`/`mod_tools`/`plugin_loader` registry
 were REMOVED 2026-07-14 (never loaded by serve; pip name is now `enigma-engine` 2.0.0). Capabilities
@@ -59,8 +65,8 @@ loaded eagerly at startup (a broken organ WARNs and text serving continues).
 - `--eyes` -> `core/eyes.py` (**her OWN captioner since 2026-07-17** — aligned encoder + grafted
   projection + the served model; BLIP DELETED): OpenAI image_url content in chat is captioned to
   `[image: ...]` text before gates/memory/render (`flatten_image_content`, data: URLs only,
-  honest markers when it can't see) + `/v1/images/describe`. Degrades text-only until the
-  align run produces a checkpoint (training-last).
+  honest markers when it can't see) + `/v1/images/describe`. Eyes verified LIVE 2026-07-20
+  ("eyes: on" at boot); degrades text-only only if the align checkpoint is missing.
 - `--image-gen` -> `core/imagegen.py` (diffusers sd-turbo, 1-step): intent-gated `imagine`
   built-in (PNGs land in `~/.enigma_engine/images/`) + `/v1/images/generations` (b64_json).
 Verified end-to-end vs served `enigma_dpo`: "Say hello out loud." -> speak call -> SAPI audio;
@@ -73,8 +79,8 @@ voice->wav->ears and imagine->png->eyes loops pass on real weights.
 - **NO ruff (user ruling 2026-07-18): do not run ruff or make ruff-appeasement edits.**
 - **The 2026-07-18 compression pass is COMMITTED** (`b02bc297`, on user order 2026-07-19,
   together with the vision-align checkpoint-safety arc). The suite dropping **574 → 349** was
-  that pass deleting the dormant stack's own tests, NOT lost coverage (now **361** with the
-  checkpoint-safety regression tests); the served checkpoint was verified byte-identical
+  that pass deleting the dormant stack's own tests, NOT lost coverage (**555** as of
+  2026-07-20 after the v2-prep arcs); the served checkpoint was verified byte-identical
   before/after. Do not "restore" deleted modules on the assumption their removal was an
   accident, and do not commit unbidden.
 - (Avatar tests live in the Enigma Avatar repo and are gated there — see that section below.)
@@ -91,10 +97,12 @@ voice->wav->ears and imagine->png->eyes loops pass on real weights.
   the real DPO path. Defaults are now the adopted-safe ones (`--lr 5e-7 --epochs 1`) — at 182M,
   lr 2e-6 x2 epochs measurably WRECKED her (identity 83→50%, factual 50→0%). DPO here is a nudge
   or a wrecking ball; do not raise the lr without a scorecard.
-- **Eval** — `python eval_behavior.py` = the 90-probe behavior gate, run against a RUNNING server.
-  `--base-url` defaults to `http://127.0.0.1:8123` (a SCRATCH port, deliberately not the live
-  8000) and `--temperature` to 0.0 (true greedy, reproducible). Probes live in
-  `data/eval/behavior_probes.jsonl`.
+- **Eval** — `python eval_behavior.py` = the behavior gate, run against a RUNNING server
+  (dev set widened to 113 probes 2026-07-20; `--probes` selects a probe file; the scorecard
+  prints probe file + decode config). `--base-url` defaults to `http://127.0.0.1:8123` (a
+  SCRATCH port, deliberately not the live 8000) and `--temperature` to 0.0 (true greedy,
+  reproducible). Dev probes: `data/eval/behavior_probes.jsonl`; the LOCKED set is the user's
+  to author blind (`data/eval/LOCKED_PROBES_AUTHORING.md`), still absent by design.
 - **Teach** — `python teach_enigma.py` chats against a running serve; `/fix` bakes a correction
   into `teachings.jsonl` + `teach_pairs.jsonl` (both gitignored — personal), with
   confirm-before-bake augmentation. `teachings.jsonl` is the USER's authoring channel: never

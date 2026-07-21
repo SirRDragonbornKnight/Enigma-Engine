@@ -391,6 +391,87 @@ def test_load_eyes_prefers_stored_encoder_config(tmp_path):
     assert "0.weight" in proj_sd
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("field_from_the_future", 7),  # unknown key: a newer writer's config
+        ("patch_size", 0),  # the ONE field the dataclass itself validates
+        ("image_size", 225),  # not divisible by patch_size -- validated lazily
+        ("dropout", 1.7),  # out of range; raises inside torch, not the config
+        ("n_heads", 0),  # ZeroDivisionError while building the encoder
+        ("n_layers", 2.5),  # TypeError deep in construction
+        ("image_size", None),  # None where an int is required
+        ("dim", 0),  # ZeroDivisionError on head_dim
+    ],
+)
+def test_load_eyes_rejects_unusable_stored_config(tmp_path, field, value):
+    """EVERY way a stored vision_encoder_config can fail to rebuild must surface
+    as EyesError. The dataclass validates only patch_size; image_size
+    divisibility, head/layer counts and dropout range are not checked until the
+    encoder is constructed, so a guard around the dataclass call alone leaves
+    ValueError/TypeError/ZeroDivisionError escaping boot()'s degrade catch and
+    killing text serving with the eyes."""
+    from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+    enc = VisionEncoder(VISION_PRESETS["small"])
+    cfg = VISION_PRESETS["small"].to_dict()
+    cfg[field] = value
+    ckpt = tmp_path / "unusable.pt"
+    torch.save(
+        {
+            "vision_encoder_state_dict": enc.state_dict(),
+            "vision_encoder_config": cfg,
+            "model_state_dict": {"vision_projection.0.weight": torch.zeros(4, 4)},
+        },
+        ckpt,
+    )
+    with pytest.raises(EyesError, match="will not rebuild"):
+        serve._load_eyes(ckpt, "small")
+
+
+@pytest.mark.parametrize("preset", ["tiny", "medium"])
+def test_load_eyes_empty_stored_config_falls_back_to_preset(tmp_path, preset):
+    """An empty stored config must NOT be treated as a config: building from it
+    would produce an all-defaults encoder and ignore --eyes-preset.
+
+    The presets here must DIFFER from VisionEncoderConfig()'s defaults -- those
+    defaults equal the "small" preset, so a "small" case would pass whether or
+    not the fallback works."""
+    from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+    enc = VisionEncoder(VISION_PRESETS[preset])
+    ckpt = tmp_path / "empty_cfg.pt"
+    torch.save(
+        {
+            "vision_encoder_state_dict": enc.state_dict(),
+            "vision_encoder_config": {},
+            "model_state_dict": {"vision_projection.0.weight": torch.zeros(4, 4)},
+        },
+        ckpt,
+    )
+    _venc, _proj, dim = serve._load_eyes(ckpt, preset)
+    assert dim == VISION_PRESETS[preset].dim
+
+
+def test_load_eyes_rejects_unreadable_checkpoint(tmp_path):
+    """A truncated or non-checkpoint file must degrade the eyes, not kill boot:
+    torch.load raises EOFError/UnpicklingError, which boot's catch does not cover."""
+    empty = tmp_path / "empty.pt"
+    empty.write_bytes(b"")
+    with pytest.raises(EyesError, match="could not be read"):
+        serve._load_eyes(empty, "small")
+
+    garbage = tmp_path / "garbage.pt"
+    garbage.write_text("this is not a checkpoint", encoding="ascii")
+    with pytest.raises(EyesError, match="could not be read"):
+        serve._load_eyes(garbage, "small")
+
+    not_a_dict = tmp_path / "not_a_dict.pt"
+    torch.save([1, 2, 3], not_a_dict)
+    with pytest.raises(EyesError, match="vision_encoder_state_dict"):
+        serve._load_eyes(not_a_dict, "small")
+
+
 def test_load_eyes_guards_and_happy_path(tmp_path):
     from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
 
@@ -540,3 +621,35 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
             setattr(serve, name, value)
         for key in _HF_ENV_KEYS:
             os.environ.pop(key, None)  # monkeypatch teardown restores originals
+
+
+def test_boot_max_context_follows_long_config(monkeypatch, tmp_path):
+    """A model whose config asks for more than Attention.MAX_CACHE_SEQ_LEN keeps
+    its full context: the KV cache allocates config.max_seq_len, so the serve
+    clamp must not bound the budget by the fallback constant (v2 targets 4k-8k)."""
+    import os
+
+    from enigma_engine.core.model_components import Attention
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    long_ctx = Attention.MAX_CACHE_SEQ_LEN * 2
+    cfg = ForgeConfig(
+        vocab_size=64, dim=32, n_layers=2, n_heads=2,
+        max_seq_len=long_ctx, dropout=0.0, use_gradient_checkpointing=False,
+    )
+    torch.manual_seed(0)
+    ckpt = tmp_path / "long_ctx.pth"
+    torch.save({"model_state_dict": Enigma(cfg).state_dict(), "config": cfg.to_dict()}, ckpt)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", str(long_ctx)])
+        assert serve.ARGS.max_context == long_ctx  # not clamped to the fallback
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)

@@ -209,30 +209,59 @@ def _load_eyes(ckpt_path: Path, preset: str):
     """Load an align checkpoint: her aligned VisionEncoder, the trained
     vision_projection weights, and the encoder dim for the model's vision
     port. Raises EyesError for a missing file / non-align checkpoint / absent
-    projection; an unknown preset raises KeyError and a mismatched encoder
-    state dict RuntimeError -- boot() catches all of these and degrades to
-    text-only with one honest WARN (extracted for testability, 2026-07-17)."""
+    projection, and for a stored encoder config that will not rebuild (any
+    failure while turning it into an encoder). An unknown preset raises KeyError
+    and a mismatched encoder state dict RuntimeError -- boot() catches all of
+    these and degrades to text-only with one honest WARN (extracted for
+    testability, 2026-07-17)."""
     from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
 
     if not ckpt_path.exists():
         raise EyesError(
             f"align checkpoint not found: {ckpt_path} (run distill_vision_encoder.py then align_vision.py)"
         )
-    eck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    if "vision_encoder_state_dict" not in eck:
+    # The file is untrusted: a truncated, empty or wrong-format checkpoint
+    # raises EOFError/UnpicklingError, neither of which boot's degrade catch
+    # covers, so an unreadable eye would take text serving down with it.
+    try:
+        eck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        raise EyesError(
+            f"{ckpt_path} could not be read as a checkpoint "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+    if not isinstance(eck, dict) or "vision_encoder_state_dict" not in eck:
         raise EyesError(f"{ckpt_path} carries no vision_encoder_state_dict (not an align checkpoint)")
     # Prefer the encoder config STORED IN the checkpoint (align runs
     # persist it since 2026-07-20) over the hand-passed preset name -- a
     # preset/checkpoint mismatch then cannot exist. Older checkpoints
     # without the key keep the preset path.
     stored_cfg = eck.get("vision_encoder_config")
-    if stored_cfg is not None:
+    if stored_cfg:
         from enigma_engine.core.vision_encoder import VisionEncoderConfig
 
-        vcfg = VisionEncoderConfig(**stored_cfg)
+        # The stored config is UNTRUSTED input: only patch_size is checked by
+        # the dataclass, while image_size/patch_size divisibility, head and
+        # layer counts and dropout range are not validated until the encoder is
+        # built. Both steps therefore sit inside the guard, and ANY failure
+        # becomes EyesError so boot degrades to text-only rather than dying on
+        # a raw ValueError/TypeError/ZeroDivisionError.
+        try:
+            vcfg = VisionEncoderConfig(**stored_cfg)
+            venc = VisionEncoder(vcfg)
+        except Exception as exc:
+            raise EyesError(
+                f"{ckpt_path} carries a vision_encoder_config that will not "
+                f"rebuild ({type(exc).__name__}: {exc}); if the config itself is "
+                f"stale, re-run the align to rewrite it or drop the key to fall "
+                f"back to --eyes-preset"
+            ) from exc
     else:
+        # Any falsy stored config (absent, or an empty dict from a writer that
+        # had nothing to record) takes the preset path: building from {} would
+        # produce an all-defaults encoder while ignoring --eyes-preset.
         vcfg = VISION_PRESETS[preset]
-    venc = VisionEncoder(vcfg)
+        venc = VisionEncoder(vcfg)
     venc.load_state_dict(eck["vision_encoder_state_dict"], strict=True)
     proj_sd = {
         k[len("vision_projection."):]: v
@@ -378,13 +407,13 @@ def boot(argv: list[str] | None = None) -> None:
     META = _ck.get("meta") or {}  # finetune_enigma stamps chat_format here
     del _ck
 
-    # Prompt truncation budgets against ARGS.max_context, but the model's KV
-    # cache holds min(max_seq_len, MAX_CACHE_SEQ_LEN) positions and refuses a
-    # larger prefill outright -- clamp so an oversize --max-context cannot let
-    # prompts through that the cache will reject.
-    from enigma_engine.core.model_components import Attention as _Attn
-
-    _cache_cap = min(CONFIG.max_seq_len, _Attn.MAX_CACHE_SEQ_LEN)
+    # Prompt truncation budgets against ARGS.max_context, and the model's KV
+    # cache holds exactly config.max_seq_len positions: a single oversize
+    # prefill is refused outright, and incremental overflow slides the window.
+    # Clamp so neither can be reached from an oversize --max-context.
+    # Attention.MAX_CACHE_SEQ_LEN must NOT bound this -- it is only the cache's
+    # own fallback for configs lacking max_seq_len, which ForgeConfig always has.
+    _cache_cap = CONFIG.max_seq_len
     if ARGS.max_context > _cache_cap:
         print(
             f"  WARN: --max-context {ARGS.max_context} exceeds the model's KV cache "

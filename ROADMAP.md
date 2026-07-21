@@ -159,6 +159,11 @@ the same corpus ~= fresh tokens — "the cheapest capability lever we have."
 
 ## Phase 4 — Length extension: block 1024 -> 2048+ (days)
 
+**OBSOLETE IF THE v2 PRETRAIN PROCEEDS** — this is a v1-lineage continuation, and
+v2 reaches the same place without it: the v2 tokenizer carries 2.41x more text per
+token (block 1024 goes ~300 -> ~722 words) and the `v2_deep_*` presets train at a
+native 8192 context. Run this ONLY if the v2 go/no-go lands on "no".
+
 Settled 2025 recipe (already researched in SUGGESTIONS): raise RoPE theta +
 continued pretraining on long documents (<10B tokens) + intra-document attention
 masking, then re-SFT.
@@ -270,22 +275,25 @@ runtime wrapping, her weights stay hers.
 
 ## Phase 7 — The next generation (the big fork; weeks of GPU)
 
-Only when the current lineage hits a measured ceiling:
-- New tokenizer (fix the standalone-space waste — 26.6% corpus-wide, 29.5% on
-  the 2026-07-16 English-sample measure; **16k vocab at a flat 182M, 32k only
-  with a size bump** — see TOKENIZER_V2_SPEC for the scaling-law grounding —
-  GPT-2-style leading-space merge, per-digit numbers) — requires retokenizing
-  the raw sources with `pretokenize_data.py` (rebuilds tokens.bin, currently
-  227 GB / 211 GiB — the "210GB" and "227 GB" figures in older notes are this
-  same file in GiB vs GB).
-- Deeper-thinner architecture, Muon + WSD from step 0 (both already
-  implemented in `core/optim.py`, just flag-gated off for lineage compat),
-  QK-norm BEFORE RoPE, RoPE theta down to 10k-100k, optional gated attention,
-  native block 2048, 350-700M params — the 5090 (32GB) can carry it.
+This phase is IN PROGRESS: the v2 prefix landed 2026-07-20 and the v2 pretrain is
+the next GPU spend, ahead of Phases 4/5.
+- New tokenizer — **DONE**: v2 vocab is 16,366 rows (leading-space merges,
+  per-digit numbers), measured 2.41x chars/token over v1, and the corpus is
+  retokenized to `data/pretrain/tokens_v2.bin` (23,694,200,666 tokens, uint16).
+  v1's `tokens.bin` (227 GB / 211 GiB — the "210GB"/"227 GB" figures in older
+  notes are this same file in GiB vs GB) is untouched and still feeds the live
+  lineage. Scaling-law grounding: TOKENIZER_V2_SPEC.
+- Deeper-thinner architecture, Muon + WSD from step 0 (both implemented in
+  `core/optim.py`, flag-gated off for lineage compat), QK-norm BEFORE RoPE,
+  optional gated attention, 350-700M params — the 5090 (32GB) can carry it.
+  **Presets ready**: `v2_deep_186m` / `v2_deep_238m` / `v2_deep_542m`
+  (28L@768 / 20L@1024 / 30L@1280, native 8192 context, Peri-LN,
+  QK-norm-before-RoPE, olmo2_flat init), all opt-in with v1 defaults untouched.
 - HRM stays a PARKED experiment (heed the ARC Prize critique).
 - **Gate: a written list of things Phase 2-5 Enigma provably cannot do —
-  that list now lives in `PHASE7_GATE.md` (started 2026-07-06, receipts
-  included; gate NOT yet open — Phase 4/5 first).**
+  that list lives in `PHASE7_GATE.md` (started 2026-07-06, receipts included).
+  What actually gates the v2 pretrain now is the locked-probe baseline
+  (`data/eval/LOCKED_PROBES_AUTHORING.md`) and the size call — not Phases 4/5.**
 
 ---
 
