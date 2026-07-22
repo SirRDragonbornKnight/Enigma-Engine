@@ -623,6 +623,90 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
             os.environ.pop(key, None)  # monkeypatch teardown restores originals
 
 
+def _tiny_ckpt(tmp_path):
+    cfg = ForgeConfig(
+        vocab_size=64, dim=32, n_layers=2, n_heads=2,
+        max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
+    )
+    torch.manual_seed(0)
+    ckpt = tmp_path / "tiny_degrade.pth"
+    torch.save({"model_state_dict": Enigma(cfg).state_dict(), "config": cfg.to_dict()}, ckpt)
+    return ckpt
+
+
+def test_boot_survives_an_unusable_memory_dir(monkeypatch, tmp_path):
+    """A memory dir that cannot be opened -- locked by another process, full,
+    unwritable -- must cost her memory, not text serving. MemoryStore mkdirs
+    and reads in __init__, and every launcher passes --memory-dir, so an
+    unguarded construction takes down EVERY boot."""
+    import os
+
+    import enigma_engine.core.memory_store as memory_store
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    def _explode(*_a, **_k):
+        raise OSError(22, "The process cannot access the file")
+
+    monkeypatch.setattr(memory_store, "MemoryStore", _explode)
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128",
+                         "--memory-dir", str(tmp_path / "mem")])
+        assert serve._BOOTED is True  # text serving came up
+        assert serve.MEMORY is None  # the organ degraded
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_boot_survives_eyes_construction_failure(monkeypatch, tmp_path):
+    """Eyes(...) moves the encoder onto the device, so a busy GPU raises
+    torch.OutOfMemoryError -- a RuntimeError, not EyesError. Catching only
+    EyesError killed boot in exactly the gaming case this machine is built
+    for. The loader is stubbed so the failure lands on construction."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+    enc = VisionEncoder(VISION_PRESETS["small"])
+    vdim = VISION_PRESETS["small"].dim
+    proj_sd = {
+        "0.weight": torch.zeros(32, vdim), "0.bias": torch.zeros(32),
+        "2.weight": torch.zeros(32, 32), "2.bias": torch.zeros(32),
+    }
+    monkeypatch.setattr(serve, "_load_eyes", lambda *_a, **_k: (enc, proj_sd, vdim))
+
+    def _oom(*_a, **_k):
+        raise torch.OutOfMemoryError("CUDA out of memory")
+
+    monkeypatch.setattr(serve, "Eyes", _oom)
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--eyes"])
+        assert serve._BOOTED is True  # text serving came up
+        assert serve.EYES is None  # the organ degraded
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
 def test_boot_max_context_follows_long_config(monkeypatch, tmp_path):
     """A model whose config asks for more than Attention.MAX_CACHE_SEQ_LEN keeps
     its full context: the KV cache allocates config.max_seq_len, so the serve

@@ -458,7 +458,14 @@ def boot(argv: list[str] | None = None) -> None:
     if ARGS.memory_dir:
         from enigma_engine.core.memory_store import MemoryStore
 
-        MEMORY = MemoryStore(ARGS.memory_dir)
+        # Same contract as the organs below: a memory dir that cannot be opened
+        # (locked by another process, unwritable, full) costs her memory, not
+        # the whole server. MemoryStore mkdirs and reads the file in __init__,
+        # so both raise here.
+        try:
+            MEMORY = MemoryStore(ARGS.memory_dir)
+        except Exception as exc:
+            print(f"  WARN: memory disabled -- {exc}", flush=True)
 
     # Organs: constructed eagerly so a broken backend surfaces at startup, not
     # mid-conversation. She still serves text if an organ fails to come up.
@@ -490,7 +497,10 @@ def boot(argv: list[str] | None = None) -> None:
             # Her own eyes: aligned encoder + grafted projection + the served
             # frozen model, sharing the generation lock.
             EYES = Eyes(model=model, tokenizer=tokenizer, encoder=_VISION_ENCODER, gen_lock=_GEN_LOCK)
-        except EyesError as exc:
+        except Exception as exc:
+            # Not just EyesError: construction moves the encoder onto the
+            # device, which raises torch.OutOfMemoryError (a RuntimeError) when
+            # the GPU is busy -- the case this machine hits while gaming.
             print(f"  WARN: eyes disabled -- {exc}", flush=True)
 
     PAINTER = None
