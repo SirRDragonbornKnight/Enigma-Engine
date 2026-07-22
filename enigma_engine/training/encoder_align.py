@@ -403,6 +403,24 @@ class Trainer:
         self.config = config or TrainingConfig()
         self.state = TrainingState()
 
+        # A tokenizer wider than the model's head emits ids the model cannot
+        # score; a NARROWER one trains real ids that mean something else to
+        # the model (v1 table against a v2 head). Neither crashes on its own:
+        # the loss curve looks plausible and the captions decode to garbage.
+        _tok_vocab = getattr(tokenizer, "vocab_size", None)
+        _model_vocab = getattr(getattr(model, "config", None), "vocab_size", None)
+        if _tok_vocab and _model_vocab and _tok_vocab > _model_vocab:
+            raise ValueError(
+                f"tokenizer vocab {_tok_vocab} exceeds model vocab {_model_vocab}; "
+                "select the tokenizer from the checkpoint (vocab_file_for_size)"
+            )
+        if _tok_vocab and _model_vocab and _tok_vocab < _model_vocab - 128:
+            raise ValueError(
+                f"tokenizer vocab {_tok_vocab} is far below model vocab {_model_vocab}; "
+                "this trains correct-looking ids that mean something else to the model -- "
+                "select the tokenizer from the checkpoint (vocab_file_for_size)"
+            )
+
         self.device = next(model.parameters()).device
 
         # Gradient checkpointing - trades compute for VRAM savings.

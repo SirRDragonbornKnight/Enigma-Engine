@@ -971,7 +971,9 @@ def gen_identity_examples() -> tuple[list[dict], int]:
 BLOCK = 1024  # finetune_enigma's --block default == the model's max_seq_len
 
 
-def fit_mix_to_block(lines: list[str], block: int = BLOCK) -> tuple[list[str], int, int]:
+def fit_mix_to_block(
+    lines: list[str], block: int = BLOCK, vocab_path: "Path | None" = None
+) -> tuple[list[str], int, int]:
     """Token-accurate pass over mix records using the TRAINER'S OWN renderer
     (render_training), so "fits" here means exactly what finetune_enigma.py
     will decide at load time. Records that fit pass through untouched.
@@ -982,7 +984,10 @@ def fit_mix_to_block(lines: list[str], block: int = BLOCK) -> tuple[list[str], i
     from enigma_engine.core.chat_format import attach_chat_tokens, render_training
     from enigma_engine.core.tokenizer import get_tokenizer
 
-    tok = attach_chat_tokens(get_tokenizer("bpe"))
+    # Measuring with a different vocab than the trainer loads mis-sizes every
+    # record: the v2 table packs ~2.2x more text per id, so a v1 measurement
+    # trims and drops records that would have fit.
+    tok = attach_chat_tokens(get_tokenizer("bpe", vocab_path=vocab_path) if vocab_path else get_tokenizer("bpe"))
     limit = block + 1  # the trainer keeps examples with len(ids) <= block+1
     out, trimmed, dropped = [], 0, 0
     for line in lines:
@@ -1112,7 +1117,28 @@ def _is_low_quality(rec: dict) -> bool:
     return bool(_LOW_QUALITY.search(_assistant_text(rec)))
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Build the SFT mix.")
+    ap.add_argument(
+        "--vocab",
+        default=None,
+        help="vocab file the finetune will use; default is the repo's v1 table. "
+        "Pass the v2 table when baking for a v2 checkpoint -- the fit pass "
+        "measures records against whichever vocab it is given.",
+    )
+    ap.add_argument(
+        "--block",
+        type=int,
+        default=BLOCK,
+        help=f"token budget per record; must match finetune's --block (default {BLOCK})",
+    )
+    args = ap.parse_args(argv)
+    vocab_path = Path(args.vocab) if args.vocab else None
+    if vocab_path is not None and not vocab_path.exists():
+        raise SystemExit(f"vocab file not found: {vocab_path}")
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # The eval probe set is held out of ALL training (identity, tools,
@@ -1266,7 +1292,7 @@ def main() -> None:
                     locked_near_rows.append(line)
                 mix.append(line)
                 n_general += 1
-    mix, n_trimmed, n_dropped = fit_mix_to_block(mix)
+    mix, n_trimmed, n_dropped = fit_mix_to_block(mix, block=args.block, vocab_path=vocab_path)
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     # The review-band records themselves -- a bare count was unactionable

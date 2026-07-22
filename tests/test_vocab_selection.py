@@ -56,3 +56,47 @@ def test_default_directory_load_is_still_v1():
     """The bare call must not change behavior for the live lineage."""
     assert get_tokenizer("bpe").vocab_size == 4718
     assert (VOCAB_DIR / "bpe_vocab.json").exists()
+
+
+@pytest.mark.parametrize("tok_vocab", [4718, 20000])
+def test_encoder_align_refuses_a_mismatched_tokenizer(tok_vocab):
+    """A v1 table against a v2 head trains ids that mean something else and
+    never crashes on its own -- the trainer has to refuse it up front."""
+    import torch.nn as nn
+
+    from enigma_engine.training.encoder_align import Trainer
+
+    class _Cfg:
+        vocab_size = 16384
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = _Cfg()
+            self.w = nn.Linear(2, 2)
+
+    class _Tok:
+        vocab_size = tok_vocab
+
+    with pytest.raises(ValueError, match="vocab"):
+        Trainer(_Model(), _Tok())
+
+
+def test_encoder_align_accepts_the_matching_tokenizer():
+    import torch.nn as nn
+
+    from enigma_engine.training.encoder_align import Trainer
+
+    class _Cfg:
+        vocab_size = 16384
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = _Cfg()
+            self.w = nn.Linear(2, 2)
+
+    class _Tok:
+        vocab_size = 16366  # real table under a padded head
+
+    assert Trainer(_Model(), _Tok()) is not None

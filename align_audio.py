@@ -35,7 +35,7 @@ import torch
 from enigma_engine.core.audio_encoder import AudioEncoder, AudioEncoderConfig
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
-from enigma_engine.core.tokenizer import get_tokenizer
+from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 from enigma_engine.training.encoder_align import Trainer, TrainingConfig
 
 ROOT = Path(__file__).resolve().parent
@@ -108,7 +108,14 @@ def main() -> None:
     print(f"text model loaded from {args.model}; fresh keys: {list(missing)}", flush=True)
     model.to(device)
 
-    tokenizer = get_tokenizer("bpe")
+    # The tokenizer follows the CHECKPOINT, not the default vocab file: a v2
+    # model aligned against v1 ids trains happily and decodes to garbage.
+    try:
+        _vocab_file = vocab_file_for_size(int(cfg.vocab_size))
+    except (ValueError, FileNotFoundError) as exc:
+        raise SystemExit(f"cannot pick a tokenizer for this checkpoint: {exc}")
+    tokenizer = get_tokenizer("bpe", vocab_path=_vocab_file)
+    print(f"tokenizer: {_vocab_file.name} (model vocab {cfg.vocab_size})", flush=True)
 
     # -- data ----------------------------------------------------------
     # Rows are {"audio": <absolute flac path>, "text": <transcript>}.
