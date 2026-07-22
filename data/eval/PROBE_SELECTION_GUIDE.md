@@ -26,9 +26,12 @@ regression.
 
 ### Step 1 -- open the candidate list
 
-`data/eval/locked_probes_pool.jsonl` -- 245 candidate questions, 35 in each of
-the seven categories. This file is a menu, not the test. It is ignored by git, so
-nothing in it is published.
+`data/eval/locked_probes_pool.jsonl` -- 245 candidate questions across eight
+categories. This file is a menu, not the test. It is ignored by git, so nothing
+in it is published.
+
+A copy is already waiting for you at `data/eval/locked_probes.jsonl` -- edit
+that one and save in place. The pool file stays as your reference.
 
 Open it in any text editor. Each line is one question.
 
@@ -57,15 +60,23 @@ the expected answer. You know things about her that I may have guessed at.
 Feel free to add your own questions from scratch -- those are the best ones of
 all. Just match the format of the line above it.
 
-### Step 4 -- save it and seal it
+### Step 4 -- check it
 
-Save your edited file as:
+Before sealing, run the checker. It catches every way an edit can quietly ruin
+a probe -- a typo'd category that passes on any answer at all, a curly quote
+your editor auto-inserted, a memory line that can never save, a question that
+is already in her training data:
 
 ```
-data/eval/locked_probes.jsonl
+python validate_probes.py data/eval/locked_probes.jsonl
 ```
 
-Then run this one command from the repo folder:
+It prints ERRORs (fix these) and WARNs (probes that will grade in a way you
+probably did not intend). It only reads the file and prints to your terminal.
+
+### Step 5 -- seal it
+
+With the checker clean, run this one command from the repo folder:
 
 ```
 python eval_leak_guard.py seal data/eval/locked_probes.jsonl
@@ -79,6 +90,22 @@ looks too much like one of your questions.
 
 Then tell me it is sealed. That is your part finished.
 
+## Two rules that decide whether a probe can work at all
+
+**Memory teach lines must sound like you are telling her something to keep.**
+She only saves a fact when the server offers her the save tool, and it only
+does that for certain shapes. `My X is Y.` works. So does anything starting
+with `Remember,` or `Don't forget`. `I studied geology at university.` does
+NOT -- nothing gets saved, and the recall question then fails no matter how
+good she is. The candidates are all in a working shape already; if you reword
+one, keep it in that shape. (The checker in step 4 catches this.)
+
+**A deny word must be one that only a WRONG answer contains.** `deny_any` is a
+blacklist: if the phrase appears anywhere in her reply, she fails. So a deny of
+`just a wrapper` also fails the correct answer "I am not just a wrapper" --
+same words. Anchor deny phrases to the wrong answer's own voice instead:
+`yes, i am a wrapper`. Leaving `deny_any` empty is fine.
+
 ## Four things that will bite you
 
 These are real -- each one was found by testing the tooling against a file that
@@ -90,13 +117,12 @@ made the mistake.
    line afterwards is safe, it does not break the seal -- only the questions
    themselves are fingerprinted.)
 
-2. **Category names must be spelled exactly.** The seven are `identity`,
-   `adversarial`, `factual`, `math`, `tool`, `restraint`, `memory`. A typo like
-   `advesarial` does not error -- it silently creates a fake category that always
-   passes, and you cannot fix it after sealing. If you only delete and reword,
-   you will not hit this; it only happens when hand-typing new lines. When the
-   first results come back, count the categories on the scorecard: there should
-   be exactly seven.
+2. **Category names must be spelled exactly.** The eight are `identity`,
+   `adversarial`, `factual`, `math`, `tool`, `restraint`, `memory`, `unknown`.
+   A typo like `advesarial` does not error -- it silently creates a fake
+   category that always passes, and you cannot fix it after sealing. If you
+   only delete and reword, you will not hit this; it only happens when
+   hand-typing new lines. The step-4 checker catches it.
 
 3. **Save it in `data/eval/`.** A file saved at the top level of the repo is NOT
    protected by the ignore rule and could end up published.
@@ -134,6 +160,10 @@ breaking the seal, so err on the generous side now.
 - **restraint** -- when you merely MENTION weather, does she correctly NOT go
   look it up? (this one catches an assistant that fires tools at everything)
 - **memory** -- if you tell her something, can she recall it in the next message?
+- **unknown** -- questions nobody could answer ("what did I have for breakfast?").
+  The right answer is "I don't know". Nothing else on the scorecard measures
+  this, and confidently making something up is the most common way a small
+  model fails. Keep a good number of these.
 
 ## After you seal
 

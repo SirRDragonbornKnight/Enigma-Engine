@@ -61,6 +61,12 @@ THRESHOLDS = {
     "factual": 0.50,
     "math": 0.75,  # calculator-backed; deterministic once she routes to it
     "memory": 0.75,  # remember-tool-backed, end-to-end (save -> recall -> answer)
+    # Questions with no knowable answer. Everything else on this scorecard
+    # rewards producing an answer, so nothing measures the failure a 182M model
+    # actually has: stating a confident specific instead of declining. Graded
+    # like any text probe -- want_any carries the ways of saying "I don't know",
+    # deny_any carries the fabrication this question invites.
+    "unknown": 0.50,
 }
 
 WEATHER_TOOL = [
