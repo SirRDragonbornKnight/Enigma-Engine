@@ -15,6 +15,7 @@ and the median is what a conversation actually feels like.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import statistics
 import time
 import warnings
@@ -97,6 +98,29 @@ def count_syncs(model, input_ids, n_tokens, device):
         torch.cuda.set_sync_debug_mode("default")
 
 
+def timed_serve_path(model, input_ids, n_tokens, device, repeats):
+    """Per-token wall time on the path serve actually runs: generate_stream,
+    serve's live sampler settings, bf16 autocast on CUDA. The default
+    timed_decode loop is greedy argmax over a bare forward in fp32 -- every
+    sampler cost (repetition penalty, top-k/p, min-p) is absent from it, so
+    its number is a floor for serving rather than a measurement of it."""
+    # serve_enigma's ChatReq defaults.
+    kw = dict(temperature=0.3, top_k=50, top_p=0.9, min_p=0.05, repetition_penalty=1.1)
+    autocast = torch.autocast("cuda", dtype=torch.bfloat16) if device == "cuda" else contextlib.nullcontext()
+    per_call = []
+    with torch.no_grad(), autocast:
+        list(model.generate_stream(input_ids, max_new_tokens=8, **kw))  # warmup
+        for _ in range(repeats):
+            if device == "cuda":
+                torch.cuda.synchronize()
+            start = time.perf_counter()
+            produced = sum(1 for _ in model.generate_stream(input_ids, max_new_tokens=n_tokens, **kw))
+            if device == "cuda":
+                torch.cuda.synchronize()
+            per_call.append((time.perf_counter() - start) * 1000 / max(1, produced))
+    return per_call
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=str(ROOT / "models" / "enigma_dpo" / "model.pth"))
@@ -106,6 +130,13 @@ def main() -> None:
     ap.add_argument("--repeats", type=int, default=3, help="timed repeats after the warmup")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--count-syncs", action="store_true", help="report host syncs per generate call (CUDA only)")
+    ap.add_argument(
+        "--serve-path",
+        action="store_true",
+        help="time generate_stream with serve's live sampler under bf16 autocast -- what serving "
+        "actually runs. The default loop times bare forward + argmax in fp32, which is a floor, "
+        "not a serve receipt.",
+    )
     args = ap.parse_args()
 
     model, cfg = build_model(args)
@@ -133,7 +164,15 @@ def main() -> None:
     print(f"  prefill      : {statistics.median(prefills):8.2f} ms ({args.prompt_len} tokens)")
     print(f"  per token    : {median:8.3f} ms median | {ordered[0]:.3f} min | {p90:.3f} p90")
     print(f"  throughput   : {1000 / median:8.1f} tok/s at batch 1")
+    print(f"    ^ greedy argmax over a bare forward, fp32: a FLOOR, not serving")
     print(f"  destination  :    0.300 -    0.600 ms/token (the serving-ladder target)")
+
+    if args.serve_path:
+        serve_times = timed_serve_path(model, input_ids, args.tokens, args.device, args.repeats)
+        serve_median = statistics.median(serve_times)
+        print(f"  serve path   : {serve_median:8.3f} ms median | {1000 / serve_median:.1f} tok/s "
+              f"(generate_stream + sampler"
+              f"{' + bf16 autocast' if args.device == 'cuda' else ''})")
 
     if args.count_syncs:
         syncs, err = count_syncs(model, input_ids, args.tokens, args.device)
@@ -142,7 +181,8 @@ def main() -> None:
         else:
             print(f"  syncs        : {syncs} over {args.tokens} tokens "
                   f"({syncs / max(1, args.tokens):.2f} per token, measured on "
-                  f"model.generate -- the serve path, not the timed loop above)")
+                  f"model.generate at temperature 0 -- NOT the serve path, which "
+                  f"runs generate_stream and samples)")
 
 
 if __name__ == "__main__":

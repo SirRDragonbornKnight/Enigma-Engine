@@ -458,10 +458,19 @@ class Attention(nn.Module):
                 # that makes served generation collapse. Build the bottom-right-aligned
                 # causal mask instead (for q_len==1 this is all-True = attend to full cache).
                 Tq, Tk = q_s.shape[-2], k_s.shape[-2]
-                attn_causal = torch.ones(Tq, Tk, dtype=torch.bool, device=q_s.device).tril(diagonal=Tk - Tq)
-                output = F.scaled_dot_product_attention(
-                    q_s, k_s, v_s, attn_mask=attn_causal, dropout_p=drop_p, scale=self._scale
-                )
+                if Tq == 1:
+                    # The one new query attends to the entire cache, so the
+                    # bottom-right mask below is all-True. Building it every
+                    # layer every token costs kernels for nothing, and passing
+                    # ANY attn_mask disqualifies the flash backend.
+                    output = F.scaled_dot_product_attention(
+                        q_s, k_s, v_s, dropout_p=drop_p, scale=self._scale
+                    )
+                else:
+                    attn_causal = torch.ones(Tq, Tk, dtype=torch.bool, device=q_s.device).tril(diagonal=Tk - Tq)
+                    output = F.scaled_dot_product_attention(
+                        q_s, k_s, v_s, attn_mask=attn_causal, dropout_p=drop_p, scale=self._scale
+                    )
             output = output.transpose(1, 2).reshape(B, T, -1)
         else:
             # ─────────────────────────────────────────────────────────────────

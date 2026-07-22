@@ -111,34 +111,19 @@ def apply_repetition_penalty(
     else:
         tokens = generated_tokens[-window:]
 
-    seq_len = tokens.numel()
+    # Mark the seen ids on the vocab axis and penalize in one pass. The index
+    # scatter needs every id in range, so out-of-range ids are routed to a sink
+    # slot that is sliced off -- filtering them instead would give the mask a
+    # data-dependent shape, which costs a device-to-host sync on every token.
+    flat = tokens.reshape(-1)
+    sink = torch.full_like(flat, vocab_size)
+    safe = torch.where((flat >= 0) & (flat < vocab_size), flat, sink)
+    seen = torch.zeros(vocab_size + 1, dtype=torch.bool, device=logits.device)
+    seen.scatter_(0, safe, True)
+    seen = seen[:vocab_size]
 
-    if seq_len < 1000:
-        # Set-based for short sequences (lower overhead)
-        unique_tokens = set(tokens.view(-1).tolist())
-        for token_id in unique_tokens:
-            if 0 <= token_id < vocab_size:
-                if logits.dim() == 1:
-                    score = logits[token_id]
-                    logits[token_id] = score / penalty if score > 0 else score * penalty
-                else:
-                    scores = logits[..., token_id]
-                    logits[..., token_id] = torch.where(scores > 0, scores / penalty, scores * penalty)
-    else:
-        # Bincount for longer sequences (better vectorization)
-        flat_tokens = tokens.view(-1)
-        valid_mask = (flat_tokens >= 0) & (flat_tokens < vocab_size)
-        valid_tokens = flat_tokens[valid_mask]
-        token_counts = torch.bincount(valid_tokens, minlength=vocab_size)
-        appeared_mask = token_counts > 0
-        if logits.dim() == 1:
-            scores = logits[appeared_mask]
-            logits[appeared_mask] = torch.where(scores > 0, scores / penalty, scores * penalty)
-        else:
-            scores = logits[..., appeared_mask]
-            logits[..., appeared_mask] = torch.where(scores > 0, scores / penalty, scores * penalty)
-
-    return logits
+    penalized = torch.where(logits > 0, logits / penalty, logits * penalty)
+    return torch.where(seen, penalized, logits)
 
 
 def sample_next_token(

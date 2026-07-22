@@ -13,6 +13,55 @@ from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.model_utils import apply_repetition_penalty
 
 
+def _reference_penalty(logits, generated_tokens, penalty, window=128):
+    """The per-id loop the vectorized implementation replaced. Kept here as the
+    oracle: the fast path has to agree with it on every shape, including the
+    out-of-range ids and the union-across-batch scope."""
+    out = logits.clone()
+    vocab_size = out.shape[-1]
+    tokens = generated_tokens[:, -window:] if generated_tokens.dim() >= 2 else generated_tokens[-window:]
+    for token_id in set(tokens.reshape(-1).tolist()):
+        if 0 <= token_id < vocab_size:
+            if out.dim() == 1:
+                score = out[token_id]
+                out[token_id] = score / penalty if score > 0 else score * penalty
+            else:
+                scores = out[..., token_id]
+                out[..., token_id] = torch.where(scores > 0, scores / penalty, scores * penalty)
+    return out
+
+
+def test_vectorized_penalty_matches_the_reference_loop():
+    torch.manual_seed(7)
+    for shape, tok_shape in (((17,), (5,)), ((1, 17), (1, 5)), ((3, 17), (3, 9))):
+        for penalty in (1.1, 1.3, 2.0):
+            logits = torch.randn(*shape) * 4.0
+            tokens = torch.randint(0, 17, tok_shape)
+            got = apply_repetition_penalty(logits, tokens, penalty)
+            want = _reference_penalty(logits, tokens, penalty)
+            assert torch.equal(got, want), f"{shape} penalty={penalty}"
+
+
+def test_vectorized_penalty_ignores_out_of_range_ids():
+    # Alignment pad rows and sentinel ids land outside the vocab; they must not
+    # penalize a real row, and must not raise.
+    logits = torch.randn(8)
+    tokens = torch.tensor([-1, 3, 99, 8])
+    got = apply_repetition_penalty(logits, tokens, 1.5)
+    want = _reference_penalty(logits, tokens, 1.5)
+    assert torch.equal(got, want)
+
+
+def test_vectorized_penalty_honors_the_window_and_leaves_caller_intact():
+    logits = torch.randn(12)
+    before = logits.clone()
+    tokens = torch.arange(12).repeat(30)  # far longer than the window
+    got = apply_repetition_penalty(logits, tokens, 1.4, window=4)
+    want = _reference_penalty(logits, tokens, 1.4, window=4)
+    assert torch.equal(got, want)
+    assert torch.equal(logits, before)  # never mutates the caller's tensor
+
+
 def _tiny() -> Enigma:
     torch.manual_seed(0)
     return Enigma(
