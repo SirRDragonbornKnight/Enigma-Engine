@@ -44,6 +44,14 @@ def test_size_smaller_than_every_table_raises():
         vocab_file_for_size(100)
 
 
+def test_gap_size_between_tables_raises():
+    """A vocab_size far above a table is not padding -- it means the trained
+    table is missing from the directory. Falling back to the nearest smaller
+    table would decode the missing ids as garbage, silently."""
+    with pytest.raises(ValueError):
+        vocab_file_for_size(8000)
+
+
 def test_default_directory_load_is_still_v1():
     """The bare call must not change behavior for the live lineage."""
     assert get_tokenizer("bpe").vocab_size == 4718

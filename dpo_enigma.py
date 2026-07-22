@@ -36,7 +36,7 @@ import torch.nn.functional as F
 from enigma_engine.core.chat_format import CHAT_FORMAT_NAME, attach_chat_tokens, render_training
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
-from enigma_engine.core.tokenizer import get_tokenizer
+from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
 PAD = 0  # padding id for batching; padded positions are never scored
 
@@ -139,8 +139,6 @@ def main() -> None:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(args.seed)
-    tokenizer = attach_chat_tokens(get_tokenizer("bpe"))
-
     src = Path(args.init)
     if not src.exists():
         raise SystemExit(f"--init {src} not found")
@@ -151,15 +149,16 @@ def main() -> None:
     if meta.get("chat_format") != CHAT_FORMAT_NAME:
         raise SystemExit("DPO expects an INSTRUCT checkpoint (run finetune_enigma.py first)")
 
+    # Tokenizer selected by the CHECKPOINT's vocab (see finetune_enigma):
+    # encoding preference pairs with any other vocab trains on wrong ids.
+    try:
+        _vocab_file = vocab_file_for_size(int(ck["config"]["vocab_size"]))
+    except (ValueError, FileNotFoundError) as exc:
+        raise SystemExit(f"cannot pick a tokenizer for this checkpoint: {exc}")
+    tokenizer = attach_chat_tokens(get_tokenizer("bpe", vocab_path=_vocab_file))
+    print(f"tokenizer: {_vocab_file.name} (model vocab {ck['config']['vocab_size']})", flush=True)
+
     config = ForgeConfig.from_dict(ck["config"])
-    _tok_vocab = getattr(tokenizer, "vocab_size", None)
-    if _tok_vocab is not None and _tok_vocab > config.vocab_size:
-        # See finetune_enigma: a wider tokenizer than the model has rows for
-        # emits ids the embedding cannot represent.
-        raise SystemExit(
-            f"tokenizer vocab {_tok_vocab} exceeds model vocab {config.vocab_size}; "
-            f"this checkpoint was trained against a different vocabulary"
-        )
     policy = Enigma(config)
     missing, unexpected = policy.load_state_dict(ck["model_state_dict"], strict=False)
     real_missing = [k for k in missing if "freqs_cis" not in k and "causal_mask" not in k]

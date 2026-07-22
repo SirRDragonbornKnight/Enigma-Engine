@@ -140,7 +140,7 @@ def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int) 
         "vocab_size": vocab_size,
         "eos_token_id": EOS_ID,
         "tokenizer": "AdvancedBPETokenizer",
-        "file_size_gb": round(len(tokens) * 4 / 1024**3, 2),
+        "file_size_gb": round(len(tokens) * tokens.dtype.itemsize / 1024**3, 2),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "note": "facts continued-pretrain mix (make_facts_pretrain_data.py)",
     }
@@ -172,7 +172,10 @@ def main() -> None:
     # replaying v2 tokens through the v1 vocab would emit a corpus whose ids
     # mean nothing to the model that trains on it.
     src_dtype = np.dtype(src_meta.get("dtype", "uint32"))
-    vocab_file = vocab_file_for_size(vocab_size)
+    try:
+        vocab_file = vocab_file_for_size(vocab_size)
+    except (ValueError, FileNotFoundError) as exc:
+        raise SystemExit(f"cannot pick a tokenizer for this corpus: {exc}")
     print(f"replay: {source_bin.name} | dtype {src_dtype} | vocab {vocab_size} -> {vocab_file.name}", flush=True)
 
     lines = gen_knowledge_pretrain_text()

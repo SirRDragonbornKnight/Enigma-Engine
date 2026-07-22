@@ -437,11 +437,14 @@ def boot(argv: list[str] | None = None) -> None:
     except (FileNotFoundError, ValueError) as exc:
         print(f"  WARN: no vocab matches model vocab {CONFIG.vocab_size} ({exc}); using the default", flush=True)
         tokenizer = get_tokenizer("bpe")
-    if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
-        print(
-            f"  WARN: tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != model vocab {CONFIG.vocab_size}",
-            flush=True,
-        )
+        # Only the fallback can mismatch: the selected path is exact-or-padding
+        # by construction, and padded sizes (table rounded up to 64) are not a
+        # mismatch worth warning about.
+        if getattr(tokenizer, "vocab_size", None) != CONFIG.vocab_size:
+            print(
+                f"  WARN: tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != model vocab {CONFIG.vocab_size}",
+                flush=True,
+            )
     EOS_ID = getattr(tokenizer, "eos_token_id", 2)
     BOS_ID = getattr(tokenizer, "bos_token_id", 1)
 

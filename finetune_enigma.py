@@ -184,9 +184,7 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     from enigma_engine.core.chat_format import CHAT_FORMAT_NAME, attach_chat_tokens
-    from enigma_engine.core.tokenizer import get_tokenizer
-
-    tokenizer = attach_chat_tokens(get_tokenizer("bpe"))
+    from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
     # Resume (an SFT run) or init (from a BASE checkpoint). Same early-load +
     # schedule-lock discipline as pretrain_enigma.
@@ -222,6 +220,17 @@ def main() -> None:
             raise
     if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
         raise SystemExit(f"{src} is not an Enigma checkpoint")
+
+    # The tokenizer is built AFTER the checkpoint so it can be the one this
+    # model was trained against -- encoding the dataset with any other vocab
+    # trains on ids that mean something else (or nothing) to the model.
+    # vocab_file_for_size refuses when no table matches within padding slack.
+    try:
+        _vocab_file = vocab_file_for_size(int(ck["config"]["vocab_size"]))
+    except (ValueError, FileNotFoundError) as exc:
+        raise SystemExit(f"cannot pick a tokenizer for this checkpoint: {exc}")
+    tokenizer = attach_chat_tokens(get_tokenizer("bpe", vocab_path=_vocab_file))
+    print(f"tokenizer: {_vocab_file.name} (model vocab {ck['config']['vocab_size']})", flush=True)
 
     saved_sched = ck.get("schedule") if resuming else None
     if saved_sched:
@@ -278,16 +287,6 @@ def main() -> None:
     from enigma_engine.core.model_presets import ForgeConfig
 
     config = ForgeConfig.from_dict(ck["config"])
-    _tok_vocab = getattr(tokenizer, "vocab_size", None)
-    if _tok_vocab is not None and _tok_vocab > config.vocab_size:
-        # Text encoded with a WIDER vocab than the model has rows for emits ids
-        # the embedding cannot represent. Refuse rather than bake a silently
-        # corrupt model: this checkpoint needs a different vocab file than the
-        # repo directory default.
-        raise SystemExit(
-            f"tokenizer vocab {_tok_vocab} exceeds model vocab {config.vocab_size}; "
-            f"this checkpoint was trained against a different vocabulary"
-        )
     if args.block > config.max_seq_len:
         raise SystemExit(f"--block {args.block} > model max_seq_len {config.max_seq_len}")
     model = Enigma(config)

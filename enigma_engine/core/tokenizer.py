@@ -784,15 +784,19 @@ def vocab_file_for_size(vocab_size: int) -> Path:
             candidates.append((len(table), path))
     if not candidates:
         raise FileNotFoundError(f"no bpe vocab files in {VOCAB_DIR}")
-    exact = [p for size, p in candidates if size == vocab_size]
-    if exact:
-        return exact[0]
-    fits = sorted((size, p) for size, p in candidates if size <= vocab_size)
+    # An exact match is just the largest fit, so one rule covers both.
+    # Non-exact sizes are only legitimate as PADDING: chat tokens plus the
+    # round-up to a multiple of 64 put a checkpoint's vocab_size at most ~2
+    # alignment steps above its table. A larger gap means the table this
+    # checkpoint was trained on is not in the directory -- picking the nearest
+    # smaller one would decode the missing ids as garbage, silently.
+    PAD_SLACK = 128
+    fits = sorted((size, p) for size, p in candidates if size <= vocab_size <= size + PAD_SLACK)
     if fits:
         return fits[-1][1]
     raise ValueError(
-        f"no vocab in {VOCAB_DIR} fits vocab_size {vocab_size} "
-        f"(have {sorted(size for size, _ in candidates)})"
+        f"no vocab in {VOCAB_DIR} matches vocab_size {vocab_size} within the "
+        f"{PAD_SLACK}-row padding slack (have {sorted(size for size, _ in candidates)})"
     )
 
 

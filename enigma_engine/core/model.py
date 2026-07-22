@@ -729,8 +729,19 @@ class Enigma(nn.Module):
         logits = self.forward(input_ids, use_cache=True)
         final_logits = logits  # Track for return_logits option
 
-        # The stop test is this loop's only host sync, and at 182M the loop is
-        # launch-bound, so one sync per token dominates the step. The check
+        # NOTE on return_logits: with the batched stop check below, forwards
+        # can run up to SYNC_EVERY-1 tokens past the stop before the loop
+        # notices, so final_logits may come from a post-stop position (the old
+        # per-token break returned the logits that sampled the stop). No
+        # in-repo caller uses return_logits; restoring the old value would
+        # cost the per-token sync this loop exists to avoid.
+        # The stop test is this loop's only host sync UNDER GREEDY decode
+        # (temperature>0 adds a per-token NaN-guard read in sample_next_token),
+        # and at 182M the loop is launch-bound, so per-token syncs dominate the
+        # step. Note: up to SYNC_EVERY-1 sampler draws can run past the stop
+        # before the boundary check notices, so with a fixed seed the global
+        # RNG stream advances further than the old per-token-break loop did --
+        # back-to-back seeded generates see different draws in the SECOND call. The check
         # accumulates ON DEVICE and is read once per SYNC_EVERY tokens; the
         # sequence is then trimmed at the first stop id, which returns exactly
         # what a per-token break returned. generate_stream cannot do this --
