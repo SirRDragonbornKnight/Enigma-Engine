@@ -409,6 +409,17 @@ class Trainer:
         # the loss curve looks plausible and the captions decode to garbage.
         _tok_vocab = getattr(tokenizer, "vocab_size", None)
         _model_vocab = getattr(getattr(model, "config", None), "vocab_size", None)
+        # int() so a Mock or str surfaces as the curated error, not a raw
+        # TypeError three lines down; 0 is as invalid as a mismatch.
+        try:
+            _tok_vocab = int(_tok_vocab) if _tok_vocab is not None else None
+            _model_vocab = int(_model_vocab) if _model_vocab is not None else None
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"unusable vocab sizes: tokenizer={_tok_vocab!r} model={_model_vocab!r}"
+            ) from None
+        if _tok_vocab == 0 or _model_vocab == 0:
+            raise ValueError("a vocab size of 0 cannot be trained against")
         if _tok_vocab and _model_vocab and _tok_vocab > _model_vocab:
             raise ValueError(
                 f"tokenizer vocab {_tok_vocab} exceeds model vocab {_model_vocab}; "

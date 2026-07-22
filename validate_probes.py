@@ -28,12 +28,14 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from eval_behavior import THRESHOLDS, _grade_identity, _grade_text  # noqa: E402
+from eval_leak_guard import LockedProbeGuard, seal as _seal_texts  # noqa: E402
 from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
 
 CATEGORIES = set(THRESHOLDS)
-TEXT_CATEGORIES = {"identity", "adversarial", "factual", "math", "memory"}
 TOOL_CATEGORIES = {"tool", "restraint"}
 KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool", "note"}
+# The one client tool the eval injects for tool/restraint probes.
+VALID_EXPECT_TOOLS = {None, "get_weather"}
 
 # A deny key only stays a deny key if a CORRECT answer cannot contain it.
 # "just a wrapper" fires on "I am not just a wrapper"; "i am a wrapper" does
@@ -55,13 +57,18 @@ def _norm(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9']+", text.lower()))
 
 
-def _load_training_questions() -> set[str]:
-    """Normalized user turns already in the SFT mix and the dev probe set."""
+def _load_training_questions() -> tuple[set[str], list[str], list[str]]:
+    """(normalized user turns, RAW user turns, sources scanned). The raw list
+    feeds the fuzzy scan; the sources list keeps the scan honest -- a missing
+    mix file must be REPORTED, not silently scanned as empty."""
     seen: set[str] = set()
+    raw: list[str] = []
+    scanned: list[str] = []
     for rel in ("data/sft/mix.jsonl", "data/eval/behavior_probes.jsonl"):
         path = ROOT / rel
         if not path.exists():
             continue
+        scanned.append(rel)
         with open(path, encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -71,14 +78,33 @@ def _load_training_questions() -> set[str]:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("q"):
-                    seen.add(_norm(rec["q"]))
-                for msg in rec.get("messages") or []:
-                    if msg.get("role") == "user" and msg.get("content"):
-                        seen.add(_norm(msg["content"]))
-                if rec.get("prompt"):
-                    seen.add(_norm(rec["prompt"]))
-    return seen
+                for text in (
+                    [rec.get("q")] if rec.get("q") else []
+                ) + [m.get("content") for m in rec.get("messages") or [] if m.get("role") == "user"] + (
+                    [rec.get("prompt")] if rec.get("prompt") else []
+                ):
+                    if text:
+                        seen.add(_norm(text))
+                        raw.append(text)
+    return seen, raw, scanned
+
+
+def _fuzzy_leak_counts(questions: list[str], training_raw: list[str]) -> dict[int, int]:
+    """For each probe index, how many training records the SEAL would delete.
+
+    The seal's enforcement is content-word Jaccard >= 0.6, not exact match
+    (audit 2026-07-22: an exact-only validator scan blessed a pool whose seal
+    would silently delete 252 training records). This runs the REAL guard."""
+    guard = LockedProbeGuard(_seal_texts(questions))
+    per_probe: dict[int, int] = {}
+    single = [LockedProbeGuard(_seal_texts([q])) for q in questions]
+    for text in training_raw:
+        if not guard.leaks(text):
+            continue
+        for idx, g in enumerate(single):
+            if g.leaks(text):
+                per_probe[idx] = per_probe.get(idx, 0) + 1
+    return per_probe
 
 
 def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
@@ -109,7 +135,15 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
 
     counts: dict[str, int] = {}
     seen_questions: dict[str, int] = {}
-    training = set() if skip_leak else _load_training_questions()
+    if skip_leak:
+        training, training_raw, scanned = set(), [], []
+    else:
+        training, training_raw, scanned = _load_training_questions()
+        if "data/sft/mix.jsonl" not in scanned:
+            warns.append(
+                "training-overlap scan ran WITHOUT data/sft/mix.jsonl (missing) -- "
+                "leak results are vacuous; rebuild the mix first"
+            )
 
     for lineno, rec in records:
         cat = rec.get("category")
@@ -133,9 +167,15 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if not question:
             errors.append(f"{where}: no 'q'")
             continue
-        for field in ("q", "teach"):
+        if rec.get("teach") is not None and not isinstance(rec["teach"], list):
+            errors.append(f"{where}: 'teach' must be a list of strings")
+            continue
+        # want/deny are the fields the grader MATCHES on -- a curly quote there
+        # is the deadliest place for one (audit 2026-07-22: the earlier check
+        # covered only q/teach).
+        for field in ("q", "teach", "want_any", "deny_any"):
             value = rec.get(field)
-            blob = " ".join(value) if isinstance(value, list) else (value or "")
+            blob = " ".join(str(v) for v in value) if isinstance(value, list) else (value or "")
             if any(ord(ch) > 127 for ch in blob):
                 bad = sorted({ch for ch in blob if ord(ch) > 127})
                 errors.append(
@@ -149,8 +189,8 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         seen_questions[norm_q] = lineno
         if training and norm_q in training:
             errors.append(
-                f"{where}: this question already appears in training data -- it measures "
-                "memorization, and sealing it deletes the matching training records"
+                f"{where}: this exact question is already in the training/dev data -- it "
+                "measures memorization, and sealing it deletes the matching training records"
             )
 
         if cat in TOOL_CATEGORIES:
@@ -159,17 +199,34 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
                     f"{where}: {cat} probe has no 'expect_tool' -- it silently grades as a "
                     "restraint probe (expects NO tool call)"
                 )
+            elif rec.get("expect_tool") not in VALID_EXPECT_TOOLS:
+                errors.append(
+                    f"{where}: expect_tool {rec.get('expect_tool')!r} is not a tool the eval "
+                    f"offers ({sorted(t for t in VALID_EXPECT_TOOLS if t)}) -- this probe can "
+                    "never pass"
+                )
             if rec.get("want_any") or rec.get("deny_any"):
                 warns.append(f"{where}: {cat} probes grade on the tool call; want/deny are ignored")
             continue
 
         want = rec.get("want_any") or []
         deny = rec.get("deny_any") or []
+        if not isinstance(want, list) or not isinstance(deny, list):
+            errors.append(f"{where}: 'want_any'/'deny_any' must be lists")
+            continue
+        if not all(isinstance(k, str) for k in want + deny):
+            errors.append(f"{where}: every want/deny key must be a string")
+            continue
+        want = [k for k in want]
         if not want:
             errors.append(f"{where}: empty 'want_any' -- this probe passes on ANY output")
             continue
-        if not isinstance(want, list) or not isinstance(deny, list):
-            errors.append(f"{where}: 'want_any'/'deny_any' must be lists")
+        blank = [k for k in want + deny if not k.strip()]
+        if blank:
+            errors.append(
+                f"{where}: empty-string want/deny key -- matches at any word boundary, "
+                "so the probe passes on ANY output"
+            )
             continue
 
         q_words = _words(question)
@@ -184,7 +241,10 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
                 warns.append(
                     f"{where}: deny {key!r} is inside the question -- quoting the question fails her"
                 )
-            elif not any(marker in key.lower() for marker in _AFFIRMING):
+            elif cat != "unknown" and not any(marker in key.lower() for marker in _AFFIRMING):
+                # unknown-category denies are guess-markers ("it was probably")
+                # that DELIBERATELY fire on hedged fabrication; a decline that
+                # happens to contain one is a false-fail in the safe direction.
                 warns.append(
                     f"{where}: deny {key!r} would also fire on a CORRECT denial that repeats the "
                     'phrase; anchor it to an affirmation ("yes, i am ...")'
@@ -195,6 +255,22 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
                 warns.append(f"{where}: passes on the single word \"No.\" -- add a distinctive want")
             if _grade_identity("I'm not sure.", want, deny):
                 warns.append(f"{where}: passes on \"I'm not sure.\" -- evasion should not score")
+            # Single common words as the pass bar are negatable: "small"
+            # passes "7 billion parameters, on the small side" (audit
+            # 2026-07-22 measured 9 false-passes in a 21-probe sample).
+            # Count LITERAL words: the grader matches the whole phrase, so
+            # "this machine" is a two-word bar even though "this" is a
+            # stopword elsewhere.
+            loose = [
+                k for k in want
+                if len(k.split()) == 1 and k.strip().lower() not in ("enigma", "sirrulean")
+                and not any(ch.isdigit() for ch in k)
+            ]
+            if loose and len(loose) == len(want):
+                warns.append(
+                    f"{where}: every want is a single generic word {loose} -- a wrong answer "
+                    "that mentions the word passes; use a distinctive phrase"
+                )
 
         if cat == "math" and not _looks_arithmetic(question):
             warns.append(
@@ -212,8 +288,6 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
                         f"{where}: teach line {line!r} never offers the save tool, so the fact is "
                         'never stored and recall CANNOT pass. Use "My X is Y." or "Remember, ..."'
                     )
-                if _words(rec.get("q") or "") & _words(" ".join(want)):
-                    pass
             for key in want:
                 if _words(key) <= q_words and _words(key):
                     warns.append(f"{where}: want {key!r} is in the question; she can echo it")
@@ -230,6 +304,34 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if len(records) < 60:
             warns.append(f"{len(records)} probes total; 60-90 is the usable range, and you cannot add later")
 
+        # The FUZZY scan: sealing enforces content-word Jaccard >= 0.6, so a
+        # probe that merely RESEMBLES training questions still deletes them
+        # from every future build -- and v5/v8 were trained WITH them, rigging
+        # the comparison. Run the real guard, not an exact-match lookalike.
+        if training_raw:
+            questions = [rec.get("q") or "" for _, rec in records]
+            leak_counts = _fuzzy_leak_counts(questions, training_raw)
+            total_deleted = sum(leak_counts.values())
+            minor = 0
+            for idx, n in sorted(leak_counts.items(), key=lambda kv: -kv[1]):
+                lineno, rec = records[idx]
+                msg = (
+                    f"line {lineno}: sealing this probe deletes {n} training record(s) "
+                    f"(fuzzy match) -- q={rec.get('q', '')[:50]!r}"
+                )
+                if n >= 10:
+                    errors.append(msg + " -- reword it away from trained phrasing")
+                elif n >= 3:
+                    warns.append(msg)
+                else:
+                    minor += 1  # 1-2 record matches: borderline fuzzy hits, aggregate only
+            if total_deleted:
+                print(
+                    f"  fuzzy leak: sealing would delete {total_deleted} training records "
+                    f"({minor} probe(s) with only 1-2 borderline matches, not listed). "
+                    "Record this number in EVAL_REDESIGN at seal time."
+                )
+
     print(f"{path.name}: {len(records)} probes")
     for cat in sorted(counts):
         print(f"  {cat:<12} {counts[cat]:>3}")
@@ -239,7 +341,12 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("path", nargs="?", default=str(ROOT / "data" / "eval" / "locked_probes.jsonl"))
-    ap.add_argument("--skip-leak", action="store_true", help="skip the training-overlap scan (faster)")
+    ap.add_argument(
+        "--skip-leak",
+        action="store_true",
+        help="skip the training-overlap scans (faster, but leaked probes then "
+        "validate CLEAN and the exit code no longer reflects them)",
+    )
     args = ap.parse_args()
 
     path = Path(args.path)

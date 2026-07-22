@@ -106,7 +106,10 @@ def timed_serve_path(model, input_ids, n_tokens, device, repeats):
     its number is a floor for serving rather than a measurement of it."""
     # serve_enigma's ChatReq defaults.
     kw = dict(temperature=0.3, top_k=50, top_p=0.9, min_p=0.05, repetition_penalty=1.1)
-    autocast = torch.autocast("cuda", dtype=torch.bfloat16) if device == "cuda" else contextlib.nullcontext()
+    # Same gate serve uses: bf16 only where supported, else the receipt would
+    # measure a dtype the server never runs.
+    use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
+    autocast = torch.autocast("cuda", dtype=torch.bfloat16) if use_bf16 else contextlib.nullcontext()
     per_call = []
     with torch.no_grad(), autocast:
         list(model.generate_stream(input_ids, max_new_tokens=8, **kw))  # warmup

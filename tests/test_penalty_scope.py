@@ -16,7 +16,13 @@ from enigma_engine.core.model_utils import apply_repetition_penalty
 def _reference_penalty(logits, generated_tokens, penalty, window=128):
     """The per-id loop the vectorized implementation replaced. Kept here as the
     oracle: the fast path has to agree with it on every shape, including the
-    out-of-range ids and the union-across-batch scope."""
+    out-of-range ids and the union-across-batch scope.
+
+    One deliberate divergence from the shipped old code: this oracle uses
+    reshape(-1) where the original used view(-1), because the original CRASHED
+    on batched non-contiguous history (a [3, 200] window slice) -- no caller
+    reaches that shape, and the vectorized version handling it is a strict
+    improvement, not a parity break."""
     out = logits.clone()
     vocab_size = out.shape[-1]
     tokens = generated_tokens[:, -window:] if generated_tokens.dim() >= 2 else generated_tokens[-window:]

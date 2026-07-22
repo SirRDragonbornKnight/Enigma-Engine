@@ -128,6 +128,116 @@ def test_stopword_only_query_retrieves_nothing(tmp_path):
     assert m.search("is it?") == []
 
 
+def test_complementary_facts_about_one_subject_coexist(tmp_path):
+    # The subject alone is not the fact's identity: a name and an age about
+    # the same subject are two facts. Keying supersede on the subject made
+    # "he's 3" destroy the dog's name (audit 2026-07-22) -- the exact shape
+    # the model is trained to store.
+    cases = [
+        ("User's dog is named Rex.", "User's dog is 3 years old."),
+        ("My brother is named Leo.", "My brother is 25 years old."),
+        ("My sister's cat is named Biscuit.", "My sister's cat is orange."),
+        ("User's kids are named Ana and Ben.", "User's kids are 5 and 7."),
+    ]
+    for first, second in cases:
+        m = MemoryStore(tmp_path / str(abs(hash(first)) % 99999))
+        m.remember(first)
+        m.remember(second)
+        assert len(m) == 2, (first, second)
+
+
+def test_same_kind_corrections_still_supersede(tmp_path):
+    # Rename replaces the name, age update replaces the age.
+    m = MemoryStore(tmp_path / "rename")
+    m.remember("User's dog is named Rex.")
+    m.remember("User's dog is named Bruno.")
+    assert [r["text"] for r in m.all()] == ["User's dog is named Bruno."]
+
+    m2 = MemoryStore(tmp_path / "age")
+    m2.remember("User's dog is 3 years old.")
+    m2.remember("User's dog is 4 years old.")
+    assert len(m2) == 1
+    assert "4 years old" in m2.all()[0]["text"]
+
+
+def test_verb_shape_corrections_supersede(tmp_path):
+    # The trained "User VERBs X." storage shapes must keep their correction
+    # path: these superseded before the 0.75 lexical bar orphaned them
+    # (audit 2026-07-22).
+    cases = [
+        ("User lives in Denver.", "User lives in Austin.", "Austin"),
+        ("User works as a teacher.", "User works as a nurse.", "nurse"),
+        ("User drives a blue pickup.", "User drives a red sedan.", "red sedan"),
+        ("User goes by Sam.", "User goes by Samantha.", "Samantha"),
+        ("User is 30 years old.", "User is 31 years old.", "31"),
+    ]
+    for first, second, kept in cases:
+        m = MemoryStore(tmp_path / str(abs(hash(first)) % 99999))
+        m.remember(first)
+        rec = m.remember(second)
+        assert len(m) == 1, (first, second)
+        assert kept in m.all()[0]["text"]
+        assert rec.get("superseded")  # serve returns "updated:" off this
+
+
+def test_call_me_and_goes_by_share_one_fact(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User goes by Sam.")
+    m.remember("Call me Samantha.")
+    assert len(m) == 1
+    assert "Samantha" in m.all()[0]["text"]
+
+
+def test_many_valued_verbs_accumulate_but_correct(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User loves spicy food.")
+    m.remember("User loves hiking.")  # a second loved thing, not a correction
+    assert len(m) == 2
+    m.remember("User loves mild food.")  # shares "food": a correction
+    texts = [r["text"] for r in m.all()]
+    assert "User loves spicy food." not in texts
+    assert "User loves mild food." in texts
+    assert "User loves hiking." in texts
+
+
+def test_allergies_accumulate(tmp_path):
+    # Losing a recorded allergy is worse than carrying two: many-valued.
+    m = MemoryStore(tmp_path)
+    m.remember("User is allergic to peanuts.")
+    m.remember("User is allergic to shellfish.")
+    assert len(m) == 2
+
+
+def test_exact_duplicate_never_deletes_a_neighbor(tmp_path):
+    # The dup check must scan the WHOLE store before any supersede: folded
+    # into one loop it broke on a key match first, deleted that record, and
+    # appended a twin of an existing one (audit 2026-07-22).
+    m = MemoryStore(tmp_path)
+    m.add("User's dog is young.")
+    m.add("User's dog is named Rex.")
+    m.remember("User's dog is named Rex.")
+    texts = sorted(r["text"] for r in m.all())
+    assert texts == ["User's dog is named Rex.", "User's dog is young."]
+
+
+def test_stemmer_does_not_merge_unrelated_words(tmp_path):
+    # care/cared must not answer car queries, notes must not answer "not"
+    # (audit 2026-07-22: the old e-stripper injected both into her context).
+    m = MemoryStore(tmp_path)
+    m.remember("User cared for a sick bird last winter.")
+    m.remember("User does not like mushrooms.")
+    assert m.search("Where did I park my car?") == []
+    assert m.search("Where are my notes?") == []
+
+
+def test_boss_and_will_are_findable(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User's bosses are Jim and Pam.")
+    m.remember("User's brother is named Will.")
+    assert m.search("Who is my boss?")
+    assert m.search("Who is Will?")
+
+
 def test_add_never_reuses_an_id_after_delete(tmp_path):
     # add() must mint max+1, not len+1: after a delete (or a supersede) a
     # len-based id collides with a surviving record, and delete-by-id then

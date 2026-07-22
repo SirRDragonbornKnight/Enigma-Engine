@@ -42,29 +42,39 @@ _STOPWORDS = frozenset({
     "and", "or", "of", "to", "in", "on", "for", "with", "as", "at",
     "s", "user", "users",
     "what", "who", "whom", "whose", "where", "when", "why", "how", "which",
-    "do", "does", "did", "can", "could", "would", "should", "will",
+    # "will" stays OUT of this list: it is a common given name, and a stopped
+    # name is unfindable forever (audit 2026-07-22).
+    "do", "does", "did", "can", "could", "would", "should",
     "tell", "me", "about", "again", "remind", "know", "have", "has", "had",
 })
 
-_VERB_SUFFIXES = ("ing", "ed")
-_PLURAL_SUFFIXES = ("es", "s")
+# The trained storage verbs, folded to their query forms directly. A generic
+# suffix-stripper was tried here and collided real words (cared -> car,
+# note -> not, audit 2026-07-22): a map over the finite verbs the store
+# actually contains cannot.
+_NORMALIZE = {
+    "named": "name", "naming": "name",
+    "called": "call", "calling": "call",
+    "goes": "go", "went": "go",
+}
 
 
 def _stem(token: str) -> str:
-    """Fold inflections so name/named/naming/names share one key."""
+    """Fold plurals and the trained storage verbs so names/named/name meet.
+
+    Plural-only stripping: -es after a sibilant (bosses -> boss), else -s when
+    the word does not end in -ss (names -> name, kids -> kid, boss stays
+    boss). No verb-suffix or trailing-e stripping -- both were measured to
+    merge unrelated words."""
+    mapped = _NORMALIZE.get(token)
+    if mapped:
+        return mapped
     if len(token) <= 3:
         return token
-    for suffix in _VERB_SUFFIXES:
-        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
-            token = token[: -len(suffix)]
-            break
-    else:
-        for suffix in _PLURAL_SUFFIXES:
-            if token.endswith(suffix) and len(token) - len(suffix) >= 3:
-                token = token[: -len(suffix)]
-                break
-    if len(token) > 3 and token.endswith("e"):
-        token = token[:-1]
+    if token.endswith("es") and len(token) >= 5 and (token[-3] in "sxz" or token[-4:-2] in ("ch", "sh")):
+        return token[:-2]
+    if token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
     return token
 
 
@@ -86,27 +96,105 @@ def _content_terms(text: str) -> set[str]:
 
 
 # The stored fact form ("User's dog is named Rex.", "My bicycle is teal.")
-# has an ATTRIBUTE slot and a VALUE slot. Two texts describe the SAME fact
-# only when the attribute matches: "User's brother is named Leo." and
-# "User's sister is named Leo." share most of their words but are two people.
+# has a SUBJECT slot and a VALUE slot. The subject alone is NOT the fact's
+# identity -- "dog is named Rex" and "dog is 3 years old" share the subject
+# and are two different facts (audit 2026-07-22: keying on the subject made
+# them delete each other). The key is subject + the KIND of value: a naming,
+# a measurement, or other -- so a rename replaces a name, an age update
+# replaces an age, and a name and an age about one subject coexist.
 _FACT = re.compile(
     r"^\s*(?:the\s+)?(?:user's|users|user|my)\s+(?P<attr>[^.]{1,60}?)"
     r"\s+(?:is|are|was|were)\s+(?P<val>[^.]+?)\s*\.?\s*$",
     re.IGNORECASE,
 )
 
-# Lexical fallback for texts that are not fact-shaped. Deliberately high:
+# The second trained storage shape: "User VERBs ..." (lives in Denver, works
+# as a teacher, drives a blue pickup, goes by Sam, is allergic to peanuts).
+# Not copula-shaped, so _FACT misses it; without this parse a correction
+# ("lives in Austin") had to clear the lexical bar and coexisted instead of
+# replacing (audit 2026-07-22).
+_VERB_FACT = re.compile(
+    r"^\s*(?:the\s+user|user|i)\s+(?:(?:is|am|are)\s+)?"
+    r"(?P<verb>[a-z]+)(?:\s+(?P<func>in|as|at|by|to|for|on|with|a|an|the)\b)?",
+    re.IGNORECASE,
+)
+
+# Verbs whose fact is single-valued (you live in one place, go by one name):
+# a new value REPLACES the old however different the wording. Everything else
+# (loves, plays, knows...) is many-valued and only supersedes when the values
+# visibly overlap ("loves spicy food" -> "loves mild food"), so "loves spicy
+# food" and "loves hiking" coexist.
+_SINGLE_VALUED_VERBS = frozenset({"live", "work", "drive", "go", "sleep", "wake"})
+
+_NAMING_HEAD = re.compile(r"(?:named|called|known\s+as)\b", re.IGNORECASE)
+_NUMBER_WORDS = re.compile(
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"twenty|thirty|forty|fifty|hundred|thousand)\b",
+    re.IGNORECASE,
+)
+_PROPER_VALUE = re.compile(r"^(?:[A-Z][a-z']+)(?:\s+[A-Z][a-z']+)?\.?$")
+
+# Lexical fallback for texts neither parse recognizes. Deliberately high:
 # a missed supersede leaves two records to rank, a wrong one DESTROYS a fact.
 _SUPERSEDE_MIN = 0.75
 
 
+def _value_kind(val: str) -> str:
+    """A rough kind for a copula fact's value: name / measure / other."""
+    stripped = val.strip()
+    if _NAMING_HEAD.match(stripped) or _PROPER_VALUE.match(stripped):
+        return "name"
+    if re.search(r"\d", stripped) or _NUMBER_WORDS.search(stripped):
+        return "measure"
+    return "other"
+
+
 def _fact_key(text: str) -> frozenset[str] | None:
-    """The attribute a fact is ABOUT, or None when the text isn't fact-shaped."""
-    match = _FACT.match(" ".join(str(text).split()))
-    if not match:
+    """The identity of what a fact ASSERTS, or None when unparseable.
+
+    Copula shape: subject terms + the value's kind. Verb shape: the verb stem
+    + its function word (so "works as ..." and "works the night shift" stay
+    distinct facts), tagged so verb keys never collide with copula keys."""
+    clean = " ".join(str(text).split())
+    # "Call me Sam." asserts the same fact as "User goes by Sam." -- one key,
+    # so either phrasing of the correction replaces either original.
+    if re.match(r"^\s*call\s+(?:me|the\s+user)\s+", clean, re.IGNORECASE):
+        return frozenset({"verb:go", "func:by"})
+    match = _FACT.match(clean)
+    if match:
+        key = _content_terms(match.group("attr"))
+        if key:
+            return frozenset(key | {f"kind:{_value_kind(match.group('val'))}"})
         return None
-    key = _content_terms(match.group("attr"))
-    return frozenset(key) if key else None
+    # "User is 30 years old." / "User is Sam." -- a copula about the user
+    # themself, no possessive subject. Only name/measure values key here;
+    # "User is allergic to peanuts" (kind other) falls through to the verb
+    # parse so the allergy keeps its own relation.
+    self_match = re.match(
+        r"^\s*(?:the\s+user|user|i)\s+(?:is|am|are)\s+(?P<val>[^.]+?)\s*\.?\s*$",
+        clean,
+        re.IGNORECASE,
+    )
+    if self_match:
+        kind = _value_kind(self_match.group("val"))
+        if kind != "other":
+            return frozenset({"self", f"kind:{kind}"})
+    verb_match = _VERB_FACT.match(clean)
+    if verb_match:
+        verb = _stem(verb_match.group("verb").lower())
+        if verb not in _STOP_STEMS:
+            func = (verb_match.group("func") or "").lower()
+            return frozenset({f"verb:{verb}", f"func:{func}"})
+    return None
+
+
+def _verb_fact_supersedes(new_text: str, old_text: str, key: frozenset[str]) -> bool:
+    """Same verb key: replace outright for single-valued verbs, otherwise only
+    when the two values share a content word (a correction, not a new item)."""
+    verb = next((k[5:] for k in key if k.startswith("verb:")), "")
+    if verb in _SINGLE_VALUED_VERBS:
+        return True
+    return bool(_content_terms(new_text) & _content_terms(old_text) - {verb})
 
 
 def _valid_id(value: Any) -> bool:
@@ -214,18 +302,26 @@ class MemoryStore:
         new_terms = _content_terms(text)
         new_key = _fact_key(text)
         with self._lock:
+            # Exact-duplicate scan FIRST, over the whole store. Folded into
+            # the supersede loop it exited on a key match before reaching a
+            # later exact duplicate, deleting one record and minting a twin
+            # (audit 2026-07-22 -- reachable on stores seeded via add()).
+            for rec in self._records:
+                if rec["text"].lower() == text.lower():
+                    return dict(rec)
             superseded = None
             best_score = 0.0
             for rec in self._records:
-                if rec["text"].lower() == text.lower():
-                    return dict(rec)  # exact duplicate: keep the original
                 old_key = _fact_key(rec["text"])
                 if new_key is not None and old_key is not None:
-                    # Both fact-shaped: the attribute alone decides.
-                    if old_key == new_key:
-                        superseded = rec
-                        break
-                    continue
+                    if old_key != new_key:
+                        continue
+                    if any(k.startswith("verb:") for k in new_key) and not _verb_fact_supersedes(
+                        text, rec["text"], new_key
+                    ):
+                        continue
+                    superseded = rec
+                    break
                 old_terms = _content_terms(rec["text"])
                 union = new_terms | old_terms
                 if not union:

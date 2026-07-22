@@ -634,6 +634,64 @@ def _tiny_ckpt(tmp_path):
     return ckpt
 
 
+def test_boot_brings_real_organs_up(monkeypatch, tmp_path):
+    """Positive control for the degrade contract: the broad WARN-and-continue
+    catches would also swallow a future constructor regression (a typo, a
+    signature drift at the call site) and leave every boot silently
+    amnesiac/blind while the whole suite stays green (audit 2026-07-22).
+    This boots with REAL constructors and asserts the organs actually exist."""
+    import os
+
+    from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = ForgeConfig(
+        vocab_size=64, dim=32, n_layers=2, n_heads=2,
+        max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
+    )
+    torch.manual_seed(0)
+    ckpt = tmp_path / "tiny_organs.pth"
+    torch.save({"model_state_dict": Enigma(cfg).state_dict(), "config": cfg.to_dict()}, ckpt)
+
+    enc = VisionEncoder(VISION_PRESETS["tiny"])
+    vdim = VISION_PRESETS["tiny"].dim
+    eyes_ckpt = tmp_path / "tiny_eyes.pt"
+    torch.save(
+        {
+            "vision_encoder_state_dict": enc.state_dict(),
+            "vision_encoder_config": VISION_PRESETS["tiny"].to_dict(),
+            "model_state_dict": {
+                "vision_projection.0.weight": torch.zeros(32, vdim),
+                "vision_projection.0.bias": torch.zeros(32),
+                "vision_projection.2.weight": torch.zeros(32, 32),
+                "vision_projection.2.bias": torch.zeros(32),
+            },
+        },
+        eyes_ckpt,
+    )
+    try:
+        serve.boot(argv=[
+            "--model", str(ckpt), "--max-context", "128",
+            "--memory-dir", str(tmp_path / "mem"),
+            "--eyes", "--eyes-model", str(eyes_ckpt), "--eyes-preset", "tiny",
+        ])
+        assert serve._BOOTED is True
+        assert serve.MEMORY is not None, "real MemoryStore failed to construct"
+        assert serve.MEMORY.remember("User's cat is named Biscuit.")
+        assert serve.EYES is not None, "real Eyes failed to construct"
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
 def test_boot_survives_an_unusable_memory_dir(monkeypatch, tmp_path):
     """A memory dir that cannot be opened -- locked by another process, full,
     unwritable -- must cost her memory, not text serving. MemoryStore mkdirs

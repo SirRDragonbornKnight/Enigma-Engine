@@ -90,6 +90,11 @@ def apply_repetition_penalty(
 
     Returns:
         Modified logits with repetition penalty applied (new tensor, not in-place)
+
+    ``generated_tokens`` must be an int32/int64 tensor on the SAME device as
+    ``logits`` -- the scatter that marks seen ids requires both. Every in-repo
+    caller already satisfies this; the old per-id Python loop tolerated
+    mismatches at the cost of a device sync per token.
     """
     if penalty == 1.0:
         return logits.clone()
