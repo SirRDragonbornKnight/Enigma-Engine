@@ -1638,7 +1638,10 @@ def memory_add(req: MemReq):
     if MEMORY is None:
         raise _organ_off("memory disabled -- start with --memory-dir")
     try:
-        return {"ok": True, "memory": MEMORY.add(req.text, kind=req.kind)}
+        # remember(), not add(): the HTTP door gets the same dedup/supersede/
+        # date semantics as the tool door, so posting a fact twice does not
+        # mint a second record competing for the same retrieval slots.
+        return {"ok": True, "memory": MEMORY.remember(req.text, kind=req.kind)}
     except ValueError as exc:
         # client-input error (empty/whitespace text), not a server crash
         raise HTTPException(status_code=400, detail=str(exc)) from exc

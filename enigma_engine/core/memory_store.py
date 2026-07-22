@@ -26,24 +26,87 @@ from enigma_engine.core.safe_save import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-_WORD = re.compile(r"[a-z0-9']+")
+# The apostrophe SEPARATES words: "dog's" tokenizes to ("dog", "s"), so a
+# query about "my dog's name" reaches a stored "User's dog is named Rex."
+_WORD = re.compile(r"[a-z0-9]+")
 
 # Words that carry no memory identity ("my dog is Rex" vs "my cat is Whiskers"
-# must NOT look similar just because both say "my ... is").
+# must NOT look similar just because both say "my ... is"). "user"/"s" are
+# boilerplate in the stored fact form ("User's X is Y."), and question words
+# carry no identity either -- without them a bare "is that right?" scores
+# against every record containing "is".
 _STOPWORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
     "my", "your", "our", "their", "his", "her", "its",
     "i", "you", "we", "they", "it", "this", "that",
     "and", "or", "of", "to", "in", "on", "for", "with", "as", "at",
+    "s", "user", "users",
+    "what", "who", "whom", "whose", "where", "when", "why", "how", "which",
+    "do", "does", "did", "can", "could", "would", "should", "will",
+    "tell", "me", "about", "again", "remind", "know", "have", "has", "had",
 })
+
+_VERB_SUFFIXES = ("ing", "ed")
+_PLURAL_SUFFIXES = ("es", "s")
+
+
+def _stem(token: str) -> str:
+    """Fold inflections so name/named/naming/names share one key."""
+    if len(token) <= 3:
+        return token
+    for suffix in _VERB_SUFFIXES:
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            token = token[: -len(suffix)]
+            break
+    else:
+        for suffix in _PLURAL_SUFFIXES:
+            if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+                token = token[: -len(suffix)]
+                break
+    if len(token) > 3 and token.endswith("e"):
+        token = token[:-1]
+    return token
 
 
 def _terms(text: str) -> list[str]:
-    return _WORD.findall(text.lower())
+    return [_stem(t) for t in _WORD.findall(text.lower())]
+
+
+# Stopwords are matched AFTER stemming, so the set carries stemmed forms too
+# ("does" stems to "doe", "have" to "hav").
+_STOP_STEMS = frozenset(_stem(w) for w in _STOPWORDS) | _STOPWORDS
+
+
+def _content_term_list(text: str) -> list[str]:
+    return [t for t in _terms(text) if t not in _STOP_STEMS]
 
 
 def _content_terms(text: str) -> set[str]:
-    return {t for t in _terms(text) if t not in _STOPWORDS}
+    return set(_content_term_list(text))
+
+
+# The stored fact form ("User's dog is named Rex.", "My bicycle is teal.")
+# has an ATTRIBUTE slot and a VALUE slot. Two texts describe the SAME fact
+# only when the attribute matches: "User's brother is named Leo." and
+# "User's sister is named Leo." share most of their words but are two people.
+_FACT = re.compile(
+    r"^\s*(?:the\s+)?(?:user's|users|user|my)\s+(?P<attr>[^.]{1,60}?)"
+    r"\s+(?:is|are|was|were)\s+(?P<val>[^.]+?)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+
+# Lexical fallback for texts that are not fact-shaped. Deliberately high:
+# a missed supersede leaves two records to rank, a wrong one DESTROYS a fact.
+_SUPERSEDE_MIN = 0.75
+
+
+def _fact_key(text: str) -> frozenset[str] | None:
+    """The attribute a fact is ABOUT, or None when the text isn't fact-shaped."""
+    match = _FACT.match(" ".join(str(text).split()))
+    if not match:
+        return None
+    key = _content_terms(match.group("attr"))
+    return frozenset(key) if key else None
 
 
 def _valid_id(value: Any) -> bool:
@@ -137,25 +200,41 @@ class MemoryStore:
         not left beside the new one to confuse retrieval. Every record gets a
         date stamp so memories can be audited.
 
-        HONEST LIMIT: this is lexical. A correction that rewords most of the
-        fact ("red hatchback" -> "silver van", overlap 0.33) coexists with the
-        old record instead of replacing it -- resolving that needs semantics,
-        which at 182M means a smarter store, not a smarter model. Single-value
-        corrections (renames, moves, dates) are the common case and do match."""
+        Fact-shaped texts supersede on their ATTRIBUTE, so a changed value
+        ("User's car is a red hatchback." -> "... a silver van.") replaces the
+        old record however much the wording moved, while a shared value across
+        different attributes ("brother"/"sister" both named Leo) does not.
+
+        HONEST LIMIT: texts that are not fact-shaped fall back to lexical
+        overlap at a deliberately high bar, so an unusual restatement coexists
+        with the old record rather than risking the wrong deletion."""
         text = " ".join(str(text).split())
         if not text:
             raise ValueError("empty memory")
         new_terms = _content_terms(text)
+        new_key = _fact_key(text)
         with self._lock:
             superseded = None
+            best_score = 0.0
             for rec in self._records:
                 if rec["text"].lower() == text.lower():
                     return dict(rec)  # exact duplicate: keep the original
+                old_key = _fact_key(rec["text"])
+                if new_key is not None and old_key is not None:
+                    # Both fact-shaped: the attribute alone decides.
+                    if old_key == new_key:
+                        superseded = rec
+                        break
+                    continue
                 old_terms = _content_terms(rec["text"])
                 union = new_terms | old_terms
-                if union and len(new_terms & old_terms) / len(union) >= 0.5:
-                    superseded = rec
-                    break
+                if not union:
+                    continue
+                score = len(new_terms & old_terms) / len(union)
+                # Rank every candidate: the FIRST record over the bar is not
+                # necessarily the closest one.
+                if score >= _SUPERSEDE_MIN and score > best_score:
+                    best_score, superseded = score, rec
             rec = {
                 "id": (max((r["id"] for r in self._records), default=0) + 1),
                 "text": text,
@@ -214,14 +293,20 @@ class MemoryStore:
         """BM25 (k1=1.5, b=0.75). Returns up to k records, best first; records
         sharing no term with the query never match. Reads take the same lock
         as writers: scoring zips _records with per-record term vectors, and a
-        concurrent supersede between the two passes would misalign the pairs."""
-        q_terms = _terms(query)
+        concurrent supersede between the two passes would misalign the pairs.
+
+        Scoring runs on CONTENT terms only. A query whose every word is a
+        stopword ("is that right?") shares nothing identifying with any record
+        and correctly retrieves nothing, rather than ranking on "is"."""
+        q_terms = _content_term_list(query)
         with self._lock:
             if not q_terms or not self._records:
                 return []
-            docs = [_terms(r["text"]) for r in self._records]
+            docs = [_content_term_list(r["text"]) for r in self._records]
             n = len(docs)
-            avg_len = sum(len(d) for d in docs) / n
+            # A record with no content terms contributes length 0; the floor
+            # keeps the length-normalization divisor defined.
+            avg_len = max(1.0, sum(len(d) for d in docs) / n)
             df: dict[str, int] = {}
             for d in docs:
                 for t in set(d):

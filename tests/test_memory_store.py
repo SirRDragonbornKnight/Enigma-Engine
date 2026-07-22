@@ -91,14 +91,41 @@ def test_supersede_persists_across_reopen(tmp_path):
     assert "silver hatchback" in m2.all()[0]["text"]
 
 
-def test_low_overlap_correction_coexists_documented_limit(tmp_path):
-    # The documented lexical limit: rewording MOST of the fact does not
-    # supersede (needs semantics). Locks the behavior so a future fix is
-    # a deliberate change, not an accident.
+def test_reworded_correction_supersedes_on_attribute(tmp_path):
+    # Same attribute ("car"), fully reworded value: one fact, the new one.
     m = MemoryStore(tmp_path)
     m.remember("User's car is a red hatchback.")
     m.remember("User's car is a silver van.")
-    assert len(m) == 2
+    assert len(m) == 1
+    assert "silver van" in m.all()[0]["text"]
+
+
+def test_shared_value_across_attributes_never_deletes(tmp_path):
+    # Two people can share a name; the store must keep both. Lexical overlap
+    # here is 0.60 -- above the old 0.5 bar, which destroyed the first record.
+    m = MemoryStore(tmp_path)
+    m.remember("User's brother is named Leo.")
+    m.remember("User's sister is named Leo.")
+    texts = {r["text"] for r in m.all()}
+    assert texts == {"User's brother is named Leo.", "User's sister is named Leo."}
+
+
+def test_recall_matches_possessive_and_inflected_queries(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+    m.remember("User works as a teacher.")
+    assert "Rex" in m.search("What's my dog's name?")[0]["text"]
+    assert "teacher" in m.search("What do I do for work?")[0]["text"]
+
+
+def test_stopword_only_query_retrieves_nothing(tmp_path):
+    # "is" appears in every stored fact; a query made only of stopwords must
+    # not inject arbitrary personal facts into the prompt.
+    m = MemoryStore(tmp_path)
+    m.remember("User's sister is Nora.")
+    m.remember("User's favorite color is teal.")
+    assert m.search("is that right?") == []
+    assert m.search("is it?") == []
 
 
 def test_add_never_reuses_an_id_after_delete(tmp_path):
