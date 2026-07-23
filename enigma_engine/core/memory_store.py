@@ -129,11 +129,18 @@ _VERB_FACT = re.compile(
 # rank. No lexical "is this a correction?" guess is attempted: it cannot tell
 # "loves reading books" from "loves writing books" (audit r3), and guessing
 # wrong deletes.
+# "go by" is NOT here: it means both "known as" and "travel by" ("I go by bus
+# to work"), so replacing on it deletes a commute when a nickname arrives
+# (audit 2026-07-22 r4). Names correct through the unambiguous "User's name is
+# X" copula path instead. A person can hold two jobs or two cars; keeping
+# work/drive single-valued bets on correction being commoner than accumulation
+# (the trained "updated:" path), and accepts the rare two-of-a-kind as the
+# documented limit -- the alternative loses the moved-city / changed-job
+# correction the training data promises.
 _SINGLE_VALUED_RELATIONS = frozenset({
     ("live", "in"), ("live", "at"),
     ("work", "as"), ("work", "at"),
     ("drive", ""), ("drive", "a"), ("drive", "an"), ("drive", "the"),
-    ("go", "by"),  # nickname only
     ("sleep", ""), ("wake", ""),
 })
 
@@ -157,25 +164,15 @@ def _value_kind(val: str) -> str:
     return "other"
 
 
-def _nickname_value(text: str) -> str | None:
-    """The name in a 'call me X' / 'goes by X' statement, else None."""
-    m = re.match(
-        r"^\s*(?:call\s+(?:me|the\s+user)|(?:i|the\s+user|user)\s+goe?s?\s+by)\s+(?P<name>.+?)\s*\.?\s*$",
-        " ".join(str(text).split()),
-        re.IGNORECASE,
-    )
-    return m.group("name") if m else None
-
-
 def _fact_key(text: str) -> frozenset[str] | None:
     """The identity of what a fact ASSERTS, or None when unparseable.
 
     Copula shape: subject terms + the value's kind (so a name and an age about
     one subject are two facts). Verb shape: the verb stem + its function word.
-    Nicknames get their own key so any phrasing of the nickname supersedes."""
+    A name correction rides the copula path as "User's name is X"; there is no
+    dedicated 'call me'/'goes by' key -- both double as travel/phone and
+    guessing wrong deletes (audit 2026-07-22 r4)."""
     clean = " ".join(str(text).split())
-    if _nickname_value(clean) is not None:
-        return frozenset({"nickname"})
     match = _FACT.match(clean)
     if match:
         key = _content_terms(match.group("attr"))
@@ -207,7 +204,7 @@ def _fact_key(text: str) -> frozenset[str] | None:
 
 def _relation_is_single_valued(key: frozenset[str]) -> bool:
     """True when the key names a relation a person has exactly one of."""
-    if "nickname" in key or "self" in key:
+    if "self" in key:
         return True
     verb = next((k[5:] for k in key if k.startswith("verb:")), None)
     if verb is None:

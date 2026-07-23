@@ -180,7 +180,7 @@ def test_single_valued_relation_corrections_supersede(tmp_path):
         ("User lives in Denver.", "User lives in Austin.", "Austin"),
         ("User works as a teacher.", "User works as a nurse.", "nurse"),
         ("User drives a blue pickup.", "User drives a red sedan.", "red sedan"),
-        ("User goes by Sam.", "User goes by Samantha.", "Samantha"),
+        ("User's name is Sam.", "User's name is Samantha.", "Samantha"),
     ]
     for first, second, kept in cases:
         m = MemoryStore(tmp_path / str(abs(hash(first)) % 99999))
@@ -191,12 +191,13 @@ def test_single_valued_relation_corrections_supersede(tmp_path):
         assert rec.get("superseded")  # serve returns "updated:" off this
 
 
-def test_call_me_and_goes_by_share_one_fact(tmp_path):
-    m = MemoryStore(tmp_path)
-    m.remember("User goes by Sam.")
-    m.remember("Call me Samantha.")
-    assert len(m) == 1
-    assert "Samantha" in m.all()[0]["text"]
+def test_go_by_travel_is_not_a_nickname(tmp_path):
+    # "go by bus" is a commute, not an alias; a later name must not delete it
+    # (audit 2026-07-22 r4). The ambiguous "goes by" phrasings coexist -- the
+    # safe direction -- while "User's name is X" carries the correction.
+    m = _two_store(tmp_path, "I go by bus to work.", "User's name is Sam.")
+    assert len(m) == 2
+    assert len(_two(tmp_path, "User goes by Sam.", "User goes by Sammy.")) == 2
 
 
 def test_open_ended_go_activities_coexist(tmp_path):
