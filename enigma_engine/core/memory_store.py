@@ -36,7 +36,7 @@ _WORD = re.compile(r"[a-z0-9]+")
 # carry no identity either -- without them a bare "is that right?" scores
 # against every record containing "is".
 _STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "a", "an", "the", "is", "am", "are", "was", "were", "be", "been", "being",
     "my", "your", "our", "their", "his", "her", "its",
     "i", "you", "we", "they", "it", "this", "that",
     "and", "or", "of", "to", "in", "on", "for", "with", "as", "at",
@@ -119,20 +119,25 @@ _VERB_FACT = re.compile(
     re.IGNORECASE,
 )
 
-# Verbs whose fact is single-valued (you live in one place, go by one name):
-# a new value REPLACES the old however different the wording. Everything else
-# (loves, plays, knows...) is many-valued and only supersedes when the values
-# visibly overlap ("loves spicy food" -> "loves mild food"), so "loves spicy
-# food" and "loves hiking" coexist.
-_SINGLE_VALUED_VERBS = frozenset({"live", "work", "drive", "go", "sleep", "wake"})
+# Single-valued RELATIONS -- a person has exactly one of each, so a new value
+# replaces the old however the wording moved. Keyed by (verb stem, function
+# word), NOT by verb alone: "go by" is a nickname (single-valued) while "go"
+# and "go to" are open-ended activities that accumulate (audit 2026-07-22 r3:
+# a verb-only set collapsed "goes running"/"goes swimming" into one). Every
+# relation NOT listed here is many-valued and COEXISTS -- the safe direction,
+# since a wrong supersede destroys a fact and a missed one only leaves two to
+# rank. No lexical "is this a correction?" guess is attempted: it cannot tell
+# "loves reading books" from "loves writing books" (audit r3), and guessing
+# wrong deletes.
+_SINGLE_VALUED_RELATIONS = frozenset({
+    ("live", "in"), ("live", "at"),
+    ("work", "as"), ("work", "at"),
+    ("drive", ""), ("drive", "a"), ("drive", "an"), ("drive", "the"),
+    ("go", "by"),  # nickname only
+    ("sleep", ""), ("wake", ""),
+})
 
-_NAMING_HEAD = re.compile(r"(?:named|called|known\s+as)\b", re.IGNORECASE)
-_NUMBER_WORDS = re.compile(
-    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-    r"twenty|thirty|forty|fifty|hundred|thousand)\b",
-    re.IGNORECASE,
-)
-_PROPER_VALUE = re.compile(r"^(?:[A-Z][a-z']+)(?:\s+[A-Z][a-z']+)?\.?$")
+_NAMING_HEAD = re.compile(r"^(?:named|called|known\s+as)\b", re.IGNORECASE)
 
 # Lexical fallback for texts neither parse recognizes. Deliberately high:
 # a missed supersede leaves two records to rank, a wrong one DESTROYS a fact.
@@ -140,61 +145,75 @@ _SUPERSEDE_MIN = 0.75
 
 
 def _value_kind(val: str) -> str:
-    """A rough kind for a copula fact's value: name / measure / other."""
+    """A copula value's kind: name (an explicit naming head) / measure (a
+    number) / other. Capitalization is NOT a signal -- keying "Red" as a name
+    and "teal" as other made a colour correction coexist as a contradiction
+    (audit 2026-07-22 r3)."""
     stripped = val.strip()
-    if _NAMING_HEAD.match(stripped) or _PROPER_VALUE.match(stripped):
+    if _NAMING_HEAD.match(stripped):
         return "name"
-    if re.search(r"\d", stripped) or _NUMBER_WORDS.search(stripped):
+    if re.search(r"\d", stripped):
         return "measure"
     return "other"
+
+
+def _nickname_value(text: str) -> str | None:
+    """The name in a 'call me X' / 'goes by X' statement, else None."""
+    m = re.match(
+        r"^\s*(?:call\s+(?:me|the\s+user)|(?:i|the\s+user|user)\s+goe?s?\s+by)\s+(?P<name>.+?)\s*\.?\s*$",
+        " ".join(str(text).split()),
+        re.IGNORECASE,
+    )
+    return m.group("name") if m else None
 
 
 def _fact_key(text: str) -> frozenset[str] | None:
     """The identity of what a fact ASSERTS, or None when unparseable.
 
-    Copula shape: subject terms + the value's kind. Verb shape: the verb stem
-    + its function word (so "works as ..." and "works the night shift" stay
-    distinct facts), tagged so verb keys never collide with copula keys."""
+    Copula shape: subject terms + the value's kind (so a name and an age about
+    one subject are two facts). Verb shape: the verb stem + its function word.
+    Nicknames get their own key so any phrasing of the nickname supersedes."""
     clean = " ".join(str(text).split())
-    # "Call me Sam." asserts the same fact as "User goes by Sam." -- one key,
-    # so either phrasing of the correction replaces either original.
-    if re.match(r"^\s*call\s+(?:me|the\s+user)\s+", clean, re.IGNORECASE):
-        return frozenset({"verb:go", "func:by"})
+    if _nickname_value(clean) is not None:
+        return frozenset({"nickname"})
     match = _FACT.match(clean)
     if match:
         key = _content_terms(match.group("attr"))
         if key:
             return frozenset(key | {f"kind:{_value_kind(match.group('val'))}"})
         return None
-    # "User is 30 years old." / "User is Sam." -- a copula about the user
-    # themself, no possessive subject. Only name/measure values key here;
-    # "User is allergic to peanuts" (kind other) falls through to the verb
-    # parse so the allergy keeps its own relation.
+    # "User is Sam." -- a self copula with a NAME value is an identity fact;
+    # measures ("User is 30 years old") are left to the verb parse, where age
+    # and height land on different keys and coexist rather than one coarse
+    # "measure" kind collapsing them (audit 2026-07-22 r3).
     self_match = re.match(
         r"^\s*(?:the\s+user|user|i)\s+(?:is|am|are)\s+(?P<val>[^.]+?)\s*\.?\s*$",
         clean,
         re.IGNORECASE,
     )
-    if self_match:
-        kind = _value_kind(self_match.group("val"))
-        if kind != "other":
-            return frozenset({"self", f"kind:{kind}"})
+    if self_match and _value_kind(self_match.group("val")) == "name":
+        return frozenset({"self", "kind:name"})
     verb_match = _VERB_FACT.match(clean)
     if verb_match:
         verb = _stem(verb_match.group("verb").lower())
-        if verb not in _STOP_STEMS:
+        # A numeric "verb" means the copula value led with a number ("is 30
+        # years old") -- not a relation. Leave it to the lexical fallback,
+        # where different measures about the user coexist.
+        if verb not in _STOP_STEMS and not verb.isdigit():
             func = (verb_match.group("func") or "").lower()
             return frozenset({f"verb:{verb}", f"func:{func}"})
     return None
 
 
-def _verb_fact_supersedes(new_text: str, old_text: str, key: frozenset[str]) -> bool:
-    """Same verb key: replace outright for single-valued verbs, otherwise only
-    when the two values share a content word (a correction, not a new item)."""
-    verb = next((k[5:] for k in key if k.startswith("verb:")), "")
-    if verb in _SINGLE_VALUED_VERBS:
+def _relation_is_single_valued(key: frozenset[str]) -> bool:
+    """True when the key names a relation a person has exactly one of."""
+    if "nickname" in key or "self" in key:
         return True
-    return bool(_content_terms(new_text) & _content_terms(old_text) - {verb})
+    verb = next((k[5:] for k in key if k.startswith("verb:")), None)
+    if verb is None:
+        return True  # a copula subject+kind key IS single-valued by construction
+    func = next((k[5:] for k in key if k.startswith("func:")), "")
+    return (verb, func) in _SINGLE_VALUED_RELATIONS
 
 
 def _valid_id(value: Any) -> bool:
@@ -314,14 +333,14 @@ class MemoryStore:
             for rec in self._records:
                 old_key = _fact_key(rec["text"])
                 if new_key is not None and old_key is not None:
-                    if old_key != new_key:
-                        continue
-                    if any(k.startswith("verb:") for k in new_key) and not _verb_fact_supersedes(
-                        text, rec["text"], new_key
-                    ):
-                        continue
-                    superseded = rec
-                    break
+                    # Same relation key: replace only when that relation is
+                    # single-valued. Many-valued relations (loves, is allergic
+                    # to, goes running) coexist -- deleting one to keep another
+                    # is the unrecoverable error.
+                    if old_key == new_key and _relation_is_single_valued(new_key):
+                        superseded = rec
+                        break
+                    continue
                 old_terms = _content_terms(rec["text"])
                 union = new_terms | old_terms
                 if not union:

@@ -89,22 +89,30 @@ def _load_training_questions() -> tuple[set[str], list[str], list[str]]:
     return seen, raw, scanned
 
 
-def _fuzzy_leak_counts(questions: list[str], training_raw: list[str]) -> dict[int, int]:
-    """For each probe index, how many training records the SEAL would delete.
+def _fuzzy_leak_counts(questions: list[str], training_raw: list[str]) -> tuple[dict[int, int], int]:
+    """(per-probe count of DISTINCT training questions each probe would delete,
+    total DISTINCT records deleted across all probes).
 
-    The seal's enforcement is content-word Jaccard >= 0.6, not exact match
-    (audit 2026-07-22: an exact-only validator scan blessed a pool whose seal
-    would silently delete 252 training records). This runs the REAL guard."""
+    The seal enforces content-word Jaccard >= 0.6, not exact match (audit
+    2026-07-22: an exact-only validator scan blessed a pool whose seal would
+    delete 252 training records). Counting DISTINCT normalized questions, not
+    raw records: a probe endangering one question repeated 25x is not as
+    dangerous as one endangering 25 distinct questions, and the hard-error
+    keys on that distinction (audit r3). The total is a set union, so a record
+    two probes both match is not double-counted (audit r3)."""
     guard = LockedProbeGuard(_seal_texts(questions))
-    per_probe: dict[int, int] = {}
     single = [LockedProbeGuard(_seal_texts([q])) for q in questions]
+    per_probe: dict[int, set[str]] = {}
+    deleted: set[str] = set()
     for text in training_raw:
         if not guard.leaks(text):
             continue
+        norm = _norm(text)
+        deleted.add(norm)
         for idx, g in enumerate(single):
             if g.leaks(text):
-                per_probe[idx] = per_probe.get(idx, 0) + 1
-    return per_probe
+                per_probe.setdefault(idx, set()).add(norm)
+    return {idx: len(qs) for idx, qs in per_probe.items()}, len(deleted)
 
 
 def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
@@ -167,7 +175,9 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if not question:
             errors.append(f"{where}: no 'q'")
             continue
-        if rec.get("teach") is not None and not isinstance(rec["teach"], list):
+        if rec.get("teach") is not None and (
+            not isinstance(rec["teach"], list) or not all(isinstance(t, str) for t in rec["teach"])
+        ):
             errors.append(f"{where}: 'teach' must be a list of strings")
             continue
         # want/deny are the fields the grader MATCHES on -- a curly quote there
@@ -310,25 +320,24 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         # the comparison. Run the real guard, not an exact-match lookalike.
         if training_raw:
             questions = [rec.get("q") or "" for _, rec in records]
-            leak_counts = _fuzzy_leak_counts(questions, training_raw)
-            total_deleted = sum(leak_counts.values())
+            leak_counts, total_deleted = _fuzzy_leak_counts(questions, training_raw)
             minor = 0
             for idx, n in sorted(leak_counts.items(), key=lambda kv: -kv[1]):
                 lineno, rec = records[idx]
                 msg = (
-                    f"line {lineno}: sealing this probe deletes {n} training record(s) "
-                    f"(fuzzy match) -- q={rec.get('q', '')[:50]!r}"
+                    f"line {lineno}: sealing this probe deletes {n} DISTINCT training "
+                    f"question(s) (fuzzy match) -- q={rec.get('q', '')[:50]!r}"
                 )
-                if n >= 10:
-                    errors.append(msg + " -- reword it away from trained phrasing")
-                elif n >= 3:
+                if n >= 8:
+                    errors.append(msg + " -- too close to trained phrasing; reword it")
+                elif n >= 2:
                     warns.append(msg)
                 else:
-                    minor += 1  # 1-2 record matches: borderline fuzzy hits, aggregate only
+                    minor += 1  # a single endangered question: borderline, aggregate only
             if total_deleted:
                 print(
-                    f"  fuzzy leak: sealing would delete {total_deleted} training records "
-                    f"({minor} probe(s) with only 1-2 borderline matches, not listed). "
+                    f"  fuzzy leak: sealing would delete {total_deleted} distinct training "
+                    f"questions ({minor} probe(s) endangering only one, not listed). "
                     "Record this number in EVAL_REDESIGN at seal time."
                 )
 

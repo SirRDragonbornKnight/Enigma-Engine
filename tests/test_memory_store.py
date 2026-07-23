@@ -12,6 +12,18 @@ def tok():
     return get_tokenizer("bpe")
 
 
+def _two_store(tmp_path, first, second):
+    """A fresh store with two facts remembered in order (unique dir per pair)."""
+    m = MemoryStore(tmp_path / str(abs(hash((first, second))) % 999983))
+    m.remember(first)
+    m.remember(second)
+    return m
+
+
+def _two(tmp_path, first, second):
+    return _two_store(tmp_path, first, second).all()
+
+
 def test_add_search_relevance(tmp_path):
     m = MemoryStore(tmp_path)
     m.add("The user's cat is named Miso and sleeps on the GPU box.")
@@ -160,16 +172,15 @@ def test_same_kind_corrections_still_supersede(tmp_path):
     assert "4 years old" in m2.all()[0]["text"]
 
 
-def test_verb_shape_corrections_supersede(tmp_path):
-    # The trained "User VERBs X." storage shapes must keep their correction
-    # path: these superseded before the 0.75 lexical bar orphaned them
-    # (audit 2026-07-22).
+def test_single_valued_relation_corrections_supersede(tmp_path):
+    # The trained "User VERBs X." shapes with a single-valued relation keep
+    # their correction path: these superseded before the 0.75 lexical bar
+    # orphaned them (audit 2026-07-22).
     cases = [
         ("User lives in Denver.", "User lives in Austin.", "Austin"),
         ("User works as a teacher.", "User works as a nurse.", "nurse"),
         ("User drives a blue pickup.", "User drives a red sedan.", "red sedan"),
         ("User goes by Sam.", "User goes by Samantha.", "Samantha"),
-        ("User is 30 years old.", "User is 31 years old.", "31"),
     ]
     for first, second, kept in cases:
         m = MemoryStore(tmp_path / str(abs(hash(first)) % 99999))
@@ -188,24 +199,43 @@ def test_call_me_and_goes_by_share_one_fact(tmp_path):
     assert "Samantha" in m.all()[0]["text"]
 
 
-def test_many_valued_verbs_accumulate_but_correct(tmp_path):
-    m = MemoryStore(tmp_path)
-    m.remember("User loves spicy food.")
-    m.remember("User loves hiking.")  # a second loved thing, not a correction
-    assert len(m) == 2
-    m.remember("User loves mild food.")  # shares "food": a correction
-    texts = [r["text"] for r in m.all()]
-    assert "User loves spicy food." not in texts
-    assert "User loves mild food." in texts
-    assert "User loves hiking." in texts
+def test_open_ended_go_activities_coexist(tmp_path):
+    # "go by" is a nickname (single-valued); "go running"/"go to church" are
+    # open-ended activities that must accumulate. A verb-only single-valued
+    # set collapsed them (audit 2026-07-22 r3).
+    assert len(_two(tmp_path, "User goes running every morning.", "User goes swimming on weekends.")) == 2
+    assert len(_two(tmp_path, "User goes to church on Sundays.", "User goes to the gym on Mondays.")) == 2
 
 
-def test_allergies_accumulate(tmp_path):
-    # Losing a recorded allergy is worse than carrying two: many-valued.
-    m = MemoryStore(tmp_path)
-    m.remember("User is allergic to peanuts.")
-    m.remember("User is allergic to shellfish.")
-    assert len(m) == 2
+def test_many_valued_facts_never_delete_each_other(tmp_path):
+    # Many-valued relations coexist unconditionally -- no lexical "is this a
+    # correction?" guess, which cannot tell "reading books" from "writing
+    # books" and deletes when it guesses wrong (audit 2026-07-22 r3). Losing a
+    # recorded allergy or fear is the unrecoverable error.
+    pairs = [
+        ("User is allergic to peanuts.", "User is allergic to shellfish."),
+        ("I am allergic to peanuts.", "I am allergic to shellfish."),  # first-person
+        ("I am afraid of spiders.", "I am afraid of heights."),
+        ("User loves reading books.", "User loves writing books."),
+        ("User loves spicy food.", "User loves mild food."),
+        ("I have three cats.", "I have two dogs."),
+    ]
+    for a, b in pairs:
+        assert len(_two(tmp_path, a, b)) == 2, (a, b)
+
+
+def test_value_capitalization_does_not_block_a_correction(tmp_path):
+    # A capitalized value must not read as a different KIND than a lowercase
+    # one, or a colour correction coexists as a contradiction (audit r3).
+    m = _two_store(tmp_path, "User's favorite color is Red.", "User's favorite color is teal.")
+    assert len(m) == 1
+    assert "teal" in m.all()[0]["text"]
+
+
+def test_distinct_self_measures_coexist(tmp_path):
+    # Age and height are different facts; a single coarse "measure" kind
+    # collapsed them (audit 2026-07-22 r3).
+    assert len(_two(tmp_path, "User is 30 years old.", "User is 6 feet tall.")) == 2
 
 
 def test_exact_duplicate_never_deletes_a_neighbor(tmp_path):
