@@ -239,6 +239,26 @@ def test_distinct_self_measures_coexist(tmp_path):
     assert len(_two(tmp_path, "User is 30 years old.", "User is 6 feet tall.")) == 2
 
 
+def test_convergence_battery(tmp_path):
+    # Cross-subject and many-valued facts coexist; same-attribute corrections
+    # replace. The round-5 convergence set (2026-07-22) -- silence across all
+    # four rounds' fixes at once.
+    coexist = [
+        ("User's name is Sam.", "User's dog is named Rex."),  # different subjects
+        ("User plays guitar.", "User plays piano."),          # many-valued verb
+        ("I have three cats.", "I have two dogs."),
+        ("User goes running.", "User goes swimming."),
+    ]
+    for a, b in coexist:
+        assert len(_two(tmp_path, a, b)) == 2, (a, b)
+    supersede = [
+        ("My mood is happy.", "My mood is sad."),             # same attr, kind other
+        ("User lives in Denver.", "User lives in Austin."),
+    ]
+    for a, b in supersede:
+        assert len(_two(tmp_path, a, b)) == 1, (a, b)
+
+
 def test_exact_duplicate_never_deletes_a_neighbor(tmp_path):
     # The dup check must scan the WHOLE store before any supersede: folded
     # into one loop it broke on a key match first, deleted that record, and
