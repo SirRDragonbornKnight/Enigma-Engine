@@ -226,6 +226,28 @@ def test_no_transcript_flag_writes_nothing(tmp_path, monkeypatch):
     assert list(tmp_path.rglob("*.jsonl")) == [probes]
 
 
+def test_ungated_category_reports_informational_and_never_gates(tmp_path, monkeypatch, capsys):
+    """A category missing from THRESHOLDS used to gate at >= 0% and print
+    PASS -- a typo'd category name was invisible green. It must be labeled
+    informational and must not decide the run's result either way."""
+    p = tmp_path / "probes.jsonl"
+    # The ungated category FAILS its probe; the run must still PASS overall.
+    p.write_text(
+        json.dumps({"category": "factual", "q": "Largest planet?", "want_any": ["jupiter"], "deny_any": []})
+        + "\n"
+        + json.dumps({"category": "reasoning", "q": "Can a bloop be a nork?", "want_any": ["zzz-never"], "deny_any": []})
+        + "\n",
+        encoding="utf-8",
+    )
+    _fake_server(monkeypatch, LONG_ANSWER)
+
+    rc = eval_behavior.run(URL, TEMP, MAXTOK, p, None)
+
+    out = capsys.readouterr().out
+    assert "no threshold defined" in out
+    assert rc == 0, "an ungated category's failure leaked into the gate"
+
+
 def test_main_wires_the_transcript_flag(monkeypatch):
     """run() being correct is worthless if the CLI never passes the flag."""
     import inspect

@@ -134,11 +134,25 @@ REMAINING (needs a human, by design):
   blindness was WAIVED by user ruling 2026-07-23, so score honesty rests on
   keeping SFT/facts authoring away from these strings — which the guard now
   enforces mechanically).
-- Validator at seal: **0 errors, 4 warnings, "Safe to seal"**. The warnings
-  quantify the training cost: sealing deletes 10 distinct training questions
-  (fuzzy match) across 4 probes (two math-chain probes, one greeting, one
-  17x23) — those records drop at the NEXT SFT build; record the exact drop
-  counts from that build's console when it runs.
+- Validator at seal: **0 errors, 4 warnings, "Safe to seal"**. NOTE: the
+  warning counts are a SNAPSHOT of the training data as it stood at seal
+  time — the fuzzy scan keys off `data/sft/mix.jsonl`, so re-running the
+  validator after any rebuild reports different numbers (post-build rerun:
+  2 warnings / 5 distinct, because the leaky records are now GONE). The
+  durable receipt is the build below, not the pre-build warning count.
+- **First build under the ACTIVE guard (2026-07-24, the drop receipt):**
+  guard ACTIVE with 108 sealed probes; **10 general records dropped as
+  eval-probe leaks** (matching the seal-time prediction), **85 kept but
+  flagged near a locked probe** (`data/sft/locked_near_misses.jsonl`,
+  regenerated for review), plus the dev exact-match holdouts (10 tool,
+  14 identity). These counts are build-state receipts: re-record them at
+  the v2 regen.
+- KNOWN GRADER RESIDUAL (unknown category, inflationary direction): a
+  decline-then-fabricate answer ("I don't know, but it's blue.") PASSES —
+  want_any hits "don't know" and no deny marker fires. The other residuals
+  in this file are deflationary; this one can inflate the unknown score,
+  and it is exactly the case the optional second-grader agreement pass
+  would catch. Weigh that option if unknown scores look suspiciously good.
 - Sealed strings: **108** (96 questions + 12 memory teach lines),
   jaccard >= 0.6, manifest carries hashes only.
 - Receipts: locked_probes.jsonl sha256 `F22D9389…5B0EA62E` (13,634 bytes),

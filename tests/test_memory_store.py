@@ -103,6 +103,27 @@ def test_supersede_persists_across_reopen(tmp_path):
     assert "4 years old" in m2.all()[0]["text"]
 
 
+def test_tied_retrieval_ranks_the_newest_value_first(tmp_path):
+    # Coexisting plain values share a term vector, so BM25 ties. The newer
+    # fact must surface first or the coexist default hands the model the
+    # STALE value as the top hit -- "outranked, not erased" has to be true.
+    m = MemoryStore(tmp_path)
+    m.remember("My mood is happy.")
+    m.remember("My mood is sad.")
+    hits = m.search("what is my mood", k=2)
+    assert len(hits) == 2
+    assert "sad" in hits[0]["text"], "the stale value outranked the correction"
+
+
+def test_word_number_corrections_stack_by_design(tmp_path):
+    # The documented asymmetry of the coexist ruling: digits classify as a
+    # measure and REPLACE ("age is 30" -> "31"), spelled-out numbers classify
+    # as plain values and COEXIST ("age is thirty" -> "thirty-one"). Pinned so
+    # the surface-form dependence is a stated limit, not a surprise.
+    m = _two_store(tmp_path, "My age is thirty.", "My age is thirty-one.")
+    assert len(m) == 2
+
+
 def test_plain_values_about_one_subject_coexist(tmp_path):
     # Same attribute ("car"), two plain values: TWO facts. The shared coarse
     # kind is not proof of a correction -- "a red hatchback" and "a silver

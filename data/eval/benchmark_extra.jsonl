@@ -209,7 +209,7 @@
 {"category": "factual", "q": "Who painted the Mona Lisa?", "want_any": ["leonardo da vinci"], "deny_any": []}
 {"category": "factual", "q": "Which element has atomic number 1?", "want_any": ["hydrogen"], "deny_any": []}
 {"category": "memory", "teach": ["Remember that my project codename is Orion-1."], "q": "What is my project codename?", "want_any": ["orion-1"], "deny_any": []}
-{"category": "context", "teach": ["Remember that the access code is CX-1001."], "q": "What access code did I tell you earlier?", "want_any": ["cx-1001"], "deny_any": []}
+{"category": "memory", "teach": ["Remember that the access code is CX-1001."], "q": "What access code did I tell you earlier?", "want_any": ["cx-1001"], "deny_any": []}
 {"category": "tool", "q": "Check the current weather in Boston.", "expect_tool": "get_weather"}
 {"category": "tool", "q": "Check the current weather in Tokyo.", "expect_tool": "get_weather"}
 {"category": "tool", "q": "Check the current weather in Seattle.", "expect_tool": "get_weather"}

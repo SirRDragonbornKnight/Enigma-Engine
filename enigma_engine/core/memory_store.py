@@ -447,7 +447,12 @@ class MemoryStore:
                     score += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(d) / avg_len))
                 if score > 0:
                     scored.append((score, rec))
-        scored.sort(key=lambda s: -s[0])
+        # Ties break toward the NEWEST record (ids are monotonic). Coexisting
+        # plain values ("mood is happy" then "mood is sad") produce identical
+        # term vectors, and a stable sort on score alone surfaced the STALE
+        # one first -- the coexist default is only honest if the current value
+        # outranks the superseded-in-spirit one.
+        scored.sort(key=lambda s: (-s[0], -s[1]["id"]))
         return [rec for _, rec in scored[:k]]
 
     def render_context(self, query: str, tokenizer, max_ids: int = 128, k: int = 3) -> str:

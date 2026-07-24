@@ -530,9 +530,11 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         overall_hits += hits
         overall_n += n
         rate = hits / n
-        thr = THRESHOLDS.get(cat, 0.0)
-        if thr is None:  # informational: reported, does not gate
-            print(f"  {cat:12} {hits}/{n} = {rate:5.0%}  (informational, deferred wall)")
+        # A category with no threshold must SAY so, not gate at >= 0% and
+        # print PASS -- a typo'd category name was invisible green before.
+        thr = THRESHOLDS.get(cat)
+        if thr is None:  # informational: reported, never gates
+            print(f"  {cat:12} {hits}/{n} = {rate:5.0%}  (informational -- no threshold defined, does not gate)")
             continue
         passed = rate >= thr
         all_pass &= passed

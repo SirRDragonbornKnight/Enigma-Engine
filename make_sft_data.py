@@ -1315,7 +1315,7 @@ def main(argv: "list[str] | None" = None) -> None:
         f"{len(knowledge)} knowledge x{KNOWLEDGE_REPEAT}; "
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
-        f"{n_lowq} dropped as low-quality (HTML/URLs/encoding/loops); "
+        f"{n_lowq} dropped as low-quality (HTML/encoding/loops); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
         f"{n_locked_near} kept but flagged near a locked probe"
         f"{' (see locked_near_misses.jsonl)' if n_locked_near else ''}; "
