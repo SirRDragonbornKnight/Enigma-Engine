@@ -17,6 +17,22 @@ def tok():
     return attach_chat_tokens(get_tokenizer("bpe"))
 
 
+def test_quality_gate_keeps_urls_and_drops_junk():
+    """A cited link is supervision, not junk -- the old gate dropped every
+    record whose ANSWER contained a URL, so she could never learn to cite a
+    source. The real junk classes (raw HTML, mojibake, source loops) stay."""
+    from make_sft_data import _is_low_quality
+
+    def rec(answer):
+        return {"messages": [{"role": "user", "content": "q"},
+                             {"role": "assistant", "content": answer}]}
+
+    assert not _is_low_quality(rec("The paper is at https://arxiv.org/abs/2404.05405 if you want the details."))
+    assert _is_low_quality(rec('See <div class="x">this</div>'))          # raw HTML
+    assert _is_low_quality(rec("it broke � here"))                   # mojibake
+    assert _is_low_quality(rec("no no no no no no way"))                  # source loop
+
+
 def _nano4718():
     from enigma_engine.core.model import Enigma
     from enigma_engine.core.model_presets import MODEL_PRESETS

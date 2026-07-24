@@ -1100,10 +1100,13 @@ def _is_ai_boilerplate(rec: dict) -> bool:
 # source-data loops. She learns to TALK from these records. Junk classes
 # ONLY -- profanity is NOT filtered (user ruling 2026-07-15: she may use
 # any type of language; the enemy is incoherence, not propriety).
+# A URL in an answer is NOT junk: dropping every record whose completion
+# cited a link removed all URL supervision, so she could never cite a
+# source at all. The fabrication risk (a small model inventing plausible
+# links) is a decode-time and grounding problem, not a data-hygiene class.
 _LOW_QUALITY = re.compile(
     "|".join(
         [
-            r"https?://",  # she cannot browse; trained URLs decode as made-up links
             r"</?(?:div|span|p|a|br|td|tr|table|html|body|script|img)\b",  # raw HTML
             r"�",  # encoding damage
             r"\b(\w+)(?:\s+\1\b){4,}",  # same word five-plus times in a row: source loops
