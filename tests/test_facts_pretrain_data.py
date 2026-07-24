@@ -1,14 +1,22 @@
-"""Facts continued-pretrain corpus (make_facts_pretrain_data.interleave): the
-pure-replay tail is the window pretrain uses as [val], so it must contain ZERO
-fact tokens or [val] stops measuring general-domain retention (final audit
-2026-07-16 M3). A fact doc used to be inserted just under mixed_end and spill
-past the fence."""
+"""Facts continued-pretrain corpus (make_facts_pretrain_data): the pure-replay
+tail is the window pretrain uses as [val], so it must contain ZERO fact tokens
+or [val] stops measuring general-domain retention (final audit 2026-07-16 M3).
+A fact doc used to be inserted just under mixed_end and spill past the fence.
+
+The locked-probe screen is the other honesty fence: this stream INSTALLS
+knowledge, so an unscreened fact line can teach a locked probe's answer
+directly into the weights and turn the gate into a memorization test."""
 
 from __future__ import annotations
 
-import numpy as np
+import json
 
-from make_facts_pretrain_data import interleave
+import numpy as np
+import pytest
+
+import make_facts_pretrain_data
+from eval_leak_guard import LockedProbeGuard, seal
+from make_facts_pretrain_data import interleave, screen_locked_probes
 
 REPLAY_TOK = 500  # distinct replay token; fact tokens are small ( < 10 )
 
@@ -36,3 +44,111 @@ def test_oversized_fact_doc_never_crosses_the_fence():
                      val_reserve=val_reserve, chunk=1024, seed=3)
     tail = out[target - val_reserve:]
     assert (tail == REPLAY_TOK).all()
+
+
+# --- locked-probe screen -------------------------------------------------
+
+# A locked KNOWLEDGE probe and the fact lines knowledge_corpus emits for the
+# same fact (declarative / QA / cloze). These are the shapes that actually
+# install the answer, so they are what the screen has to catch.
+LOCKED = ["Which planet in our solar system is the largest?"]
+LEAKY_QA = "Q: Which planet in our solar system is the largest? A: Jupiter."
+LEAKY_DECLARATIVE = "The largest planet in our solar system is Jupiter."
+UNRELATED = "The Nile is the longest river in Africa."
+
+
+def test_screen_is_a_noop_before_any_seal():
+    lines = [LEAKY_QA, LEAKY_DECLARATIVE, UNRELATED]
+    assert screen_locked_probes(lines, LockedProbeGuard(None)) == lines
+
+
+def test_dropped_and_near_miss_lines_go_to_files_not_the_console(tmp_path, capsys):
+    """Records to a file, counts to the console: a dropped line scores >=
+    threshold against a sealed probe, so printing it puts the sealed set's
+    content words into any pasted build log."""
+    # Measured 0.5 against the relativity probe -- inside the [0.5, 0.6) review
+    # band, so it is KEPT and flagged rather than dropped. Picked by measuring,
+    # not by eyeballing the wording: a hand-guessed paraphrase scored 0.33 and
+    # silently tested nothing.
+    near = "Einstein developed relativity."
+    guard = LockedProbeGuard(seal(LOCKED + ["Who developed the theory of relativity?"]))
+
+    kept = screen_locked_probes([LEAKY_QA, near, UNRELATED], guard, review_dir=tmp_path)
+
+    out = capsys.readouterr().out
+    assert LEAKY_QA not in out, "a dropped line's text reached the console"
+    dropped_rows = [json.loads(x) for x in (tmp_path / "locked_dropped_facts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["text"] for r in dropped_rows] == [LEAKY_QA]
+    near_rows = [json.loads(x) for x in (tmp_path / "locked_near_miss_facts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["text"] for r in near_rows] == [near]
+    assert near in kept, "review-band lines are flagged, not dropped"
+
+
+def test_stale_review_files_are_removed_when_a_run_is_clean(tmp_path):
+    stale = tmp_path / "locked_dropped_facts.jsonl"
+    stale.write_text('{"text": "from an earlier run"}\n', encoding="utf-8")
+
+    screen_locked_probes([UNRELATED], LockedProbeGuard(seal(LOCKED)), review_dir=tmp_path)
+
+    assert not stale.exists(), "a clean run left a stale drop list to mislead the next reader"
+
+
+def test_sealed_probe_drops_the_leaky_fact_line_and_keeps_the_rest():
+    # The adversarial case: a fact line that would teach the locked probe's
+    # answer must be GONE, while an unrelated fact survives. Asserting only
+    # "unrelated survives" would pass with the screen deleted entirely.
+    kept = screen_locked_probes(
+        [LEAKY_QA, LEAKY_DECLARATIVE, UNRELATED], LockedProbeGuard(seal(LOCKED))
+    )
+    assert LEAKY_QA not in kept
+    # The declarative form carries no question shape at all, and it is the one
+    # that most directly installs the answer -- it has to be caught too.
+    assert LEAKY_DECLARATIVE not in kept
+    assert UNRELATED in kept
+
+
+def test_screen_does_not_empty_a_corpus_of_unrelated_facts():
+    # Guard against the opposite failure: a screen that drops everything would
+    # silently gut the knowledge stream.
+    unrelated = [
+        UNRELATED,
+        "Water boils at 100 degrees Celsius at sea level.",
+        "The human heart has four chambers.",
+    ]
+    assert screen_locked_probes(unrelated, LockedProbeGuard(seal(LOCKED))) == unrelated
+
+
+def test_the_build_screens_before_it_tokenizes(monkeypatch):
+    """The screen being correct is worthless if main() does not call it, or
+    calls it after the fact lines are already tokenized into the corpus."""
+    order = []
+
+    def spy_screen(lines, guard, review_dir=None):
+        order.append("screen")
+        return list(lines)
+
+    def spy_tokenize(lines, tokenizer, vocab_size):
+        order.append("tokenize")
+        raise SystemExit("stop here -- ordering is what this test pins")
+
+    monkeypatch.setattr(make_facts_pretrain_data, "screen_locked_probes", spy_screen)
+    monkeypatch.setattr(make_facts_pretrain_data, "tokenize_fact_docs", spy_tokenize)
+    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
+
+    with pytest.raises(SystemExit):
+        make_facts_pretrain_data.main()
+
+    assert order == ["screen", "tokenize"]
+
+
+def test_an_empty_knowledge_corpus_is_not_blamed_on_the_screen(monkeypatch):
+    """The 'everything was screened out' error used to fire when the corpus was
+    simply empty, pointing the operator at a guard that never ran."""
+    monkeypatch.setattr(make_facts_pretrain_data, "gen_knowledge_pretrain_text", lambda: [])
+    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
+
+    with pytest.raises(SystemExit) as exc:
+        make_facts_pretrain_data.main()
+
+    assert "no fact lines" in str(exc.value)
+    assert "screened out" not in str(exc.value)

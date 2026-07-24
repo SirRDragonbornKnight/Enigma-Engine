@@ -36,6 +36,7 @@ from pathlib import Path
 import numpy as np
 
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
+from eval_leak_guard import LockedProbeGuard
 from knowledge_corpus import gen_knowledge_pretrain_text
 
 ROOT = Path(__file__).resolve().parent
@@ -43,6 +44,61 @@ SOURCE_BIN = ROOT / "data" / "pretrain" / "tokens.bin"
 OUT_BIN = ROOT / "data" / "pretrain" / "facts_tokens.bin"
 HEADER_SIZE = 256
 EOS_ID = 2
+
+
+REVIEW_DIR = ROOT / "data" / "pretrain"
+
+
+def screen_locked_probes(lines: list[str], guard: "LockedProbeGuard",
+                         review_dir: Path | None = None) -> list[str]:
+    """Drop fact lines that are verbatim or paraphrase-close to a LOCKED probe.
+
+    The knowledge stream is the one place that can teach a locked probe's answer
+    straight into the weights, and pretraining is exactly where knowledge gets
+    installed -- so an unscreened facts corpus silently converts the honest gate
+    into a memorization test. Empty manifest = no-op, matching the SFT build's
+    `_held_out`.
+
+    Counts go to the console, RECORDS go to a file: a dropped line scores >=
+    threshold against a sealed probe, so printing the text would put the sealed
+    set's content words (and their answers) into any pasted build log. Same
+    split make_sft_data uses for its review band.
+    """
+    if not len(guard):
+        print("locked-probe fuzzy guard inactive (no data/eval/locked_probes.manifest.json yet)")
+        return list(lines)
+    kept, dropped, near = [], [], []
+    for line in lines:
+        if guard.leaks(line):
+            dropped.append(line)
+            continue
+        if guard.is_near_miss(line):
+            near.append(line)
+        kept.append(line)
+    print(f"locked-probe fuzzy guard ACTIVE: {len(guard)} sealed probes "
+          f"(jaccard >= {guard.threshold})")
+    print(f"fact lines: {len(kept)} kept, {len(dropped)} dropped as locked-probe leaks, "
+          f"{len(near)} in the review band (kept)")
+    if dropped:
+        # Dropping lines does NOT change the fact-token fraction -- the budget in
+        # `interleave` is a token count -- but the same number of insertions now
+        # cycles a SMALLER pool, so every surviving fact repeats more often. That
+        # is memorization pressure moving onto the unscreened facts, so say it.
+        lift = len(lines) / len(kept) if kept else float("inf")
+        print(f"  per-fact repetition rises ~{lift:.2f}x (same insertion budget, "
+              f"{len(kept)} docs instead of {len(lines)})")
+    out_dir = review_dir if review_dir is not None else REVIEW_DIR
+    for name, rows in (("locked_dropped_facts.jsonl", dropped),
+                       ("locked_near_miss_facts.jsonl", near)):
+        path = out_dir / name
+        if rows:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(json.dumps({"text": r}, ensure_ascii=False) for r in rows) + "\n",
+                            encoding="utf-8")
+            print(f"  wrote {path} ({len(rows)} lines) -- review it, do not annotate it (regenerated every run)")
+        elif path.exists():
+            path.unlink()  # stale file from an earlier run
+    return kept
 
 
 def tokenize_fact_docs(lines: list[str], tokenizer, vocab_size: int) -> list[list[int]]:
@@ -178,7 +234,15 @@ def main() -> None:
         raise SystemExit(f"cannot pick a tokenizer for this corpus: {exc}")
     print(f"replay: {source_bin.name} | dtype {src_dtype} | vocab {vocab_size} -> {vocab_file.name}", flush=True)
 
-    lines = gen_knowledge_pretrain_text()
+    source_lines = gen_knowledge_pretrain_text()
+    if not source_lines:
+        raise SystemExit("knowledge_corpus produced no fact lines; nothing to build")
+    lines = screen_locked_probes(source_lines, LockedProbeGuard.load())
+    if not lines:
+        raise SystemExit(
+            f"all {len(source_lines)} fact lines screened out as locked-probe leaks -- "
+            "the sealed set and the knowledge corpus are covering the same ground"
+        )
     tokenizer = get_tokenizer("bpe", vocab_path=vocab_file)
     if getattr(tokenizer, "vocab_size", None) != vocab_size:
         raise SystemExit(
