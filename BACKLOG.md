@@ -61,6 +61,20 @@
 
 ## 1. Correctness / measurement instruments (high leverage, small)
 
+- [x] **Memory learns, corrects, and forgets on the spot** (user ask
+  2026-07-24: "learn new things easily, preferences about me, correct on the
+  spot"). Landed on the LIVE lineage (gate improvements, no v8 retrain):
+  the write gate now catches professions/possessions/origin ("I'm a nurse",
+  "I have two cats", "I was born in 1990") and NATURAL factual corrections
+  ("Actually, my dog is Bruno now", "No, it's Samantha") so the supersede
+  path fires from chat; a new `forget` built-in (MemoryStore.forget removes
+  what recall would surface, never an unrelated fact) with a `_FORGETTABLE`
+  gate that SUPPRESSES remember ("forget that I like tea" no longer re-saves
+  it); recall keys on the last N user turns, not just the last message, so a
+  follow-up no longer blanks the memory block. forget joins the standard
+  built-in block (new models inherit it). STILL OPEN (Tier-2, deferred): the
+  structured {subject,attribute,value} fact store and episodic/session memory.
+
 - [x] Encoder **persistence bug** — FIXED `f9ec5184`: `_save_checkpoint` takes
   encoder/optimizer overrides, vision/audio save their encoder + the LOCAL
   optimizer that actually stepped, `_load_encoder_checkpoint` resumes and
@@ -524,8 +538,9 @@ The block, in execution order:
   stream, identity anchors rewritten to actual capabilities, the
   ALWAYS-OFFERED built-in block (router gates retire here, ruled
   2026-07-24; the block is part of the STANDARD recipe -- any new AI the
-  trainer molds inherits it, ruled same day), the client-system
-  "Available tools:" shape, image turns
+  trainer molds inherits it, ruled same day; the block is now FIVE built-ins
+  -- calculate, remember, forget, speak, imagine -- forget added
+  2026-07-24), the client-system "Available tools:" shape, image turns
   carrying system/tools/memory blocks, URL-bearing records now kept,
   trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
   passed explicitly, finetune `--block` raised.

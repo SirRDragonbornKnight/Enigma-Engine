@@ -888,6 +888,17 @@ def _last_user_text(messages: list[Msg]) -> str:
     return ""
 
 
+def _recent_user_text(messages: list[Msg], n: int = 3) -> str:
+    """The last N user turns joined, for MEMORY RETRIEVAL only. Keying recall on
+    the single last message blanked the memory block on a follow-up ("and what
+    did I say my dog was called?" shares no term with the stored fact). Widening
+    the query to the recent turns keeps the referenced fact reachable. The
+    tool-offer gates still key on the LAST message -- they are about the current
+    ask, not the thread."""
+    users = [m.content for m in messages if m.role == "user" and m.content]
+    return " ".join(users[-n:])
+
+
 # Built-in tools serve executes ITSELF (no client round-trip), in the same
 # spec shape make_sft_data trains on (flat params). calculate: a from-scratch
 # 182M model can't compute arithmetic in-weights (tokenizer splits numbers
@@ -926,7 +937,16 @@ _IMAGINE_TOOL = {
         "parameters": {"prompt": "string"},
     },
 }
-_BUILTIN_NAMES = {"calculate", "remember", "speak", "imagine"}
+_FORGET_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "forget",
+        "description": "Remove a fact about the user from long-term memory when they ask "
+        "you to forget it or say it is no longer true. Pass the fact to remove.",
+        "parameters": {"text": "string"},
+    },
+}
+_BUILTIN_NAMES = {"calculate", "remember", "speak", "imagine", "forget"}
 _MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
 
 # The calculate tool is offered ONLY when the ask looks arithmetic. Injecting
@@ -951,9 +971,12 @@ def _looks_arithmetic(text: str) -> bool:
     return has_digit and bool(_ARITH_KEYWORDS.search(text) or _ARITH_SYMBOLS.search(text))
 
 
-# remember is offered only when the message states something save-worthy:
-# an explicit remember ask, or a first-person fact/preference. Same rationale
-# as the calculate gate -- an ever-present tool prompt degrades normal chat.
+# remember is offered when the message states something save-worthy: an
+# explicit remember ask, a first-person fact/preference, or a factual
+# correction. Same rationale as the calculate gate -- an ever-present tool
+# prompt degrades normal chat, so this stays intent-gated; she still decides
+# whether to call. (At the v2 regen the gate retires for an always-offered
+# built-in block -- ruled 2026-07-24 -- but the live v8 lineage keeps it.)
 _MEMORABLE = re.compile(
     r"\b(remember|don'?t forget|note (that|this)|keep in mind|save (this|that)|"
     r"call me|my name('s| is)|"
@@ -961,14 +984,44 @@ _MEMORABLE = re.compile(
     # season is" (two attribute words -- a single-\w+ pattern missed it,
     # measured 2026-07-06). Offering is cheap; she decides whether to call.
     r"my (\w+('s)? ){1,3}(is|are)\b|"
-    r"i (like|love|hate|prefer|live|work|drive|play|always|never|usually)|"
-    r"i'?m (allergic|from|married|working))",
+    r"i (like|love|hate|prefer|live|work|drive|play|have|own|always|never|usually)\b|"
+    # first-person identity/state: "I'm a nurse", "I am from Denver", "I was
+    # born in 1990" -- profession and origin were unreachable before.
+    r"i'?m an? \w+|i am an? \w+|i'?m (allergic|from|married|working|called)|"
+    r"i (was|am) (born|from|based)|"
+    r"we (renamed|changed|moved|got|now)\b|"
+    # factual corrections: a correction cue with a copula/naming nearby, so the
+    # supersede path fires from natural chat ("Actually, my dog is Bruno now")
+    # without arming remember on conversational "actually"/"no".
+    r"(actually|no,? it'?s|i meant|correction[:,]|that'?s not right)\b[^.?!]{0,40}?"
+    r"\b(is|are|not|named|called|no longer)\b)",
+    re.IGNORECASE,
+)
+
+# forget is offered when the user asks to drop a fact or says one no longer
+# holds. It must SUPPRESS remember: "forget that I like tea" matches "i like"
+# too, and offering remember there is the wrong direction (it would re-save the
+# thing she was told to drop).
+_FORGETTABLE = re.compile(
+    r"\b(forget (that|about|my|the|it|this)|don'?t remember|stop remembering|"
+    r"no longer (true|the case|like|have|live|work)|not true anymore|"
+    r"scratch that|delete (that|this|the|my)|remove (that|this|the|my))\b",
     re.IGNORECASE,
 )
 
 
+def _looks_forgettable(text: str) -> bool:
+    return bool(text) and MEMORY is not None and bool(_FORGETTABLE.search(text))
+
+
 def _looks_memorable(text: str) -> bool:
-    return bool(text) and MEMORY is not None and bool(_MEMORABLE.search(text))
+    # A forget ask outranks a memorable shape -- offer forget, not remember.
+    return (
+        bool(text)
+        and MEMORY is not None
+        and not _looks_forgettable(text)
+        and bool(_MEMORABLE.search(text))
+    )
 
 
 # speak is offered only on an explicit say-it-out-loud ask, same rationale as
@@ -1015,6 +1068,8 @@ def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
         tools.append(_CALC_TOOL)
     if _looks_memorable(user_text):  # checks MEMORY is enabled too
         tools.append(_REMEMBER_TOOL)
+    if _looks_forgettable(user_text):  # checks MEMORY is enabled too
+        tools.append(_FORGET_TOOL)
     if _looks_speakable(user_text):  # checks SPEAKER is enabled too
         tools.append(_SPEAK_TOOL)
     if _looks_imaginable(user_text):  # checks PAINTER is enabled too
@@ -1045,6 +1100,16 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             return "error: nothing to remember"
         rec = MEMORY.remember(text, source="chat")
         return f"updated: {rec['text']}" if rec.get("superseded") else f"saved: {rec['text']}"
+    if name == "forget":
+        if MEMORY is None:
+            return "error: memory disabled (start serve with --memory-dir)"
+        text = str(arguments.get("text", "")).strip()
+        if not text:
+            return "error: nothing to forget"
+        removed = MEMORY.forget(text)
+        if not removed:
+            return f"no matching memory to forget for: {text}"
+        return "forgot: " + "; ".join(r["text"] for r in removed)
     if name == "speak":
         if SPEAKER is None:
             return "error: voice disabled (start serve with --voice)"
@@ -1077,7 +1142,7 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
     built-in calculate tool is ALWAYS offered alongside any client tools."""
     extra = []
     if MEMORY is not None:
-        mem = MEMORY.render_context(_last_user_text(req.messages), tokenizer, max_ids=128)
+        mem = MEMORY.render_context(_recent_user_text(req.messages), tokenizer, max_ids=128)
         if mem:
             extra.append(mem)
     # Built-ins are gated on intent (see _builtin_tools); client tools are
@@ -1617,7 +1682,7 @@ def chat(req: ChatReq):
         return _chat_instruct(req)
     messages = list(req.messages)
     if MEMORY is not None:
-        mem = MEMORY.render_context(_last_user_text(messages), tokenizer, max_ids=128)
+        mem = MEMORY.render_context(_recent_user_text(messages), tokenizer, max_ids=128)
         if mem:
             messages = [Msg(role="system", content=mem)] + messages
     prompt = _render_transcript(messages)

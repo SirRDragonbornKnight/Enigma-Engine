@@ -161,6 +161,48 @@ def test_memorable_gate_requires_memory_enabled(monkeypatch):
     assert not serve._looks_memorable("What's the weather like?")
 
 
+def test_memorable_gate_catches_preferences_facts_and_corrections(monkeypatch):
+    monkeypatch.setattr(serve, "MEMORY", object())
+    mem = serve._looks_memorable
+    # preferences and first-person facts that were unreachable before
+    assert mem("I'm a nurse.")                       # profession
+    assert mem("I have two cats.")                   # possession
+    assert mem("I was born in 1990.")                # origin fact
+    assert mem("I prefer tea over coffee.")
+    # on-the-spot factual corrections must arm remember (-> supersede path)
+    assert mem("Actually, my dog is named Bruno now.")
+    assert mem("No, it's Samantha, not Sam.")
+    assert mem("We renamed the project to Orion.")
+    # conversational cues that are NOT facts must stay quiet
+    assert not mem("Actually, that's a great question.")
+    assert not mem("No, thanks.")
+    assert not mem("What's the weather like?")
+
+
+def test_forget_gate_suppresses_remember(monkeypatch):
+    monkeypatch.setattr(serve, "MEMORY", object())
+    # "forget that I like tea" matches the memorable "i like" shape too --
+    # forget must win, or she re-saves the thing she was told to drop.
+    assert serve._looks_forgettable("Forget that I like tea.")
+    assert not serve._looks_memorable("Forget that I like tea.")
+    assert serve._looks_forgettable("I no longer live in Denver.")
+    assert serve._looks_forgettable("Scratch that.")
+    assert not serve._looks_forgettable("I like tea.")  # a plain fact is not a forget
+
+
+def test_recent_user_text_spans_the_thread():
+    Msg = serve.Msg
+    msgs = [
+        Msg(role="user", content="My dog is named Rex."),
+        Msg(role="assistant", content="Got it."),
+        Msg(role="user", content="And what did I say he was called?"),
+    ]
+    # last-message-only recall would drop "Rex" from the query on the follow-up
+    q = serve._recent_user_text(msgs)
+    assert "Rex" in q and "called" in q
+    assert serve._last_user_text(msgs) == "And what did I say he was called?"
+
+
 def test_speak_and_imagine_gates(monkeypatch):
     monkeypatch.setattr(serve, "SPEAKER", object())
     monkeypatch.setattr(serve, "PAINTER", object())

@@ -388,6 +388,33 @@ class MemoryStore:
                     return True
             return False
 
+    def forget(self, query: str, limit: int = 3) -> list[dict]:
+        """Remove the memories that best match `query`; return what was removed.
+
+        The correct-on-the-spot primitive: "forget that I like tea" resolves to
+        the stored fact and deletes it. Ranking is the same BM25 as recall, so
+        an unrelated memory (shares no content term, score 0) is never touched
+        -- forget removes what recall would have surfaced, nothing more. Returns
+        [] when the query is empty or matches no stored fact."""
+        if not str(query).strip():
+            return []
+        hits = self.search(query, k=limit)  # score > 0 required, takes the lock
+        if not hits:
+            return []
+        ids = {h["id"] for h in hits}
+        removed: list[dict] = []
+        with self._lock:
+            keep = []
+            for rec in self._records:
+                if rec["id"] in ids:
+                    removed.append(rec)
+                else:
+                    keep.append(rec)
+            if removed:
+                self._records = keep
+                self._rewrite()
+        return removed
+
     def clear(self) -> int:
         """Remove ALL memories; returns how many were dropped."""
         with self._lock:

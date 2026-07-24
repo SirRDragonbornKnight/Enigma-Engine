@@ -103,6 +103,34 @@ def test_supersede_persists_across_reopen(tmp_path):
     assert "4 years old" in m2.all()[0]["text"]
 
 
+def test_forget_removes_the_matching_fact_and_leaves_the_rest(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User likes tea.")
+    m.remember("User's dog is named Rex.")
+    m.remember("User lives in Denver.")
+    removed = m.forget("the user likes tea")
+    assert [r["text"] for r in removed] == ["User likes tea."]
+    kept = {r["text"] for r in m.all()}
+    assert kept == {"User's dog is named Rex.", "User lives in Denver."}
+    assert len(MemoryStore(tmp_path)) == 2  # deletion persisted
+
+
+def test_forget_never_touches_an_unrelated_memory(tmp_path):
+    # forget removes what RECALL would surface -- an unrelated fact shares no
+    # content term (score 0) and must survive, or "forget my tea" nukes the dog.
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+    assert m.forget("forget that I like tea") == []
+    assert len(m) == 1
+
+
+def test_forget_empty_query_is_a_noop(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User lives in Denver.")
+    assert m.forget("   ") == []
+    assert len(m) == 1
+
+
 def test_tied_retrieval_ranks_the_newest_value_first(tmp_path):
     # Coexisting plain values share a term vector, so BM25 ties. The newer
     # fact must surface first or the coexist default hands the model the
