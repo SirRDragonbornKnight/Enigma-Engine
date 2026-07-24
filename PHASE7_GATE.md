@@ -8,8 +8,23 @@ bypassed; the day the un-bypassable entries outweigh what Phases 4-6 can
 still buy, Phase 7 starts.
 
 Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
-(pretrain DONE 2026-07-03, 287,882 steps / 56.6B tokens). Behavior scorecard
-26/29 (90%), all gates PASS as of 2026-07-06 (`eval_behavior.py`).
+(pretrain DONE 2026-07-03, 287,882 steps / 56.6B tokens).
+
+Behavior scorecard: the last measured figure is v8 at **79/90 (2026-07-16)**,
+and it is NOT reproducible today — `data/eval/behavior_probes.jsonl` grew to
+**113 probes** on 2026-07-20 (>=15 per category), so a run now returns an
+`/113` number that cannot be compared to it, and no checkpoint has been scored
+on the current file. `eval_behavior.py` also gates **eight** categories now
+(`unknown` was added at 0.50) while the dev file contains zero `unknown`
+probes, so that category cannot be measured at all. The earlier "26/29" and
+"first to pass all seven categories" lines were both retired here.
+
+The scorecard that will actually gate v2 is the LOCKED set — the probe file
+`data/eval/locked_probes.jsonl` (authoring guide:
+`data/eval/LOCKED_PROBES_AUTHORING.md`), which is UNSEALED as of 2026-07-23:
+no `locked_probes.manifest.json` exists, so the leak guard is an announced
+no-op. Until it is sealed and v5/v8 are re-measured on it, every number here
+is a ceiling, not a baseline.
 
 ## Measured ceilings (cannot fix with more SFT data at 182M)
 
@@ -38,13 +53,27 @@ Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
 5. **Block 1024.** Multi-turn depth, long tool chains, and memory-injection
    headroom all compete for one small window; 74% of the distill corpus is
    unusable as SFT data. Phase 4 (RoPE theta raise + continued pretrain +
-   re-SFT) can retrofit this WITHOUT Phase 7 — attempt that first.
-6. **Whole-fact rewording defeats memory supersede.** `remember`'s
-   contradiction handling is lexical (content-word Jaccard >= 0.5): renames
-   and single-value corrections supersede; a fully reworded fact coexists
-   with the old one (test-locked in `test_memory_store.py`). Fixing this
-   needs semantics — a smarter store or a model big enough to do the
-   resolution itself.
+   re-SFT) could retrofit this WITHOUT Phase 7, but ROADMAP marks Phase 4
+   OBSOLETE if the v2 pretrain proceeds — v2's tokenizer and native context
+   reach the same place, so this is no longer the first thing to attempt.
+6. **Same-kind facts about one subject cannot both be held.** The lexical
+   Jaccard rule this entry used to describe was DEMOTED 2026-07-22, not
+   removed: supersede first tries a structural key (subject + value-kind), and
+   the lexical path still runs — at a raised bar, `_SUPERSEDE_MIN = 0.75` — for
+   every text the key function declines. A reworded correction replaces only
+   when both forms classify to the SAME kind (`a red hatchback` -> `a silver
+   van`, test-locked); cross the kind boundary (`age is 30` -> `age is thirty`,
+   measure vs other) and the keys differ, the 0.75 bar does not bridge them,
+   and the two coexist. The residual ceiling is the inverse case — two
+   genuinely different values that classify to the same coarse kind
+   (`My car is red.` / `My car is electric.`) share a key, so the newer
+   replaces the older. NOTE: no test exercises that collapse; the convergence
+   battery pins the desired corrections (mood, city), not this limit, so the
+   suite stays green either way. `memory_store.py`'s "accepted the rare
+   two-of-a-kind as the documented limit" comment is attached to the
+   single-valued VERB list, not to the copula key — nothing in the code warns
+   the next editor of `_value_kind`. Escaping this needs semantics — a smarter
+   store or a model big enough to resolve the contradiction itself.
 
 ## Remake decisions (design of the next generation, when the gate opens)
 
@@ -76,6 +105,13 @@ Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
   gets its own intent gate (ride-along offering stole tool calls); every
   serve-side injection format gets a matching SFT slice (she ignored
   "Things you remember:" until trained on it).
+  **CONTESTED 2026-07-22:** the per-built-in intent gate was measured
+  defective in both directions (missed asks get no offer, so no gradient and
+  no eval signal; false fires happen on negated asks), and the eyes flatten
+  images to text before the gates read them, so her own caption can fire the
+  painter. The proposed replacement is a fixed always-offered built-in block
+  trained into the v2 SFT regen. Pending a user ruling — the line above is
+  the hypothesis this doctrine was written under, not a settled wall.
 - Run-stamped checkpoint directories with SHA256 receipts — rounds
   overwrote model.pth all week; the peaks survived by manual backup only.
 - QA gates from day 0: foreign-identity purge, boilerplate filter,
@@ -88,8 +124,11 @@ fine-tune). One chat renderer shared by train and serve. Evals as code,
 gating every run. The finished lineage stays immutable; new runs get new
 directories. Small-model-plus-tools as the shape of the thing.
 
-## Gate status: NOT YET OPEN
+## Gate status: OPEN — v2 is IN PROGRESS
 
-Phase 4 (length) and Phase 5 (daily use via Odysseus, memory growth) are
-untried and cheap relative to a new pretrain. The gate opens when those are
-done and the remaining ceilings above still bind.
+Superseded 2026-07-20 by ROADMAP's Phase 7 section: the v2 prefix landed and
+the v2 pretrain is the next GPU spend, ahead of Phases 4/5. This section used
+to say the gate opened only after Phase 4 (length) and Phase 5 (daily use)
+were done; Phase 4 is obsolete under v2, and Phase 5 does not block a
+pretrain. What actually gates the launch now is the locked-probe baseline
+(seal + v5/v8 re-measure) and the size call.

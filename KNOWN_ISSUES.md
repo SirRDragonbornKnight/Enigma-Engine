@@ -123,9 +123,14 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     pairs collected + `distill_audio_encoder.py` ready), and the audio ALIGN
     trainer was REBUILT the same day — `vision_align.py` generalized into
     `enigma_engine/training/encoder_align.py` (shared `_train_encoder` core;
-    `train_audio` + `align_audio.py`; audio runs batch_size=1 until the
-    encoder gains a padding mask). Remaining gap is the GPU work only
-    (distill + align runs, serve wiring), parked by training-last.
+    `train_audio` + `align_audio.py`). UPDATE 2026-07-23: audio batches at
+    `--batch-size 8` through a padding-mask collate (the mask-aware encoder
+    landed; the old batch_size=1 note is retired), and the training-last
+    ruling was LIFTED 2026-07-20. The remaining gap is NOT GPU-bound first:
+    the distill is blocked on DOWNLOADING the `openai/whisper-base` teacher
+    (the cached Systran/faster-whisper-base is the ASR organ, not the
+    teacher). After that download it is GPU work -- distill, align, serve
+    wiring -- queued behind the v2 pretrain.
 
 12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
     the checkpoint-safety subset AND the pre-align fix batch were FIXED same

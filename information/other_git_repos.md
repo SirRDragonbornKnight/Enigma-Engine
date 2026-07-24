@@ -23,9 +23,10 @@ I'll give you a **deduped list of "top + latest"** AI repos that contain **raw m
 #     process zoo is gone; capabilities live in-process now):
 #       image-gen (--image-gen) — Stable Diffusion sd-turbo via diffusers;
 #                                 imagine tool + /v1/images/generations
-#       eyes (--eyes)           — BLIP captioning; image messages captioned
-#                                 into context + /v1/images/describe
-#       voice (--voice)         — pyttsx3/SAPI TTS; speak tool + /v1/audio/speech
+#       eyes (--eyes)           — her own distilled ViT captioning; image
+#                                 messages captioned into context +
+#                                 /v1/images/describe
+#       voice (--voice)         — Kokoro-82M TTS; speak tool + /v1/audio/speech
 #       ears (--ears)           — faster-whisper ASR; /v1/audio/transcriptions
 #       (audiogen/videogen/threed have NO current equivalent — future organs;
 #        codegen is just the model itself)
@@ -103,9 +104,14 @@ I'll give you a **deduped list of "top + latest"** AI repos that contain **raw m
 # -------------------------------------------------------
 # Speech / audio
 # Relevant: Enigma has audio_projection in the model; the ears
-# organ uses faster-whisper (ASR), the voice organ uses
-# pyttsx3/SAPI (TTS). Missing: audio encoder for training, better
-# TTS, audio feature extraction for multimodal training.
+# organ uses faster-whisper (ASR), the voice organ uses Kokoro-82M
+# (neural TTS, swapped in 2026-07-23). Missing: audio encoder
+# training runs, audio feature extraction for multimodal training.
+# NOTE: the reviews below were written when the voice organ was
+# still pyttsx3/SAPI, so their "neural TTS would be an upgrade"
+# verdicts are already banked -- read them for the ARCHITECTURE
+# notes (Conformer, mel params, audio tokenization), not for the
+# current state of the organ.
 # -------------------------------------------------------
 - openai/whisper                     ✅ REVIEWED: AudioEncoder architecture is clean and reusable: Conv1d(n_mels→n_state, k=3, p=1) → GELU → Conv1d(n_state→n_state, k=3, stride=2, p=1) → GELU → sinusoidal_pos_embed → N transformer blocks (LayerNorm + MultiHeadAttention + FFN with GELU) → LayerNorm. Dimensions: tiny(n_mels=80, n_state=384, n_head=6, n_layer=4), base(n_state=512, n_head=8, n_layer=6), small(n_state=768, n_head=12, n_layer=12). Key insight: sinusoidal positional embeddings (not learned) for audio sequences. Stride-2 conv downsamples mel frames 2x. This is the exact template for Enigma's missing audio encoder — Conv1d frontend + transformer blocks, outputs features that feed into audio_projection.
 - espnet/espnet                      ✅ REVIEWED: End-to-end speech processing (ASR, TTS, speech translation). Key patterns: (1) **Conformer encoder** — combines convolution (local patterns) with transformer attention (global patterns). Architecture: FFN → MultiHeadAttention → Conv → FFN per block (macaron-style). Outperforms pure transformer for audio by ~10-15% WER. Enigma's Whisper-inspired audio encoder template uses pure transformer — Conformer is the modern upgrade. ~30 lines to add Conv module inside each audio encoder block. (2) **Mel spectrogram extraction** — espnet uses 80-dim mel filterbanks, 25ms window, 10ms hop, log-mel scaling. Same as Whisper. Enigma doesn't have mel extraction yet — this confirms the standard params. (3) **CTC loss** — Connectionist Temporal Classification for sequence-to-sequence alignment without explicit alignment labels. Used alongside attention loss in hybrid CTC/attention ASR. Relevant if Enigma adds speech recognition training. (4) **TTS: Tacotron2/FastSpeech2** — text→mel→waveform pipeline. FastSpeech2 is non-autoregressive (fast). Enigma's voice organ uses pyttsx3/SAPI (system TTS) — local neural TTS would be a major upgrade but requires pretrained vocoder (HiFi-GAN). Verdict: Conformer encoder architecture is the main actionable finding — a Conv module inside each transformer block improves audio processing. Mel spectrogram params confirmed. Neural TTS is aspirational (needs significant infrastructure).

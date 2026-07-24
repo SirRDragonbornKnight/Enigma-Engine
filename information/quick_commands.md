@@ -15,9 +15,9 @@ Run everything from the Enigma Engine folder (venv activated).
 | `python serve_enigma.py --host 0.0.0.0` | Listen on all interfaces |
 | `python serve_enigma.py --max-context 1024` | Set the context window (tokens) |
 | `python serve_enigma.py --memory-dir data/memory` | Enable the memory store (JSONL + BM25) + /v1/memory API |
-| `python serve_enigma.py --voice` | Voice organ: `speak` tool + /v1/audio/speech (pyttsx3/SAPI) |
+| `python serve_enigma.py --voice` | Voice organ: `speak` tool + /v1/audio/speech (Kokoro-82M; run under the repo `venv/`) |
 | `python serve_enigma.py --ears` | Ears organ: /v1/audio/transcriptions (faster-whisper) |
-| `python serve_enigma.py --eyes` | Eyes organ: image messages captioned into context + /v1/images/describe (BLIP) |
+| `python serve_enigma.py --eyes` | Eyes organ: image messages captioned into context + /v1/images/describe (her own distilled ViT) |
 | `python serve_enigma.py --image-gen` | Imagination organ: `imagine` tool + /v1/images/generations (Stable Diffusion) |
 | `python serve_enigma.py --eyes --allow-downloads` | First-ever use of an organ on a machine: permit the one-time weight download. Without the flag the server is fully offline (cache only) |
 

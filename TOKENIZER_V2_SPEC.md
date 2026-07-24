@@ -341,9 +341,12 @@ Consequences that everything else works around:
    - **QK-norm ordering nit to fix in the v2 arch** (confirmed standard
      2026-07-18): apply RMSNorm to Q/K BEFORE RoPE, not after — Qwen3/Gemma3/
      modded-nanogpt all norm-then-RoPE. Near-equivalent math (RoPE preserves
-     RMS) so it's a convention fix, cheap to do in a fresh lineage. Also drop
+     RMS) so it's a convention fix, cheap to do in a fresh lineage. ~~Also drop
      RoPE theta from 500000 -> 10k-100k (500k is a long-context setting wasted
-     at 1024 ctx). Optional cheap adds: gated attention (Qwen3-Next, NeurIPS
+     at 1024 ctx).~~ SUPERSEDED 2026-07-23: this line was written when the
+     target was a 1024-context lineage. The `v2_deep_*` presets are native
+     8192 and train at block 2048, where 500000 is the defensible setting —
+     all three presets keep it. Optional cheap adds: gated attention (Qwen3-Next, NeurIPS
      2025 best paper — one sigmoid gate/layer, kills attention-sink spikes) and
      a deeper-thinner reshape (MobileLLM: at sub-1B more layers beat more width;
      16x1024 is on the wide side). All three UNPROVEN at sub-1B specifically —

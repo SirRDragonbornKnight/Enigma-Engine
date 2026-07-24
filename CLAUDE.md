@@ -55,12 +55,16 @@ NOT in-repo mods.
 **Organs (live 2026-07-14):** capabilities as local services behind serve flags; each is a
 `core/` primitive with an injectable factory (tests never download models or touch hardware),
 loaded eagerly at startup (a broken organ WARNs and text serving continues).
-- `--voice` -> `core/tts.py` (pyttsx3/SAPI; one engine per JOB — say-then-save on one engine
-  deadlocks, see module docstring): intent-gated `speak` built-in + `/v1/audio/speech` (WAV) +
-  `/v1/audio/voices`. `speak` = server speakers; `avatar_say` stays a CLIENT tool.
-  **Voice PARKED by user ruling (2026-07-16): launchers start voiceless**; revisit "later when it
-  matters." When it lifts: `-Voice` serves `--voice-name zira`, and the wanted real fix is the
-  Kokoro-82M swap (BACKLOG §5, needs the user's go-ahead).
+- `--voice` -> `core/tts.py` (**Kokoro-82M since 2026-07-23**; one worker thread serializes
+  synth/play/recipe, playback is interruptible sentence-by-sentence): intent-gated `speak`
+  built-in + `/v1/audio/speech` (WAV) + `/v1/audio/voices` + `/v1/audio/stop`,
+  `/v1/audio/talk-mode`, `/v1/audio/status`, `/v1/audio/voice`. `speak` = server speakers;
+  `avatar_say` stays a CLIENT tool. Voices are style tensors that BLEND by weighted sum; the
+  active recipe persists to `~/.enigma_engine/voice.json`. **The server must run under the repo
+  `venv/`** — it is the only interpreter with kokoro installed, and Start-Enigma points there.
+  Talk-mode PERSISTS in `data/talk_mode.json` and is re-read at boot: she starts silent
+  today only because that file does not exist yet. Turn narration on once and every later
+  launch narrates -- no launcher resets it.
 - `--ears` -> `core/asr.py` (faster-whisper, cuda->cpu fallback): `/v1/audio/transcriptions`.
 - `--eyes` -> `core/eyes.py` (**her OWN captioner since 2026-07-17** — aligned encoder + grafted
   projection + the served model; BLIP DELETED): OpenAI image_url content in chat is captioned to
@@ -69,7 +73,7 @@ loaded eagerly at startup (a broken organ WARNs and text serving continues).
   ("eyes: on" at boot); degrades text-only only if the align checkpoint is missing.
 - `--image-gen` -> `core/imagegen.py` (diffusers sd-turbo, 1-step): intent-gated `imagine`
   built-in (PNGs land in `~/.enigma_engine/images/`) + `/v1/images/generations` (b64_json).
-Verified end-to-end vs served `enigma_dpo`: "Say hello out loud." -> speak call -> SAPI audio;
+Verified end-to-end vs served `enigma_dpo`: "Say hello out loud." -> speak call -> Kokoro audio;
 voice->wav->ears and imagine->png->eyes loops pass on real weights.
 
 ## Setup / build / test — run these first

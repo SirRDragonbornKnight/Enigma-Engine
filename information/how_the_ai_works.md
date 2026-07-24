@@ -113,9 +113,9 @@ separate model formats, not plugins:
 
 | Organ | Flag | Backend | Endpoints / tools |
 |-------|------|---------|-------------------|
-| Voice | `--voice` | pyttsx3 / SAPI | `speak` tool, `/v1/audio/speech`, `/v1/audio/voices` |
+| Voice | `--voice` | Kokoro-82M | `speak` tool, `/v1/audio/speech`, `/v1/audio/voices`, `/v1/audio/stop`, `/v1/audio/talk-mode`, `/v1/audio/status`, `/v1/audio/voice` |
 | Ears | `--ears` | faster-whisper | `/v1/audio/transcriptions` |
-| Eyes | `--eyes` | BLIP | OpenAI-style image messages captioned into her context, `/v1/images/describe` |
+| Eyes | `--eyes` | her own distilled ViT | OpenAI-style image messages captioned into her context, `/v1/images/describe` |
 | Imagination | `--image-gen` | Stable Diffusion (sd-turbo) | `imagine` tool, `/v1/images/generations` |
 
 ---

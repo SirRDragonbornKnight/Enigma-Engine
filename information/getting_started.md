@@ -37,9 +37,9 @@ serves the adopted model.
 | `--host` / `--port` | Bind address (default 127.0.0.1:8000) |
 | `--max-context N` | Context window in tokens (default 1024) |
 | `--memory-dir DIR` | Enable the memory store (JSONL + BM25); memories are injected into her context |
-| `--voice` | Voice organ: `speak` tool + `/v1/audio/speech` (local pyttsx3/SAPI TTS) |
+| `--voice` | Voice organ: `speak` tool + `/v1/audio/speech` (local Kokoro-82M TTS) |
 | `--ears` | Ears organ: `/v1/audio/transcriptions` (local faster-whisper) |
-| `--eyes` | Eyes organ: image messages captioned into her context + `/v1/images/describe` (local BLIP) |
+| `--eyes` | Eyes organ: image messages captioned into her context + `/v1/images/describe` (her own distilled ViT) |
 | `--image-gen` | Imagination organ: `imagine` tool + `/v1/images/generations` (local Stable Diffusion) |
 | `--allow-downloads` | Permit the ONE-TIME organ weight download from HuggingFace. Without it the server is fully offline (organs load from local cache only) -- first-ever use of an organ on a machine needs this flag once |
 

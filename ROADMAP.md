@@ -35,8 +35,9 @@ Muppet.
   `--allow-downloads` exists solely for an explicit first weight fetch).
   Nothing she hears or says leaves this machine. Ever.
 - **Her abilities must become HER OWN.** Borrowed organ backbones
-  (BLIP/whisper/sd-turbo/SAPI) are SCAFFOLDING; every organ has a transplant
-  path to own-trained weights — see Phase 4.5.
+  (whisper/sd-turbo/Kokoro — BLIP is already retired for her own ViT) are
+  SCAFFOLDING; every organ has a transplant path to own-trained weights —
+  see Phase 4.5.
 - **No language censorship.** Data gates drop structural junk only, never words.
 - **Clarity over character.** Understandable sentences are the bar; "Enigma"
   is a personality, not an excuse for word salad.
@@ -46,6 +47,12 @@ Muppet.
 **Methods-audit verdicts (2026-07-15):**
 - KEEP (validated): restart-from-pretrain each SFT cycle; oversample weights;
   regex tool gates; clarity sampling defaults (one min_p-only A/B queued).
+  **The "regex tool gates" verdict is CONTESTED as of the 2026-07-22 router
+  audit** — the gates were measured defective in both directions (false-miss
+  "Draw me a dragon" / word-number math; false-fire "Do not draw anything"),
+  and a miss means no offer, no gradient, and nothing the eval can see. The
+  proposed replacement is a fixed always-offered built-in block baked into the
+  v2 SFT regen. This is a pending user ruling; the line stays until it lands.
 - FIX instruments: SFT val split is contaminated by oversample duplicates
   (dedup before split — FIXED `47f557ae`); DPO "100% val" is 8
   template-sharing pairs (group val by prompt — FIXED `fd2776d1`); 29 eval
@@ -189,22 +196,30 @@ weights that result are hers, on her machine, forever.
    (~25M, cosine loss, ~1-2 GPU-days). Contrastive-from-scratch is NOT
    viable solo (needs 10M+ pairs); distillation is the honest shortcut that
    still ends in owned weights.
-4. **Align:** `train_vision` over the 558k pairs (encoder unfrozen, LM
-   frozen; add real batching first — the current loop is batch-1), optional
-   final pass unfreezing the last 2-4 LM layers.
-5. **Wire and retire:** image begin/end tokens (ids 4724+ reserved, 12
-   free), serve ingestion, delete the BLIP path. Her eyes are hers.
+4. **Align: DONE 2026-07-20.** `align_vision.py` ran batched over the pairs
+   (encoder unfrozen, LM frozen via `freeze_text_io` so the projection
+   targets v8's embedding space). The optional final pass unfreezing the
+   last 2-4 LM layers was not run.
+5. **Wire and retire: PARTLY DONE.** Serve ingestion is live and the BLIP path
+   was deleted 2026-07-17 — her eyes are hers, and captions enter chat as the
+   "[image: ...]" TEXT marker. The image begin/end tokens are NOT done: ids
+   4724-4735 are still listed as reserved in `chat_format.py`, no delimiter
+   constant exists, and `core/eyes.py` says so outright — she has no trained
+   image-delimiter tokens, and token-level image injection is the next
+   training cycle's work. Also open: the captions are question-blind
+   (see BACKLOG item 5).
 6. **Her ears (same shape, ~3 days):** `collect_audio_data.py` DONE
    (LibriSpeech-clean-100, 28,539 pairs); `distill_audio_encoder.py` DONE
    (own loop, unaffected by the compression pass) but NOT launched.
-   **GAP created 2026-07-18:** the align step used `Trainer.train_audio`,
-   which was deleted with the Forge trainer — only the VISION half was
-   carved out (`enigma_engine/training/vision_align.py`). Rebuilding it is
-   mechanical: mirror `vision_align.py` + `align_vision.py` for audio
-   (same freeze logic, same local-optimizer + encoder-persistence
-   checkpoint contract; `tests/test_encoder_persistence.py` documents the
-   contract the retired audio twin used to pin). Then wire and retire
-   whisper.
+   The 2026-07-18 gap (the align step's `Trainer.train_audio` was deleted
+   with the Forge trainer) was CLOSED 2026-07-19: `vision_align.py` was
+   generalized into `enigma_engine/training/encoder_align.py` — one shared
+   `_train_encoder` core with `train_vision`/`train_audio` wrappers — and
+   `align_audio.py` is the entry point, batching at `--batch-size 8`
+   through a padding-mask collate. What remains is GPU work gated on
+   downloading the `openai/whisper-base` teacher (the cached
+   Systran/faster-whisper-base is the ASR organ, NOT the teacher), then the
+   align run, serve wiring, and retiring whisper.
 7. **Her voice (later):** train a small TTS on a chosen voice — in-house
    project; Kokoro is scaffolding until then.
 8. **Her imagination (much later):** an own-trained image generator is

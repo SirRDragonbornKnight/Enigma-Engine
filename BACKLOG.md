@@ -229,7 +229,17 @@
   `d15bc6c`); quality work belongs to the next align cycle
   (VISION_QUALITY_SPEC: bigger student, pixel-shuffle connector, stage-2
   unfreeze), which is gated on the user's image-domain decision.
-- [ ] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
+- [~] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
+  Serve wiring DONE and BLIP deleted 2026-07-17; her own distilled ViT serves
+  live under `serve --eyes`. STILL OPEN, both needing the next training cycle:
+  (a) the image begin/end TOKENS were never allocated or trained -- ids
+  4724-4735 remain "reserved for future passes" in `chat_format.py`, there is
+  no delimiter constant, and captions reach the model as the "[image: ...]"
+  text marker instead; (b) captions are question-blind (serve passes
+  `EYES.describe` as a bare 1-arg callable, so the pixels are gone before the
+  question is asked) even though `model.forward_multimodal` already
+  concatenates [vision][text] -- closing it is a stage-2 VQA align plus an
+  `Eyes.answer(img, question)` path.
 - [~] 6. Her ears: `collect_audio_data.py` DONE, `distill_audio_encoder.py`
   DONE-not-launched (own loop, survived the compression pass). Align
   trainer REBUILT 2026-07-19: `vision_align.py` generalized into
@@ -249,10 +259,21 @@
 ## 5. Interim organ upgrades (still borrowed, better scaffolding; pip-only)
 
 > USER RULING 2026-07-16: voice/sound stays OFF for now ("we will work on it
-> later when it matters") -- launchers no longer pass -Voice. The zira
-> `--voice-name` stopgap and the Kokoro swap below wait for that ruling to lift.
+> later when it matters") -- launchers no longer pass -Voice.
+> RULING LIFTED 2026-07-23: voice work resumed by user order; the launchers
+> pass `-Voice` again and boot with talk-mode OFF (she starts silent).
 
-- [ ] TTS SAPI -> **Kokoro-82M** (~330 MB; near-natural, pure-Python G2P).
+- [x] TTS SAPI -> **Kokoro-82M** (~330 MB; near-natural, pure-Python G2P).
+  DONE 2026-07-23: `core/tts.py` runs on Kokoro. Synthesis measured at RTF
+  ~0.25x on the 5090 (1.31 s of compute for 5.28 s of audio, first run
+  including warmup) -- a session measurement with no committed benchmark, so
+  re-measure before relying on it. Voices are style tensors that blend by
+  weighted sum (`set_recipe` multiplies and sums whatever `load_voice`
+  returns; no shape is asserted anywhere); the
+  chosen recipe approximates the Cortana character and persists to
+  `~/.enigma_engine/voice.json`. The `[voice]` extra installs kokoro +
+  soundfile + sounddevice, and the launcher runs the server under the repo
+  `venv/` where kokoro lives.
 - [ ] ASR whisper-base -> **large-v3-turbo** (~1.6 GB; ~half the errors).
   VERIFY FIRST: CTranslate2 CUDA works on the 5090 (sm_120) — else it silently
   falls back to slow CPU int8. One-line check: `Ears(device="cuda").device`.
@@ -435,6 +456,41 @@ Method rules this produced, for any future capacity search:
   equivalents) and pays 30-40% for the checkpointing it would then require.
 - `--block` defaults to **1024**: a launch that omits it trains at 1024 no
   matter what the preset's `max_seq_len` says.
+
+### Launch commands, BRANCHED on the size call
+
+The flags are not shared across sizes. `--no-grad-ckpt` is right for 186m/238m
+and catastrophic for 542m (the cliff above: 503-845 tok/s, 325-545 days/epoch),
+and 542m's micro-batch is 16, not 6. Copying one size's line to the other
+produces a run roughly 40x slower with nothing in the output to say so. Flag
+surface verified against `pretrain_enigma.py --help` 2026-07-23.
+
+238m -- wall-clock optimal (8.8 days/epoch):
+
+    python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
+      --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
+      --block 2048 --micro-batch 6 \
+      --tokens-bin data/pretrain/tokens_v2.bin \
+      --out models/enigma_v2_238m --seed <N> --archive-every <N>
+
+542m -- largest the 5090 sanely trains (19.2 days/epoch). Note BOTH changes:
+drop `--no-grad-ckpt` (checkpointing is mandatory here) and raise the
+micro-batch to 16:
+
+    python pretrain_enigma.py --size v2_deep_542m --optimizer muon \
+      --schedule wsd_sqrt --sdpa-backend cudnn \
+      --block 2048 --micro-batch 16 \
+      --tokens-bin data/pretrain/tokens_v2.bin \
+      --out models/enigma_v2_542m --seed <N> --archive-every <N>
+
+- `--tokens-bin` defaults to the v1 `tokens.bin`: pass the v2 corpus
+  EXPLICITLY or the run trains the new architecture on the old tokenization.
+- Size `--archive-every` so the decay tail leaves ~10 archives; post-hoc EMA
+  has nothing to average otherwise, and an EMA checkpoint is `--init-from`
+  only (it carries no optimizer state, so `--resume` refuses it).
+- There is NO rope-theta flag: theta comes from the preset (all three
+  `v2_deep_*` carry 500000). Changing it means editing `model_presets.py`,
+  which is a lineage decision, not a launch knob.
 
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 

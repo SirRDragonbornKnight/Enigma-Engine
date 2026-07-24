@@ -6,8 +6,9 @@
 > like bad art at all"); and she should handle FINE-GRAINED discrimination
 > — the named target: two near-identical subjects (twins) with one visible
 > difference, and she can tell you what it is.
-> Status: design only. Training is LAST (user ruling); nothing here runs
-> until the user reopens it.
+> Status: design only. The training-last ruling that parked this was LIFTED
+> 2026-07-20 ("gpu usage is fine"); what gates the work now is the v2
+> pretrain owning the GPU, not a standing ban.
 
 ## 1. Why the current stack cannot pass the twins test (honest limits)
 
