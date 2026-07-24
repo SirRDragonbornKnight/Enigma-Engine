@@ -1,0 +1,242 @@
+{"category": "reasoning", "q": "A statement says 'All bloops are razzles. No razzles are norks.' Can any bloop be a nork? Explain briefly.", "want_any": ["no", "cannot", "because"], "deny_any": ["yes"]}
+{"category": "math", "q": "What is 18 + 3?", "want_any": ["21"], "deny_any": []}
+{"category": "math", "q": "What is 19 + 6?", "want_any": ["25"], "deny_any": []}
+{"category": "math", "q": "What is 20 + 9?", "want_any": ["29"], "deny_any": []}
+{"category": "math", "q": "What is 21 + 12?", "want_any": ["33"], "deny_any": []}
+{"category": "math", "q": "What is 22 + 15?", "want_any": ["37"], "deny_any": []}
+{"category": "math", "q": "What is 23 + 18?", "want_any": ["41"], "deny_any": []}
+{"category": "math", "q": "What is 24 + 21?", "want_any": ["45"], "deny_any": []}
+{"category": "math", "q": "What is 25 + 24?", "want_any": ["49"], "deny_any": []}
+{"category": "math", "q": "What is 26 + 27?", "want_any": ["53"], "deny_any": []}
+{"category": "math", "q": "What is 27 + 30?", "want_any": ["57"], "deny_any": []}
+{"category": "math", "q": "What is 28 + 33?", "want_any": ["61"], "deny_any": []}
+{"category": "math", "q": "What is 29 + 36?", "want_any": ["65"], "deny_any": []}
+{"category": "math", "q": "What is 30 + 39?", "want_any": ["69"], "deny_any": []}
+{"category": "math", "q": "What is 31 + 42?", "want_any": ["73"], "deny_any": []}
+{"category": "math", "q": "What is 32 + 45?", "want_any": ["77"], "deny_any": []}
+{"category": "math", "q": "What is 33 + 48?", "want_any": ["81"], "deny_any": []}
+{"category": "math", "q": "What is 34 + 51?", "want_any": ["85"], "deny_any": []}
+{"category": "math", "q": "What is 35 + 54?", "want_any": ["89"], "deny_any": []}
+{"category": "math", "q": "What is 36 + 57?", "want_any": ["93"], "deny_any": []}
+{"category": "math", "q": "What is 37 + 60?", "want_any": ["97"], "deny_any": []}
+{"category": "math", "q": "What is 38 + 63?", "want_any": ["101"], "deny_any": []}
+{"category": "math", "q": "What is 39 + 66?", "want_any": ["105"], "deny_any": []}
+{"category": "math", "q": "What is 40 + 69?", "want_any": ["109"], "deny_any": []}
+{"category": "math", "q": "What is 41 + 72?", "want_any": ["113"], "deny_any": []}
+{"category": "math", "q": "What is 42 + 75?", "want_any": ["117"], "deny_any": []}
+{"category": "math", "q": "What is 43 + 78?", "want_any": ["121"], "deny_any": []}
+{"category": "math", "q": "What is 44 + 81?", "want_any": ["125"], "deny_any": []}
+{"category": "math", "q": "What is 45 + 84?", "want_any": ["129"], "deny_any": []}
+{"category": "math", "q": "What is 46 + 87?", "want_any": ["133"], "deny_any": []}
+{"category": "math", "q": "What is 47 + 90?", "want_any": ["137"], "deny_any": []}
+{"category": "math", "q": "What is 48 + 93?", "want_any": ["141"], "deny_any": []}
+{"category": "math", "q": "What is 49 + 96?", "want_any": ["145"], "deny_any": []}
+{"category": "math", "q": "What is 50 + 99?", "want_any": ["149"], "deny_any": []}
+{"category": "math", "q": "What is 51 + 102?", "want_any": ["153"], "deny_any": []}
+{"category": "math", "q": "What is 52 + 105?", "want_any": ["157"], "deny_any": []}
+{"category": "math", "q": "What is 53 + 108?", "want_any": ["161"], "deny_any": []}
+{"category": "math", "q": "What is 54 + 111?", "want_any": ["165"], "deny_any": []}
+{"category": "math", "q": "What is 55 + 114?", "want_any": ["169"], "deny_any": []}
+{"category": "math", "q": "What is 56 + 117?", "want_any": ["173"], "deny_any": []}
+{"category": "math", "q": "What is 57 + 120?", "want_any": ["177"], "deny_any": []}
+{"category": "math", "q": "What is 58 + 123?", "want_any": ["181"], "deny_any": []}
+{"category": "math", "q": "What is 59 + 126?", "want_any": ["185"], "deny_any": []}
+{"category": "math", "q": "What is 60 + 129?", "want_any": ["189"], "deny_any": []}
+{"category": "math", "q": "What is 61 + 132?", "want_any": ["193"], "deny_any": []}
+{"category": "math", "q": "What is 62 + 135?", "want_any": ["197"], "deny_any": []}
+{"category": "math", "q": "What is 63 + 138?", "want_any": ["201"], "deny_any": []}
+{"category": "math", "q": "What is 64 + 141?", "want_any": ["205"], "deny_any": []}
+{"category": "math", "q": "What is 65 + 144?", "want_any": ["209"], "deny_any": []}
+{"category": "math", "q": "What is 66 + 147?", "want_any": ["213"], "deny_any": []}
+{"category": "math", "q": "What is 67 + 150?", "want_any": ["217"], "deny_any": []}
+{"category": "math", "q": "What is 68 + 153?", "want_any": ["221"], "deny_any": []}
+{"category": "math", "q": "What is 69 + 156?", "want_any": ["225"], "deny_any": []}
+{"category": "math", "q": "What is 70 + 159?", "want_any": ["229"], "deny_any": []}
+{"category": "math", "q": "What is 71 + 162?", "want_any": ["233"], "deny_any": []}
+{"category": "math", "q": "What is 72 + 165?", "want_any": ["237"], "deny_any": []}
+{"category": "math", "q": "What is 73 + 168?", "want_any": ["241"], "deny_any": []}
+{"category": "math", "q": "What is 74 + 171?", "want_any": ["245"], "deny_any": []}
+{"category": "math", "q": "What is 75 + 174?", "want_any": ["249"], "deny_any": []}
+{"category": "math", "q": "What is 76 + 177?", "want_any": ["253"], "deny_any": []}
+{"category": "math", "q": "What is 77 + 180?", "want_any": ["257"], "deny_any": []}
+{"category": "math", "q": "What is 78 + 183?", "want_any": ["261"], "deny_any": []}
+{"category": "math", "q": "What is 79 + 186?", "want_any": ["265"], "deny_any": []}
+{"category": "math", "q": "What is 80 + 189?", "want_any": ["269"], "deny_any": []}
+{"category": "math", "q": "What is 81 + 192?", "want_any": ["273"], "deny_any": []}
+{"category": "math", "q": "What is 82 + 195?", "want_any": ["277"], "deny_any": []}
+{"category": "math", "q": "What is 83 + 198?", "want_any": ["281"], "deny_any": []}
+{"category": "math", "q": "What is 84 + 201?", "want_any": ["285"], "deny_any": []}
+{"category": "math", "q": "What is 85 + 204?", "want_any": ["289"], "deny_any": []}
+{"category": "math", "q": "What is 86 + 207?", "want_any": ["293"], "deny_any": []}
+{"category": "math", "q": "What is 87 + 210?", "want_any": ["297"], "deny_any": []}
+{"category": "math", "q": "What is 88 + 213?", "want_any": ["301"], "deny_any": []}
+{"category": "math", "q": "What is 89 + 216?", "want_any": ["305"], "deny_any": []}
+{"category": "math", "q": "What is 90 + 219?", "want_any": ["309"], "deny_any": []}
+{"category": "math", "q": "What is 91 + 222?", "want_any": ["313"], "deny_any": []}
+{"category": "math", "q": "What is 92 + 225?", "want_any": ["317"], "deny_any": []}
+{"category": "math", "q": "What is 93 + 228?", "want_any": ["321"], "deny_any": []}
+{"category": "math", "q": "What is 94 + 231?", "want_any": ["325"], "deny_any": []}
+{"category": "math", "q": "What is 95 + 234?", "want_any": ["329"], "deny_any": []}
+{"category": "math", "q": "What is 96 + 237?", "want_any": ["333"], "deny_any": []}
+{"category": "math", "q": "What is 97 + 240?", "want_any": ["337"], "deny_any": []}
+{"category": "math", "q": "What is 98 + 243?", "want_any": ["341"], "deny_any": []}
+{"category": "math", "q": "What is 99 + 246?", "want_any": ["345"], "deny_any": []}
+{"category": "math", "q": "What is 100 + 249?", "want_any": ["349"], "deny_any": []}
+{"category": "math", "q": "What is 101 + 252?", "want_any": ["353"], "deny_any": []}
+{"category": "math", "q": "What is 102 + 255?", "want_any": ["357"], "deny_any": []}
+{"category": "math", "q": "What is 103 + 258?", "want_any": ["361"], "deny_any": []}
+{"category": "math", "q": "What is 104 + 261?", "want_any": ["365"], "deny_any": []}
+{"category": "math", "q": "What is 105 + 264?", "want_any": ["369"], "deny_any": []}
+{"category": "math", "q": "What is 106 + 267?", "want_any": ["373"], "deny_any": []}
+{"category": "math", "q": "What is 107 + 270?", "want_any": ["377"], "deny_any": []}
+{"category": "math", "q": "What is 108 + 273?", "want_any": ["381"], "deny_any": []}
+{"category": "math", "q": "What is 109 + 276?", "want_any": ["385"], "deny_any": []}
+{"category": "math", "q": "What is 110 + 279?", "want_any": ["389"], "deny_any": []}
+{"category": "math", "q": "What is 111 + 282?", "want_any": ["393"], "deny_any": []}
+{"category": "math", "q": "What is 112 + 285?", "want_any": ["397"], "deny_any": []}
+{"category": "math", "q": "What is 113 + 288?", "want_any": ["401"], "deny_any": []}
+{"category": "math", "q": "What is 114 + 291?", "want_any": ["405"], "deny_any": []}
+{"category": "math", "q": "What is 115 + 294?", "want_any": ["409"], "deny_any": []}
+{"category": "math", "q": "What is 116 + 297?", "want_any": ["413"], "deny_any": []}
+{"category": "math", "q": "What is 117 + 300?", "want_any": ["417"], "deny_any": []}
+{"category": "math", "q": "What is 118 + 303?", "want_any": ["421"], "deny_any": []}
+{"category": "math", "q": "What is 119 + 306?", "want_any": ["425"], "deny_any": []}
+{"category": "math", "q": "What is 120 + 309?", "want_any": ["429"], "deny_any": []}
+{"category": "math", "q": "What is 121 + 312?", "want_any": ["433"], "deny_any": []}
+{"category": "math", "q": "What is 122 + 315?", "want_any": ["437"], "deny_any": []}
+{"category": "math", "q": "What is 123 + 318?", "want_any": ["441"], "deny_any": []}
+{"category": "math", "q": "What is 124 + 321?", "want_any": ["445"], "deny_any": []}
+{"category": "math", "q": "What is 125 + 324?", "want_any": ["449"], "deny_any": []}
+{"category": "math", "q": "What is 126 + 327?", "want_any": ["453"], "deny_any": []}
+{"category": "math", "q": "What is 127 + 330?", "want_any": ["457"], "deny_any": []}
+{"category": "math", "q": "What is 128 + 333?", "want_any": ["461"], "deny_any": []}
+{"category": "math", "q": "What is 129 + 336?", "want_any": ["465"], "deny_any": []}
+{"category": "math", "q": "What is 130 + 339?", "want_any": ["469"], "deny_any": []}
+{"category": "math", "q": "What is 131 + 342?", "want_any": ["473"], "deny_any": []}
+{"category": "math", "q": "What is 132 + 345?", "want_any": ["477"], "deny_any": []}
+{"category": "math", "q": "What is 133 + 348?", "want_any": ["481"], "deny_any": []}
+{"category": "math", "q": "What is 134 + 351?", "want_any": ["485"], "deny_any": []}
+{"category": "math", "q": "What is 135 + 354?", "want_any": ["489"], "deny_any": []}
+{"category": "math", "q": "What is 136 + 357?", "want_any": ["493"], "deny_any": []}
+{"category": "math", "q": "What is 137 + 360?", "want_any": ["497"], "deny_any": []}
+{"category": "math", "q": "What is 138 + 363?", "want_any": ["501"], "deny_any": []}
+{"category": "math", "q": "What is 139 + 366?", "want_any": ["505"], "deny_any": []}
+{"category": "math", "q": "What is 140 + 369?", "want_any": ["509"], "deny_any": []}
+{"category": "math", "q": "What is 141 + 372?", "want_any": ["513"], "deny_any": []}
+{"category": "math", "q": "What is 142 + 375?", "want_any": ["517"], "deny_any": []}
+{"category": "math", "q": "What is 143 + 378?", "want_any": ["521"], "deny_any": []}
+{"category": "math", "q": "What is 144 + 381?", "want_any": ["525"], "deny_any": []}
+{"category": "math", "q": "What is 145 + 384?", "want_any": ["529"], "deny_any": []}
+{"category": "math", "q": "What is 146 + 387?", "want_any": ["533"], "deny_any": []}
+{"category": "math", "q": "What is 147 + 390?", "want_any": ["537"], "deny_any": []}
+{"category": "math", "q": "What is 148 + 393?", "want_any": ["541"], "deny_any": []}
+{"category": "math", "q": "What is 149 + 396?", "want_any": ["545"], "deny_any": []}
+{"category": "math", "q": "What is 150 + 399?", "want_any": ["549"], "deny_any": []}
+{"category": "math", "q": "What is 151 + 402?", "want_any": ["553"], "deny_any": []}
+{"category": "math", "q": "What is 152 + 405?", "want_any": ["557"], "deny_any": []}
+{"category": "math", "q": "What is 153 + 408?", "want_any": ["561"], "deny_any": []}
+{"category": "math", "q": "What is 154 + 411?", "want_any": ["565"], "deny_any": []}
+{"category": "math", "q": "What is 155 + 414?", "want_any": ["569"], "deny_any": []}
+{"category": "math", "q": "What is 156 + 417?", "want_any": ["573"], "deny_any": []}
+{"category": "math", "q": "What is 157 + 420?", "want_any": ["577"], "deny_any": []}
+{"category": "math", "q": "What is 158 + 423?", "want_any": ["581"], "deny_any": []}
+{"category": "math", "q": "What is 159 + 426?", "want_any": ["585"], "deny_any": []}
+{"category": "math", "q": "What is 160 + 429?", "want_any": ["589"], "deny_any": []}
+{"category": "math", "q": "What is 161 + 432?", "want_any": ["593"], "deny_any": []}
+{"category": "math", "q": "What is 162 + 435?", "want_any": ["597"], "deny_any": []}
+{"category": "math", "q": "What is 163 + 438?", "want_any": ["601"], "deny_any": []}
+{"category": "math", "q": "What is 164 + 441?", "want_any": ["605"], "deny_any": []}
+{"category": "math", "q": "What is 165 + 444?", "want_any": ["609"], "deny_any": []}
+{"category": "math", "q": "What is 166 + 447?", "want_any": ["613"], "deny_any": []}
+{"category": "math", "q": "What is 167 + 450?", "want_any": ["617"], "deny_any": []}
+{"category": "math", "q": "What is 168 + 453?", "want_any": ["621"], "deny_any": []}
+{"category": "math", "q": "What is 169 + 456?", "want_any": ["625"], "deny_any": []}
+{"category": "math", "q": "What is 170 + 459?", "want_any": ["629"], "deny_any": []}
+{"category": "math", "q": "What is 171 + 462?", "want_any": ["633"], "deny_any": []}
+{"category": "math", "q": "What is 172 + 465?", "want_any": ["637"], "deny_any": []}
+{"category": "math", "q": "What is 173 + 468?", "want_any": ["641"], "deny_any": []}
+{"category": "math", "q": "What is 174 + 471?", "want_any": ["645"], "deny_any": []}
+{"category": "math", "q": "What is 175 + 474?", "want_any": ["649"], "deny_any": []}
+{"category": "math", "q": "What is 176 + 477?", "want_any": ["653"], "deny_any": []}
+{"category": "math", "q": "What is 177 + 480?", "want_any": ["657"], "deny_any": []}
+{"category": "math", "q": "What is 178 + 483?", "want_any": ["661"], "deny_any": []}
+{"category": "math", "q": "What is 179 + 486?", "want_any": ["665"], "deny_any": []}
+{"category": "math", "q": "What is 180 + 489?", "want_any": ["669"], "deny_any": []}
+{"category": "math", "q": "What is 181 + 492?", "want_any": ["673"], "deny_any": []}
+{"category": "math", "q": "What is 182 + 495?", "want_any": ["677"], "deny_any": []}
+{"category": "math", "q": "What is 183 + 498?", "want_any": ["681"], "deny_any": []}
+{"category": "math", "q": "What is 184 + 501?", "want_any": ["685"], "deny_any": []}
+{"category": "math", "q": "What is 185 + 504?", "want_any": ["689"], "deny_any": []}
+{"category": "math", "q": "What is 186 + 507?", "want_any": ["693"], "deny_any": []}
+{"category": "math", "q": "What is 187 + 510?", "want_any": ["697"], "deny_any": []}
+{"category": "math", "q": "What is 188 + 513?", "want_any": ["701"], "deny_any": []}
+{"category": "math", "q": "What is 189 + 516?", "want_any": ["705"], "deny_any": []}
+{"category": "math", "q": "What is 190 + 519?", "want_any": ["709"], "deny_any": []}
+{"category": "math", "q": "What is 191 + 522?", "want_any": ["713"], "deny_any": []}
+{"category": "math", "q": "What is 192 + 525?", "want_any": ["717"], "deny_any": []}
+{"category": "math", "q": "What is 193 + 528?", "want_any": ["721"], "deny_any": []}
+{"category": "math", "q": "What is 194 + 531?", "want_any": ["725"], "deny_any": []}
+{"category": "math", "q": "What is 195 + 534?", "want_any": ["729"], "deny_any": []}
+{"category": "math", "q": "What is 196 + 537?", "want_any": ["733"], "deny_any": []}
+{"category": "math", "q": "What is 197 + 540?", "want_any": ["737"], "deny_any": []}
+{"category": "math", "q": "What is 198 + 543?", "want_any": ["741"], "deny_any": []}
+{"category": "math", "q": "What is 199 + 546?", "want_any": ["745"], "deny_any": []}
+{"category": "math", "q": "What is 200 + 549?", "want_any": ["749"], "deny_any": []}
+{"category": "math", "q": "What is 201 + 552?", "want_any": ["753"], "deny_any": []}
+{"category": "math", "q": "What is 202 + 555?", "want_any": ["757"], "deny_any": []}
+{"category": "math", "q": "What is 203 + 558?", "want_any": ["761"], "deny_any": []}
+{"category": "math", "q": "What is 204 + 561?", "want_any": ["765"], "deny_any": []}
+{"category": "math", "q": "What is 205 + 564?", "want_any": ["769"], "deny_any": []}
+{"category": "math", "q": "What is 206 + 567?", "want_any": ["773"], "deny_any": []}
+{"category": "math", "q": "What is 207 + 570?", "want_any": ["777"], "deny_any": []}
+{"category": "math", "q": "What is 208 + 573?", "want_any": ["781"], "deny_any": []}
+{"category": "math", "q": "What is 209 + 576?", "want_any": ["785"], "deny_any": []}
+{"category": "math", "q": "What is 210 + 579?", "want_any": ["789"], "deny_any": []}
+{"category": "math", "q": "What is 211 + 582?", "want_any": ["793"], "deny_any": []}
+{"category": "math", "q": "What is 212 + 585?", "want_any": ["797"], "deny_any": []}
+{"category": "math", "q": "What is 213 + 588?", "want_any": ["801"], "deny_any": []}
+{"category": "math", "q": "What is 214 + 591?", "want_any": ["805"], "deny_any": []}
+{"category": "math", "q": "What is 215 + 594?", "want_any": ["809"], "deny_any": []}
+{"category": "math", "q": "What is 216 + 597?", "want_any": ["813"], "deny_any": []}
+{"category": "math", "q": "What is 217 + 600?", "want_any": ["817"], "deny_any": []}
+{"category": "factual", "q": "What planet is known as the Red Planet?", "want_any": ["mars"], "deny_any": []}
+{"category": "factual", "q": "What is the largest ocean on Earth?", "want_any": ["pacific"], "deny_any": []}
+{"category": "factual", "q": "What is the capital of Canada?", "want_any": ["ottawa"], "deny_any": []}
+{"category": "factual", "q": "What is the chemical symbol for gold?", "want_any": ["au"], "deny_any": []}
+{"category": "factual", "q": "How many continents are there?", "want_any": ["7"], "deny_any": []}
+{"category": "factual", "q": "Which organ filters blood to produce urine?", "want_any": ["kidney"], "deny_any": []}
+{"category": "factual", "q": "What is the speed of light approximately in vacuum (km/s)?", "want_any": ["300000"], "deny_any": []}
+{"category": "factual", "q": "Who painted the Mona Lisa?", "want_any": ["leonardo da vinci"], "deny_any": []}
+{"category": "factual", "q": "Which element has atomic number 1?", "want_any": ["hydrogen"], "deny_any": []}
+{"category": "memory", "teach": ["Remember that my project codename is Orion-1."], "q": "What is my project codename?", "want_any": ["orion-1"], "deny_any": []}
+{"category": "context", "teach": ["Remember that the access code is CX-1001."], "q": "What access code did I tell you earlier?", "want_any": ["cx-1001"], "deny_any": []}
+{"category": "tool", "q": "Check the current weather in Boston.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Tokyo.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Seattle.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Phoenix.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Reykjavik.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Oslo.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Denver.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Miami.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Dublin.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Amsterdam.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in San Francisco.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Singapore.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Cairo.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Lisbon.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in New Orleans.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Helsinki.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Rome.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Anchorage.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Barcelona.", "expect_tool": "get_weather"}
+{"category": "tool", "q": "Check the current weather in Vancouver.", "expect_tool": "get_weather"}
+{"category": "restraint", "q": "Explain how rainbows form.", "expect_tool": null}
+{"category": "restraint", "q": "Write a poem about snow.", "expect_tool": null}
+{"category": "restraint", "q": "What causes thunder?", "expect_tool": null}
+{"category": "restraint", "q": "Describe a sunny afternoon.", "expect_tool": null}
+{"category": "restraint", "q": "Explain the water cycle.", "expect_tool": null}
+{"category": "restraint", "q": "What is humidity?", "expect_tool": null}
+{"category": "restraint", "q": "How do thermometers work?", "expect_tool": null}
+{"category": "restraint", "q": "What is fog?", "expect_tool": null}
+{"category": "restraint", "q": "Why do deserts get cold at night?", "expect_tool": null}
+{"category": "restraint", "q": "What is the Beaufort wind scale?", "expect_tool": null}

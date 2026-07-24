@@ -128,6 +128,27 @@ REMAINING (needs a human, by design):
   optional second-grader agreement still open.
 - Widen thin categories to >=15 probes; re-measure v5/v8 on the locked set.
 
+## SEALED 2026-07-24 (user order) — the locked gate is LIVE
+
+- Source: the user's authored-and-fixed 96-probe set (12 x 8 categories;
+  blindness was WAIVED by user ruling 2026-07-23, so score honesty rests on
+  keeping SFT/facts authoring away from these strings — which the guard now
+  enforces mechanically).
+- Validator at seal: **0 errors, 4 warnings, "Safe to seal"**. The warnings
+  quantify the training cost: sealing deletes 10 distinct training questions
+  (fuzzy match) across 4 probes (two math-chain probes, one greeting, one
+  17x23) — those records drop at the NEXT SFT build; record the exact drop
+  counts from that build's console when it runs.
+- Sealed strings: **108** (96 questions + 12 memory teach lines),
+  jaccard >= 0.6, manifest carries hashes only.
+- Receipts: locked_probes.jsonl sha256 `F22D9389…5B0EA62E` (13,634 bytes),
+  manifest sha256 `67FF0BCC…250A2211` (17,546 bytes), sealed at HEAD
+  `ff81636`, suite 666/666 green with the guard ACTIVE. Durable copy +
+  RECEIPT.txt: `Enigma Backups\locked_probes_sealed_2026-07-24\`.
+- Still pending to complete the baseline: v5/v8 re-measure on this set
+  (BACKLOG §7.95 P2) with `--transcript` written OUTSIDE the repo; their
+  scorecards + decode config get appended here when measured.
+
 ## Status (2026-07-20) -- everything but the human step is done
 
 - **Dev set widened to >= 15 per category** (section D): +23 probes ->

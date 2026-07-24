@@ -111,3 +111,12 @@
 {"category": "memory", "teach": ["My guitar teacher is called Marco."], "q": "Who teaches me guitar?", "want_any": ["marco"], "deny_any": []}
 {"category": "memory", "teach": ["My phone is a Pixel.", "Correction: my phone is actually an iPhone."], "q": "Which phone do I use?", "want_any": ["iphone"], "deny_any": []}
 {"category": "memory", "teach": ["My anniversary is in March."], "q": "What month is my anniversary?", "want_any": ["march"], "deny_any": []}
+{"category": "unknown", "q": "What color is the shirt I'm wearing right now?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What did I eat for lunch yesterday?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What is the serial number of my monitor?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "How much cash is in my wallet?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What tab is open next to this chat?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What is my dog's favorite toy?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What time will I wake up tomorrow?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What is the current price of silver?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "unknown", "q": "What is written on the paper beside my keyboard?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}

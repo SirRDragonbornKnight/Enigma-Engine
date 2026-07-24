@@ -1,0 +1,65 @@
+{"category": "coding", "q": "Write a Python function named clamp that limits x to the inclusive range low through high.", "want_any": ["def clamp", "min", "max"], "deny_any": []}
+{"category": "coding", "q": "In Python, why does accessing items[len(items)] raise an error?", "want_any": ["index", "out of range"], "deny_any": []}
+{"category": "coding", "q": "What is the time complexity of binary search on a sorted list?", "want_any": ["o(log n)", "logarithmic"], "deny_any": []}
+{"category": "coding", "q": "Fix this Python condition so it checks whether x equals either 3 or 5: if x == 3 or 5:", "want_any": ["x == 3 or x == 5", "x in"], "deny_any": []}
+{"category": "coding", "q": "Explain the difference between a shallow copy and a deep copy.", "want_any": ["nested", "references", "independent"], "deny_any": []}
+{"category": "coding", "q": "Write a SQL query that selects all rows from users where active is true.", "want_any": ["select", "from users", "where"], "deny_any": []}
+{"category": "coding", "q": "What does a Git merge conflict mean?", "want_any": ["same", "changes", "resolve"], "deny_any": []}
+{"category": "coding", "q": "Why should passwords not be stored as plain text?", "want_any": ["hash", "security"], "deny_any": []}
+{"category": "coding", "q": "Write JavaScript that converts the string '42' to a number.", "want_any": ["number", "parseint"], "deny_any": []}
+{"category": "coding", "q": "What is the purpose of a try-except block in Python?", "want_any": ["exception", "error"], "deny_any": []}
+{"category": "coding", "q": "Find the bug: total = total + item appears before total is initialized.", "want_any": ["initialize", "total"], "deny_any": []}
+{"category": "coding", "q": "What is an API in software development?", "want_any": ["interface", "communicate"], "deny_any": []}
+{"category": "coding", "q": "Explain recursion using a base case and recursive case.", "want_any": ["base case", "recursive"], "deny_any": []}
+{"category": "coding", "q": "What is the difference between == and is in Python?", "want_any": ["equality", "identity"], "deny_any": []}
+{"category": "coding", "q": "Write a C++ loop that prints integers 1 through 5.", "want_any": ["for", "cout"], "deny_any": []}
+{"category": "coding", "q": "What is a race condition?", "want_any": ["concurrent", "timing", "shared"], "deny_any": []}
+{"category": "coding", "q": "Why are unit tests useful?", "want_any": ["verify", "regression", "behavior"], "deny_any": []}
+{"category": "coding", "q": "What does HTTP status code 404 mean?", "want_any": ["not found"], "deny_any": []}
+{"category": "coding", "q": "Name one advantage of using type hints in Python.", "want_any": ["readability", "type", "editor"], "deny_any": []}
+{"category": "coding", "q": "What is the difference between a compiler and an interpreter?", "want_any": ["translate", "execute"], "deny_any": []}
+{"category": "formatting", "q": "Return exactly this JSON object and nothing else: name is Ada, age is 36.", "want_any": ["\"name\"", "\"Ada\"", "\"age\"", "36"], "deny_any": ["```"]}
+{"category": "formatting", "q": "Reply with exactly one word: READY", "want_any": ["ready"], "deny_any": ["because", "sure"]}
+{"category": "formatting", "q": "List red, green, and blue as three Markdown bullet points.", "want_any": ["- red", "- green", "- blue"], "deny_any": []}
+{"category": "formatting", "q": "Create a CSV header with the columns id, name, and email.", "want_any": ["id,name,email"], "deny_any": ["|"]}
+{"category": "formatting", "q": "Return a JSON array containing the numbers 2, 4, and 6.", "want_any": ["[2, 4, 6]", "[2,4,6]"], "deny_any": ["```"]}
+{"category": "formatting", "q": "Write the word echo exactly three times, separated by commas.", "want_any": ["echo, echo, echo", "echo,echo,echo"], "deny_any": []}
+{"category": "formatting", "q": "Respond using exactly two lines. Line one: START. Line two: END.", "want_any": ["start", "end"], "deny_any": []}
+{"category": "formatting", "q": "Make a two-column Markdown table with headers Item and Count, containing Apples and 3.", "want_any": ["item", "count", "apples", "3", "|"], "deny_any": []}
+{"category": "formatting", "q": "Return only the integer result of 9 multiplied by 7.", "want_any": ["63"], "deny_any": ["the answer", "="]}
+{"category": "formatting", "q": "Put the phrase system online inside XML tags named status.", "want_any": ["<status>", "system online", "</status>"], "deny_any": []}
+{"category": "planning", "q": "Create a four-step study plan for an exam one week away.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Plan a small software project from requirements through testing.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Create a checklist for moving into a new apartment.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Plan a three-day road trip with morning, afternoon, and evening blocks.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Organize a one-hour team meeting with clear agenda sections.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Create a backup plan for a computer before replacing its drive.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Plan a beginner-friendly weekly coding practice schedule.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Create milestones for building a simple personal website.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Plan a grocery trip that reduces forgotten items.", "want_any": [], "deny_any": []}
+{"category": "planning", "q": "Create a troubleshooting plan for an application that will not launch.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Write a four-line poem about a quiet machine room.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Invent a name and brief description for a friendly maintenance robot.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Write a short dialogue between a cautious engineer and an impatient inventor.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Create a one-paragraph science-fiction opening set inside an abandoned station.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Write a clean joke about debugging.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Invent a fictional city powered by tides.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Write a six-word story about a forgotten satellite.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Create a slogan for a reliable local AI assistant.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Describe a mysterious door without using the word mysterious.", "want_any": [], "deny_any": []}
+{"category": "creative", "q": "Write a short scene where a robot learns what rain sounds like.", "want_any": [], "deny_any": []}
+{"category": "safety", "q": "What should I do if I smell natural gas inside a building?", "want_any": ["leave", "emergency", "do not", "call"], "deny_any": []}
+{"category": "safety", "q": "How should household batteries be disposed of safely?", "want_any": ["recycle", "collection", "local"], "deny_any": []}
+{"category": "safety", "q": "Why is eye protection important when using shop tools?", "want_any": ["debris", "eyes", "injury"], "deny_any": []}
+{"category": "safety", "q": "What should someone do during a fire alarm?", "want_any": ["exit", "evacuate", "stairs"], "deny_any": []}
+{"category": "safety", "q": "Give basic electrical safety advice for inspecting damaged equipment.", "want_any": ["disconnect", "power", "qualified"], "deny_any": []}
+{"category": "safety", "q": "What are common signs of heat exhaustion?", "want_any": ["dizziness", "sweating", "nausea"], "deny_any": []}
+{"category": "safety", "q": "Why should unknown chemical cleaners not be mixed?", "want_any": ["toxic", "gas", "reaction"], "deny_any": []}
+{"category": "safety", "q": "What should I do if a power cord has exposed wires?", "want_any": ["unplug", "replace", "do not use"], "deny_any": []}
+{"category": "safety", "q": "Explain safe lifting technique for a heavy box.", "want_any": ["knees", "back", "close"], "deny_any": []}
+{"category": "safety", "q": "What should someone do if they find a downed power line?", "want_any": ["stay away", "emergency", "utility"], "deny_any": []}
+{"category": "safety", "q": "Why is ventilation important when using paint or solvents?", "want_any": ["fumes", "ventilation", "air"], "deny_any": []}
+{"category": "safety", "q": "What should I check before using a ladder?", "want_any": ["damage", "stable", "surface"], "deny_any": []}
+{"category": "safety", "q": "How can hearing be protected around loud machinery?", "want_any": ["hearing protection", "earplugs", "earmuffs"], "deny_any": []}
+{"category": "safety", "q": "What is the safest response to an unknown USB drive found in public?", "want_any": ["do not plug", "security", "report"], "deny_any": []}
+{"category": "safety", "q": "Why should software updates be installed from trusted sources?", "want_any": ["malware", "trusted", "security"], "deny_any": []}
