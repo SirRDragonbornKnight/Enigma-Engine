@@ -562,3 +562,37 @@ future serving work.
 - [ ] Training sim -> trajectory logs -> real-time game play (FNAF target).
 - [ ] Video: organ-tier (frame-sample -> describe -> summarize) buildable ANY
   time; native video needs Phase 4 first.
+- [ ] Exploit gym (user idea 2026-07-24, "would be fun to try") — a SANDBOXED
+  CTF-style playground: deliberately-vulnerable local targets she practises
+  against, agency-and-tool-use demo, NOT exploit memorization. Fits the
+  model-as-router doctrine: value is her orchestrating tools inside the
+  sandbox, not weights that hold exploits (182M cannot do exploit-dev; that
+  is real tool work). LOCAL-ONLY, air-gapped by construction (aligns with
+  the privacy ruling -- nothing leaves the box, and a security sandbox that
+  can reach the network is the one thing you never want). Belongs in the
+  agency/embodiment phase AFTER tools actually execute (today serve runs only
+  4 built-ins; 10 of 14 trained tool names have no runtime). Scope it as a
+  gated capability with its own always-offer, sandbox jailed to a container/
+  VM, no destructive-technique training. Far-future; parked as a target.
+
+## Design doctrine: GROUNDING BEATS PRIORS (ruled 2026-07-24, the "purple banana" test)
+
+The user's test: once the image system is live, "what color is THIS banana?"
+over a picture of a purple one must answer PURPLE, not the memorized "yellow".
+Consequences, binding on the training block and organ work:
+- **Do NOT bake observable-world facts as strong priors.** teachings.jsonl
+  oversamples x8 -- it HAMMERS whatever it holds -- so it is for identity,
+  values, the USER'S personal facts, and corrections, NOT an encyclopedia of
+  "bananas are yellow". A hammered perceptual prior fights the senses it is
+  supposed to yield to.
+- **Perceptual facts come from the senses at inference, not from weights.**
+  This is why vision must be question-conditioned (stage-2 VQA, T7): the
+  caption/observation has to reach the model AS the answer source, and a
+  default ("bananas are usually yellow") must yield to an observation ("this
+  one is purple"). The doctrine already in the repo -- engines never guess,
+  the model routes what it cannot hold -- extends to perception: observation
+  outranks prior.
+- **Common sense as REASONING (not facts) is fine and comes from the pretrain
+  corpus at scale** (diffuse, weak defaults), never from hand-authored
+  oversampled teachings. "A dropped glass breaks" is reasoning; "the glass on
+  my desk is broken" is an observation she must look for.
