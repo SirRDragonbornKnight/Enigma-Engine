@@ -101,13 +101,15 @@ is a ceiling, not a baseline.
   gets its own intent gate (ride-along offering stole tool calls); every
   serve-side injection format gets a matching SFT slice (she ignored
   "Things you remember:" until trained on it).
-  **CONTESTED 2026-07-22:** the per-built-in intent gate was measured
-  defective in both directions (missed asks get no offer, so no gradient and
-  no eval signal; false fires happen on negated asks), and the eyes flatten
-  images to text before the gates read them, so her own caption can fire the
-  painter. The proposed replacement is a fixed always-offered built-in block
-  trained into the v2 SFT regen. Pending a user ruling — the line above is
-  the hypothesis this doctrine was written under, not a settled wall.
+  **OVERTURNED — RULED 2026-07-24: the intent gates retire at the v2 regen.**
+  The per-built-in gate was measured defective in both directions (missed
+  asks get no offer, so no gradient and no eval signal; false fires happen on
+  negated asks), and the eyes flatten images to text before the gates read
+  them, so her own caption can fire the painter. Replacement: a fixed
+  always-offered built-in block trained into the v2 SFT regen, with restraint
+  learned in-weights instead of regexed at serve. The gates stay untouched on
+  the v8 lineage (v8 was trained under gate-mediated offers; always-offering
+  to it is untrained input).
 - Run-stamped checkpoint directories with SHA256 receipts — rounds
   overwrote model.pth all week; the peaks survived by manual backup only.
 - QA gates from day 0: foreign-identity purge, boilerplate filter,

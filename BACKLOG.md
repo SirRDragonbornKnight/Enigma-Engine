@@ -492,6 +492,57 @@ micro-batch to 16:
   `v2_deep_*` carry 500000). Changing it means editing `model_presets.py`,
   which is a lineage decision, not a launch knob.
 
+## 7.95 THE TRAINING BLOCK — everything that trains, deferred to the end, in order
+
+> RULED 2026-07-24: anything that trains the AI waits as long as possible and
+> runs as one consolidated block. Local 5090 only (rental rejected same day).
+> Non-training prerequisites run first, whenever convenient.
+
+Prerequisites (not training):
+- P1. Seal the locked probes (validate, seal manifest, record drop counts +
+  shas + scorecards in EVAL_REDESIGN). User's call on timing.
+- P2. v5/v8 locked re-measure (`--port 8123`, throwaway `--memory-dir`,
+  `--transcript` OUTSIDE the repo) = the baseline v2 must beat. Runs before
+  any vocab adoption. Needs the serve-launch permission line (user's hand).
+
+The block, in execution order:
+- T1. Corpus prep (~1 day, mostly CPU): quality-score the raw third
+  (edu-classifier or DCLM swap), add code+math (FineMath collector was never
+  run), add short conversational register (chat was left entirely to SFT
+  last lineage), 5-10 paraphrase variants of every must-know fact IN the
+  corpus, decay-tail annealing set (~2-3B best tokens); then the rust
+  retokenize (~42 min). Decide doc-boundary attention masking here.
+- T2. 10k-step probe pretrain (hours): first val-loss receipt for the v2
+  lineage + live shakeout of archive cadence. The only v2 runs on disk are
+  throughput probes.
+- T3. Full v2 pretrain (5090; size = user's call at launch -- 238m 8.8
+  d/epoch or 542m 19.2 d/epoch; commands above, flags BRANCH on size).
+- T4. SFT regen riding the bake (data work, minutes-hours of GPU):
+  multi-turn, <think> reasoning, math re-enabled (per-digit vocab kills the
+  old disable reason), widened knowledge, DPO pairs beyond identity, the
+  contradiction/correction shape, teachings.jsonl dual-routed into the facts
+  stream, identity anchors rewritten to actual capabilities, the
+  ALWAYS-OFFERED built-in block (router gates retire here, ruled
+  2026-07-24), the client-system "Available tools:" shape, image turns
+  carrying system/tools/memory blocks, URL-bearing records now kept,
+  trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
+  passed explicitly, finetune `--block` raised.
+- T5. DPO/polish pass (safe recipe: lr 5e-7 x 1 epoch).
+- T6. Gate: locked eval vs the P2 baseline -> beat aggregate with no
+  category floor regression = adopt + flip the vocab default; ambiguous =
+  user's call.
+- T7. Post-adoption organ training, in order: vision stage-2 VQA
+  (needs the image-domain pick), ears distill + align (needs the
+  whisper-base teacher download), then the far-future own TTS / own
+  image-gen transplants.
+
+Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
+REJECTED -- her serving path is our own code. Consequence: the vendored
+`enigma_engine/bin/llama-server/` binary (+~1 GB DLLs) is dead weight,
+pending a deletion decision; the deferred eager-path optimizations
+(enable_gqa, fused RMSNorm, CUDA graphs) are back on the table as
+future serving work.
+
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 
 - [x] New tokenizer — DONE 2026-07-20: v2 vocab 16,366 rows kills the

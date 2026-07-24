@@ -47,12 +47,13 @@ Muppet.
 **Methods-audit verdicts (2026-07-15):**
 - KEEP (validated): restart-from-pretrain each SFT cycle; oversample weights;
   regex tool gates; clarity sampling defaults (one min_p-only A/B queued).
-  **The "regex tool gates" verdict is CONTESTED as of the 2026-07-22 router
-  audit** — the gates were measured defective in both directions (false-miss
-  "Draw me a dragon" / word-number math; false-fire "Do not draw anything"),
-  and a miss means no offer, no gradient, and nothing the eval can see. The
-  proposed replacement is a fixed always-offered built-in block baked into the
-  v2 SFT regen. This is a pending user ruling; the line stays until it lands.
+  **The "regex tool gates" verdict was OVERTURNED — ruled 2026-07-24.** The
+  gates were measured defective in both directions (false-miss "Draw me a
+  dragon" / word-number math; false-fire "Do not draw anything"), and a miss
+  means no offer, no gradient, and nothing the eval can see. At the v2 regen
+  the gates retire in favor of a fixed always-offered built-in block, with
+  restraint trained in-weights; the v8 lineage keeps its gates (it was
+  trained under them).
 - FIX instruments: SFT val split is contaminated by oversample duplicates
   (dedup before split — FIXED `47f557ae`); DPO "100% val" is 8
   template-sharing pairs (group val by prompt — FIXED `fd2776d1`); 29 eval
