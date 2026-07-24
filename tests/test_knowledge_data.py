@@ -82,10 +82,12 @@ def test_low_quality_gate_drops_junk():
     def rec(text):
         return {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": text}]}
 
-    assert _is_low_quality(rec("See https://example.com for details."))
     assert _is_low_quality(rec("<div>hello</div>"))
     assert _is_low_quality(rec("bad bad bad bad bad bad loop"))
     assert not _is_low_quality(rec("The capital of France is Paris."))
+    # A cited link is supervision, not junk: dropping URL-bearing answers
+    # removed all URL supervision, so she could never cite a source.
+    assert not _is_low_quality(rec("See https://example.com for details."))
     # Profanity is NOT junk -- she may use any type of language (user
     # ruling 2026-07-15); only structural garbage gets dropped.
     assert not _is_low_quality(rec("Well fuck that noise, the build is green."))
