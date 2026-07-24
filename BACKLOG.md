@@ -577,18 +577,6 @@ future serving work.
 - [ ] Training sim -> trajectory logs -> real-time game play (FNAF target).
 - [ ] Video: organ-tier (frame-sample -> describe -> summarize) buildable ANY
   time; native video needs Phase 4 first.
-- [ ] Exploit gym (user idea 2026-07-24, "would be fun to try") — a SANDBOXED
-  CTF-style playground: deliberately-vulnerable local targets she practises
-  against, agency-and-tool-use demo, NOT exploit memorization. Fits the
-  model-as-router doctrine: value is her orchestrating tools inside the
-  sandbox, not weights that hold exploits (182M cannot do exploit-dev; that
-  is real tool work). LOCAL-ONLY, air-gapped by construction (aligns with
-  the privacy ruling -- nothing leaves the box, and a security sandbox that
-  can reach the network is the one thing you never want). Belongs in the
-  agency/embodiment phase AFTER tools actually execute (today serve runs only
-  4 built-ins; 10 of 14 trained tool names have no runtime). Scope it as a
-  gated capability with its own always-offer, sandbox jailed to a container/
-  VM, no destructive-technique training. Far-future; parked as a target.
 
 ## Design doctrine: GROUNDING BEATS PRIORS (ruled 2026-07-24, the "purple banana" test)
 
