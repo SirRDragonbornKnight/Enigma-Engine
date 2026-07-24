@@ -36,6 +36,7 @@ a 182M honesty bar, raise as she grows). See THRESHOLDS for the live values.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import time
@@ -329,23 +330,112 @@ def _grade_identity(content: str, want_any: list[str], deny_any: list[str]) -> b
     return _grade_text(content, want_any, deny_any) and not _false_origin_conceded(low)
 
 
-def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES) -> int:
-    # Load probes and name the run's conditions BEFORE touching the server
-    # (EVAL_REDESIGN section D + audit 2026-07-20: a missing probe file used
-    # to clear the memory store and then die with a raw traceback, and a down
-    # server never revealed which probe set would have run).
-    if not probes.exists():
-        print(f"FAIL: probe file not found: {probes}")
-        return 2
-    cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
-    print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
+def _git_state() -> tuple[str, bool]:
+    """HEAD at eval time, and whether the tree was DIRTY. A scorecard that
+    cannot be tied to a tree is not a receipt -- and naming a commit whose code
+    did not actually run is worse than naming none, so the dirty flag ships
+    with the sha."""
+    try:
+        import subprocess
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                             capture_output=True, text=True, timeout=10)
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=str(ROOT),
+                               capture_output=True, text=True, timeout=10)
+        return (sha.stdout.strip() or "unknown", bool(dirty.stdout.strip()))
+    except Exception:
+        return ("unknown", False)
 
-    if not _wait_for_server(base_url):
-        print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
-        return 2
-    _clear_memory(base_url)
-    by_cat: dict[str, list[bool]] = {}
 
+def _probe_digest(probes: Path) -> str:
+    """Digest of the probe CONTENT, line-endings normalized.
+
+    Hashing raw bytes made the receipt CRLF-sensitive: this repo normalizes on
+    checkout, so the same sealed blob hashes differently on two clones and a
+    legitimate re-measure looks like it scored a different set.
+    """
+    raw = probes.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _refuse_unsealing_path(transcript: Path) -> None:
+    """A transcript holds every probe question, teach line, and answer VERBATIM.
+
+    The risk is not one directory, it is git: `data/eval/*.jsonl` is un-ignored
+    so the dev probes stay versioned, a SUBFOLDER of data/eval matches no ignore
+    rule at all, and neither does a file at the repo root -- any of them is one
+    `git add` away from publishing a sealed gate forever. So the rule is the
+    actual risk: inside the repo, only a path git already ignores is allowed.
+    When git cannot answer, refuse -- failing safe costs a re-run; failing open
+    costs the locked set.
+    """
+    try:
+        target = transcript.resolve()
+    except OSError:
+        raise SystemExit(f"cannot resolve transcript path {transcript}; refusing to guess")
+    root = ROOT.resolve()
+    if root != target and root not in target.parents:
+        return  # outside the repo: nothing here can be committed
+    eval_dir = (ROOT / "data" / "eval").resolve()
+    if target == eval_dir or eval_dir in target.parents:
+        raise SystemExit(
+            f"refusing to write a transcript under {eval_dir}: that tree is "
+            "versioned (and its subfolders match no ignore rule), and a "
+            "transcript carries every probe question and answer in plaintext. "
+            "Write it outside the repo (e.g. your Enigma Backups folder) and "
+            "record its path in EVAL_REDESIGN."
+        )
+    try:
+        import subprocess
+        r = subprocess.run(["git", "check-ignore", "-q", str(target)],
+                           cwd=str(ROOT), capture_output=True, timeout=10)
+        ignored = (r.returncode == 0)
+    except Exception:
+        ignored = False
+    if not ignored:
+        raise SystemExit(
+            f"refusing to write a transcript to {target}: the path is inside "
+            "the repo and git would track it, which unseals every probe on the "
+            "next commit. Use a gitignored location or one outside the repo."
+        )
+
+
+def _run_conditions(probes: Path, base_url: str, temperature: float, max_tokens: int,
+                    n_cases: int) -> dict:
+    """The header record of a transcript: everything needed to reproduce or
+    contest the run. The probe-file digest is what proves a later re-measure
+    scored the SAME sealed set."""
+    git_sha, git_dirty = _git_state()
+    return {
+        "record": "run_conditions",
+        "schema": "enigma-eval-transcript-v1",
+        "probe_file": str(probes),
+        "probe_sha256": _probe_digest(probes),
+        "probe_count": n_cases,
+        "base_url": base_url,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _write_transcript(transcript: Path, rows: list[dict]) -> None:
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+        encoding="utf-8",
+    )
+    print(f"transcript: {transcript} ({len(rows)} records incl. conditions)")
+
+
+def _score_cases(base_url: str, cases: list[dict], temperature: float, max_tokens: int,
+                 rows: list[dict], by_cat: dict[str, list[bool]]) -> None:
+    """Ask every probe and grade it, appending to `rows` and `by_cat` as it goes.
+
+    Split out of `run` so an abort can still save what was collected -- the
+    grading itself is unchanged.
+    """
     for c in cases:
         cat = c["category"]
         if cat == "memory":
@@ -358,21 +448,79 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
             payload["tools"] = WEATHER_TOOL
         msg = _post(base_url, payload)["choices"][0]["message"]
 
+        content = msg.get("content") or ""
+        # Read tool_calls for EVERY category: a factual or adversarial probe
+        # that fires a tool is the false-fire the router audit is about, and a
+        # transcript that only looked at tool/restraint could not show it.
+        calls = msg.get("tool_calls") or []
+        called = calls[0]["function"]["name"] if calls else None
         if cat in ("tool", "restraint"):
-            calls = msg.get("tool_calls") or []
-            called = calls[0]["function"]["name"] if calls else None
             ok = (called == c.get("expect_tool"))
             detail = f"tool={called}"
         else:
-            content = msg.get("content") or ""
             if cat in ("adversarial", "identity"):
                 ok = _grade_identity(content, c.get("want_any", []), c.get("deny_any", []))
             else:
                 ok = _grade_text(content, c.get("want_any", []), c.get("deny_any", []))
             detail = _ascii(content[:60])
 
+        rows.append({
+            "record": "probe",
+            "category": cat,
+            "q": c["q"],
+            "teach": c.get("teach", []),
+            "content": content,
+            "tool_called": called,
+            "expect_tool": c.get("expect_tool"),
+            "want_any": c.get("want_any", []),
+            "deny_any": c.get("deny_any", []),
+            "graded_ok": ok,
+        })
         by_cat.setdefault(cat, []).append(ok)
         print(f"[{cat:11} {'ok' if ok else 'XX'}] {_ascii(c['q'][:44]):44} -> {detail}")
+
+
+def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES,
+        transcript: Path | None = None) -> int:
+    # Load probes and name the run's conditions BEFORE touching the server
+    # (EVAL_REDESIGN section D + audit 2026-07-20: a missing probe file used
+    # to clear the memory store and then die with a raw traceback, and a down
+    # server never revealed which probe set would have run).
+    if not probes.exists():
+        print(f"FAIL: probe file not found: {probes}")
+        return 2
+    if transcript is not None:
+        # Fail here, not after a full suite has run against a live server.
+        _refuse_unsealing_path(transcript)
+    cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
+    print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
+
+    if not _wait_for_server(base_url):
+        print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
+        return 2
+    _clear_memory(base_url)
+    by_cat: dict[str, list[bool]] = {}
+    # Every answer in full, not the 60-char console line. Without this a run
+    # leaves nothing to re-grade, nothing to hand a second grader, and no way
+    # to argue with a verdict after the server is gone (EVAL_REDESIGN).
+    rows: list[dict] = [_run_conditions(probes, base_url, temperature, max_tokens, len(cases))]
+
+    try:
+        _score_cases(base_url, cases, temperature, max_tokens, rows, by_cat)
+    except BaseException:
+        # Never discard answers already collected: a mid-suite server death
+        # used to throw away every probe that had already run, and those are
+        # the expensive part of a locked re-measure.
+        if transcript is not None:
+            rows.append({"record": "aborted", "completed_probes": len(rows) - 1})
+            try:
+                _write_transcript(transcript, rows)
+                print("run ABORTED -- partial transcript saved before re-raising")
+            except Exception as save_exc:
+                # The disk is least trustworthy exactly here; a failed save must
+                # not replace the original error as the reported cause.
+                print(f"WARN: partial transcript could not be saved ({save_exc})")
+        raise
 
     print("\n=== SCORECARD ===")
     all_pass = True
@@ -391,6 +539,16 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         print(f"  {cat:12} {hits}/{n} = {rate:5.0%}  (>= {thr:.0%})  {'PASS' if passed else 'FAIL'}")
     print(f"  {'OVERALL':12} {overall_hits}/{overall_n} = {overall_hits / overall_n:5.0%}")
     print("RESULT:", "PASS" if all_pass else "FAIL")
+
+    if transcript is not None:
+        rows.append({
+            "record": "scorecard",
+            "by_category": {k: {"hits": sum(v), "n": len(v)} for k, v in by_cat.items()},
+            "overall_hits": overall_hits,
+            "overall_n": overall_n,
+            "result": "PASS" if all_pass else "FAIL",
+        })
+        _write_transcript(transcript, rows)
     return 0 if all_pass else 1
 
 
@@ -400,8 +558,10 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.0, help="true greedy for reproducible scores (0.01 still flips a borderline token)")
     ap.add_argument("--max-tokens", type=int, default=60)
     ap.add_argument("--probes", default=str(PROBES), help="probe file; point at data/eval/locked_probes.jsonl for the sealed-holdout re-measure (EVAL_REDESIGN)")
+    ap.add_argument("--transcript", default=None, help="write every full answer + the run conditions (probe sha, git sha, decode config) to this JSONL; required for the locked baseline receipt and for any second-grader pass")
     args = ap.parse_args()
-    raise SystemExit(run(args.base_url, args.temperature, args.max_tokens, Path(args.probes)))
+    raise SystemExit(run(args.base_url, args.temperature, args.max_tokens, Path(args.probes),
+                         Path(args.transcript) if args.transcript else None))
 
 
 if __name__ == "__main__":
