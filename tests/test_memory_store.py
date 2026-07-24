@@ -96,20 +96,23 @@ def test_remember_stamps_provenance(tmp_path):
 
 def test_supersede_persists_across_reopen(tmp_path):
     m = MemoryStore(tmp_path)
-    m.remember("User's car is a red hatchback.")
-    m.remember("User's car is a silver hatchback.")
+    m.remember("User's dog is 3 years old.")
+    m.remember("User's dog is 4 years old.")
     m2 = MemoryStore(tmp_path)
     assert len(m2) == 1
-    assert "silver hatchback" in m2.all()[0]["text"]
+    assert "4 years old" in m2.all()[0]["text"]
 
 
-def test_reworded_correction_supersedes_on_attribute(tmp_path):
-    # Same attribute ("car"), fully reworded value: one fact, the new one.
+def test_plain_values_about_one_subject_coexist(tmp_path):
+    # Same attribute ("car"), two plain values: TWO facts. The shared coarse
+    # kind is not proof of a correction -- "a red hatchback" and "a silver
+    # van" could as easily be a repaint as a second car, and a wrong
+    # supersede destroys a fact while a kept duplicate is merely outranked.
     m = MemoryStore(tmp_path)
     m.remember("User's car is a red hatchback.")
     m.remember("User's car is a silver van.")
-    assert len(m) == 1
-    assert "silver van" in m.all()[0]["text"]
+    texts = {r["text"] for r in m.all()}
+    assert texts == {"User's car is a red hatchback.", "User's car is a silver van."}
 
 
 def test_shared_value_across_attributes_never_deletes(tmp_path):
@@ -225,12 +228,19 @@ def test_many_valued_facts_never_delete_each_other(tmp_path):
         assert len(_two(tmp_path, a, b)) == 2, (a, b)
 
 
-def test_value_capitalization_does_not_block_a_correction(tmp_path):
-    # A capitalized value must not read as a different KIND than a lowercase
-    # one, or a colour correction coexists as a contradiction (audit r3).
+def test_value_capitalization_does_not_change_the_kind(tmp_path):
+    # A capitalized value must classify to the same KIND as a lowercase one --
+    # "Red" keying as a name while "teal" keys as other would put the pair on
+    # different keys for a capitalization accident. Both are plain values, so
+    # under the coexist default the pair lands on ONE key and both are kept.
+    from enigma_engine.core.memory_store import _fact_key, _value_kind
+
+    assert _value_kind("Red") == _value_kind("teal") == "other"
+    assert _fact_key("User's favorite color is Red.") == _fact_key(
+        "User's favorite color is teal."
+    )
     m = _two_store(tmp_path, "User's favorite color is Red.", "User's favorite color is teal.")
-    assert len(m) == 1
-    assert "teal" in m.all()[0]["text"]
+    assert len(m) == 2
 
 
 def test_distinct_self_measures_coexist(tmp_path):
@@ -240,20 +250,27 @@ def test_distinct_self_measures_coexist(tmp_path):
 
 
 def test_convergence_battery(tmp_path):
-    # Cross-subject and many-valued facts coexist; same-attribute corrections
-    # replace. The round-5 convergence set (2026-07-22) -- silence across all
-    # four rounds' fixes at once.
+    # Cross-subject, many-valued, and plain-value facts coexist; namings,
+    # measures, and single-valued relations replace. Plain copula values
+    # ("mood", colours, car descriptions) COEXIST even when they read like
+    # corrections: the coarse kind cannot distinguish a correction from a
+    # second fact, and deleting on the guess is the unrecoverable direction.
     coexist = [
         ("User's name is Sam.", "User's dog is named Rex."),  # different subjects
         ("User plays guitar.", "User plays piano."),          # many-valued verb
         ("I have three cats.", "I have two dogs."),
         ("User goes running.", "User goes swimming."),
+        ("My mood is happy.", "My mood is sad."),             # plain values stack
+        ("My car is red.", "My car is electric."),            # two facts, one kind
+        ("My dog is friendly.", "My dog is brown."),
     ]
     for a, b in coexist:
         assert len(_two(tmp_path, a, b)) == 2, (a, b)
     supersede = [
-        ("My mood is happy.", "My mood is sad."),             # same attr, kind other
-        ("User lives in Denver.", "User lives in Austin."),
+        ("User lives in Denver.", "User lives in Austin."),   # single-valued verb
+        ("User's dog is named Rex.", "User's dog is named Bruno."),  # naming
+        ("My age is 30.", "My age is 31."),                   # measure
+        ("User's name is Sam.", "User's name is Samantha."),  # naming by attribute
     ]
     for a, b in supersede:
         assert len(_two(tmp_path, a, b)) == 1, (a, b)

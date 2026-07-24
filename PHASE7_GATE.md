@@ -56,24 +56,20 @@ is a ceiling, not a baseline.
    re-SFT) could retrofit this WITHOUT Phase 7, but ROADMAP marks Phase 4
    OBSOLETE if the v2 pretrain proceeds — v2's tokenizer and native context
    reach the same place, so this is no longer the first thing to attempt.
-6. **Same-kind facts about one subject cannot both be held.** The lexical
-   Jaccard rule this entry used to describe was DEMOTED 2026-07-22, not
-   removed: supersede first tries a structural key (subject + value-kind), and
-   the lexical path still runs — at a raised bar, `_SUPERSEDE_MIN = 0.75` — for
-   every text the key function declines. A reworded correction replaces only
-   when both forms classify to the SAME kind (`a red hatchback` -> `a silver
-   van`, test-locked); cross the kind boundary (`age is 30` -> `age is thirty`,
-   measure vs other) and the keys differ, the 0.75 bar does not bridge them,
-   and the two coexist. The residual ceiling is the inverse case — two
-   genuinely different values that classify to the same coarse kind
-   (`My car is red.` / `My car is electric.`) share a key, so the newer
-   replaces the older. NOTE: no test exercises that collapse; the convergence
-   battery pins the desired corrections (mood, city), not this limit, so the
-   suite stays green either way. `memory_store.py`'s "accepted the rare
-   two-of-a-kind as the documented limit" comment is attached to the
-   single-valued VERB list, not to the copula key — nothing in the code warns
-   the next editor of `_value_kind`. Escaping this needs semantics — a smarter
-   store or a model big enough to resolve the contradiction itself.
+6. **Plain-value corrections accumulate instead of replacing (RULED
+   2026-07-24: coexist by default).** Supersede keys on subject + value-kind;
+   namings (by value head or by the `name` attribute), measures, and the
+   single-valued verb relations replace, and everything else COEXISTS —
+   `My car is red.` + `My car is electric.` are two facts, and the ruling
+   chose keeping both over guessing which one a shared coarse kind was
+   "correcting" (a wrong supersede destroys a fact; a kept duplicate is
+   merely outranked at retrieval). The accepted residual: a corrected mood
+   or colour leaves the stale value in the store (`mood is happy` +
+   `mood is sad` both retrievable). The lexical fallback still runs at
+   `_SUPERSEDE_MIN = 0.75` only for texts the key parser declines. Both
+   directions are test-pinned in the convergence battery, including the
+   red/electric coexist case. Escaping the residual needs semantics — a
+   smarter store or a model big enough to resolve the contradiction itself.
 
 ## Remake decisions (design of the next generation, when the gate opens)
 

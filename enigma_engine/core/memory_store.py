@@ -100,8 +100,10 @@ def _content_terms(text: str) -> set[str]:
 # identity -- "dog is named Rex" and "dog is 3 years old" share the subject
 # and are two different facts (audit 2026-07-22: keying on the subject made
 # them delete each other). The key is subject + the KIND of value: a naming,
-# a measurement, or other -- so a rename replaces a name, an age update
-# replaces an age, and a name and an age about one subject coexist.
+# a measurement, or other -- a rename replaces a name and an age update
+# replaces an age, while plain values about one subject COEXIST ("car is
+# red" and "car is electric" are two facts; the shared coarse kind is not
+# proof of a correction, and a wrong supersede destroys a fact).
 _FACT = re.compile(
     r"^\s*(?:the\s+)?(?:user's|users|user|my)\s+(?P<attr>[^.]{1,60}?)"
     r"\s+(?:is|are|was|were)\s+(?P<val>[^.]+?)\s*\.?\s*$",
@@ -145,6 +147,7 @@ _SINGLE_VALUED_RELATIONS = frozenset({
 })
 
 _NAMING_HEAD = re.compile(r"^(?:named|called|known\s+as)\b", re.IGNORECASE)
+_NAME_STEM = _stem("name")  # the attribute spelling of a naming ("name is Sam")
 
 # Lexical fallback for texts neither parse recognizes. Deliberately high:
 # a missed supersede leaves two records to rank, a wrong one DESTROYS a fact.
@@ -208,7 +211,16 @@ def _relation_is_single_valued(key: frozenset[str]) -> bool:
         return True
     verb = next((k[5:] for k in key if k.startswith("verb:")), None)
     if verb is None:
-        return True  # a copula subject+kind key IS single-valued by construction
+        # Copula subject+kind key. A naming or a measurement is one-per-
+        # attribute, so a new value replaces; a naming is proven by the VALUE
+        # ("dog is named Rex") or by the ATTRIBUTE ("User's name is Sam" --
+        # the value 'Sam' carries no naming head, the attribute does). A
+        # plain ("other") value is NOT provably single-valued: "my car is
+        # red" and "my car is electric" are two facts sharing one coarse
+        # kind, and replacing on it deletes one -- so plain values coexist,
+        # accepting that a corrected mood or colour leaves the stale value
+        # behind to be outranked, not erased.
+        return "kind:name" in key or "kind:measure" in key or _NAME_STEM in key
     func = next((k[5:] for k in key if k.startswith("func:")), "")
     return (verb, func) in _SINGLE_VALUED_RELATIONS
 
