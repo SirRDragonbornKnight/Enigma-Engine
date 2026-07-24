@@ -523,7 +523,9 @@ The block, in execution order:
   contradiction/correction shape, teachings.jsonl dual-routed into the facts
   stream, identity anchors rewritten to actual capabilities, the
   ALWAYS-OFFERED built-in block (router gates retire here, ruled
-  2026-07-24), the client-system "Available tools:" shape, image turns
+  2026-07-24; the block is part of the STANDARD recipe -- any new AI the
+  trainer molds inherits it, ruled same day), the client-system
+  "Available tools:" shape, image turns
   carrying system/tools/memory blocks, URL-bearing records now kept,
   trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
   passed explicitly, finetune `--block` raised.
