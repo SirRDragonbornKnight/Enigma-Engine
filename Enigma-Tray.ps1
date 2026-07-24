@@ -9,6 +9,8 @@ Add-Type -AssemblyName System.Drawing
 
 $script:engineDir = "C:\Users\SirKn\Enigma Engine"
 $script:muteUrl = "http://127.0.0.1:8000/v1/audio/mute"
+$script:stopUrl = "http://127.0.0.1:8000/v1/audio/stop"
+$script:talkUrl = "http://127.0.0.1:8000/v1/audio/talk-mode"
 
 # One tray icon, ever. A second launch exits quietly.
 $created = $false
@@ -36,11 +38,14 @@ $script:notify.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenu
 $script:miTalk = New-Object System.Windows.Forms.MenuItem "Talk to Enigma"
+$script:miTalkMode = New-Object System.Windows.Forms.MenuItem "Talk mode"
+$script:miHush = New-Object System.Windows.Forms.MenuItem "Hush (stop talking)"
 $script:miMute = New-Object System.Windows.Forms.MenuItem "Mute"
 $script:miStop = New-Object System.Windows.Forms.MenuItem "Stop Enigma"
 $script:miExit = New-Object System.Windows.Forms.MenuItem "Exit tray icon"
-$sep = New-Object System.Windows.Forms.MenuItem "-"
-$menu.MenuItems.AddRange(@($script:miTalk, $script:miMute, $sep, $script:miStop, $script:miExit))
+$sep1 = New-Object System.Windows.Forms.MenuItem "-"
+$sep2 = New-Object System.Windows.Forms.MenuItem "-"
+$menu.MenuItems.AddRange(@($script:miTalk, $sep1, $script:miTalkMode, $script:miHush, $script:miMute, $sep2, $script:miStop, $script:miExit))
 $script:notify.ContextMenu = $menu
 
 $talk = {
@@ -67,7 +72,32 @@ $script:miMute.add_Click({
     }
 })
 
-# Refresh the Mute label from live server state each time the menu opens.
+$script:miHush.add_Click({
+    # One-shot: stop the utterance playing now. Leaves mute + talk mode as-is.
+    try {
+        Invoke-RestMethod -Uri $script:stopUrl -Method Post -TimeoutSec 2 | Out-Null
+        $script:notify.ShowBalloonTip(1000, "Enigma", "Hushed.", [System.Windows.Forms.ToolTipIcon]::None)
+    } catch {
+        $script:notify.ShowBalloonTip(1500, "Enigma", "Server is not running.", [System.Windows.Forms.ToolTipIcon]::Info)
+    }
+})
+
+$script:miTalkMode.add_Click({
+    # Target comes from the label the Popup handler just painted (Popup always
+    # fires before the menu can show), same trick as Mute.
+    $target = ($script:miTalkMode.Text -eq "Talk mode: off")
+    try {
+        $body = @{ enabled = $target } | ConvertTo-Json -Compress
+        $now = Invoke-RestMethod -Uri $script:talkUrl -Method Post -Body $body `
+            -ContentType "application/json" -TimeoutSec 2
+        if ($now.enabled) { $tip = "Talk mode on -- she speaks every reply." } else { $tip = "Talk mode off." }
+        $script:notify.ShowBalloonTip(1200, "Enigma", $tip, [System.Windows.Forms.ToolTipIcon]::None)
+    } catch {
+        $script:notify.ShowBalloonTip(1500, "Enigma", "Server is not running.", [System.Windows.Forms.ToolTipIcon]::Info)
+    }
+})
+
+# Refresh the Mute + Talk-mode labels from live server state when the menu opens.
 $menu.add_Popup({
     try {
         $state = Invoke-RestMethod -Uri $script:muteUrl -TimeoutSec 1
@@ -76,6 +106,14 @@ $menu.add_Popup({
     } catch {
         $script:miMute.Text = "Mute (server off)"
         $script:miMute.Enabled = $false
+    }
+    try {
+        $ts = Invoke-RestMethod -Uri $script:talkUrl -TimeoutSec 1
+        if ($ts.enabled) { $script:miTalkMode.Text = "Talk mode: on" } else { $script:miTalkMode.Text = "Talk mode: off" }
+        $script:miTalkMode.Enabled = $true
+    } catch {
+        $script:miTalkMode.Text = "Talk mode (server off)"
+        $script:miTalkMode.Enabled = $false
     }
 })
 

@@ -361,6 +361,137 @@ def test_mute_roundtrip_persists_and_gates(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# talk-mode toggle, stop endpoint, status poll, and runtime voice endpoints
+# ---------------------------------------------------------------------------
+
+
+class _FakeSpeaker:
+    def __init__(self):
+        self.stopped = 0
+        self.last_error = None
+        self._recipe = {"engine": "kokoro", "lang_code": "a",
+                        "blend": [["af_heart", 1.0]], "speed": 1.0}
+
+    def stop(self):
+        self.stopped += 1
+
+    def get_voice(self):
+        return dict(self._recipe)
+
+    def set_voice(self, blend=None, speed=None, lang_code=None):
+        if speed is not None and not 0.5 <= speed <= 2.0:
+            raise serve.TTSError("speed must be between 0.5 and 2.0")
+        if speed is not None:
+            self._recipe["speed"] = speed
+        if blend is not None:
+            self._recipe["blend"] = blend
+        return dict(self._recipe)
+
+
+def test_talk_mode_roundtrip_persists(monkeypatch, tmp_path):
+    state = tmp_path / "talk_mode.json"
+    monkeypatch.setattr(serve, "_TALK_STATE", state)
+    monkeypatch.setattr(serve, "TALK_MODE", False)
+    assert serve.get_talk_mode() == {"enabled": False}
+    assert serve.set_talk_mode(serve.TalkReq(enabled=True)) == {"enabled": True}
+    assert serve.TALK_MODE is True
+    assert json.loads(state.read_text(encoding="utf-8")) == {"enabled": True}
+    assert serve.get_talk_mode() == {"enabled": True}
+
+
+def test_stop_bumps_generation_and_aborts_speaker(monkeypatch):
+    spk = _FakeSpeaker()
+    monkeypatch.setattr(serve, "SPEAKER", spk)
+    monkeypatch.setattr(serve, "_STOP_GEN", 0)
+    assert serve.audio_stop() == {"stopped": True, "stop_gen": 1}
+    assert spk.stopped == 1
+    assert serve.audio_stop()["stop_gen"] == 2 and spk.stopped == 2
+
+
+def test_stop_is_safe_when_voice_off(monkeypatch):
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "_STOP_GEN", 5)
+    assert serve.audio_stop() == {"stopped": False, "stop_gen": 6}  # never 503s
+
+
+def test_status_reports_mute_talk_and_stop_gen(monkeypatch):
+    spk = _FakeSpeaker()
+    monkeypatch.setattr(serve, "SPEAKER", spk)
+    monkeypatch.setattr(serve, "MUTED", True)
+    monkeypatch.setattr(serve, "TALK_MODE", True)
+    monkeypatch.setattr(serve, "_STOP_GEN", 3)
+    assert serve.audio_status() == {
+        "muted": True, "talk_mode": True, "stop_gen": 3, "voice": "ok"}
+
+
+def test_status_reports_voice_health(monkeypatch):
+    """A broken audio device (play jobs failing in the worker with only a
+    console WARN) must be visible on the poll, not silent (audit 2026-07-23 M3)."""
+    monkeypatch.setattr(serve, "MUTED", False)
+    monkeypatch.setattr(serve, "TALK_MODE", False)
+    # voice off
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    assert serve.audio_status()["voice"] == "off"
+    # voice healthy
+    spk = _FakeSpeaker()
+    monkeypatch.setattr(serve, "SPEAKER", spk)
+    assert serve.audio_status()["voice"] == "ok"
+    assert "voice_error" not in serve.audio_status()
+    # voice erroring -- the error surfaces
+    spk.last_error = RuntimeError("no audio device")
+    s = serve.audio_status()
+    assert s["voice"] == "error" and "no audio device" in s["voice_error"]
+
+
+def test_voice_get_set_and_validation(monkeypatch):
+    spk = _FakeSpeaker()
+    monkeypatch.setattr(serve, "SPEAKER", spk)
+    assert serve.get_voice()["blend"] == [["af_heart", 1.0]]
+    assert serve.set_voice(serve.VoiceReq(speed=1.2))["speed"] == 1.2
+    with pytest.raises(serve.HTTPException) as ei:  # bad recipe = 400, not 500
+        serve.set_voice(serve.VoiceReq(speed=9.0))
+    assert ei.value.status_code == 400
+
+
+def test_voice_endpoints_organ_off_when_disabled(monkeypatch):
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    with pytest.raises(serve.HTTPException):
+        serve.get_voice()
+    with pytest.raises(serve.HTTPException):
+        serve.set_voice(serve.VoiceReq(speed=1.0))
+
+
+def test_set_voice_endpoint_maps_real_validation_to_400(monkeypatch):
+    """The 400-not-500 contract, exercised through the REAL Speaker/normalizer
+    -- not a fake that reimplements validation (audit 2026-07-23 T2). A malformed
+    blend item raises a raw ValueError/TypeError inside _normalize_recipe unless
+    it is caught as TTSError; this pins that it surfaces as a 400."""
+    from enigma_engine.core.tts import Speaker
+
+    class _Backend:
+        sample_rate = 24000
+        def synth(self, text):
+            import numpy as np
+            return np.zeros(8, dtype=np.float32)
+        def set_recipe(self, recipe):
+            pass
+
+    spk = Speaker(synth_factory=lambda: _Backend(), player_factory=lambda: None)
+    monkeypatch.setattr(serve, "SPEAKER", spk)
+    try:
+        for bad in (serve.VoiceReq(speed=9.0),                 # out of range
+                    serve.VoiceReq(blend=[["af_heart", "loud"]]),  # non-numeric weight
+                    serve.VoiceReq(blend=[["nope", 1.0]])):    # unknown voice
+            with pytest.raises(serve.HTTPException) as ei:
+                serve.set_voice(bad)
+            assert ei.value.status_code == 400
+        # a valid change still succeeds through the real path
+        assert serve.set_voice(serve.VoiceReq(speed=1.3))["speed"] == 1.3
+    finally:
+        spk.close()
+
+
+# ---------------------------------------------------------------------------
 # --eyes graft guards (_load_eyes): every malformed align checkpoint must
 # raise EyesError so boot() degrades to text-only instead of dying
 # ---------------------------------------------------------------------------

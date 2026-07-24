@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import queue
 import re
@@ -89,12 +90,23 @@ _p.add_argument(
 _p.add_argument(
     "--voice",
     action="store_true",
-    help="enable the voice organ: the speak built-in tool + /v1/audio/speech (local pyttsx3/SAPI)",
+    help="enable the voice organ: the speak built-in tool + /v1/audio/speech (local Kokoro-82M)",
 )
 _p.add_argument(
     "--voice-name",
     default=None,
-    help="pick the TTS voice by name or id substring, e.g. 'zira' (default: system default voice)",
+    help="override the voice with a single Kokoro preset, e.g. 'af_heart' (default: her saved blend)",
+)
+_p.add_argument(
+    "--barge-in",
+    action="store_true",
+    help="stop speaking when the mic hears you talk (energy VAD; needs headphones or AEC -- tune live)",
+)
+_p.add_argument(
+    "--barge-in-threshold",
+    type=float,
+    default=None,
+    help="RMS loudness that counts as you talking (default 0.02); raise if she cuts herself off, lower if she ignores you",
 )
 _p.add_argument(
     "--ears",
@@ -200,6 +212,39 @@ _GEN_LOCK = threading.Lock()
 # the same state file (2026-07-17 audit).
 _MUTE_STATE = Path(__file__).resolve().parent / "data" / "mute_state.json"
 
+# The runtime-editable voice recipe (Kokoro blend + speed). Lives in the
+# engine's data home so set_voice edits survive restarts and are shared by any
+# launcher, wherever it was started from. Absent = the shipped Cortana default.
+_VOICE_STATE = Path.home() / ".enigma_engine" / "voice.json"
+
+# Talk-mode: when ON, the chat window speaks EVERY reply out loud (conversation
+# mode); when OFF, she stays quiet unless a reply used the speak tool. Distinct
+# from mute (a hard silence). Server-owned + persisted like mute; defaults OFF
+# so enabling the voice organ never surprises the user with narration.
+_TALK_STATE = Path(__file__).resolve().parent / "data" / "talk_mode.json"
+TALK_MODE = False
+
+# Bumped by POST /v1/audio/stop. An open chat window polls it and hushes its own
+# browser audio when it changes, so a desktop/tray Stop reaches the window too
+# (server-side playback is aborted directly via SPEAKER.stop()).
+_STOP_GEN = 0
+
+
+def _write_state_atomic(path: Path, obj: dict) -> None:
+    """Persist a small state file so a crash mid-write can never leave a corrupt
+    file that loads as the wrong default on the next boot -- the exact case the
+    mute-state comment promises against (a half-written mute_state.json must not
+    silently unmute a muted gaming session). Write-temp + os.replace is atomic
+    on the same volume; a failed write is swallowed (state still holds this run).
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(obj), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
 # Where the imagine tool and /v1/images/generations drop their PNGs: the
 # engine's data home, not the repo checkout.
 IMAGES_DIR = Path.home() / ".enigma_engine" / "images"
@@ -292,7 +337,7 @@ def boot(argv: list[str] | None = None) -> None:
     directly). argv=None reads sys.argv -- byte-identical behavior to the
     old import-time startup."""
     global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META
-    global INSTRUCT, MEMORY, SPEAKER, MUTED, EARS, EYES, PAINTER, EOS_ID, BOS_ID
+    global INSTRUCT, MEMORY, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, EOS_ID, BOS_ID
     global _BOOTED
 
     _BOOTED = False  # a re-boot is unready until it completes
@@ -472,9 +517,28 @@ def boot(argv: list[str] | None = None) -> None:
     SPEAKER = None
     if ARGS.voice:
         try:
-            SPEAKER = Speaker(voice=ARGS.voice_name)
+            SPEAKER = Speaker(recipe_path=_VOICE_STATE, voice_name=ARGS.voice_name)
         except TTSError as exc:
             print(f"  WARN: voice disabled -- {exc}", flush=True)
+
+    # Barge-in: let the mic cut her off when the user talks over her. The mic
+    # opens only while she speaks (via the speaking-state callback). Off unless
+    # asked -- energy VAD self-triggers on speakers without echo cancellation.
+    if SPEAKER is not None and ARGS.barge_in:
+        try:
+            from enigma_engine.core.barge_in import DEFAULT_THRESHOLD, MicBargeIn
+
+            _threshold = ARGS.barge_in_threshold if ARGS.barge_in_threshold is not None else DEFAULT_THRESHOLD
+            # A threshold <= 0 fires on pure silence (she cuts herself off 0.25s
+            # into every utterance); NaN/inf never fires while claiming "on".
+            if not math.isfinite(_threshold) or _threshold <= 0:
+                print(f"  WARN: --barge-in-threshold {_threshold} is unusable (must be a positive number); using {DEFAULT_THRESHOLD}", flush=True)
+                _threshold = DEFAULT_THRESHOLD
+            _bargein = MicBargeIn(on_detect=SPEAKER.stop, threshold=_threshold)
+            SPEAKER.set_on_speaking(_bargein.set_active)
+            print(f"  barge-in: on (energy VAD, threshold {_threshold} -- retune with --barge-in-threshold)", flush=True)
+        except Exception as exc:
+            print(f"  WARN: barge-in disabled -- {exc}", flush=True)
 
     MUTED = False
     try:
@@ -483,6 +547,14 @@ def boot(argv: list[str] | None = None) -> None:
             MUTED = bool(_state.get("muted", False))
     except (OSError, ValueError):
         pass  # best-effort: a missing or corrupt state file must never stop serve
+
+    TALK_MODE = False  # OFF until the user turns it on -- enabling voice is silent
+    try:
+        _tstate = json.loads(_TALK_STATE.read_text(encoding="utf-8"))
+        if isinstance(_tstate, dict):
+            TALK_MODE = bool(_tstate.get("enabled", False))
+    except (OSError, ValueError):
+        pass
 
     EARS = None
     if ARGS.ears:
@@ -1321,9 +1393,11 @@ _CHAT_PAGE = """<!doctype html>
            background:var(--panel); border-bottom:1px solid #000; }
   header h1 { font-size:18px; font-weight:600; flex:1; }
   #voice-state { color:var(--dim); font-size:13px; }
-  #mute { background:var(--accent); color:#08121c; border:0; border-radius:8px;
-          padding:8px 18px; font-size:15px; font-weight:700; cursor:pointer; }
+  #mute, #talk, #stop { background:var(--accent); color:#08121c; border:0; border-radius:8px;
+          padding:8px 15px; font-size:14px; font-weight:700; cursor:pointer; }
   #mute.muted { background:var(--warn); }
+  #talk.on { background:#6fca6f; }
+  #stop { background:var(--warn); }
   #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
   .msg { max-width:72%; padding:9px 13px; border-radius:12px; white-space:pre-wrap;
          overflow-wrap:break-word; }
@@ -1341,6 +1415,8 @@ _CHAT_PAGE = """<!doctype html>
 <header>
   <h1>Enigma</h1>
   <span id="voice-state">voice: checking...</span>
+  <button id="talk" type="button" title="Speak every reply out loud">Talk: off</button>
+  <button id="stop" type="button" title="Stop talking (Esc)">Stop</button>
   <button id="mute" type="button">Mute</button>
 </header>
 <div id="log"></div>
@@ -1349,15 +1425,20 @@ _CHAT_PAGE = """<!doctype html>
 <script>
 "use strict";
 var history_ = [];
-var muted = false;  // the SERVER owns mute; syncMute adopts the truth within 3s
+var muted = false;       // the SERVER owns mute; syncStatus adopts within 3s
+var talkMode = false;    // conversation mode: speak every reply (server-owned)
 var voiceReady = false;
 var currentAudio = null;
 var currentUrl = null;   // blob URL of the playing reply, revoked in stopAudio
 var muteEpoch = 0;       // clicks invalidate in-flight polls (no stale revert)
+var talkEpoch = 0;
+var stopGen = null;      // server's stop counter; a change means "hush now"
 var log = document.getElementById("log");
 var box = document.getElementById("box");
 var send = document.getElementById("send");
 var muteBtn = document.getElementById("mute");
+var talkBtn = document.getElementById("talk");
+var stopBtn = document.getElementById("stop");
 var voiceState = document.getElementById("voice-state");
 
 function add(cls, text) {
@@ -1368,9 +1449,14 @@ function add(cls, text) {
   log.scrollTop = log.scrollHeight;
   return d;
 }
-function stopAudio() {
-  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-  if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
+var speakSeq = 0;        // the newest speak() call owns playback; a hush outbids them all
+function clearClip() {   // cleanup only -- NEVER a cancel signal (a clip ending naturally
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }   // must not silence a
+  if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }  // pending reply)
+}
+function stopAudio() {   // hush: cancel every reply still synthesizing, then clean up
+  speakSeq += 1;
+  clearClip();
 }
 function paintMute() {
   muteBtn.textContent = muted ? "Muted" : "Mute";
@@ -1382,16 +1468,36 @@ function pushMute() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ muted: muted }) }).catch(function () {});
 }
-function syncMute() {
-  var epoch = muteEpoch;
-  fetch("/v1/audio/mute")
+function paintTalk() {
+  talkBtn.textContent = talkMode ? "Talk: on" : "Talk: off";
+  talkBtn.className = talkMode ? "on" : "";
+}
+function pushTalk() {
+  fetch("/v1/audio/talk-mode", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: talkMode }) }).catch(function () {});
+}
+function stopTalking() {
+  stopAudio();                                                     // hush this window now
+  fetch("/v1/audio/stop", { method: "POST" }).catch(function () {});  // and the server's speakers
+}
+function syncStatus() {
+  var me = muteEpoch, te = talkEpoch;
+  fetch("/v1/audio/status")
     .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
     .then(function (s) {
-      if (epoch !== muteEpoch) return;  // a click won since this poll left
-      if (s.muted === muted) return;
-      muted = s.muted;
-      if (muted) stopAudio();
-      paintMute();
+      if (me === muteEpoch && s.muted !== muted) {  // no click since this poll left
+        muted = s.muted;
+        if (muted) stopAudio();
+        paintMute();
+      }
+      if (te === talkEpoch && s.talk_mode !== talkMode) {
+        talkMode = s.talk_mode;
+        if (!talkMode) stopAudio();  // tray turned narration off -- hush here too
+        paintTalk();
+      }
+      if (stopGen === null) stopGen = s.stop_gen;  // first poll: adopt baseline, do not hush
+      else if (s.stop_gen !== stopGen) { stopGen = s.stop_gen; stopAudio(); }  // a Stop fired elsewhere
     }).catch(function () {});
 }
 muteBtn.onclick = function () {
@@ -1401,8 +1507,20 @@ muteBtn.onclick = function () {
   paintMute();
   pushMute();
 };
+talkBtn.onclick = function () {
+  talkMode = !talkMode;
+  talkEpoch += 1;
+  if (!talkMode) stopAudio();  // narration off means NOW -- cancel the reply
+  paintTalk();                 // playing or still synthesizing (mute parity)
+  pushTalk();
+};
+stopBtn.onclick = stopTalking;
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape") stopTalking();
+});
 function speak(text) {
   if (!voiceReady || muted || !text) return;
+  var seq = ++speakSeq;   // this speak is now the newest; a hush OR a newer reply outbids it
   fetch("/v1/audio/speech", { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: text }) })
@@ -1411,12 +1529,12 @@ function speak(text) {
       if (!r.ok) throw new Error();
       return r.blob(); })
     .then(function (b) {
-      if (!b || muted) return;
-      stopAudio();
+      if (!b || muted || seq !== speakSeq) return;  // hushed or superseded while synthesizing
+      clearClip();
       currentUrl = URL.createObjectURL(b);
       var a = new Audio(currentUrl);
       currentAudio = a;
-      a.addEventListener("ended", function () { if (currentAudio === a) stopAudio(); });
+      a.addEventListener("ended", function () { if (currentAudio === a) clearClip(); });
       a.play().catch(function () {});
     }).catch(function () {});
 }
@@ -1446,7 +1564,7 @@ document.getElementById("f").onsubmit = function (ev) {
       }
       add("her", reply);
       history_.push({ role: "assistant", content: reply });
-      if (!(data.enigma && data.enigma.spoke)) speak(reply);
+      if (talkMode && !(data.enigma && data.enigma.spoke)) speak(reply);
     })
     .catch(function (e) {
       thinking.remove();
@@ -1461,10 +1579,11 @@ fetch("/v1/audio/voices")
     voiceState.textContent = voiceReady
       ? (muted ? "voice: muted" : "voice: on")
       : "voice: off (start with --voice)";
-    if (voiceReady) syncMute();
+    if (voiceReady) syncStatus();
   });
 paintMute();
-setInterval(syncMute, 3000);
+paintTalk();
+setInterval(syncStatus, 3000);
 </script></body></html>
 """
 
@@ -1697,12 +1816,15 @@ def audio_speech(req: SpeechReq):
         raise _organ_off("voice disabled -- start with --voice")
     if req.voice is not None:
         raise HTTPException(status_code=400, detail="voice selection not supported yet -- one system voice")
+    text = (req.input or "").strip()
+    if not text:  # a client input error is a 400, not a server 500
+        raise HTTPException(status_code=400, detail="nothing to say -- 'input' is empty")
     if MUTED:
         return Response(status_code=204)
     fd, tmp = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
     try:
-        SPEAKER.save_wav(req.input, tmp)
+        SPEAKER.save_wav(text, tmp)
         wav = Path(tmp).read_bytes()
     except TTSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1734,12 +1856,88 @@ def set_mute(req: MuteReq):
     cannot silently unmute."""
     global MUTED
     MUTED = bool(req.muted)
-    try:
-        _MUTE_STATE.parent.mkdir(parents=True, exist_ok=True)
-        _MUTE_STATE.write_text(json.dumps({"muted": MUTED}), encoding="utf-8")
-    except OSError:
-        pass  # mute still works for this run; it just won't survive a restart
+    _write_state_atomic(_MUTE_STATE, {"muted": MUTED})
     return {"muted": MUTED}
+
+
+@app.post("/v1/audio/stop")
+def audio_stop():
+    """Silence her NOW: abort the utterance playing on the server's speakers
+    and cancel anything queued. Bumping the stop generation also tells an open
+    chat window (which polls it) to hush its own browser audio. Never 503s --
+    a desktop/tray Stop must be safe even when the voice organ is off."""
+    global _STOP_GEN
+    _STOP_GEN += 1
+    stopped = False
+    if SPEAKER is not None:
+        SPEAKER.stop()
+        stopped = True
+    return {"stopped": stopped, "stop_gen": _STOP_GEN}
+
+
+class TalkReq(BaseModel):
+    enabled: bool
+
+
+@app.get("/v1/audio/talk-mode")
+def get_talk_mode():
+    return {"enabled": TALK_MODE}
+
+
+@app.post("/v1/audio/talk-mode")
+def set_talk_mode(req: TalkReq):
+    """Toggle conversation mode: when ON, the window speaks every reply out
+    loud. Server-owned + persisted so it survives a restart and any open
+    window adopts it within the poll interval."""
+    global TALK_MODE
+    TALK_MODE = bool(req.enabled)
+    _write_state_atomic(_TALK_STATE, {"enabled": TALK_MODE})
+    return {"enabled": TALK_MODE}
+
+
+@app.get("/v1/audio/status")
+def audio_status():
+    """One poll the chat page reads every few seconds: the mute + talk-mode
+    truth to adopt, the stop generation to hush on when it changes, and the
+    voice health so a broken audio device (play jobs failing in the worker with
+    only a console WARN) is visible to the page/tray instead of silent."""
+    if SPEAKER is None:
+        voice = "off"
+    elif SPEAKER.last_error is not None:
+        voice = "error"
+    else:
+        voice = "ok"
+    status = {"muted": MUTED, "talk_mode": TALK_MODE, "stop_gen": _STOP_GEN, "voice": voice}
+    if voice == "error":
+        status["voice_error"] = str(SPEAKER.last_error)[:200]
+    return status
+
+
+class VoiceReq(BaseModel):
+    """Any subset of the recipe; omitted fields keep their current value."""
+
+    blend: list | None = None
+    speed: float | None = None
+    lang_code: str | None = None
+
+
+@app.get("/v1/audio/voice")
+def get_voice():
+    if SPEAKER is None:
+        raise _organ_off("voice disabled -- start with --voice")
+    return SPEAKER.get_voice()
+
+
+@app.post("/v1/audio/voice")
+def set_voice(req: VoiceReq):
+    """Retune her voice at runtime (blend, speed, or language) and persist it.
+    An invalid recipe is a 400, not a 500 -- the current voice is unchanged."""
+    if SPEAKER is None:
+        raise _organ_off("voice disabled -- start with --voice")
+    try:
+        return SPEAKER.set_voice(blend=req.blend, speed=req.speed, lang_code=req.lang_code)
+    except TTSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/v1/audio/transcriptions")
