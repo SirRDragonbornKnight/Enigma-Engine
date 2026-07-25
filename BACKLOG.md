@@ -565,8 +565,32 @@ The block, in execution order:
       sees — a resume that dropped them would finish on a different diet than
       it started. OFF by default (`--anneal-tokens 0`), so the sampler is the
       same single uniform draw the live lineage used.
-      **What T1 still owes it: write the curated shard LAST** at tokenize time,
-      so the region the flag points at is actually the good tokens.
+      **Tail-position is DEAD (round-7 audit + fix + fix-arc audit, all
+      2026-07-25):** val is carved off the very END of the bin, so "write the
+      curated shard LAST" would have handed the shard to val -- 100% held
+      out, never trained on. The curated oversample is now
+      `pretokenize_data.py --repeat-sources curated=N` (repetition AFTER the
+      global paragraph dedup, which silently collapses on-disk copies;
+      passes are byte-identical). The fix-arc audit then broke the first fix
+      four more ways, all closed: the curated source now walks FIRST (dedup
+      is first-wins, so mid-list it silently LOST every paragraph a web
+      source shared, and "not last" was one absent stackexchange dir from
+      last on a fresh checkout); a declared oversample that emits zero
+      tokens refuses at tokenize time (empty dir / fully-deduped shard had
+      produced a stream byte-identical to no-shard-at-all under a meta
+      claiming x5); pretrain boot-refuses ANY source lying entirely in val,
+      a repeated source overlapping val or the fenced val-gen window, and a
+      per-pass span <= block (adjacent copies in one window); the v1
+      lineage tokens.bin is now write-protected outright -- and so is its
+      SIDECAR (round-B: `--output-bin tokens.bin2` mapped its .json onto the
+      gitignored lineage receipt); the repeat cache refuses web-scale
+      sources (2 GB cap), and the refusal is a plain Exception because a
+      SystemExit inside the doc stream was swallowed by pool.imap's feeder
+      thread and HUNG the run under --workers > 1 (round-B, measured). A
+      too-small `--anneal-tokens` (<= block+1) refuses at boot instead of
+      dying at the decay boundary days in. The anneal mechanism itself stays built+OFF, waiting for a
+      deliberately PLACED region (e.g. a length-extension anneal), not the
+      T1 shard.
     - **Paraphrases of must-know facts enter through `pretokenize_data.py`,
       which has no leak screen** (the guard is wired into make_sft_data,
       make_facts_pretrain_data and make_dpo_data). Screen that text against

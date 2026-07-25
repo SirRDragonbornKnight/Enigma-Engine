@@ -105,7 +105,7 @@ voice->wav->ears and imagine->png->eyes loops pass on real weights.
   lr 2e-6 x2 epochs measurably WRECKED her (identity 83→50%, factual 50→0%). DPO here is a nudge
   or a wrecking ball; do not raise the lr without a scorecard.
 - **Eval** — `python eval_behavior.py` = the behavior gate, run against a RUNNING server
-  (dev set = 134 probes / 9 categories as of 2026-07-25; `--probes` selects a probe file; the
+  (dev set = 152 probes / 11 categories, counted 2026-07-25; `--probes` selects a probe file; the
   scorecard prints probe file + decode config). `--base-url` defaults to
   `http://127.0.0.1:8123` (a SCRATCH port, deliberately not the live 8000) and `--temperature`
   to 0.0 (true greedy, reproducible). The run CLEARS the target server's memory store before
@@ -208,8 +208,9 @@ code, and it was FIXED the same day — it turned out to be a loud broadcast cra
 corruption, unreachable from the live serve loop; regression tests in
 `tests/test_cpu_rectangular_decode.py`.
 
-**Data state (counted 2026-07-19, all verified):** bottleneck stays SFT DATA at scale — tool
-corpus 534 records (incl. speak/imagine), identity 422, mix 114,320, dpo_pairs 240, general diet
+**Data state (recounted 2026-07-25 after the floor-2 reseal rebuild):** bottleneck stays SFT
+DATA at scale — tool corpus 526 records (incl. speak/imagine; 18 held out as eval probes),
+identity 422, mix 114,027, dpo_pairs 240, general diet
 `data/finetune/combined_finetune.jsonl` 105,203 short pairs (per-source length caps DIFFER — see
 `information/trainer/training_guide.md` Stage 2). Recall strategy since 2026-07-15: facts INSTALL
 via a continued-pretrain pass (`make_facts_pretrain_data.py` → `pretrain_enigma.py --tokens-bin`
@@ -225,5 +226,9 @@ words by nature, so scanning them as leaks refused the entire live SFT mix (56 h
 advice that could not clear it, because the builder screens the question side only. Tool-call
 arguments reached NO screen at all until 2026-07-25 (`content` is `""` on a tool-calling turn,
 so the guard read an empty string while the payload trained inside the mask — and
-`tool_calls.jsonl` is built entirely of that shape). Still unscreened by design of its own
-path: `pretokenize_data.py` (the corpus route) — screen T1's fact paraphrases before tokenizing.
+`tool_calls.jsonl` is built entirely of that shape). `pretokenize_data.py` itself stays
+screenless by design of its own path; the one text headed for it, the T1 curated shard, is
+screened at build time by `make_pretrain_curated.py`. Since the 2026-07-25 floor-2 reseal the
+builder screens the SAME unit the trainers refuse on (all user+system turns, not just the
+first question) — screening only the question left memory-read system blocks armed as a
+training-day refusal the builder could not clear.

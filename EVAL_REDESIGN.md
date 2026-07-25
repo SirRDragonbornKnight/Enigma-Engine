@@ -491,3 +491,81 @@ v1 4718, v2 **16366** (not 16384). `4718 % 64 = 46`, `16366 % 64 = 46`, so both
 mask their 18-row reserve correctly and the alias WARN never fires either. Two
 of that agent's findings rested on the same wrong number. Verify the load-bearing
 figures before acting on a report -- including this one.
+
+## 2026-07-25 (later): the floor moves to 2 -- the 6th seal
+
+Round-7 reported the memory column contaminated: sealed memory TEACH lines
+carried whole in `mix.jsonl` turns, invisible to the guard because a
+2-content-word string seals ZERO runs at floor 3. **The direction was right and
+the magnitude was not** (the agents' "388 occurrences / 32 caught" did not
+reproduce; the same lesson as the vocab correction above). Measured directly on
+the live artifacts: 18 of the 108 sealed strings have exactly two content words
+-- 5 of them teach lines -- and ONE teach line sat verbatim in **10** mix
+turns, of which floor 3 caught **0** and floor 2 catches **10**. Floor-3 vs
+floor-2, remeasured: coverage 85/108 -> 103/108 (the 5 one-word strings stay
+exact/jaccard-only); mix asks 5 -> 301 flagged (0.25% of 120,791 -- the price
+of the memory category measuring memory); combined asks 14 -> 58; answer-side
+advisory 72 -> 131. The old row's "refuses the training block" was the stale
+artifact talking: a rebuild is the documented remedy and it worked.
+
+- **NGRAM_MIN = 2.** A 2-word probe seals its single full-length run; order
+  still separates quotation from topic overlap. One content word stays
+  run-free -- that is a membership test, not a quotation.
+- **The seal now carries its enforcement parameters** (`ngram_min`/`ngram_n`).
+  The trainers never re-seal, so a stale floor-3 manifest under floor-2 code
+  would have kept every short string sealed as NOTHING behind the same ACTIVE
+  banner; a parameter mismatch is now a `Weakened` refusal (legacy manifests
+  that carry runs but no keys were all sealed at (3,4) and refuse the same way).
+- **Re-seal receipt:** manifest `f7d7a902` -> `ff070561`; exact hashes, shingle
+  sets, grading digest (`784499b7`) and plaintext (`f22d9389`) all UNCHANGED;
+  exactly the 18 two-content-word strings gained a run (163 sealed runs total).
+- **The builder now screens the unit the trainers refuse on.** `_held_out`
+  screened only the first user question while consume-time refuses on ALL
+  user+system turns -- so even a freshly guarded rebuild left a training-day
+  refusal armed (196 prompt-side turns at floor 2; **5 already under floor 3**,
+  sitting in memory-read system blocks). `_held_out` now walks every prompt-side
+  turn; rebuild receipt: 59 records dropped as leaks (was 10), memory-read pool
+  78 -> 65, memory+tools 51 -> 46, and all four training artifacts verify
+  consume-time CLEAN (0 prompt-side hits; mix answer-side advisory 86).
+
+The fix-arc audit (same day) then attacked the floor-2 work itself. Closed:
+
+- **The arrays are enforcement payload.** Emptying `probes[].n` (or `.s`)
+  passed every digest -- the seal comparison is over exact-hash lists, the
+  file digest covers the plaintext, not the sidecar -- so an edit could strip
+  the quotation or paraphrase tier behind an ACTIVE banner (the round-5
+  `jaccard_threshold` lesson re-entering through the arrays). At floor 2, two
+  or more distinct shingles ALWAYS come with runs and runs always come with
+  shingles, so either inconsistency now raises `Weakened` at load, everywhere.
+- **The prompt trim ran AFTER the screen.** `fit_mix_to_block` keeps the
+  prompt's TAIL, which can turn a passing prompt into a sealed-probe hit
+  (measured 0.005 -> 1.0) -- and the rebuild re-creates the same trimmed
+  record deterministically, making it the one consume-time refusal "rebuild"
+  could not clear. Every cut is now re-screened with the builder's own
+  predicate before it is emitted (receipt line: "trimmed prompts dropped as
+  post-trim leaks"; 0 in the live rebuild).
+- The general-corpus review band now flags on ALL prompt-side turns, the same
+  unit the drops use. Generated families stay unflagged by design: their
+  shapes are code, reviewed as code.
+
+Recorded as honest limits, not fixed: a single 2-word run has zero
+redundancy, so one inflection or one interposed content word evades it --
+floor 2 buys verbatim carry; paraphrase-proofing the 18 short strings means
+DISTINCTIVE teach content, which edits the sealed holdout and waits on the
+user. A `Weakened` refusal surfaces as a raw traceback (fail-closed, just
+loud); list-shaped message content would crash the trainer before the guard
+reads it (also fail-closed; zero such records exist).
+
+Round-B (same day) then broke the fix-arc's own guards -- the series pattern,
+sixth time. Closed: stripping BOTH arrays slipped between the two one-sided
+payload checks (it is also the stopword-only probe's legitimate shape) -- a
+whole manifest of empties now refuses in aggregate, and `_seal_mismatch`
+recomputes the FULL payload (h+s+n) from plaintext at every gate run, which
+also catches the partial strip no plaintext-free loader can see (that
+residual plus git tracking of the manifest is the documented defense);
+`fit_mix_to_block`'s screen gave up on the first leaky cut, over-dropping
+records whose shorter cut excluded the sealed text -- it now keeps shrinking
+and only a record with NO clean fitting cut counts as leaked; and the forget
+tool's argument echo was the one path that could FORGE the handshake
+rendering at a line start via an embedded newline -- the argument is
+whitespace-normalized at intake.
