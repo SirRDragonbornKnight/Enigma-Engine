@@ -55,6 +55,7 @@ from enigma_engine.core.imagegen import ImageGenError, Painter
 from enigma_engine.core.tts import Speaker, TTSError
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
+from enigma_engine.core.memory_store import FORGET_PENDING_MARK as _FORGET_PENDING
 from enigma_engine.core.persona import Persona
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
@@ -1050,6 +1051,26 @@ _NEGATED_FORGET_SRC = (
 )
 _FORGET_NEGATED = re.compile(r"\b" + _NEGATED_FORGET_SRC, re.IGNORECASE)
 
+# Talking ABOUT forgetting is not asking her to forget. "I forget where I put
+# my keys" and "Did you forget my name?" armed the deletion tool, and the store
+# then deleted on a single coincidental match -- the widened verb's premise is
+# that a false OFFER is cheap, which only holds while the tool cannot destroy
+# something on its own.
+#
+# Same safe direction as the negation: these SUPPRESS the offer, so a miss
+# costs one un-offered tool and never a fact. First person and second person
+# only -- an imperative "forget my address" has no subject and stays armed.
+_FORGET_NOT_A_REQUEST = re.compile(
+    r"\b("
+    r"i (always |often |sometimes |usually |constantly |never |keep |kept )*forget|"
+    r"i'?ve forgotten|i forgot|"
+    r"(did|do|does|have|has) you forget|"
+    r"(did|do|does) (you|he|she|they|we) forget|"
+    r"(you|he|she|they|we) (always |often |sometimes |usually )*forget"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 # remember is offered when the message states something save-worthy: an
 # explicit remember ask, a first-person fact/preference, or a factual
@@ -1113,6 +1134,7 @@ def _looks_forgettable(text: str) -> bool:
         bool(text)
         and MEMORY is not None
         and not _FORGET_NEGATED.search(text)
+        and not _FORGET_NOT_A_REQUEST.search(text)
         and bool(_FORGETTABLE.search(text))
     )
 
@@ -1159,7 +1181,28 @@ def _looks_imaginable(text: str) -> bool:
     return bool(text) and PAINTER is not None and bool(_IMAGINABLE.search(text))
 
 
-def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
+def _answering_a_forget_question(messages: list[Msg]) -> bool:
+    """True when her last turn ASKED which memory to forget.
+
+    The gate decides per request from the user's wording, so after she reported
+    "2 memories match that -- say the one you mean word for word, or give its
+    id", the natural answers ("#2", "the second one", quoting the memory back)
+    armed nothing at all: only a reply that happened to contain the word
+    "forget" reached the tool again. The question was unanswerable, which is
+    not a question.
+
+    No conversation state is needed -- the client sends the history, so the
+    pending question is right there in the request."""
+    for m in reversed(messages):
+        if m.role == "assistant" and m.content:
+            return _FORGET_PENDING in m.content
+        if m.role == "user":
+            continue
+    return False
+
+
+def _builtin_tools(user_text: str, client_mode: bool,
+                   messages: list[Msg] | None = None) -> list[dict]:
     """The built-ins to offer for this request. calculate rides along in
     client tool-mode (a tool prompt exists anyway; math grammar is distinctive
     enough that it never steals calls). remember is intent-gated ALWAYS:
@@ -1171,7 +1214,12 @@ def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
         tools.append(_CALC_TOOL)
     if _looks_memorable(user_text):  # checks MEMORY is enabled too
         tools.append(_REMEMBER_TOOL)
-    if _looks_forgettable(user_text):  # checks MEMORY is enabled too
+    # ...or she just asked WHICH memory to forget, in which case whatever the
+    # user says next is the answer to that question.
+    if MEMORY is not None and (
+        _looks_forgettable(user_text)
+        or (messages is not None and _answering_a_forget_question(messages))
+    ):
         tools.append(_FORGET_TOOL)
     if _looks_speakable(user_text):  # checks SPEAKER is enabled too
         tools.append(_SPEAK_TOOL)
@@ -1298,7 +1346,9 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
     # Built-ins are gated on intent (see _builtin_tools); client tools are
     # always honored.
     client_tools = list(req.tools or [])
-    all_tools = _builtin_tools(_last_user_text(req.messages), bool(client_tools)) + client_tools
+    all_tools = _builtin_tools(
+        _last_user_text(req.messages), bool(client_tools), req.messages
+    ) + client_tools
     if all_tools:
         tools_block = render_tools_system(all_tools)
         if not (msgs and msgs[0].get("role") == "system"):

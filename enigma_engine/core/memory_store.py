@@ -196,6 +196,12 @@ def _forget_terms(text: str) -> set[str]:
 # a 1024-token window. (measured 2026-07-25)
 _FORGET_NAMED_MAX = 5
 
+# The phrase that marks a refusal as "I asked which memory you meant". serve
+# looks for it in her last turn so the NEXT message is read as the answer --
+# a question the user could not answer is not a question. Kept here, beside the
+# text that emits it, so the two cannot drift apart.
+FORGET_PENDING_MARK = "memories match that"
+
 _NAMING_HEAD = re.compile(r"^(?:named|called|known\s+as)\b", re.IGNORECASE)
 _NAME_STEM = _stem("name")  # the attribute spelling of a naming ("name is Sam")
 
@@ -553,7 +559,7 @@ class MemoryStore:
                     more = len(candidates) - len(shown)
                     tail = f" (and {more} more)" if more > 0 else ""
                     raise self.TooBroad(
-                        f"{len(candidates)} memories match that -- say the one you mean "
+                        f"{len(candidates)} {FORGET_PENDING_MARK} -- say the one you mean "
                         f"word for word, or give its id: {named}{tail}"
                     )
             if candidates:

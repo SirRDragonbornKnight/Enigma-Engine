@@ -339,6 +339,42 @@ def test_an_ambiguous_forget_can_be_answered_with_an_id(monkeypatch, tmp_path):
     assert serve._execute_builtin("forget", {"id": "nope"}).startswith("error: memory id must be")
 
 
+def test_her_which_one_question_can_actually_be_answered(monkeypatch, tmp_path):
+    """The gate decided per request from the user's wording, so after she asked
+    "say the one you mean word for word, or give its id", the natural answers
+    armed nothing at all -- only a reply containing "forget" reached the tool
+    again. A question the user cannot answer is not a question.
+
+    Stateless: the client sends the history, so the pending question is in the
+    request."""
+    from enigma_engine.core.memory_store import MemoryStore
+
+    mem = MemoryStore(tmp_path)
+    mem.add("User likes tea.")
+    mem.add("User likes tea.")
+    monkeypatch.setattr(serve, "MEMORY", mem)
+
+    refusal = serve._execute_builtin("forget", {"text": "forget that I like tea"})
+    assert refusal.startswith("error:")
+
+    def offered(reply):
+        msgs = [serve.Msg(role="user", content="forget that I like tea"),
+                serve.Msg(role="assistant", content=refusal),
+                serve.Msg(role="user", content=reply)]
+        return [t["function"]["name"] for t in serve._builtin_tools(reply, False, msgs)]
+
+    for answer in ("#2", "2", "the second one", "id 2", "yes, #2",
+                   "the green tea one", "User likes tea."):
+        assert "forget" in offered(answer), answer
+
+    # ...and an ordinary exchange still arms nothing: the marker is what opens
+    # the door, not the mere presence of history.
+    plain = [serve.Msg(role="user", content="hello"),
+             serve.Msg(role="assistant", content="Hi there."),
+             serve.Msg(role="user", content="what is the weather")]
+    assert serve._builtin_tools("what is the weather", False, plain) == []
+
+
 def test_an_id_cannot_reach_a_memory_the_wording_never_named(monkeypatch, tmp_path):
     """As a door of its own the id deleted whatever record happened to hold it,
     overriding a perfectly good `text`. She has no honest source for an id
@@ -384,6 +420,27 @@ def test_a_failed_memory_write_is_reported_as_text_not_a_500(monkeypatch, tmp_pa
     out = serve._execute_builtin("forget", {"text": "forget that I like tea"})
     assert out.startswith("error: could not update the memory file")
     assert "disk full" in out
+
+
+def test_talking_about_forgetting_is_not_asking_her_to_forget(monkeypatch):
+    """The widened verb's premise is that a false OFFER is cheap, which only
+    holds while the tool cannot destroy something on its own -- and the store
+    deletes on a single coincidental match. These are statements and questions
+    ABOUT forgetting, so they suppress the offer; an imperative has no subject
+    and stays armed."""
+    monkeypatch.setattr(serve, "MEMORY", object())
+    for text in ("I forget where I put my keys",
+                 "Did you forget my name?",
+                 "Do you forget things often?",
+                 "I always forget my umbrella",
+                 "I forgot to call her",
+                 "I've forgotten his birthday",
+                 "You forget how cold it gets"):
+        assert not serve._looks_forgettable(text), text
+    # the real asks are untouched
+    for text in ("forget that I like tea", "forget I'm tall", "forget where I live",
+                 "please forget everything about my dog"):
+        assert serve._looks_forgettable(text), text
 
 
 def test_the_forget_gate_offers_the_shapes_the_store_can_handle(monkeypatch):
