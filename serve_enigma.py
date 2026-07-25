@@ -1509,6 +1509,12 @@ def _chat_instruct(req: ChatReq):
     # Trained tool calls carry empty content, so this is usually empty.
     hop_texts: list[str] = []
     spoke_server_side = False
+    # Built-ins actually EXECUTED, in order. A looped built-in is consumed by
+    # the hop that runs it, so the surfaced message carries no `tool_calls` for
+    # it -- which left every server-side action unobservable from outside. An
+    # eval could not tell a `speak` that fired from one that never happened,
+    # and a restraint probe expecting NO call passed even when she called one.
+    tools_run: list[str] = []
     for hop in range(_MAX_TOOL_HOPS + 1):
         prompt_ids, last_max = _hop(cur_msgs)
         out_ids = list(
@@ -1530,6 +1536,7 @@ def _chat_instruct(req: ChatReq):
                 hop_texts.append(out["content"])
             tool_results: list = []
             cur_msgs = _apply_builtins(cur_msgs, out, parsed, tool_results)
+            tools_run += [name for name, _ in tool_results]
             # Flag on the EXECUTED result, not the intent -- "error: nothing
             # to say" must not silence the page's own TTS (2026-07-17 audit).
             if any(name == "speak" and result == "speaking" for name, result in tool_results):
@@ -1553,10 +1560,12 @@ def _chat_instruct(req: ChatReq):
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
-    if spoke_server_side:
-        # Non-standard extension the chat page reads so it never double-voices
-        # a reply the speak tool already said on the server's speakers.
-        resp["enigma"] = {"spoke": True}
+    if spoke_server_side or tools_run:
+        # Non-standard extension. `spoke` is what the chat page reads so it
+        # never double-voices a reply the speak tool already said on the
+        # server's speakers; `tools_run` is the execution trace that makes a
+        # server-side action observable at all.
+        resp["enigma"] = {"spoke": spoke_server_side, "tools_run": tools_run}
     return resp
 
 

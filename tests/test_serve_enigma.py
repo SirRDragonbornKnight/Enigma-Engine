@@ -217,6 +217,50 @@ def test_the_negation_does_not_have_to_touch_the_forget_verb(monkeypatch):
         assert serve._looks_memorable(text), text
 
 
+def test_an_executed_builtin_is_visible_in_the_reply(monkeypatch, tok, tmp_path):
+    """A built-in EXECUTES server-side and the hop loop consumes it, so the
+    surfaced message carries no `tool_calls` for it. Nothing outside the server
+    could then tell a built-in that fired from one that never happened: an organ
+    probe scored 0 however well she routed, and a restraint probe expecting NO
+    call passed while she called one. The reply now reports what ran."""
+    from enigma_engine.core.memory_store import MemoryStore
+
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "EOS_ID", tok.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tok.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512))
+    monkeypatch.setattr(serve, "MEMORY", MemoryStore(tmp_path))
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+
+    # hop 0 emits a remember call; hop 1 answers in plain text. The span
+    # markers are ids, the way the model emits them -- encoding the whole
+    # string would leave the closing marker as literal text, because the
+    # splitter does not fire on `}<|/tool_call|>` with no space between.
+    from enigma_engine.core.chat_format import TOOL_CALL, TOOL_CALL_END
+
+    payload = json.dumps({"name": "remember", "arguments": {"text": "User likes tea."}})
+    hops = [[TOOL_CALL] + tok.encode(payload, add_special_tokens=False) + [TOOL_CALL_END],
+            tok.encode("Saved that for you.", add_special_tokens=False)]
+    seq = iter(hops)
+
+    def fake_gen(ids, max_tokens, *a, **k):
+        yield from next(seq, hops[-1])
+
+    monkeypatch.setattr(serve, "_gen_ids", fake_gen)
+    resp = serve._chat_instruct(serve.ChatReq(
+        messages=[serve.Msg(role="user", content="Remember that I like tea.")],
+        max_tokens=64,
+    ))
+
+    assert "tool_calls" not in resp["choices"][0]["message"], (
+        "fixture assumption gone: the built-in is no longer consumed by the loop, "
+        "so the surfaced calls would already have shown it"
+    )
+    assert resp["enigma"]["tools_run"] == ["remember"]
+    assert [r["text"] for r in serve.MEMORY.all()] == ["User likes tea."]
+
+
 def test_generated_images_are_served_only_from_the_images_dir(monkeypatch, tmp_path):
     """The imagine tool answers with a filesystem path, so the page could only
     print it as a sentence. Serving it needs a fetchable URL -- and that URL is

@@ -3,6 +3,19 @@
 _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (bugs),
 `CLEANUP_TRACKER.md` (file state)._
 
+0. **`encode()` misses a chat special that directly follows `}`.** Measured
+   2026-07-25: `encode('<|/tool_call|>')` is `[4721]` and
+   `encode('} <|/tool_call|>')` ends `[..., 4721]`, but
+   `encode('{"a": 1}<|/tool_call|>')` leaves the closing marker as ordinary
+   text — so a whole tool-call span encoded as ONE string comes back
+   unparseable, with the marker inside the payload. All six chat tokens
+   round-trip correctly on their own.
+   NOT a live path: `render_training` emits the span markers as IDS (verified
+   — every one of the six appears in the rendered ids), and the model generates
+   them as ids at serve time, so neither training nor serving encodes such a
+   string. It bites anything that builds a tool-call span by string
+   concatenation and then encodes it — write the ids directly instead.
+
 1. **TRAINING -- DONE 2026-07-03: full 287,882 steps / 56.6B tokens, val ppl 3.5.** Base model shipped to `models/enigma_pretrain_large/model.pth` (final-save NaN guard passed), backed up with SHA256 receipts at `C:\Users\SirKn\Enigma Backups\enigma_pretrain_large_final\`. The finished lineage is immutable; any continuation run gets a NEW directory. Forward plan: `ROADMAP.md` (bottleneck is now SFT data, not compute).
 
    _History below = the pause playbook from the 2026-06-12 / 2026-06-25 pauses; kept only for the operational pattern (detached resume, daily shortcuts, Windows Update note) in case a future NEW run needs it._

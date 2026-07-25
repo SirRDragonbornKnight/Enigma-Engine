@@ -643,17 +643,23 @@ The block, in execution order:
 ### Non-training queue (GO'd 2026-07-24, runs alongside — nothing here trains)
 
 Recorded because it existed only in conversation:
-- Organ evals: **vision DONE 2026-07-25** -- 12 synthetic-marker probes in the
-  dev set, measured v8 at 9/12, ungated by design (EVAL_REDESIGN "ORGAN EVAL,
-  part 1"). The other three are blocked on mechanism, not probes: `imagine`
-  and `speak` execute SERVER-side and loop, so the surfaced reply carries no
-  `tool_calls` for a probe to grade -- they need an execution-trace field or a
-  serve-side counter first; `ears` needs an audio fixture and the organ loaded.
-- Chat page senses: the served page has one text input — no mic capture, no
-  image upload, and a generated image arrives as literal path text. She
-  cannot exercise her own organs from her own UI, so no signal accumulates.
-  (`--ears` and `--image-gen` now load under the launcher's interpreter; the
-  venv was missing faster-whisper and diffusers entirely until 2026-07-24.)
+- Organ evals: **vision, speech and imagery DONE 2026-07-25.** Vision = 12
+  synthetic-marker probes, measured v8 at 9/12. The execution-trace blocker is
+  CLOSED: a looped built-in is consumed by its hop, so the surfaced reply
+  carried no `tool_calls` and a server-side action was unobservable — serve now
+  reports `enigma.tools_run` and the eval grades on it, which also closes the
+  restraint inflation where a probe expecting NO call passed while she called
+  one. `speech` and `imagery` are 9 routing probes each (6 positive, 3
+  restraint), ungated like vision. **Consequence to settle: the v5/v8 locked
+  baseline was measured with a grader that could not see server-side calls, so
+  its restraint column is an upper bound — re-measure before comparing v2 to
+  it.** `ears` still needs an audio fixture and the organ loaded.
+- Chat page senses **DONE 2026-07-25**: hold-to-talk mic posting to
+  `/v1/audio/transcriptions`, and generated images render inline via
+  `GET /v1/images/file/{name}` (bare name, strict pattern, resolved-parent
+  re-check). Both appear only when `GET /v1/capabilities` says the organ
+  booted. Still absent: image UPLOAD from the page (eyes are reachable only by
+  an API client sending a data: URL).
 - Stage 7 persona pack + `--name` spawn scaffold: trainer/tokenizer/registry
   need zero edits; persona literals are scattered across ~12-15 files, with
   the mass in identity_anchors/identity_paraphrases and make_sft_data.

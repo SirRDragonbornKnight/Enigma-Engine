@@ -492,14 +492,26 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
         payload = {"messages": [{"role": "user", "content": c["q"]}], "max_tokens": max_tokens, "temperature": temperature}
         if cat in ("tool", "restraint"):
             payload["tools"] = WEATHER_TOOL
-        msg = _post(base_url, payload)["choices"][0]["message"]
+        reply = _post(base_url, payload)
+        msg = reply["choices"][0]["message"]
+        # Built-ins EXECUTE server-side and the hop loop consumes them, so the
+        # surfaced message carries no `tool_calls` for one. Grading only what
+        # was surfaced meant a probe could not see a built-in fire at all: an
+        # organ probe scored 0 however well she routed, and a restraint probe
+        # expecting NO call passed while she called one. serve reports the
+        # executed names; an older server sends nothing and grading falls back
+        # to the surfaced calls alone.
+        ran = (reply.get("enigma") or {}).get("tools_run") or []
 
         content = msg.get("content") or ""
         # Read tool_calls for EVERY category: a factual or adversarial probe
         # that fires a tool is the false-fire the router audit is about, and a
         # transcript that only looked at tool/restraint could not show it.
         calls = msg.get("tool_calls") or []
-        called = calls[0]["function"]["name"] if calls else None
+        # A surfaced call names the turn; otherwise the first EXECUTED built-in
+        # does. Either way `called` is "the tool this turn used", which is what
+        # every expect_tool probe is asking about.
+        called = calls[0]["function"]["name"] if calls else (ran[0] if ran else None)
         # Grade by the probe's SHAPE, not by its category name. Keying on
         # ("tool", "restraint") meant any other category carrying `expect_tool`
         # fell through to text grading -- and text grading with no wants and no
@@ -531,6 +543,7 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
                  "arguments": t.get("function", {}).get("arguments")}
                 for t in calls
             ],
+            "tools_run": ran,
             "expect_tool": c.get("expect_tool"),
             "want_any": c.get("want_any", []),
             "deny_any": c.get("deny_any", []),
