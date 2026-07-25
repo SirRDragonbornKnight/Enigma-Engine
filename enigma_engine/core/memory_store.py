@@ -202,6 +202,25 @@ _FORGET_NAMED_MAX = 5
 # text that emits it, so the two cannot drift apart.
 FORGET_PENDING_MARK = "memories match that"
 
+# THE refusal's exact rendering, anchored to a line start. A bare substring
+# test on the MARK could not tell the question from text that merely QUOTES
+# it: a stored memory containing the phrase rode out in "forgot: ..." (a
+# SUCCESS), was surfaced to the client as if she had asked something, and
+# armed answering-mode with no question pending -- so her next ordinary turn
+# was read as naming a memory to delete (2026-07-25 fix-arc audit). Only text
+# matching this rendering is the handshake; everything else just mentions it.
+# Kept beside the raise below for the same no-drift reason as the MARK.
+FORGET_PENDING_RE = re.compile(
+    r"(?m)^[0-9]+ " + re.escape(FORGET_PENDING_MARK)
+    + r" -- say the one you mean word for word, or give its id: "
+)
+
+
+def renders_forget_pending(text: str) -> bool:
+    """True only for text carrying THE ambiguity refusal (at a line start),
+    never for text that merely quotes its marker phrase."""
+    return bool(FORGET_PENDING_RE.search(text))
+
 _NAMING_HEAD = re.compile(r"^(?:named|called|known\s+as)\b", re.IGNORECASE)
 _NAME_STEM = _stem("name")  # the attribute spelling of a naming ("name is Sam")
 
@@ -341,7 +360,16 @@ class MemoryStore:
                     except json.JSONDecodeError:
                         continue
                     if isinstance(rec, dict) and rec.get("text"):
-                        self._records.append(rec)
+                        # Whitespace-normalize, the same way add()/remember()
+                        # do. Hand-edited files are inside the contract, and a
+                        # record text carrying a newline was the last route by
+                        # which "forgot: <text>" could FORGE the TooBroad
+                        # rendering at a line start in her surfaced reply --
+                        # arming forget answering-mode with no question
+                        # pending (round-C audit, 2026-07-25).
+                        rec["text"] = " ".join(str(rec["text"]).split())
+                        if rec["text"]:
+                            self._records.append(rec)
         # Hand-edited files are inside the contract (module docstring): a
         # record whose id is missing or not a valid int gets renumbered here
         # so the max+1 id arithmetic in add()/remember() always sees ints.

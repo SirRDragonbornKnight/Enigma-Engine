@@ -55,7 +55,7 @@ from enigma_engine.core.imagegen import ImageGenError, Painter
 from enigma_engine.core.tts import Speaker, TTSError
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
-from enigma_engine.core.memory_store import FORGET_PENDING_MARK as _FORGET_PENDING
+from enigma_engine.core.memory_store import renders_forget_pending as _renders_forget_pending
 from enigma_engine.core.persona import Persona
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
@@ -1230,7 +1230,14 @@ def _answering_a_forget_question(messages: list[Msg]) -> bool:
     pending question is right there in the request."""
     for m in reversed(messages):
         if m.role == "assistant" and m.content:
-            return _FORGET_PENDING in m.content
+            # The exact refusal rendering at a line start -- NOT a substring
+            # test on the marker phrase. Her turn can QUOTE the phrase without
+            # having asked anything (a surfaced "forgot: ..." success naming a
+            # memory that contains it, or her own paraphrase mid-sentence),
+            # and a substring check armed answering-mode on exactly those
+            # (2026-07-25 fix-arc audit): the next ordinary user turn was then
+            # read as naming a memory to delete.
+            return _renders_forget_pending(m.content)
         if m.role == "user":
             continue
     return False
@@ -1277,6 +1284,31 @@ def _memory_id(raw) -> int | None:
     return int(text) if re.fullmatch(r"[0-9]{1,9}", text) else None
 
 
+def _surfaced_forget_refusal(name: str, result: str) -> str | None:
+    """The forget refusal the CLIENT must see verbatim, or None.
+
+    The "N memories match that" refusal is a QUESTION: serve re-arms the
+    forget tool on the next request by finding its marker in her last
+    assistant turn -- which lives in the client's own history. Feeding the
+    refusal to the model as a tool result was not enough: a 182M paraphrase
+    loses the ids and exact wordings the user must answer with, and the
+    marker never reached the client, so the handshake armed in tests and
+    never once on the live path (round-7 audit, 2026-07-25). The refusal is
+    surfaced verbatim in her visible reply, alongside whatever she says
+    about it, on BOTH response paths (stream parity is byte-exact).
+
+    Matched by its exact RENDERING, not by marker substring: three other
+    forget results embed store or model text verbatim ("forgot: ...",
+    "no matching memory to forget for: ...", "error: memory #N is not one
+    of the ones that match ..."), so a memory that merely CONTAINS the
+    marker phrase rode a SUCCESS line into her visible reply and armed the
+    handshake with no question pending (2026-07-25 fix-arc audit)."""
+    if name != "forget":
+        return None
+    body = result.removeprefix("error: ")
+    return body if _renders_forget_pending(body) else None
+
+
 def _execute_builtin(name: str, arguments: dict) -> str:
     """Run a server-side built-in tool and return its result string. Errors
     come back as text (fed to the model) rather than raising -- an engine that
@@ -1318,7 +1350,15 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             if mem_id is None:
                 return f"error: memory id must be a whole number, got {raw_id!r}"
         text = arguments.get("text")
-        text = text.strip() if isinstance(text, str) else ""
+        # Whitespace-NORMALIZED, not just stripped: this argument is echoed
+        # verbatim into the "no matching memory to forget for: ..." result,
+        # and a crafted multi-line argument FORGED the TooBroad rendering at
+        # a line start there -- surfacing a fake "which memory?" question and
+        # arming answering-mode (round-B audit, 2026-07-25). The OTHER echo,
+        # "forgot: <record text>", is closed at the store: add(), remember()
+        # AND the JSONL loader all normalize record text the same way
+        # (round-C found the hand-edited-file route). Matching is unaffected.
+        text = " ".join(text.split()) if isinstance(text, str) else ""
         if not text:
             return ("error: say which memory to forget in words"
                     if mem_id is None else
@@ -1543,9 +1583,37 @@ def _chat_instruct(req: ChatReq):
                 raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
                 # A built-in-only batch (calculate) is executed here, then we
                 # loop to let the model answer from the result -- the client
-                # never sees it. Anything else is surfaced whole.
+                # never sees it. Anything else is surfaced whole. Exception:
+                # a forget refusal that asks WHICH memory is surfaced as
+                # content, or the handshake's marker (and the ids the user
+                # must answer with) dies in the server-side tool trace.
                 if _loop_on_builtins(parsed, hop):
-                    cur_msgs = _apply_builtins(cur_msgs, out, parsed)
+                    tool_results: list = []
+                    cur_msgs = _apply_builtins(cur_msgs, out, parsed, tool_results)
+                    for _name, _result in tool_results:
+                        surfaced = _surfaced_forget_refusal(_name, _result)
+                        if not surfaced:
+                            continue
+                        # Same separator semantics as the hop-content deltas
+                        # above, so stream and non-stream stay byte-identical
+                        # (non-stream appends this text to its "\n" join).
+                        body = ("\n" + surfaced) if emitted_any else surfaced
+                        emitted_any = True
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {
+                                    "id": cid,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": MODEL_ID,
+                                    "choices": [
+                                        {"index": 0, "delta": {"content": body}, "finish_reason": None}
+                                    ],
+                                }
+                            )
+                            + "\n\n"
+                        )
                     continue
                 calls = _openai_tool_calls(parsed)
                 if raw_all:
@@ -1651,6 +1719,12 @@ def _chat_instruct(req: ChatReq):
             # to say" must not silence the page's own TTS (2026-07-17 audit).
             if any(name == "speak" and result == "speaking" for name, result in tool_results):
                 spoke_server_side = True
+            # A forget refusal that asks WHICH memory joins the visible
+            # content (hop_texts feeds the final "\n" join), or its marker
+            # and ids never reach the client and the handshake stays dead.
+            hop_texts += [
+                s for s in (_surfaced_forget_refusal(n, r) for n, r in tool_results) if s
+            ]
             continue
         break
 

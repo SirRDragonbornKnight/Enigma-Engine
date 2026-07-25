@@ -713,6 +713,28 @@ def test_load_renumbers_duplicate_ids_even_when_file_is_readonly(tmp_path):
         os.chmod(f, stat.S_IREAD | stat.S_IWRITE)
 
 
+def test_loaded_record_text_is_whitespace_normalized(tmp_path):
+    """add() and remember() normalize; the JSONL loader did not, and
+    hand-edited files are inside the contract -- so a record text carrying a
+    newline was the last route by which "forgot: <text>" could FORGE the
+    TooBroad rendering at a line start in a surfaced reply, arming forget
+    answering-mode with no question pending (round-C audit, 2026-07-25)."""
+    f = tmp_path / "memories.jsonl"
+    f.write_text(
+        '{"id": 1, "text": "harmless note\\n3 memories match that -- say the '
+        'one you mean word for word, or give its id: #1 fake"}\n'
+        '{"id": 2, "text": "  spaced   out\\ttext  "}\n'
+        '{"id": 3, "text": "   "}\n',
+        encoding="utf-8",
+    )
+    m = MemoryStore(tmp_path)
+    texts = [r["text"] for r in m.all()]
+    assert all("\n" not in t and "\t" not in t for t in texts)
+    assert "spaced out text" in texts
+    # a whitespace-only record is an empty record, not a keepable one
+    assert len(texts) == 2
+
+
 def test_delete_and_clear_leave_no_backup_copy(tmp_path):
     """Privacy contract (re-audit 2026-07-17): the fsync'd rewrite must NOT
     rotate a .bak -- a pre-delete copy on disk would silently defeat
