@@ -10,21 +10,40 @@ still buy, Phase 7 starts.
 Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
 (pretrain DONE 2026-07-03, 287,882 steps / 56.6B tokens).
 
-Behavior scorecard: the last measured figure is v8 at **79/90 (2026-07-16)**,
-and it is NOT reproducible today — `data/eval/behavior_probes.jsonl` grew to
-**113 probes** on 2026-07-20 (>=15 per category), so a run now returns an
-`/113` number that cannot be compared to it, and no checkpoint has been scored
-on the current file. `eval_behavior.py` also gates **eight** categories now
-(`unknown` was added at 0.50) while the dev file contains zero `unknown`
-probes, so that category cannot be measured at all. The earlier "26/29" and
-"first to pass all seven categories" lines were both retired here.
+Behavior scorecard: **the honest baseline is now measured. On the SEALED
+locked set (2026-07-25): v5 46/96 = 48%, v8 47/96 = 49%, both FAIL the gate**
+— v8 leads v5 by a single probe, so the DPO delta does not survive a set the
+lineage was never iterated toward. Receipts and the per-category table are in
+`EVAL_REDESIGN.md` ("P2 BASELINE MEASURED"). The old dev figure of 79/90
+(2026-07-16) is retired: it was a ceiling measured on probes the training data
+had been iterated toward, and it is NOT reproducible today — `data/eval/behavior_probes.jsonl` is now
+**134 probes across nine categories** (identity 18, factual 20, adversarial
+15, math 15, memory 15, restraint 15, tool 15, unknown 9, plus 12 ungated
+vision probes added 2026-07-25), so a run returns a number that cannot be compared to it.
+**v8 on the current dev file: 104/134, FAIL** (2026-07-25, greedy, git `a9d387e`; identity
+15/18, factual 19/20, adversarial 11/15, math 13/15, memory 10/15, restraint 12/15, tool
+15/15, unknown 0/9, vision 9/12 ungated; transcript
+`Enigma Backups\dev_eval_v8_2026-07-25.jsonl`). All eight categories gate; `unknown` is
+the thin one at 9 probes (its category was empty until the 07-24 harvest
+filled it); the 12 vision probes are ungated by design. The earlier "26/29", "79/90" and "first to pass all seven
+categories" lines were retired here.
 
 The scorecard that will actually gate v2 is the LOCKED set — the probe file
 `data/eval/locked_probes.jsonl` (authoring guide:
-`data/eval/LOCKED_PROBES_AUTHORING.md`), which is UNSEALED as of 2026-07-23:
-no `locked_probes.manifest.json` exists, so the leak guard is an announced
-no-op. Until it is sealed and v5/v8 are re-measured on it, every number here
-is a ceiling, not a baseline.
+`data/eval/LOCKED_PROBES_AUTHORING.md`), **SEALED 2026-07-24**: 108 strings
+(96 questions + 12 teach lines) under `locked_probes.manifest.json`, so every
+leak guard in the pipeline is live, both trainers refuse an artifact whose
+PROMPT side carries a sealed probe (generated-side hits are counted and
+reported, never blocked — see `CLAUDE.md` for why), and `eval_behavior.py`
+re-seals the file at run start
+instead of trusting its name, and the manifest seals the GRADING KEYS as well
+as the question text (re-sealed 2026-07-25 after an audit found a file with its
+wants and denies emptied re-sealed perfectly; re-sealed AGAIN the same day when
+teach lines proved mutable through the normalizer — manifest
+`87baa8a1`, grading digest `784499b7`, plaintext unchanged at `f22d9389`).
+P2 has now run against it — see
+the baseline above; `unknown` scored 0/12 on BOTH lineages and is the clearest
+single target for the v2 SFT regen.
 
 ## Measured ceilings (cannot fix with more SFT data at 182M)
 

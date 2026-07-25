@@ -5,6 +5,16 @@
 > hold). Status lines here are MEASURED, not asserted — re-measure before
 > trusting any number that matters.
 
+> **EXECUTION ORDER LIVES IN `BACKLOG.md` §7.95, NOT HERE (ruled 2026-07-24).**
+> This file is the phase MAP — what each phase is and why it exists. The order
+> work actually happens in is the training block: P1 seal (done 2026-07-24),
+> P2 v5/v8 locked baseline, then T1 corpus prep → T2 probe pretrain → T3 full
+> v2 pretrain → T4 SFT regen → T5 DPO → T6 adoption gate → T7 organ training.
+> A phase below that reads like "next up" is describing itself, not claiming a
+> queue position: every phase that TRAINS sits inside T3–T7. Non-training work
+> (organ evals, chat-page mic + image render, the Stage-7 persona pack) runs
+> alongside and is listed at the end of §7.95.
+
 ## North star
 
 A local, from-scratch, personally-aligned AI — Jarvis-class companion that runs
@@ -93,10 +103,12 @@ Muppet.
   review; TEACHINGS_REPEAT 8->4); merge `teach_pairs.jsonl` into DPO behind the
   probe filter (DONE `47f557ae`). Second-pass audit: /undo left records baked on disk and
   a second /fix rejected the user's own correction — both FIXED `deb7c182`.
-- ORGAN UPGRADES (interim, still borrowed, all pip-only): TTS -> Kokoro-82M;
-  ASR -> whisper large-v3-turbo (verify CTranslate2 on sm_120 first); eyes ->
-  SmolVLM2 with question-conditioned VQA (captioning throws the user's
-  question away); image gen -> sdxl-turbo (a string change in Painter).
+- ORGAN UPGRADES (list from 2026-07-06; superseded in part by the owned-organ
+  arc): TTS -> Kokoro-82M **DONE 2026-07-23**; ASR -> whisper large-v3-turbo
+  (verify CTranslate2 on sm_120 first); eyes -> SmolVLM2 is OBSOLETE (BLIP
+  deleted 07-17, her own ViT serves) but its point stands as the live defect —
+  captioning throws the user's question away, so question-conditioned VQA is
+  T7 work on HER weights; image gen -> sdxl-turbo (a string change in Painter).
 
 ## Update 2026-07-06 (measured, `eval_behavior.py` held-out scorecard)
 
@@ -183,6 +195,12 @@ masking, then re-SFT.
   remains is the training work (theta raise + doc-masked continuation + re-SFT).
 
 ## Phase 4.5 — Owned organs: the transplant arc (user-ordered 2026-07-15; ~1-2 weeks of 5090 time)
+
+> QUEUE POSITION: the training half of this phase is **T7**, after the v2
+> adoption gate (`BACKLOG.md` §7.95). Its already-done parts (persistence, her
+> own ViT, the align run) stand; what remains — vision stage-2 VQA, the ears
+> distill + align — waits for T7 and its own prerequisites (image domain pick,
+> whisper-base teacher download).
 
 Goal: every sense runs on HER weights; borrowed backbones retire one at a
 time. Teachers may be used OFFLINE during training (distillation) — the

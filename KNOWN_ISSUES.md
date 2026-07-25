@@ -66,9 +66,12 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    checkpoint.
 5. **base_v2 (122M @ step 2,000) is pipeline-validation quality only** —
    barely trained. Don't judge her by it; probe the large 51k checkpoint.
-6. **Vendored weight:** `enigma_engine/bin/llama-server/` is ~1.06 GB of CUDA
-   DLLs for the GGUF route — intentional (5090/sm_120 needs newer CUDA than
-   wheel-based llama-cpp). Tree-kill `llama-server.exe` on teardown.
+6. **Vendored weight:** `enigma_engine/bin/llama-server/` is 1.07 GB (1,066,991,160 bytes) of CUDA
+   DLLs for the GGUF route. Intentional while the GGUF serving pivot was open;
+   that pivot was **REJECTED 2026-07-24** — serving stays from-scratch — so
+   this directory is dead weight pending a deletion decision, and nothing in
+   the repo launches it (no script, launcher, or module references the path).
+   If it is ever run by hand, tree-kill `llama-server.exe` on teardown.
 7. **Environment quirks (this dev box):** MCP servers load ONLY from the
    project `.mcp.json`; Claude Desktop is MSIX-sandboxed so `%LOCALAPPDATA%`
    writes are virtualized; no Windows admin without explicit user grant.

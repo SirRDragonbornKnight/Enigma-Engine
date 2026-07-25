@@ -51,11 +51,14 @@
   (`_held_out`), no-op until a manifest exists. Tests in
   `tests/test_eval_leak_guard.py`. Known limit: verb-swap paraphrases land in
   the 0.5-0.6 review band (flagged, not dropped).
-- [ ] **Author the locked probe set** (~60-90, BLIND to the training corpus),
-  then `python eval_leak_guard.py seal data/eval/locked_probes.jsonl`. Needs a
-  human by design (the separation-of-powers rule).
-- [ ] Widen thin eval categories to >=15 probes; re-measure v5/v8 on the locked
-  set for the honest baseline.
+- [x] **Author the locked probe set** — DONE 2026-07-24: the user's 96-probe
+  file was validated and sealed (108 strings incl. 12 teach lines); manifest
+  committed, plaintext gitignored, durable copy in `Enigma Backups`.
+- [ ] Widen thin eval categories to >=15 probes: the DEV set is there (134
+  probes, 9 categories incl. 12 ungated vision) except `unknown` at 9; the SEALED set is 12 per
+  category, under EVAL_REDESIGN's own >=15 rule, and cannot be widened
+  without re-sealing. Re-measure v5/v8 on the locked set (P2) for the honest
+  baseline.
 - [ ] (Optional) second-grader agreement pass; semantic-embedding leak guard to
   close the verb-swap gap.
 
@@ -291,9 +294,14 @@
 - [ ] ASR whisper-base -> **large-v3-turbo** (~1.6 GB; ~half the errors).
   VERIFY FIRST: CTranslate2 CUDA works on the 5090 (sm_120) — else it silently
   falls back to slow CPU int8. One-line check: `Ears(device="cuda").device`.
-- [ ] Eyes BLIP -> **SmolVLM2** with **question-conditioned VQA** — captioning
-  throws the user's question away; VQA answers what was actually asked. Bigger
-  win than the model swap alone.
+- [~] Eyes: **question-conditioned VQA** — captioning throws the user's
+  question away; VQA answers what was actually asked. The BLIP half of this
+  item is OBSOLETE (BLIP deleted 2026-07-17; her own distilled ViT serves
+  today), and the borrowed-model swap is off the table under owned-organs.
+  What SURVIVES is the real defect: serve passes `EYES.describe` as a bare
+  one-argument callable, so the pixels are gone before the question is asked,
+  even though `model.forward_multimodal` already concatenates [vision][text].
+  Fix = stage-2 VQA align + `Eyes.answer(img, question)` — scheduled at T7.
 - [ ] Image gen sd-turbo -> **sdxl-turbo** — a one-string change in `Painter`
   (already turbo-aware); higher fidelity, fits VRAM easily.
 - [x] Offline-by-default privacy (organs load from cache; `--allow-downloads`
@@ -305,6 +313,10 @@
   roughly halves her VRAM/footprint; int4 (~4x smaller) with slight quality
   cost lets her run on far weaker hardware and start faster. She's already free
   to run (local, no API), so this is pure headroom, not a cost cut.
+  CAVEAT since the 2026-07-24 GGUF-serving rejection: this is the ONLY live
+  reason gguf.py still exists, and its qwen3 auto-flip is math-wrong for the
+  v1 architecture (norms before rope, missing NEOX permute) — fix that first
+  or quantize inside the from-scratch serving path instead.
 - [ ] **Load organs on-demand** vs eager-at-boot — keeps idle VRAM low when an
   organ isn't in use; matters once eyes/imagination models get bigger.
 - [ ] **min_p-only sampling A/B** — drop top_p+top_k, keep min_p 0.05-0.1; the
@@ -483,7 +495,7 @@ surface verified against `pretrain_enigma.py --help` 2026-07-23.
 
     python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
-      --block 2048 --micro-batch 6 \
+      --block 2048 --micro-batch 6 --tokens 23.7e9 \
       --tokens-bin data/pretrain/tokens_v2.bin \
       --out models/enigma_v2_238m --seed <N> --archive-every <N>
 
@@ -493,10 +505,16 @@ micro-batch to 16:
 
     python pretrain_enigma.py --size v2_deep_542m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn \
-      --block 2048 --micro-batch 16 \
+      --block 2048 --micro-batch 16 --tokens 23.7e9 \
       --tokens-bin data/pretrain/tokens_v2.bin \
       --out models/enigma_v2_542m --seed <N> --archive-every <N>
 
+- `--tokens` defaults to **2e9** — one twelfth of the corpus. Omitting it
+  trains 8.4% of an epoch (~17 h at the measured 238m rate) and, because
+  `total_steps` is derived from it, places the WSD decay tail there too: the
+  run ends, looks finished, and is nowhere near the 8.8 days/epoch this
+  section quotes. Pass the token budget EXPLICITLY, and re-derive it if T1
+  changes the corpus size.
 - `--tokens-bin` defaults to the v1 `tokens.bin`: pass the v2 corpus
   EXPLICITLY or the run trains the new architecture on the old tokenization.
 - Size `--archive-every` so the decay tail leaves ~10 archives; post-hoc EMA
@@ -514,10 +532,20 @@ micro-batch to 16:
 
 Prerequisites (not training):
 - P1. Seal the locked probes (validate, seal manifest, record drop counts +
-  shas + scorecards in EVAL_REDESIGN). User's call on timing.
+  shas + scorecards in EVAL_REDESIGN). **DONE 2026-07-24** — 108 strings
+  (96 q + 12 teach), manifest `data/eval/locked_probes.manifest.json`,
+  receipts in EVAL_REDESIGN, durable copy in `Enigma Backups`. eval_behavior
+  now re-seals the file at run start and refuses a holdout that was edited.
 - P2. v5/v8 locked re-measure (`--port 8123`, throwaway `--memory-dir`,
   `--transcript` OUTSIDE the repo) = the baseline v2 must beat. Runs before
-  any vocab adoption. Needs the serve-launch permission line (user's hand).
+  any vocab adoption.
+    - The harness CLEARS the target server's memory store before probing and
+      then writes probe facts into it, so it refuses any target off the
+      scratch port unless `--allow-live-server` is passed. Never point it at
+      the daily server on 8000.
+    - Both checkpoints live in `Enigma Backups\enigma_dpo_v5_adopted\` and
+      `…v8_adopted\` with sha receipts; serve them from there, not from
+      `models/`, so the live checkpoint is never in play.
 
 The block, in execution order:
 - T1. Corpus prep (~1 day, mostly CPU): quality-score the raw third
@@ -526,9 +554,49 @@ The block, in execution order:
   last lineage), 5-10 paraphrase variants of every must-know fact IN the
   corpus, decay-tail annealing set (~2-3B best tokens); then the rust
   retokenize (~42 min). Decide doc-boundary attention masking here.
+    - **The anneal needs a MECHANISM, not just a token set.** `get_batch`
+      draws uniformly at random over `[0, train_end)`, so position in the
+      corpus means nothing and a "best tokens at the end" file changes
+      nothing on its own. Either write the anneal set as its own bin and
+      switch `--tokens-bin` at the decay step, or teach the sampler a phase.
+      Decide and build this BEFORE T3 — the WSD win the schedule is chosen
+      for is a data-curriculum win.
+    - **Paraphrases of must-know facts enter through `pretokenize_data.py`,
+      which has no leak screen** (the guard is wired into make_sft_data,
+      make_facts_pretrain_data and make_dpo_data). Screen that text against
+      the sealed manifest before it is tokenized, or the corpus teaches the
+      gate's answers.
+    - Adding sources means editing the hardcoded `SOURCE_DIRS` in
+      `pretokenize_data.py`; the v2 retokenize invocation is
+      `--vocab bpe_vocab_v2_16k.json --output-bin tokens_v2.bin
+      --dtype uint16 --workers 10` (nothing else records it).
+    - **T1 changes the corpus size, so the 7.9 grid moves with it**: the
+      8.4/8.8/19.2 days-per-epoch figures and the `--tokens` budget are
+      derived from 23.69B tokens. Re-derive both before the size call, or
+      Gate B is decided on stale arithmetic.
+    - Decide `<search>`/`</search>` (v2 vocab rows 12/13) here: the last
+      window is this retokenize. VERDICT unless overruled: KEEP the rows
+      (two embedding rows are nothing) and delete the 31 SFT records that
+      teach a tag no runtime parses — training a tag with no owner is the
+      part that costs. Same window for the image begin/end delimiters, which
+      no step currently allocates.
 - T2. 10k-step probe pretrain (hours): first val-loss receipt for the v2
   lineage + live shakeout of archive cadence. The only v2 runs on disk are
-  throughput probes.
+  throughput probes. Same flags as T3 at the chosen size, with the budget cut
+  down — the defaults are the trap here too:
+
+        python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
+          --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
+          --block 2048 --micro-batch 6 --tokens 2e9 \
+          --tokens-bin data/pretrain/tokens_v2.bin \
+          --out models/enigma_v2_probe --seed 1 --archive-every 1000
+
+  ~2B tokens at the measured 31,311 tok/s is **~17 h**, not "a few hours".
+  DECISION RULE: the probe answers "is this lineage learning at all" — val
+  loss must fall smoothly and end below the v1 lineage's early-step curve at
+  the same token count. It is NOT comparable to v1's final val ppl 3.5 (a
+  different vocab means a different unit). A flat or rising curve stops the
+  launch and sends the corpus back to T1.
 - T3. Full v2 pretrain (5090; size = user's call at launch -- 238m 8.8
   d/epoch or 542m 19.2 d/epoch; commands above, flags BRANCH on size).
 - T4. SFT regen riding the bake (data work, minutes-hours of GPU):
@@ -544,14 +612,53 @@ The block, in execution order:
   carrying system/tools/memory blocks, URL-bearing records now kept,
   trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
   passed explicitly, finetune `--block` raised.
-- T5. DPO/polish pass (safe recipe: lr 5e-7 x 1 epoch).
+- T5. DPO/polish pass (safe recipe: lr 5e-7 x 1 epoch). Regenerate
+  `dpo_pairs.jsonl` as part of this: both trainers now refuse an artifact
+  carrying a sealed probe, so a stale file stops the run rather than rigging
+  the gate.
 - T6. Gate: locked eval vs the P2 baseline -> beat aggregate with no
-  category floor regression = adopt + flip the vocab default; ambiguous =
-  user's call.
+  category floor regression = adopt; ambiguous = user's call. Adoption is
+  more than a verdict, and none of it was written down:
+    - There is **no "vocab default" to flip** — serve and finetune both pick
+      the vocab from the checkpoint's `vocab_size`
+      (`serve_enigma.py` / `finetune_enigma.py`), which is exactly why v1 and
+      v2 models coexist in one checkout. Nothing to switch; delete this from
+      the mental model.
+    - `Start-Enigma.ps1` hardcodes `models\enigma_dpo\model.pth`. Adoption
+      means backing up the v8 checkpoint (receipted, alongside v5/v8 in
+      `Enigma Backups`) and putting the v2 export at that path, or editing
+      the launcher. Decide which, in writing, before the swap.
+    - serve's `--max-context` still defaults to **1024**. A model trained at
+      block 2048 and served at 1024 silently throws away the context win the
+      whole lineage was for — raise it at adoption and re-check VRAM.
+    - Gate statistics: the sealed set is 12 probes per category, under
+      EVAL_REDESIGN's own ">= 15" rule (one flip = 8.3% against 0.80
+      thresholds). Read a single-category miss as directional, not decisive;
+      the aggregate is the honest signal at this n.
 - T7. Post-adoption organ training, in order: vision stage-2 VQA
   (needs the image-domain pick), ears distill + align (needs the
   whisper-base teacher download), then the far-future own TTS / own
   image-gen transplants.
+
+### Non-training queue (GO'd 2026-07-24, runs alongside — nothing here trains)
+
+Recorded because it existed only in conversation:
+- Organ evals: **vision DONE 2026-07-25** -- 12 synthetic-marker probes in the
+  dev set, measured v8 at 9/12, ungated by design (EVAL_REDESIGN "ORGAN EVAL,
+  part 1"). The other three are blocked on mechanism, not probes: `imagine`
+  and `speak` execute SERVER-side and loop, so the surfaced reply carries no
+  `tool_calls` for a probe to grade -- they need an execution-trace field or a
+  serve-side counter first; `ears` needs an audio fixture and the organ loaded.
+- Chat page senses: the served page has one text input — no mic capture, no
+  image upload, and a generated image arrives as literal path text. She
+  cannot exercise her own organs from her own UI, so no signal accumulates.
+  (`--ears` and `--image-gen` now load under the launcher's interpreter; the
+  venv was missing faster-whisper and diffusers entirely until 2026-07-24.)
+- Stage 7 persona pack + `--name` spawn scaffold: trainer/tokenizer/registry
+  need zero edits; persona literals are scattered across ~12-15 files, with
+  the mass in identity_anchors/identity_paraphrases and make_sft_data.
+  Shared-home collisions (`~/.enigma_engine`, tray mutex, port 8000) are the
+  real one-AI-per-machine guards.
 
 Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
 REJECTED -- her serving path is our own code. Consequence: the vendored

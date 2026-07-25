@@ -61,7 +61,11 @@ Deleted after a three-agent adversarial audit verified every claim
 - **LIVE — perception training:** `vision_encoder.py`, `audio_encoder.py`,
   `training/vision_align.py` (Trainer for align_vision.py).
 - **KEPT DORMANT BY RULING:** `core/gguf.py` (llama-server export route,
-  KNOWN_ISSUES; reachable only via `Enigma.export_to_gguf`).
+  KNOWN_ISSUES; reachable only via `Enigma.export_to_gguf`). The GGUF SERVING
+  pivot was REJECTED 2026-07-24, so the only remaining use for this file is
+  the quantization idea in BACKLOG §6 — and its qwen3 auto-flip is math-wrong
+  for the v1 architecture (norms before rope, missing NEOX permute). Nothing
+  should ride it before that is fixed.
 - **In git history only (idea-source, not code):** the Forge trainer's
   method variants (SimPO/KTO/ORPO/APO losses, EMA/SWA/LISA/LLRD machinery,
   RL loops) — retrieve from history if an instruct-pass design wants to

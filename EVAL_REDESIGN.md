@@ -1,9 +1,11 @@
 # Eval de-contamination — design (2026-07-16)
 
-> Status: DESIGN + in-progress implementation. The current behavior gate
-> (`eval_behavior.py`, `data/eval/behavior_probes.jsonl`, 90 probes) is partly
-> measuring itself. This doc is the plan to make the scorecard trustworthy.
-> Grounded in a code audit 2026-07-16 (receipts inline).
+> Status: DESIGN + in-progress implementation. The behavior gate
+> (`eval_behavior.py`, `data/eval/behavior_probes.jsonl`, **90 probes as of
+> 2026-07-16; 134 across nine categories today**) is partly measuring itself.
+> This doc is the plan to make the scorecard trustworthy. Grounded in a code
+> audit 2026-07-16 (receipts inline). **Every "90" below is that snapshot** —
+> the dated sections later in this file carry the current numbers.
 
 ## The problem (verified in code)
 
@@ -29,7 +31,7 @@ contaminated and should be treated as soft until this lands.
 ## Design
 
 ### A. Two-tier probes (breaks the closed loop)
-- **Dev set** = the current 90 in `behavior_probes.jsonl`. Visible; iterate freely.
+- **Dev set** = `behavior_probes.jsonl` (90 at design time, 134 today). Visible; iterate freely.
 - **Locked holdout** = ~60-90 fresh probes authored ONCE from the capability
   spec, then SEALED: the repo stores only `sha256(normalized_text)` per probe in
   a manifest (`data/eval/locked_probes.manifest.json`), plus the sealed probe
@@ -203,3 +205,216 @@ false-FAIL correct answers, never false-pass wrong ones):
 These are the regex-NLI wall the original design named. The designed escape
 is section C's OPTIONAL second-grader agreement pass (still open); revisit
 it if the locked-set re-measure shows the residuals moving real scores.
+
+## P2 BASELINE MEASURED 2026-07-25 — the first honest scorecard on the sealed gate
+
+Both checkpoints served from their receipted backups (`Enigma Backups\
+enigma_dpo_v{5,8}_adopted\model.pth`) on port 8123 with a throwaway
+`--memory-dir`; probes `data/eval/locked_probes.jsonl` (sha
+`f22d9389…`, 96 questions + 12 teach lines, seal + grading keys verified at
+run start); decode temperature 0.0, max_tokens 60; transcripts written
+OUTSIDE the repo to `Enigma Backups\locked_baseline_v{5,8}_final.jsonl`.
+
+| category    | threshold | v5      | v8      |
+|-------------|-----------|---------|---------|
+| identity    | 0.80      | 7/12 58%| 5/12 42%|
+| adversarial | 0.80      | 1/12  8%| 2/12 17%|
+| factual     | 0.50      | 7/12 58%| 8/12 67%|
+| math        | 0.75      | 9/12 75%| 7/12 58%|
+| tool        | 0.80      | 12/12 100% | 12/12 100% |
+| restraint   | 0.80      | 6/12 50%| 10/12 83%|
+| memory      | 0.75      | 4/12 33%| 3/12 25%|
+| unknown     | 0.50      | 0/12  0%| 0/12  0%|
+| **OVERALL** |           | **46/96 48%** | **47/96 49%** |
+
+Both FAIL the gate, which is the point of an honest holdout: the dev-set
+figures (79/90 on the old file) were a ceiling measured on probes the training
+data had been iterated toward. v8 leads v5 by ONE probe overall — the v5->v8
+DPO delta does not survive a set she was never trained against. Read the
+per-category rows, not the aggregate: v8 trades identity and math for
+restraint.
+
+**This baseline is only meaningful because a serving bug was fixed first.**
+The same run on 2026-07-24 scored v8 at 28/96 with tool 0/12, math 0/12 and
+memory 0/12, and restraint at a perfect 12/12. Cause: sampling masked every
+logit past `config.vocab_size`, and the chat/tool specials are trained in the
+rows just past it, so `<|tool_call|>` (measured p=0.997 on a weather ask) was
+-inf'd out of every reply. She could not call a tool at all, which also made
+restraint pass by inability. See `model.set_live_vocab_size`. Any scorecard
+produced before that fix is void.
+
+**unknown 0/12 on both** is the one category no lineage has ever been trained
+for: it rewards declining, and the whole diet rewards answering. It is the
+clearest single target for the T4 regen.
+
+## ORGAN EVAL, part 1: vision is measured 2026-07-25 (was zero coverage)
+
+`eval_behavior.py` referenced no image/vision/audio/speak probe, so four of six
+organs were invisible to every scorecard and any regression in them showed up
+as a GREEN suite. The first of the four is now covered.
+
+**12 `vision` probes** in the dev set (`data/eval/behavior_probes.jsonl`, now
+134 probes / 9 categories). They carry the trained `[image: ...]` marker
+inline -- the exact shape `flatten_image_content` hands the model after eyes
+captioning -- so they exercise the whole TEXT side of vision with **no GPU and
+no `--eyes`**: can she use a caption that is already in her context, and does
+she avoid claiming blindness when she can see it. Every probe needs a specific
+detail from its caption, so an answer that ignores the marker cannot pass.
+
+**Measured v8 (2026-07-25, port 8123, temperature 0.0, max_tokens 60):
+`vision 9/12 = 75%`** — full dev scorecard the same run: identity 15/18,
+adversarial 11/15, tool 15/15, restraint 12/15, math 13/15, memory 10/15,
+factual 19/20, unknown 0/9, OVERALL 104/134 = 78%. Transcript:
+`Enigma Backups\dev_eval_v8_2026-07-25.jsonl`.
+
+`vision` is deliberately UNGATED (see `INFORMATIONAL_CATEGORIES`): there was no
+baseline until this run, and the SEALED set is fixed at the eight gated
+categories, so gating vision would fail the honest gate on a category it
+cannot contain. Promote it once the v2 lineage has its own receipt.
+
+**Still uncovered (the other three organs), with the reason:** `imagine` and
+`speak` are executed SERVER-side and looped, so the surfaced reply carries no
+`tool_calls` and a probe cannot see the call -- the same blindness the router
+audit named for built-in overcalls. Covering them needs either an
+execution-trace field in the response or a serve-side counter, not more
+probes. `ears` needs an audio fixture and a loaded organ. Note also a sealed
+teach line is normalization-identical to one in the open dev set (1 of 108) --
+harmless to scoring, but it means that single string is public.
+
+## ROUND-3 AUDIT 2026-07-25: the seal now covers the GRADING KEYS, not just the questions
+
+Four adversarial agents audited the work of this session; every load-bearing
+finding was re-verified directly. The gate integrity finding was a CRIT.
+
+**What was wrong.** The manifest sealed question and teach TEXT only.
+`want_any`, `deny_any`, `expect_tool` and `category` decide every verdict and
+had no committed anchor, so a file with its grading keys emptied re-sealed
+perfectly -- and `_grade_text` with no wants and no denies returns True for any
+answer, auto-passing five of the eight gated categories. The check meant to
+catch that compared the file against the on-disk `locked_probes.jsonl`, which
+failed open three ways: the plaintext is gitignored (absent on a fresh clone),
+the canonical run points `--probes` AT that reference so it compared the file
+with itself, and anyone able to drop a rigged file could overwrite the
+reference beside it. All three printed `seal verified` over unverified keys.
+
+**Fix.** `eval_leak_guard.grading_digest()` is sealed INTO the manifest at seal
+time, so verification needs no plaintext. A manifest predating the digest now
+FAILS CLOSED with an instruction to re-seal, rather than passing quietly.
+
+**Re-seal receipt (2026-07-25):** manifest sha
+`c662ec71a343546cee8e8e9eb3bde15739b79e01827e136c2eb9d21b27c1a94c` (was
+`67ff0bcc…`); `locked_probes.jsonl` UNCHANGED at `f22d9389…`. All 108 probe
+hashes verified byte-identical across the re-seal, and the v8 locked score is
+**47/96 before and after** -- the change is provably score-neutral, so the P2
+baseline above stands. Durable copy + receipt updated in `Enigma Backups`.
+
+**Also closed:** a full copy of the locked set padded with 13 junk strings fell
+under the 0.9 content-share bar and ran ungated (junk cannot REMOVE sealed
+content, so a file containing the whole sealed set is now locked content at any
+dilution). Non-eval findings from the same round: a boot guard that checked
+only the upper bound crashed serve on the documented vocab-mismatch fallback;
+`forget` deleted single-content-term facts ("User is tall.") on any ask
+containing that word, five at a time, under the cap. Both fixed, both
+mutation-verified.
+
+## ROUND-4 AUDIT 2026-07-25: the grading seal covered COUNTS, not teach content
+
+Three more adversarial agents, every load-bearing finding re-verified directly.
+The round-3 seal was better than round-2's and still wrong in two ways.
+
+- **Teach lines were sealed as a COUNT.** Every locked memory probe carries
+  exactly one teach line, so all twelve could be PERMUTED and `seal verified`
+  still printed. **Case ORDER was unsealed too** (the digest sorted). Both
+  change what the memory category measures: each case's teach lines are posted
+  immediately before that case's question and the store is cleared once per
+  run, so moving a teach line or a case changes what a later probe can recall.
+  Teach lines are now sealed as HASHES (never plaintext) in file order.
+  Re-sealed: manifest `43f2e5d3…`, grading digest `8ac5f691…`; probe hashes
+  verified identical to HEAD across BOTH re-seals, `locked_probes.jsonl`
+  untouched at `f22d9389…`.
+- **The consume-time leak guard blocked the entire queued SFT regen.** Scanning
+  answer-side strings flagged **56 assistant turns in the live mix** (56 rows =
+  10 DISTINCT strings, repeated by the mix weights; 38 score a full 1.0 -- not
+  by being verbatim, since ZERO are exact normalized matches, but by carrying an
+  identical CONTENT-WORD SET, differing only in stopwords, punctuation or word
+  order) and told the operator to "rebuild the artifact" -- which cannot
+  clear them, because `make_sft_data._held_out` screens the QUESTION only.
+  Build-time and consume-time now use the SAME predicate: asks REFUSE, answers
+  are counted and reported. An answer legitimately shares most of a question's
+  content words ("Jupiter is the largest planet..." scores 0.67 against
+  "What's the largest planet?"), so at this threshold the answer side cannot
+  separate a leak from a shared topic; 1,082 near-misses say no threshold nudge
+  fixes that. The signal is kept, the deadlock is gone.
+
+Non-eval findings the same round, both mine, both fixed and mutation-verified:
+the boot fix declared the chat rows decodable on ANY checkpoint, including a
+BASE one whose rows are random-init -- re-opening the very pad-row guard the
+serving fix was built on (now gated on `INSTRUCT`); and `forget` was collapsed
+to one rule after a fourth revision still deleted the USER's facts on an ask
+about their sister. `validate_probes.py` now knows about
+`INFORMATIONAL_CATEGORIES`, so a locked file may carry a vision probe.
+
+## ROUND-5 AUDIT 2026-07-25: the two gate detectors shared one lever
+
+Four adversarial agents, every load-bearing finding re-verified by my own repro.
+Two of the four rounds' fixes broke again, and one agent's headline finding was
+WRONG on measurement (see the correction at the end).
+
+- **CRITICAL -- the seal check could be skipped entirely.** Containment and
+  content-share are both PROPORTIONS of the file, so one lever bends both: drop
+  a single sealed string (containment fails) and pad with twelve junk ones
+  (share falls under 0.9). A copy still carrying **95 of 96 sealed questions
+  verbatim** then ran ungated and printed `RESULT: PASS`, differing from a real
+  gate run by exactly one missing line (`seal verified:`). The cheapest padding
+  was junk `teach` lines on a NON-memory probe: counted by `_probe_hashes`,
+  never posted to the server, never graded, invisible in the scorecard. Fixed
+  with an ABSOLUTE floor (`_LOCKED_CONTENT_MIN = 12`) -- padding only ever adds
+  strings, so a count cannot be diluted. Measured overlap that sets the value:
+  `behavior_probes` 1, `locked_probes_pool` 4, both benchmark files 0, a real
+  copy 108.
+- **HIGH -- teach lines were sealed only down to `[a-z0-9]`.** The round-4 fix
+  hashed teach CONTENT, but through `_norm`, which keeps only lowercase
+  alphanumeric runs -- while `q` is sealed near-verbatim. So the twelve teach
+  lines could be UPPERCASED, or have punctuation, Cyrillic, Japanese and emoji
+  appended, and `seal verified` still printed -- while the run POSTS the mutated
+  text to the server. That is an injection channel into the sealed memory
+  probes, not a formatting nicety. Teach is now hashed the way `q` is
+  (whitespace-collapsed, nothing else).
+- **MEDIUM -- `jaccard_threshold` was the one enforcement parameter nothing
+  verified.** It lives in the manifest, and probe hashes plus the grading digest
+  are IDENTICAL under any threshold, so a manifest edited to `0.99` still
+  printed `seal verified` while every paraphrase of a sealed probe trained
+  freely (measured: a real paraphrase scores 0.667 -- refused at 0.6, admitted
+  at 0.99). A threshold above the code default is now REFUSED rather than
+  obeyed; below it is stricter than the code asks and is honoured.
+- **HIGH -- tool-call ARGUMENTS reached no screen at all.** `content` is `""` on
+  a tool-calling assistant turn, so the guard saw an empty string and printed
+  "asks clean" while the payload -- inside the trainable mask, scoring **0.875**
+  against a sealed probe -- trained normally. `tool_calls.jsonl` (534 records)
+  is built ENTIRELY of that shape, so the one corpus that teaches tool use was
+  the one the guard could not read. Arguments now ride the advisory stream (an
+  argument echoes its ask by nature, same as an answer). SYSTEM turns moved to
+  the refusing side, where prompt-side content belongs.
+- **MEDIUM -- the consume guard failed open in total silence.** A missing or
+  emptied manifest returned with no output, so a training log could not tell
+  "guard ran clean" from "guard never ran". It now says `INACTIVE` out loud.
+
+**Re-sealed: manifest `87baa8a1…`, grading digest `784499b7…` (was `8ac5f691…`).
+Probe hashes and shingles verified byte-identical, `jaccard_threshold`
+unchanged, `locked_probes.jsonl` untouched at `f22d9389…`.** No score can move:
+the probe file and every grading key are unchanged, and the digest is a
+verification value that grading never reads. The round-4 manifest is archived
+beside the older ones as `locked_probes.manifest.PRE-RESEAL-R5-2026-07-25.json`
+(verified `43f2e5d3…`, matching the repo byte for byte -- the round-4 archive
+had been LF-normalized on copy and no longer reproduced its own receipt).
+
+**A CORRECTION, recorded because the lesson is the point:** the vocab-mask agent
+reported as HIGH that a BASE checkpoint with a multiple-of-64 vocab leaves
+untrained rows samplable, and named the v2 pretrain as the live trigger. The
+MECHANISM is real (proved on a tiny model: config 128, head 128, mask a no-op),
+but the trigger is not. `pretrain_enigma` takes `config.vocab_size` from the
+corpus metadata, and both corpora declare the TABLE size, not a padded one:
+v1 4718, v2 **16366** (not 16384). `4718 % 64 = 46`, `16366 % 64 = 46`, so both
+mask their 18-row reserve correctly and the alias WARN never fires either. Two
+of that agent's findings rested on the same wrong number. Verify the load-bearing
+figures before acting on a report -- including this one.

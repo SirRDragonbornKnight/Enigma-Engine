@@ -132,9 +132,19 @@ python eval_behavior.py --base-url http://127.0.0.1:8123     # in another shell
 ## The Tokenizer
 
 The BPE tokenizer (base vocab 4718, in `enigma_engine/vocab_model/`) is
-**fixed**: it produced `tokens.bin` and every checkpoint's embedding is
-tied to it. Retraining the tokenizer invalidates all existing weights,
-so it is not part of the normal cycle.
+fixed FOR A LINEAGE: it produced `tokens.bin`, and every v1 checkpoint's
+embedding is tied to it. Retraining the tokenizer invalidates existing
+weights, so it is not part of the normal cycle -- it is what STARTS a new
+lineage.
+
+That is exactly what the v2 work is. A second vocab already exists
+(`bpe_vocab_v2_16k.json`, 16,366 rows, 2.41x chars/token) with its own
+corpus (`data/pretrain/tokens_v2.bin`), waiting on the pretrain in
+`BACKLOG.md` §7.95. The two coexist safely because serve and finetune pick
+the vocab from the CHECKPOINT's `vocab_size`, not from a global default --
+so a v1 checkpoint keeps loading the v1 vocab no matter what else is on
+disk. Read this section as "don't swap the vocab under an existing
+lineage", not as "the tokenizer never changes".
 
 ---
 

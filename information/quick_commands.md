@@ -75,8 +75,11 @@ Each script documents its sources and flags in its docstring (`--help`).
 |---------|-------------|
 | `python -m pytest tests/ -v` | Run all tests (verbose) |
 | `python -m pytest tests/ --tb=short -q` | Run all tests (compact output) |
-| `ruff check enigma_engine/` | Lint the codebase |
-| `ruff check --fix enigma_engine/` | Auto-fix safe lint issues |
+
+Linting is NOT part of this project's loop: ruff was dropped by user ruling
+2026-07-18. Two leftovers remain in pyproject.toml and are equally inert:
+the `[tool.ruff]` config and the `ruff>=0.4.0` dev dependency.
+Run the tests instead.
 
 ---
 

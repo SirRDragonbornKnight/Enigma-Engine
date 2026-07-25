@@ -42,8 +42,11 @@ Vision perception is LIVE (`serve --eyes`, 2026-07-20); native audio is in progr
   on the shared encoder-align core (`train_audio` + `align_audio.py`; mask-aware encoder since
   2026-07-20, `--batch-size 8` works — padded-batch==unbatched at 3.6e-7). Encoder persistence FIXED
   `f9ec5184`, re-locked for audio 2026-07-19. History: `KNOWN_ISSUES.md` #11.
-- **TRAINING-LAST ruling LIFTED by user 2026-07-20** ("gpu usage is fine") — training runs are
-  allowed again; ask-before-hot-runs courtesy still applies while the user is connected/gaming.
+- **Training runs are PERMITTED (the 2026-07-20 "gpu usage is fine" lifting) but SEQUENCED:**
+  ruled 2026-07-24, everything that trains waits and runs as one consolidated block, in the
+  order `BACKLOG.md` §7.95 sets (P1 seal, P2 baseline, T1 corpus … T7 organs). So the answer
+  to "may I train?" is yes-when-its-turn-comes, not never and not now. Ask-before-hot-runs
+  courtesy still applies while the user is connected/gaming.
   Vision image DOMAIN is still the user's open decision (`VISION_QUALITY_SPEC.md` §4 — NOT the
   everyday-LLaVA diet).
 
@@ -102,11 +105,14 @@ voice->wav->ears and imagine->png->eyes loops pass on real weights.
   lr 2e-6 x2 epochs measurably WRECKED her (identity 83→50%, factual 50→0%). DPO here is a nudge
   or a wrecking ball; do not raise the lr without a scorecard.
 - **Eval** — `python eval_behavior.py` = the behavior gate, run against a RUNNING server
-  (dev set widened to 113 probes 2026-07-20; `--probes` selects a probe file; the scorecard
-  prints probe file + decode config). `--base-url` defaults to `http://127.0.0.1:8123` (a
-  SCRATCH port, deliberately not the live 8000) and `--temperature` to 0.0 (true greedy,
-  reproducible). Dev probes: `data/eval/behavior_probes.jsonl`; the LOCKED set is the user's
-  to author blind (`data/eval/LOCKED_PROBES_AUTHORING.md`), still absent by design.
+  (dev set = 134 probes / 9 categories as of 2026-07-25; `--probes` selects a probe file; the
+  scorecard prints probe file + decode config). `--base-url` defaults to
+  `http://127.0.0.1:8123` (a SCRATCH port, deliberately not the live 8000) and `--temperature`
+  to 0.0 (true greedy, reproducible). The run CLEARS the target server's memory store before
+  probing, so it REFUSES any target off the scratch port unless `--allow-live-server` says the
+  target is disposable. Dev probes: `data/eval/behavior_probes.jsonl`; the LOCKED set
+  (`data/eval/locked_probes.jsonl`) is SEALED as of 2026-07-24 and is re-sealed at run start —
+  an edited holdout is refused rather than scored.
 - **Teach** — `python teach_enigma.py` chats against a running serve; `/fix` bakes a correction
   into `teachings.jsonl` + `teach_pairs.jsonl` (both gitignored — personal), with
   confirm-before-bake augmentation. `teachings.jsonl` is the USER's authoring channel: never
@@ -203,11 +209,21 @@ corruption, unreachable from the live serve loop; regression tests in
 `tests/test_cpu_rectangular_decode.py`.
 
 **Data state (counted 2026-07-19, all verified):** bottleneck stays SFT DATA at scale — tool
-corpus 544 records (incl. speak/imagine), identity 426, mix 114,316, dpo_pairs 242, general diet
+corpus 534 records (incl. speak/imagine), identity 422, mix 114,320, dpo_pairs 240, general diet
 `data/finetune/combined_finetune.jsonl` 105,203 short pairs (per-source length caps DIFFER — see
 `information/trainer/training_guide.md` Stage 2). Recall strategy since 2026-07-15: facts INSTALL
 via a continued-pretrain pass (`make_facts_pretrain_data.py` → `pretrain_enigma.py --tokens-bin`
 → `models/enigma_pretrain_facts`; SFT inits from it, and `knowledge_corpus.py` x5 only SURFACES
 them) — measured factual 13/20 → 19/20 on the 90-probe suite. The eval leak guard
-(`eval_leak_guard.py`) is wired into `make_sft_data` but stays a NO-OP until a human authors
-`data/eval/locked_probes.jsonl` and seals it — still absent, by design (separation of powers).
+(`eval_leak_guard.py`) is wired into `make_sft_data`, `make_facts_pretrain_data` and
+`make_dpo_data`, and since the 2026-07-24 seal it is LIVE: `refuse_if_leaky` also runs at
+CONSUME time in `finetune_enigma.py` and `dpo_enigma.py`, split by side: the PROMPT side
+(user turns, system turns, DPO `prompt`) REFUSES and stops the run, while the GENERATED side
+(assistant turns, tool-call ARGUMENTS, DPO `chosen`/`rejected`) is counted and reported but
+never blocks. Answers are advisory on purpose — an answer shares most of a question's content
+words by nature, so scanning them as leaks refused the entire live SFT mix (56 hits) behind
+advice that could not clear it, because the builder screens the question side only. Tool-call
+arguments reached NO screen at all until 2026-07-25 (`content` is `""` on a tool-calling turn,
+so the guard read an empty string while the payload trained inside the mask — and
+`tool_calls.jsonl` is built entirely of that shape). Still unscreened by design of its own
+path: `pretokenize_data.py` (the corpus route) — screen T1's fact paraphrases before tokenizing.
