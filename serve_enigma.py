@@ -367,11 +367,15 @@ def boot(argv: list[str] | None = None) -> None:
     # the values derived from her identity. Rebinding here rather than reading
     # PERSONA at each use keeps those names plain constants for every other
     # reader, and a boot is the only moment identity can change.
+    # UNCONDITIONAL. Rebinding only when the flag is present left a flagless
+    # re-boot serving the PREVIOUS persona -- the same shape as the double-boot
+    # environment hole fixed thirty lines below, and the reason a boot must be
+    # the moment identity is decided rather than the moment it can change.
+    PERSONA = Persona.load(Path(ARGS.persona) if ARGS.persona else None)
+    _VOICE_STATE = PERSONA.home / "voice.json"
+    IMAGES_DIR = PERSONA.home / "images"
+    _STOP_TEXTS = ("\nUser:", PERSONA.transcript_label)
     if ARGS.persona:
-        PERSONA = Persona.load(Path(ARGS.persona))
-        _VOICE_STATE = PERSONA.home / "voice.json"
-        IMAGES_DIR = PERSONA.home / "images"
-        _STOP_TEXTS = ("\nUser:", PERSONA.transcript_label)
         print(f"  persona: {PERSONA.name} (home {PERSONA.home})", flush=True)
 
     # PRIVACY: she is local, fully. Her own weights never touch the network; the
@@ -738,10 +742,15 @@ def _render_transcript(messages: list[Msg]) -> str:
         if m.role == "system":
             lines.append(text)
         elif m.role == "assistant":
-            lines.append(f"Enigma: {text}")
+            lines.append(f"{PERSONA.name}: {text}")
         else:
             lines.append(f"User: {text}")
-    lines.append("Enigma:")
+    # The label MUST be the one _STOP_TEXTS cuts on. Hardcoding "Enigma:" here
+    # while the stop text followed the persona meant a --persona run prompted
+    # her as Enigma and then had no stop sequence that could fire on the turn
+    # marker it had just taught -- the reply kept a whole fabricated assistant
+    # turn and was only cut at the next "\nUser:".
+    lines.append(f"{PERSONA.name}:")
     return "\n".join(lines)
 
 
@@ -1078,13 +1087,21 @@ _FORGET_NEGATED = re.compile(r"\b" + _NEGATED_FORGET_SRC, re.IGNORECASE)
 # Same safe direction as the negation: these SUPPRESS the offer, so a miss
 # costs one un-offered tool and never a fact. First person and second person
 # only -- an imperative "forget my address" has no subject and stays armed.
+# The AUXILIARY is what separates the two: "did/do/does you forget" asks about
+# the act of forgetting; "can/could/will/would you forget" is an imperative
+# wearing a question mark. A bare "(you|they) forget" branch was tried and
+# matched inside "can you forget my address", which disarmed a real delete ask
+# -- and because remember is gated on `not forgettable`, "could you forget that
+# I like tea" then offered to SAVE it. That is the save-instead-of-delete
+# inversion the negation guard above exists to prevent, arriving through the
+# suppressor instead. Statements like "you forget how cold it gets" are left
+# armed: a false offer costs one declined tool, and the store's one-candidate
+# rule is what actually stands between an offer and a deletion.
 _FORGET_NOT_A_REQUEST = re.compile(
     r"\b("
     r"i (always |often |sometimes |usually |constantly |never |keep |kept )*forget|"
     r"i'?ve forgotten|i forgot|"
-    r"(did|do|does|have|has) you forget|"
-    r"(did|do|does) (you|he|she|they|we) forget|"
-    r"(you|he|she|they|we) (always |often |sometimes |usually )*forget"
+    r"(did|do|does|have|has) (you|he|she|they|we) forget"
     r")\b",
     re.IGNORECASE,
 )

@@ -438,13 +438,30 @@ def test_talking_about_forgetting_is_not_asking_her_to_forget(monkeypatch):
                  "Do you forget things often?",
                  "I always forget my umbrella",
                  "I forgot to call her",
-                 "I've forgotten his birthday",
-                 "You forget how cold it gets"):
+                 "I've forgotten his birthday"):
         assert not serve._looks_forgettable(text), text
     # the real asks are untouched
     for text in ("forget that I like tea", "forget I'm tall", "forget where I live",
                  "please forget everything about my dog"):
         assert serve._looks_forgettable(text), text
+
+
+def test_a_polite_delete_request_is_still_a_delete_request(monkeypatch):
+    """The AUXILIARY separates the two shapes: "did you forget" asks about the
+    act, "could you forget" is an imperative wearing a question mark. A bare
+    "(you) forget" suppressor matched inside the second, disarming a real ask --
+    and since remember is gated on `not forgettable`, "could you forget that I
+    like tea" then offered to SAVE it. That is the save-instead-of-delete
+    inversion the negation guard exists to prevent, arriving through the
+    suppressor."""
+    monkeypatch.setattr(serve, "MEMORY", object())
+    for text in ("can you forget my address",
+                 "could you forget that I like tea",
+                 "will you forget my old number",
+                 "would you forget where I live",
+                 "please can you forget my birthday"):
+        assert serve._looks_forgettable(text), text
+        assert not serve._looks_memorable(text), f"{text} offered to SAVE instead"
 
 
 def test_the_forget_gate_offers_the_shapes_the_store_can_handle(monkeypatch):
