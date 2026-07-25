@@ -43,6 +43,7 @@ except Exception:
     pass
 
 from enigma_engine.core.optim import build_optimizer, get_lr  # the shared arsenal
+from eval_leak_guard import refuse_if_leaky
 
 ROOT = Path(__file__).resolve().parent
 IGNORE = -100  # ignore_index for the masked positions
@@ -53,6 +54,8 @@ def load_examples(path: Path, tokenizer, block: int):
     from enigma_engine.core.chat_format import render_training
 
     examples, skipped_long, bad = [], 0, 0
+    asks: list[str] = []
+    answers: list[str] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -71,6 +74,33 @@ def load_examples(path: Path, tokenizer, block: int):
                     bad += 1
                     continue
                 msgs = [{"role": "user", "content": prompt}, {"role": "assistant", "content": completion}]
+            # Split by PROMPT side vs GENERATED side, not by "user vs everything
+            # else". The prompt side REFUSES (same predicate the builder screens
+            # with, so "rebuild" is advice that works); the generated side is
+            # advisory -- an answer shares most of a question's content words, so
+            # scanning it as a leak blocked the whole SFT regen on topicality.
+            #
+            # SYSTEM turns are prompt side. Filing them as advisory made a
+            # sealed probe pasted into a system block a warning instead of a
+            # refusal, and the SFT builder emits memory-read records that carry
+            # facts in exactly that block.
+            #
+            # TOOL-CALL ARGUMENTS were collected by nobody. `content` is "" on a
+            # tool-calling assistant turn, so the guard saw an empty string and
+            # printed "asks clean" while the payload -- inside the trainable
+            # mask, scoring 0.875 against a sealed probe -- trained normally.
+            # tool_calls.jsonl is built ENTIRELY of that shape, so the one
+            # corpus that teaches tool use was the one the guard could not read.
+            # They ride the advisory stream for the same reason answers do: an
+            # argument is derived from the ask and echoes it by nature.
+            for m in msgs:
+                content = m.get("content", "") or ""
+                (asks if m.get("role") in ("user", "system") else answers).append(content)
+                for call in (m.get("tool_calls") or []):
+                    fn = call.get("function") or {}
+                    args = fn.get("arguments")
+                    if args:
+                        answers.append(args if isinstance(args, str) else json.dumps(args))
             try:
                 ids, mask = render_training(tokenizer, msgs)
             except ValueError:
@@ -88,6 +118,10 @@ def load_examples(path: Path, tokenizer, block: int):
         f"({skipped_long} skipped as longer than block {block}, {bad} malformed/empty)",
         flush=True,
     )
+    # The build-time screen cleans data as it is GENERATED; this file may have
+    # been generated before the seal existed. The run that touches the weights
+    # is the one that has to refuse.
+    refuse_if_leaky(asks, path, advisory=answers)
     return examples
 
 

@@ -37,6 +37,7 @@ from enigma_engine.core.chat_format import CHAT_FORMAT_NAME, attach_chat_tokens,
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
+from eval_leak_guard import refuse_if_leaky
 
 PAD = 0  # padding id for batching; padded positions are never scored
 
@@ -174,17 +175,24 @@ def main() -> None:
     # Load + render pairs (drop the ones that don't fit the block).
     pairs = []
     n_skip = 0
+    prompts = []
+    answers = []
     for line in Path(args.data).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         p = json.loads(line)
+        prompts.append(p["prompt"])
+        # The graded sides are advisory, not blocking: an answer legitimately
+        # shares a question's content words (see refuse_if_leaky).
+        answers += [x for x in (p.get("chosen"), p.get("rejected")) if x]
         c = _render(tokenizer, p["prompt"], p["chosen"], args.block)
         r = _render(tokenizer, p["prompt"], p["rejected"], args.block)
         if c is None or r is None:
             n_skip += 1
             continue
         pairs.append((p["prompt"], c, r))
+    refuse_if_leaky(prompts, Path(args.data), advisory=answers)
     if not pairs:
         raise SystemExit("no usable preference pairs")
     rng = random.Random(args.seed)
