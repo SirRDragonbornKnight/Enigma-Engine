@@ -293,6 +293,29 @@ def test_naming_a_nested_fact_word_for_word_resolves_the_tie(tmp_path):
     assert [r["text"] for r in m.forget("forget that I like tea")] == ["User likes tea."]
 
 
+def test_forget_coerces_a_non_string_query_instead_of_crashing(tmp_path):
+    # The emptiness guard called str(query) but handed the RAW object to the
+    # term split, so None and ints raised AttributeError out of a delete path.
+    m = MemoryStore(tmp_path)
+    m.remember("User likes tea.")
+    assert m.forget(None) == []
+    assert m.forget(123) == []
+    assert len(m) == 1
+
+
+def test_an_ambiguous_refusal_names_ids(tmp_path):
+    # Records with identical term sets cannot be separated by restating them,
+    # so a refusal that named only text was advice with no way to follow it.
+    m = MemoryStore(tmp_path)
+    m.add("User likes tea.")
+    m.add("User likes tea.")
+    with pytest.raises(MemoryStore.TooBroad) as err:
+        m.forget("forget that I like tea")
+    assert "#1" in str(err.value) and "#2" in str(err.value)
+    assert m.delete(2) is True
+    assert [r["id"] for r in m.all()] == [1]
+
+
 def test_an_ask_covering_both_nested_facts_still_refuses(tmp_path):
     # The exact-name rule must not become a licence to delete on a superset ask
     # that names neither record.

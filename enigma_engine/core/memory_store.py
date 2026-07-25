@@ -478,7 +478,8 @@ class MemoryStore:
         "forget everything now") matches nothing -- an unbounded wipe belongs to
         clear(), behind its own explicit ask. A SCOPED wipe keeps its subject
         ("forget everything about my dog" -> {dog}) and still deletes."""
-        if not str(query).strip():
+        query = str(query) if query is not None else ""
+        if not query.strip():
             return []
         q_terms = {t for t in _content_terms(query) if t not in _FORGET_NOISE}
         if not q_terms:
@@ -498,10 +499,13 @@ class MemoryStore:
                     keep += [r for r in candidates if r is not named_exactly[0]]
                     candidates = named_exactly
                 else:
-                    named = "; ".join(r["text"] for r in candidates)
+                    # Name the IDS, not just the text. Records with identical
+                    # term sets cannot be told apart by restating them, so a
+                    # text-only refusal was advice with no way to follow it.
+                    named = "; ".join(f"#{r['id']} {r['text']}" for r in candidates)
                     raise self.TooBroad(
                         f"{len(candidates)} memories match that -- say the one you mean "
-                        f"word for word, or delete it by id: {named}"
+                        f"word for word, or give its id: {named}"
                     )
             if candidates:
                 self._records = keep

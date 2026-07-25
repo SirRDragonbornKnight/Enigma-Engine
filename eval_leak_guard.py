@@ -46,6 +46,14 @@ _STOP_WORDS = (
 _STOP = frozenset(_STOP_WORDS.split())
 DEFAULT_JACCARD = 0.6
 
+# Content words a sealed probe needs before CONTAINING it counts as a leak on
+# its own. Measured against the live training asks: a floor of 5 still flags 3
+# ordinary records, 6 flags none in mix/tool_calls/identity, and a padded
+# verbatim probe is caught at every padding level either way. Sealed strings
+# shorter than this keep the ratio test only -- a two-word probe is not
+# distinctive enough for containment to mean anything. (measured 2026-07-25)
+_CONTAINMENT_MIN_WORDS = 6
+
 
 def _norm(text: str) -> str:
     return " ".join(_WORD.findall(text.lower()))
@@ -158,6 +166,16 @@ class LockedProbeGuard:
         self.threshold: float = threshold
         self.exact: set[str] = {p["h"] for p in m.get("probes", [])}
         self.shingles: list[set[str]] = [set(p["s"]) for p in m.get("probes", [])]
+        # Probes distinctive enough that CONTAINING one is itself the leak.
+        # Jaccard is a ratio, so padding a verbatim probe with unrelated words
+        # shrinks it below the threshold while the probe sits intact inside the
+        # text (measured: a 10-word probe drops to 0.529 at 8 filler words and
+        # trains freely). Containment does not divide by the added words, so it
+        # cannot be diluted -- but it is only safe above a length floor, since
+        # any text mentioning a 2-word probe's words "contains" it.
+        self.long_shingles: list[set[str]] = [
+            s for s in self.shingles if len(s) >= _CONTAINMENT_MIN_WORDS
+        ]
 
     @classmethod
     def load(cls, path: Path = LOCKED_MANIFEST) -> "LockedProbeGuard":
@@ -179,8 +197,21 @@ class LockedProbeGuard:
         q = {_hw(w) for w in _content_words(text)}
         return max((_jaccard(q, s) for s in self.shingles), default=0.0)
 
+    def contains_probe(self, text: str) -> bool:
+        """True when a distinctive sealed probe sits INTACT inside `text`.
+
+        The dilution answer to `score`: adding words can only lower a ratio, so
+        a padded verbatim probe scores under the threshold while still teaching
+        the gate. Restricted to probes of at least `_CONTAINMENT_MIN_WORDS`
+        content words -- below that a probe is not distinctive enough for
+        containment to mean anything."""
+        if not self.long_shingles:
+            return False
+        t = {_hw(w) for w in _content_words(text)}
+        return any(s <= t for s in self.long_shingles)
+
     def leaks(self, text: str) -> bool:
-        return self.score(text) >= self.threshold
+        return self.score(text) >= self.threshold or self.contains_probe(text)
 
     def is_near_miss(self, text: str, low: float = 0.5) -> bool:
         """In the review band [low, threshold): worth a human glance, not dropped."""
@@ -231,13 +262,67 @@ def refuse_if_leaky(texts: list[str], source: Path, manifest: Path = LOCKED_MANI
             f"gate. Rebuild the artifact with the current guard, then re-run."
         )
     note = ""
+    flagged_texts: list[str] = []
     if advisory:
-        flagged = sum(1 for t in advisory if guard.leaks(t))
-        if flagged:
-            note = (f"; {flagged} of {len(advisory)} answer-side strings sit at or above the "
-                    "threshold -- expected on shared topics, reviewed not blocked")
+        flagged_texts = [t for t in advisory if guard.leaks(t)]
+        if flagged_texts:
+            note = (f"; {len(flagged_texts)} of {len(advisory)} answer-side strings sit at or "
+                    "above the threshold -- expected on shared topics, reviewed not blocked")
     print(f"leak guard: {len(texts)} asks clean against {len(guard)} sealed probes{note}",
           flush=True)
+    _write_verdict(source, manifest, guard, len(texts), advisory or [], flagged_texts)
+
+
+def last_verdict(source: Path, manifest: Path = LOCKED_MANIFEST) -> dict | None:
+    """The recorded verdict for `source`, or None if the guard never ran on it.
+
+    Trainers read this to stamp the guard's result into the checkpoint, so a
+    finished model carries evidence the screen ran rather than leaving it in a
+    console scrollback that redirection can lose."""
+    path = _verdict_path(source)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _verdict_path(source: Path) -> Path:
+    return Path(source).with_name(Path(source).name + ".leakguard.json")
+
+
+def _write_verdict(source: Path, manifest: Path, guard: "LockedProbeGuard",
+                   n_asks: int, advisory: list[str], flagged: list[str]) -> None:
+    """Record the verdict beside the artifact.
+
+    A bare console count is unactionable and vanishes under redirection, and a
+    finished checkpoint carried no evidence the screen had run at all. The
+    flagged strings are the artifact's OWN text (never sealed plaintext), so
+    writing them is what makes the advisory band reviewable -- the same pattern
+    the build-time screens already use for dropped and near-miss records."""
+    try:
+        manifest_sha = hashlib.sha256(Path(manifest).read_bytes()).hexdigest() if Path(manifest).exists() else None
+    except OSError:
+        manifest_sha = None
+    verdict = {
+        "source": str(source),
+        "manifest": str(manifest),
+        "manifest_sha256": manifest_sha,
+        "sealed_probes": len(guard),
+        "jaccard_threshold": guard.threshold,
+        "asks_screened": n_asks,
+        "asks_refused": 0,  # a refusal raises before this point
+        "answer_side_screened": len(advisory),
+        "answer_side_flagged": len(flagged),
+        "answer_side_flagged_distinct": len({" ".join(t.split()) for t in flagged}),
+        "flagged": sorted({" ".join(t.split()) for t in flagged})[:200],
+    }
+    try:
+        _verdict_path(source).write_text(json.dumps(verdict, indent=2, ensure_ascii=False),
+                                         encoding="utf-8")
+    except OSError as exc:  # a receipt must never take the training run down
+        print(f"WARN: could not write the leak-guard verdict beside {source} ({exc})", flush=True)
 
 
 def _cli_seal(src: str) -> int:

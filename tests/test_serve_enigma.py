@@ -217,6 +217,46 @@ def test_the_negation_does_not_have_to_touch_the_forget_verb(monkeypatch):
         assert serve._looks_memorable(text), text
 
 
+def test_an_ambiguous_forget_can_be_answered_with_an_id(monkeypatch, tmp_path):
+    """The store refuses an ambiguous forget rather than guessing, and names the
+    candidates. Without an id door that refusal was unanswerable from chat:
+    records with identical term sets cannot be told apart by restating them, so
+    the same error came back however the ask was reworded."""
+    from enigma_engine.core.memory_store import MemoryStore
+
+    mem = MemoryStore(tmp_path)
+    mem.add("User likes tea.")
+    mem.add("User likes tea.")  # identical terms: no wording separates them
+    monkeypatch.setattr(serve, "MEMORY", mem)
+
+    refusal = serve._execute_builtin("forget", {"text": "forget that I like tea"})
+    assert refusal.startswith("error:")
+    assert "#1" in refusal and "#2" in refusal, "the refusal must name ids to be answerable"
+    assert len(mem.all()) == 2, "an ambiguous ask must not delete"
+
+    assert serve._execute_builtin("forget", {"id": 2}) == "forgot: User likes tea."
+    assert [r["id"] for r in mem.all()] == [1]
+    assert serve._execute_builtin("forget", {"id": 99}).startswith("error: no memory with id")
+    assert serve._execute_builtin("forget", {"id": "nope"}).startswith("error: memory id must be")
+
+
+def test_a_failed_memory_write_is_reported_as_text_not_a_500(monkeypatch, tmp_path):
+    """Built-ins answer errors as text so the model can say what happened. A
+    failed rewrite escaped as an exception, 500ing mid-conversation and leaving
+    the in-memory store and the file disagreeing until the next boot."""
+    from enigma_engine.core import memory_store as ms
+
+    mem = ms.MemoryStore(tmp_path)
+    mem.add("User likes tea.")
+    monkeypatch.setattr(serve, "MEMORY", mem)
+    monkeypatch.setattr(ms, "atomic_write_text",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+
+    out = serve._execute_builtin("forget", {"text": "forget that I like tea"})
+    assert out.startswith("error: could not update the memory file")
+    assert "disk full" in out
+
+
 def test_the_forget_gate_offers_the_shapes_the_store_can_handle(monkeypatch):
     monkeypatch.setattr(serve, "MEMORY", object())
     # The store's one-candidate rule deletes all of these correctly, but the

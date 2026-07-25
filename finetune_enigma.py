@@ -43,7 +43,7 @@ except Exception:
     pass
 
 from enigma_engine.core.optim import build_optimizer, get_lr  # the shared arsenal
-from eval_leak_guard import refuse_if_leaky
+from eval_leak_guard import last_verdict, refuse_if_leaky
 
 ROOT = Path(__file__).resolve().parent
 IGNORE = -100  # ignore_index for the masked positions
@@ -331,7 +331,20 @@ def main() -> None:
     model.to(device)
     raw_model = model
 
+    # Stamp the leak-guard verdict into the lineage. The screen already ran on
+    # this data (load_examples refuses a leaky artifact before training starts),
+    # but its result lived only in the console, so a finished checkpoint carried
+    # no evidence the gate had been protected.
+    guard_verdict = last_verdict(Path(args.data))
+
     meta = dict(ck.get("meta") or {})
+    if guard_verdict:
+        meta["leak_guard"] = {
+            k: guard_verdict[k]
+            for k in ("manifest_sha256", "sealed_probes", "jaccard_threshold",
+                      "asks_screened", "answer_side_flagged")
+            if k in guard_verdict
+        }
     if meta.get("chat_format") != CHAT_FORMAT_NAME:
         rows = reinit_chat_rows(raw_model, tokenizer)
         print(
@@ -340,6 +353,13 @@ def main() -> None:
             flush=True,
         )
         meta = {"chat_format": CHAT_FORMAT_NAME, "init_from": str(src), "base_step": int(ck.get("step", 0))}
+        if guard_verdict:
+            meta["leak_guard"] = {
+                k: guard_verdict[k]
+                for k in ("manifest_sha256", "sealed_probes", "jaccard_threshold",
+                          "asks_screened", "answer_side_flagged")
+                if k in guard_verdict
+            }
 
     optim = build_optimizer(raw_model, args.optimizer, args.lr, args.weight_decay)
     start_step = 0

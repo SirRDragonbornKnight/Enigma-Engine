@@ -983,8 +983,10 @@ _FORGET_TOOL = {
     "function": {
         "name": "forget",
         "description": "Remove a fact about the user from long-term memory when they ask "
-        "you to forget it or say it is no longer true. Pass the fact to remove.",
-        "parameters": {"text": "string"},
+        "you to forget it or say it is no longer true. Pass the fact to remove as "
+        "'text'. If a previous call reported several matching memories, pass the "
+        "'id' of the one they meant instead.",
+        "parameters": {"text": "string", "id": "integer"},
     },
 }
 _BUILTIN_NAMES = {"calculate", "remember", "speak", "imagine", "forget"}
@@ -1186,11 +1188,31 @@ def _execute_builtin(name: str, arguments: dict) -> str:
         text = str(arguments.get("text", "")).strip()
         if not text:
             return "error: nothing to remember"
-        rec = MEMORY.remember(text, source="chat")
+        try:
+            rec = MEMORY.remember(text, source="chat")
+        except OSError as exc:
+            return f"error: could not update the memory file ({exc})"
         return f"updated: {rec['text']}" if rec.get("superseded") else f"saved: {rec['text']}"
     if name == "forget":
         if MEMORY is None:
             return "error: memory disabled (start serve with --memory-dir)"
+        # An id answers the ambiguity the store reports. Without this door a
+        # TooBroad refusal was unanswerable from chat: records with identical
+        # term sets cannot be told apart by restating them, so the refusal
+        # repeated forever however the ask was worded.
+        raw_id = arguments.get("id")
+        if raw_id is not None and str(raw_id).strip() != "":
+            try:
+                mem_id = int(str(raw_id).strip().lstrip("#"))
+            except ValueError:
+                return f"error: memory id must be a number, got {raw_id!r}"
+            record = next((r for r in MEMORY.all() if r["id"] == mem_id), None)
+            try:
+                if not MEMORY.delete(mem_id):
+                    return f"error: no memory with id {mem_id}"
+            except OSError as exc:
+                return f"error: could not update the memory file ({exc})"
+            return f"forgot: {record['text']}" if record else f"forgot memory {mem_id}"
         text = str(arguments.get("text", "")).strip()
         if not text:
             return "error: nothing to forget"
@@ -1199,6 +1221,11 @@ def _execute_builtin(name: str, arguments: dict) -> str:
         except MEMORY.TooBroad as exc:
             # Honest refusal beats a silent mass delete: memories have no .bak.
             return f"error: {exc}"
+        except OSError as exc:
+            # The store deletes in memory and then rewrites the file. A failed
+            # rewrite used to escape as a 500 mid-conversation and leave memory
+            # and disk disagreeing until the next boot.
+            return f"error: could not update the memory file ({exc})"
         if not removed:
             return f"no matching memory to forget for: {text}"
         return "forgot: " + "; ".join(r["text"] for r in removed)

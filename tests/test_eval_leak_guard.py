@@ -139,6 +139,47 @@ def test_the_answer_side_is_reported_but_never_blocks(tmp_path, capsys):
     assert "ASKS that match" in str(err.value)
 
 
+def test_padding_a_verbatim_probe_does_not_hide_it(tmp_path):
+    """Jaccard is a ratio, so unrelated words shrink it while the probe sits
+    intact inside the text: a 10-content-word probe drops to 0.529 at eight
+    filler words and trained freely. Containment cannot be diluted, because
+    padding only ever adds words."""
+    probe = "Which planet in our solar system has the greatest total mass overall"
+    guard = LockedProbeGuard(seal([probe]))
+    filler = ("bicycle tyre lever puncture repair kit spanner workshop garage "
+              "afternoon weather forecast pencil notebook lantern kettle").split()
+    for pad in (0, 6, 8, 12, 16):
+        text = probe + " " + " ".join(filler[:pad])
+        assert guard.leaks(text), f"diluted with {pad} filler words and slipped through"
+    assert guard.score(probe + " " + " ".join(filler)) < guard.threshold, \
+        "fixture is not exercising dilution -- the ratio must fall below the bar"
+
+    # ...and a SHORT probe keeps the ratio test only: too few content words for
+    # containment to distinguish a leak from an ordinary mention.
+    short = LockedProbeGuard(seal(["Largest planet?"]))
+    assert not short.contains_probe("The largest planet question came up at dinner tonight")
+
+
+def test_the_guard_records_a_durable_verdict(tmp_path):
+    """A console count vanishes under redirection and left a finished checkpoint
+    with no evidence the screen ran. The verdict lands beside the artifact and
+    names the manifest it was screened against."""
+    manifest = _manifest_file(tmp_path, ["What is the capital city of France?"])
+    src = tmp_path / "mix.jsonl"
+    src.write_text("{}\n", encoding="utf-8")
+    refuse_if_leaky(["Say hello."], src, manifest,
+                    advisory=["Paris is the capital city of France."])
+
+    from eval_leak_guard import last_verdict
+
+    v = last_verdict(src)
+    assert v is not None
+    assert v["asks_screened"] == 1
+    assert v["answer_side_flagged"] == 1
+    assert v["manifest_sha256"] and v["sealed_probes"] == 1
+    assert last_verdict(tmp_path / "never_screened.jsonl") is None
+
+
 def test_a_clean_artifact_trains(tmp_path):
     manifest = _manifest_file(tmp_path, ["What's the capital city of France?"])
     refuse_if_leaky(["What is the tallest mountain?", "Say hello."], tmp_path / "ok.jsonl", manifest)
