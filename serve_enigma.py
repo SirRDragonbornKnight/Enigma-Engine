@@ -90,6 +90,13 @@ _p.add_argument(
     help="enable the local memory store (JSONL + BM25); relevant memories are injected into her system context",
 )
 _p.add_argument(
+    "--persona",
+    default=None,
+    help="serve a DIFFERENT AI: a persona pack (JSON) giving her name, data home and "
+    "the meaning of that name. Omitted = Enigma, which is this repo's own identity "
+    "and what every default reproduces exactly",
+)
+_p.add_argument(
     "--voice",
     action="store_true",
     help="enable the voice organ: the speak built-in tool + /v1/audio/speech (local Kokoro-82M)",
@@ -345,7 +352,7 @@ def boot(argv: list[str] | None = None) -> None:
     old import-time startup."""
     global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META
     global INSTRUCT, MEMORY, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, EOS_ID, BOS_ID
-    global _BOOTED
+    global _BOOTED, PERSONA, _VOICE_STATE, IMAGES_DIR, _STOP_TEXTS
 
     _BOOTED = False  # a re-boot is unready until it completes
 
@@ -355,6 +362,17 @@ def boot(argv: list[str] | None = None) -> None:
     ARGS, unknown = _p.parse_known_args(argv)
     if unknown:
         print(f"  WARN: ignoring unrecognized args: {' '.join(unknown)}", flush=True)
+
+    # WHO is being served. The module-level defaults are Enigma; a pack rebinds
+    # the values derived from her identity. Rebinding here rather than reading
+    # PERSONA at each use keeps those names plain constants for every other
+    # reader, and a boot is the only moment identity can change.
+    if ARGS.persona:
+        PERSONA = Persona.load(Path(ARGS.persona))
+        _VOICE_STATE = PERSONA.home / "voice.json"
+        IMAGES_DIR = PERSONA.home / "images"
+        _STOP_TEXTS = ("\nUser:", PERSONA.transcript_label)
+        print(f"  persona: {PERSONA.name} (home {PERSONA.home})", flush=True)
 
     # PRIVACY: she is local, fully. Her own weights never touch the network; the
     # organ libraries (transformers/diffusers/faster-whisper) would by default

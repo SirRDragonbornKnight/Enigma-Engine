@@ -674,6 +674,8 @@ Recorded because it existed only in conversation:
   the tools-block system line, so a second AI on this box no longer overwrites
   the first one's voice and pictures. Unsafe packs (a path separator or newline
   in the name, which reaches a directory name AND a stop sequence) refuse.
+  **`serve --persona <pack.json>` serves that AI instead** -- her own data home,
+  voice recipe, images, turn marker and system line; omitted is Enigma.
   **Design finding worth keeping: the identity data is NOT mechanically
   parameterizable.** Her answers explain what the WORD "Enigma" means ("a
   closed box, in the good sense"), so a pack carries `name_meaning` rather than
