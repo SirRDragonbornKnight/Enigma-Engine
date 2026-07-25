@@ -185,6 +185,70 @@ def test_the_anneal_is_off_by_default_and_is_run_math_when_on():
     assert "anneal_lo is not None" in src
 
 
+def test_an_anneal_region_that_dies_at_the_decay_boundary_is_refused_at_boot():
+    """Both bad sizes pass argparse, boot clean, and then kill the run DAYS in,
+    at the decay phase's first curated draw -- and a resume restores the same
+    schedule from the checkpoint and dies at the same step (round-7 audit,
+    2026-07-25: --anneal-tokens <= block+1 gave randint an empty range). The
+    only helpful refusal is the one at boot."""
+    region = pretrain_enigma.anneal_region
+    # off: no region, no complaint
+    assert region(0, train_end=10_000, block=64) is None
+    # a healthy region is exactly train_end - N
+    assert region(1_000, train_end=10_000, block=64) == 9_000
+    # the boundary landmine: too small to fit one sample window + draw position
+    with pytest.raises(SystemExit, match="decay boundary"):
+        region(65, train_end=10_000, block=64)  # == block + 1
+    with pytest.raises(SystemExit, match="decay boundary"):
+        region(1, train_end=10_000, block=64)
+    # the smallest legal region boots (block + 2 leaves one draw position)
+    assert region(66, train_end=10_000, block=64) == 10_000 - 66
+    # the other end: no general region left ahead of the curated one
+    with pytest.raises(SystemExit, match="general region"):
+        region(9_990, train_end=10_000, block=64)
+    # and negative stays refused
+    with pytest.raises(SystemExit, match="negative"):
+        region(-1, train_end=10_000, block=64)
+
+
+def test_source_placement_that_defeats_training_is_refused():
+    """The T1 curated shard was designed to tokenize LAST so the anneal could
+    read it -- and the END of the bin is exactly what val is carved from, so
+    the shard would have landed 100% in val and never been trained on (round-7
+    audit, 2026-07-25). The corpus metadata now records each source's token
+    extent and boot checks every coupling its own fix-arc audit then found
+    still open: an UN-repeated source can lie entirely in val (one absent
+    stackexchange dir away on a fresh checkout), a repeated one can overlap
+    the fenced val-gen window, and a per-pass span under one block makes the
+    copies co-occupy a training window."""
+    refuse = pretrain_enigma.refuse_repeated_source_in_val
+    meta = {"repeated_sources": {"Curated": 5},
+            "source_token_extents": {"Curated": [100, 900], "SE/x": [900, 2000]}}
+    # curated ends before the val tail: fine (SE STRADDLING val is the norm)
+    refuse(meta, train_end=1_500)
+    # repeated source reaches into val: refused
+    with pytest.raises(SystemExit, match="val tail"):
+        refuse(meta, train_end=800)
+    # ANY source lying entirely in val is refused, repeated or not -- this is
+    # the round-7 failure reappearing with nothing declared
+    plain = {"source_token_extents": {"Curated": [1_600, 2_000], "A": [0, 1_600]}}
+    with pytest.raises(SystemExit, match="entirely in the val tail"):
+        refuse(plain, train_end=1_500)
+    # a repeated source overlapping the fenced val-gen window is refused: the
+    # fence redraws around it, so those copies are held out while their train
+    # siblings memorize the eval window
+    with pytest.raises(SystemExit, match="fenced window"):
+        refuse(meta, train_end=1_500, fenced=((500, 700),))
+    refuse(meta, train_end=1_500, fenced=((900, 1_100),))  # disjoint: fine
+    # per-pass span must exceed one training window, or every copy shares it
+    with pytest.raises(SystemExit, match="per-pass span"):
+        refuse(meta, train_end=1_500, block=160)  # span 800 / x5 = 160 <= block
+    refuse(meta, train_end=1_500, block=159)
+    # a corpus whose metadata predates the extents record is untouched
+    refuse({}, train_end=10)
+    refuse({"repeated_sources": {"Curated": 5}}, train_end=10)
+
+
 def _stamp(path, meta):
     ck = torch.load(path, weights_only=False)
     ck["meta"] = meta

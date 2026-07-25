@@ -71,6 +71,96 @@ def anneal_counts(micro_batch: int, anneal_frac: float) -> tuple[int, int]:
     return k, micro_batch - k
 
 
+def anneal_region(anneal_tokens: int, train_end: int, block: int) -> int | None:
+    """Start offset of the decay-phase curated region, validated at BOOT.
+
+    Both bad sizes pass argparse and every startup check, then kill the run at
+    the DECAY BOUNDARY -- days in -- when the phase's first curated draw
+    executes, and a resume restores the same schedule from the checkpoint and
+    dies at the same step. Nothing short of a boot refusal helps:
+    * a region of block+1 tokens or fewer cannot fit one sample window plus a
+      draw position, so randint on the curated side gets hi <= lo;
+    * a region covering all but block+1 tokens of the stream leaves the same
+      empty randint on the general side."""
+    if anneal_tokens < 0:
+        raise SystemExit(f"--anneal-tokens {anneal_tokens} must not be negative")
+    if not anneal_tokens:
+        return None
+    if anneal_tokens <= block + 1:
+        raise SystemExit(
+            f"--anneal-tokens {anneal_tokens:,} cannot fit one sample window plus a draw "
+            f"position (needs at least block+2 = {block + 2:,}) -- this boots clean and "
+            f"then dies at the decay boundary, so it is refused here"
+        )
+    lo = train_end - anneal_tokens
+    if lo <= block + 1:
+        raise SystemExit(
+            f"--anneal-tokens {anneal_tokens:,} leaves no general region ahead of it "
+            f"(train stream holds {train_end:,} tokens)"
+        )
+    return lo
+
+
+def refuse_repeated_source_in_val(meta: dict, train_end: int, block: int = 0,
+                                  fenced: tuple = ()) -> None:
+    """Refuse a corpus whose source placement defeats the training it claims.
+
+    val is the last val_n tokens of the bin, and the T1 tail-position design
+    died on exactly that coupling -- a curated shard tokenized last landed
+    100% in val, held out and never trained on (round-7 audit, 2026-07-25).
+    The first guard here checked only REPEATED sources, and its own audit
+    caught the survivor the same day: on a checkout with no stackexchange
+    dirs the UN-repeated curated shard walks last and reproduces the round-7
+    failure with nothing declared. So, from the corpus's own metadata
+    (corpora predating the extents record are unaffected):
+    * ANY source lying entirely inside val is refused -- a source with zero
+      training contribution is never intended, declared or not;
+    * a REPEATED source (curated-by-declaration) must not extend into val or
+      into a fenced window `(lo, hi)` (the val-gen window is sampled-around,
+      so copies there are held out while their siblings memorize the eval);
+    * a repeated source's per-pass span must exceed `block`, or the "copies
+      land a whole source apart" spacing is void -- every copy co-occupies
+      one training window and teaches verbatim repetition."""
+    repeated = meta.get("repeated_sources") or {}
+    extents = meta.get("source_token_extents") or {}
+    for label, ext in extents.items():
+        if ext and ext[0] >= train_end:
+            raise SystemExit(
+                f"source '{label}' lies entirely in the val tail (starts at token "
+                f"{ext[0]:,}, train ends at {train_end:,}) -- zero training "
+                f"contribution is never intended; move it earlier in SOURCE_DIRS "
+                f"(pretokenize_data.py -- the walk is deliberately not a CLI knob) "
+                f"or shrink --val-tokens"
+            )
+    for label, r in repeated.items():
+        ext = extents.get(label)
+        if not ext:
+            continue
+        span = ext[1] - ext[0]
+        if ext[1] > train_end:
+            raise SystemExit(
+                f"repeated source '{label}' (x{r}) extends into the val tail "
+                f"(ends at token {ext[1]:,}, train ends at {train_end:,}) -- its copies "
+                f"would be held out and its train copies would leak into val; move it "
+                f"earlier in SOURCE_DIRS (pretokenize_data.py) or shrink --val-tokens"
+            )
+        for lo, hi in fenced:
+            if ext[0] < hi and ext[1] > lo:
+                raise SystemExit(
+                    f"repeated source '{label}' (x{r}) overlaps the fenced window "
+                    f"[{lo:,}, {hi:,}) -- the fence redraws every sample touching it, "
+                    f"so those copies are held out while their train siblings memorize "
+                    f"the eval window"
+                )
+        if block and span // max(r, 1) <= block:
+            raise SystemExit(
+                f"repeated source '{label}' (x{r}) has a per-pass span of "
+                f"{span // max(r, 1):,} tokens, not more than one {block}-token training "
+                f"window -- the copies co-occupy windows and teach verbatim repetition; "
+                f"lower the repeat count or grow the shard"
+            )
+
+
 def apply_seed(seed: int | None) -> bool:
     """Seed every stream a run draws from, and report whether it seeded.
 
@@ -200,8 +290,10 @@ def main() -> None:
         default=0,
         help="decay-tail anneal: treat the last N tokens of the train stream as the "
         "CURATED region and oversample it during the decay phase. 0 = off (the "
-        "sampler draws uniformly, as the live lineage did). The curated shard has to "
-        "be written last at tokenize time for this to point at anything",
+        "sampler draws uniformly, as the live lineage did). NOTE: the end of the BIN "
+        "is val, so a shard tokenized last feeds val, not this region -- the T1 "
+        "curated shard oversamples via pretokenize --repeat-sources instead; this "
+        "flag waits for a deliberately placed region (e.g. a length-extension set)",
     )
     ap.add_argument(
         "--anneal-frac",
@@ -508,6 +600,12 @@ def main() -> None:
         print(f"val-gen window: [{vg_lo:,}, {vg_end:,}) -- pre-append tail, fenced from train sampling", flush=True)
 
     block = args.block
+    # After block and the fenced window are known, so the guard can check all
+    # three couplings (val tail, fence, per-pass span vs window).
+    refuse_repeated_source_in_val(
+        meta, train_end, block=block,
+        fenced=((vg_lo, vg_end),) if use_val_gen else (),
+    )
 
     # Decay-tail anneal: during the WSD decay phase, oversample a curated
     # region of the corpus instead of continuing to draw uniformly.
@@ -515,20 +613,18 @@ def main() -> None:
     # The v2 recipe called for "anneal on the best ~2-3B tokens" and there was
     # nowhere for that to land -- get_batch samples IID over the whole train
     # stream, so a file of hand-picked tokens changes nothing about what the
-    # model actually sees. The curated region is the TAIL of the train stream
-    # (pretokenize writes that shard last); during decay a fraction of every
-    # micro-batch is drawn from it and the rest from the general region.
+    # model actually sees. The curated region is the TAIL of the train stream;
+    # during decay a fraction of every micro-batch is drawn from it and the
+    # rest from the general region. NOTE what that tail actually IS: val is
+    # carved off the very end of the BIN, so a shard tokenized last feeds val,
+    # not this region (round-7 audit, 2026-07-25) -- the T1 curated shard
+    # oversamples via pretokenize --repeat-sources instead, and this mechanism
+    # waits for a region that is deliberately placed (e.g. a length-extension
+    # anneal set).
     #
     # OFF by default: with --anneal-tokens 0 this is the same single draw the
     # sampler always made, so the live lineage's data order is untouched.
-    if args.anneal_tokens < 0:
-        raise SystemExit(f"--anneal-tokens {args.anneal_tokens} must not be negative")
-    anneal_lo = (train_end - args.anneal_tokens) if args.anneal_tokens else None
-    if anneal_lo is not None and anneal_lo <= block + 1:
-        raise SystemExit(
-            f"--anneal-tokens {args.anneal_tokens:,} leaves no general region ahead of it "
-            f"(train stream holds {train_end:,} tokens)"
-        )
+    anneal_lo = anneal_region(args.anneal_tokens, train_end, block)
     if anneal_lo is not None and not 0.0 <= args.anneal_frac <= 1.0:
         # Refuse at BOOT. The sampler clamps too, but a run that silently
         # annealed at a fraction nobody asked for is a lineage nobody can

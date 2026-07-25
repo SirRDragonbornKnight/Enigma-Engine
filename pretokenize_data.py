@@ -9,9 +9,12 @@ per document, so the on-disk layout for each document is:
     <bos> ...content... <eos> <eos>
 This matches the existing tokens.bin corpus and pretrain lineage exactly.
 
-Defaults reproduce the v1 lineage byte-for-byte: live vocab, uint32,
-data/pretrain/tokens.bin, single process. The v2 retokenize
-(TOKENIZER_V2_SPEC) parameterizes all four:
+The v1 lineage corpus (data/pretrain/tokens.bin) is COMPLETE and sacred:
+this script now refuses to write to that path at all -- pretraining on it
+finished 2026-07-03, and since the Curated source joined SOURCE_DIRS
+(2026-07-25) a rebuild could not be byte-identical to the lineage anyway
+(a new source shifts the stream AND wins dedup collisions). Every new
+corpus names its own --output-bin; the v2 retokenize (TOKENIZER_V2_SPEC):
 
     python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json ^
         --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10
@@ -47,6 +50,20 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 BASE_DIR = ROOT / "data" / "pretrain"
 SOURCE_DIRS = [
+    # The curated shard (make_pretrain_curated.py): must-know facts, her own
+    # identity as prose, short dialogue. Walked FIRST, for two reasons the
+    # fix-arc audits paid for (both 2026-07-25):
+    # * position decides VAL membership: val is carved off the very END of
+    #   the bin, so the round-7 tail-position design handed the whole shard
+    #   to val, and "not last" was still one absent stackexchange dir away
+    #   from last on a fresh checkout. First can never touch the tail.
+    # * position decides DEDUP precedence: the paragraph dedup is first-wins,
+    #   so walked 13th the shard silently LOST every paragraph a web source
+    #   happened to share -- before any --repeat-sources multiplied what was
+    #   left. First means her must-know text wins the collision.
+    # Oversample with --repeat-sources; pretrain re-checks placement at boot
+    # from the recorded extents either way.
+    ("Curated", BASE_DIR / "curated"),
     ("Wiki Dump", BASE_DIR / "wikipedia_dump"),
     ("Wikipedia", BASE_DIR / "wikipedia"),
     ("Simple Wiki", BASE_DIR / "simple_wiki"),
@@ -75,12 +92,119 @@ DTYPES = {"uint32": "I", "uint16": "H"}
 
 
 def build_source_dirs() -> list[tuple[str, Path]]:
+    """The walk order, which IS the order of the token stream.
+
+    There is deliberately no knob to reorder it. A --tail-sources flag existed
+    for one uncommitted day so the anneal could read a shard "at the end" --
+    and the end of the bin is exactly what pretrain carves off as val, so the
+    shard it moved would have been held out, not oversampled. Position in the
+    corpus buys nothing the sampler can see; --repeat-sources is the honest
+    oversample."""
     source_dirs = list(SOURCE_DIRS)
     if SE_DIR.exists():
         for sub in sorted(SE_DIR.iterdir()):
             if sub.is_dir():
                 source_dirs.append((f"SE/{sub.name}", sub))
     return source_dirs
+
+
+def parse_repeat_sources(spec: str, source_dirs: list[tuple[str, Path]]) -> dict[str, int]:
+    """'curated=5' -> {'Curated': 5}, validated against the actual walk.
+
+    Copying the shard on disk was the obvious route and it does not survive
+    this script: the paragraph dedup is GLOBAL, so replicated files collapse
+    right back to one copy at tokenize time -- silently, and only for
+    paragraphs long enough to be hashed, which skews as well as shrinks.
+    Repetition has to happen on the far side of the dedup; this knob is
+    that."""
+    if not spec:
+        return {}
+    by_key = {label.lower(): label for label, _p in source_dirs}
+    by_key.update({p.name.lower(): label for label, p in source_dirs})
+    out: dict[str, int] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _eq, count = part.partition("=")
+        label = by_key.get(name.strip().lower())
+        if label is None:
+            raise SystemExit(
+                f"--repeat-sources names no such source: {name.strip()!r} "
+                f"(known: {', '.join(sorted(p.name for _l, p in source_dirs))})"
+            )
+        try:
+            r = int(count)
+        except ValueError:
+            r = -1
+        if not 2 <= r <= 50:
+            raise SystemExit(
+                f"--repeat-sources {part!r}: count must be a whole number in [2, 50] "
+                f"(one copy is what you get without the flag)"
+            )
+        out[label] = r
+    return out
+
+
+# The repeat cache holds a source's whole cleaned pass-1 text in RAM. That is
+# the point (byte-identical passes on the far side of the dedup) and it is
+# only sane for the curated-shard class: someone aiming the flag at a web
+# source (fineweb_edu is ~95 GB of text on this box) would OOM the parent
+# hours into the walk, and the BaseException handler would then delete the
+# whole .tmp. Refuse early instead, at a bound generous for any honest shard.
+REPEAT_CACHE_MAX_BYTES = 2 * 1024**3
+
+
+class RepeatCacheExceeded(RuntimeError):
+    """The repeat-cache refusal, raised INSIDE the doc stream.
+
+    Its class is load-bearing twice over: it must be a plain Exception (a
+    SystemExit raised here is swallowed by pool.imap's task-feeder thread,
+    whose guard catches Exception only, and the run HUNG forever instead of
+    refusing -- round-B audit, 2026-07-25), and it must be its OWN type so
+    main() can convert exactly this refusal to a clean SystemExit without
+    also dressing up a genuine worker crash (RuntimeError) as one."""
+
+
+def with_repeats(docs, repeats: dict[str, int]):
+    """Re-emit a repeated source's cleaned docs after its first pass.
+
+    Runs on the dedup walk's OUTPUT, so every copy is byte-identical to the
+    pass-1 text and the global paragraph dedup cannot touch it. Sources are
+    contiguous in walk order, so copies of a doc land a whole SOURCE apart in
+    the stream. NOTE the honest limit its own audit measured (2026-07-25):
+    that spacing is only wider than a training window when the source itself
+    is -- a pass shorter than --block still puts copies in one window, which
+    is why pretrain refuses a repeated source whose per-pass span does not
+    exceed its block."""
+    cache: list[str] = []
+    cache_bytes = 0
+    prev: str | None = None
+
+    def flush(label):
+        for _ in range(repeats[label] - 1):
+            for text in cache:
+                yield label, text
+
+    for label, cleaned in docs:
+        if label != prev and cache:
+            yield from flush(prev)
+            cache.clear()
+            cache_bytes = 0
+        prev = label
+        if repeats.get(label, 1) > 1:
+            cache.append(cleaned)
+            cache_bytes += len(cleaned)
+            if cache_bytes > REPEAT_CACHE_MAX_BYTES:
+                raise RepeatCacheExceeded(
+                    f"--repeat-sources: source '{label}' exceeds the "
+                    f"{REPEAT_CACHE_MAX_BYTES / 1024**3:.0f} GB repeat cache -- this "
+                    "flag is for the curated-shard class, not web-scale sources "
+                    "(the whole source is held in RAM for the repeat passes)"
+                )
+        yield label, cleaned
+    if cache:
+        yield from flush(prev)
 
 
 def _read_txt(path: str) -> str | None:
@@ -226,6 +350,15 @@ def main():
     ap.add_argument("--output-bin", default=str(OUTPUT_BIN), help="output .bin (metadata lands beside it as .json)")
     ap.add_argument("--dtype", choices=sorted(DTYPES), default="uint32", help="token width (uint16 needs vocab <= 65,536)")
     ap.add_argument("--workers", type=int, default=1, help="encode processes; 10 = CRD-safe parallel, 1 = legacy sequential")
+    ap.add_argument(
+        "--repeat-sources",
+        default="",
+        help="comma-separated name=count, e.g. 'curated=5': emit that source's cleaned "
+        "docs count times so the corpus itself carries the oversample (on-disk copies "
+        "would be collapsed by the global paragraph dedup). Meant for the curated-shard "
+        "class: the whole source is cached in RAM for the repeat passes. Default: every "
+        "source once",
+    )
     args = ap.parse_args()
 
     out_bin = Path(args.output_bin)
@@ -233,12 +366,41 @@ def main():
     typecode = DTYPES[args.dtype]
     bpt = array.array(typecode).itemsize
 
-    # The v1 lineage corpus is sacred: refuse to aim a NON-default vocab or
-    # dtype at the default tokens.bin path (same protection class as
-    # train_tokenizer's explicit-output rule, LOW-9).
-    if out_bin.resolve() == OUTPUT_BIN.resolve() and (args.vocab or args.dtype != "uint32"):
+    # The v1 lineage corpus is sacred AND finished (pretraining done
+    # 2026-07-03). The old guard only refused a custom vocab/dtype here, so a
+    # bare no-argument run could still overwrite the lineage bin -- and since
+    # Curated joined SOURCE_DIRS the rebuild would differ from the lineage
+    # regardless (new source, and dedup is first-wins). Refuse the path
+    # outright; every corpus this script writes from now on is a NEW one.
+    def _canon(p: Path) -> str:
+        # Identity, not string equality: resolve() keeps a \\?\ extended-
+        # length prefix verbatim, so `--output-bin \\?\...\tokens.bin` failed
+        # the == while the OS opened the identical file, defeating both
+        # refusals below (round-C audit, 2026-07-25). normcase folds the
+        # case/separator dimensions the same way the filesystem does.
+        s = str(Path(p).resolve())
+        if s.startswith("\\\\?\\UNC\\"):
+            s = "\\\\" + s[8:]
+        elif s.startswith("\\\\?\\"):
+            s = s[4:]
+        return os.path.normcase(s)
+
+    if _canon(out_bin) == _canon(OUTPUT_BIN):
         raise SystemExit(
-            "refusing to overwrite the lineage tokens.bin with a custom vocab/dtype -- pass --output-bin"
+            "refusing to overwrite the v1 lineage tokens.bin (pretraining on it is "
+            "COMPLETE and the source walk has changed since it was built) -- name a "
+            "new corpus with --output-bin"
+        )
+    # The SIDECAR needs the same protection: metadata lands at
+    # with_suffix(".json"), so `--output-bin data/pretrain/tokens.bin2` (any
+    # tokens.<ext> there) passes the bin refusal above and then clobbers
+    # tokens.json -- the lineage receipt, which is gitignored and therefore
+    # unrecoverable (round-B audit, 2026-07-25).
+    if _canon(out_meta) == _canon(OUTPUT_BIN.with_suffix(".json")):
+        raise SystemExit(
+            "refusing to overwrite the v1 lineage sidecar tokens.json -- this "
+            "--output-bin maps its metadata onto the lineage receipt; pick a bin "
+            "name whose .json lands elsewhere"
         )
 
     from enigma_engine.core.tokenizer import get_tokenizer
@@ -265,22 +427,41 @@ def main():
         raise SystemExit(f"--dtype uint16 with vocab {vocab_size:,} > 65,536 -- ids would overflow")
 
     source_dirs = build_source_dirs()
+    repeats = parse_repeat_sources(args.repeat_sources, source_dirs)
+    for label, r in repeats.items():
+        print(f"  Repeat: {label} x{r} (copies emitted after the source's own pass)", flush=True)
 
     # Spec requirement: NEVER skip an absent source silently -- a quietly
     # smaller corpus is a quality regression nothing downstream can catch.
     absent = [label for label, d in source_dirs if not d.exists()]
     if absent:
         print(f"  WARNING: {len(absent)} source dirs ABSENT and skipped: {', '.join(absent)}", flush=True)
+    repeat_absent = sorted(set(repeats) & set(absent))
+    if repeat_absent:
+        # A warning is enough for a source that merely shrinks the corpus; a
+        # source someone explicitly asked to OVERSAMPLE cannot be absent by
+        # intent, and its silent loss is the exact failure the repeat exists
+        # to prevent.
+        raise SystemExit(
+            f"--repeat-sources names absent source dir(s): {', '.join(repeat_absent)}"
+        )
 
     total_tokens = 0
     total_docs = 0
     per_label: dict[str, list[int]] = {}
+    # Token extents per source, [start, end) in stream token indices -- the
+    # same index space pretrain memmaps. This is what lets pretrain refuse a
+    # repeated source whose copies extend into the held-out val tail instead
+    # of trusting walk order across two scripts.
+    extents: dict[str, list[int]] = {}
     start_time = time.monotonic()
     tmp_file = out_bin.with_suffix(".bin.tmp")
 
     def result_stream():
         """(label, packed, n) triples in deterministic walk order."""
         docs = iter_cleaned_docs(source_dirs)
+        if repeats:
+            docs = with_repeats(docs, repeats)
         if args.workers <= 1:
             _worker_init(str(ROOT), args.vocab, typecode, vocab_size, eos_id)
             for label, cleaned in docs:
@@ -317,6 +498,11 @@ def main():
 
             for label, packed, n in result_stream():
                 out.write(packed)
+                ext = extents.get(label)
+                if ext is None:
+                    extents[label] = [total_tokens, total_tokens + n]
+                else:
+                    ext[1] = total_tokens + n
                 total_tokens += n
                 total_docs += 1
                 cnt = per_label.setdefault(label, [0, 0])
@@ -344,9 +530,40 @@ def main():
             )
             out.write(header)
 
+        # A declared oversample must have HAPPENED. The absent-dir check
+        # catches a missing directory and nothing else: a curated dir with no
+        # .txt files, or one whose every paragraph an earlier source already
+        # published (first-wins dedup), emitted zero tokens while the sidecar
+        # recorded the multiplier as fact -- the fix-arc audit produced a
+        # stream byte-identical to a run with no curated source at all, under
+        # a meta claiming x5 (2026-07-25). Refuse before the rename; the
+        # except-handler below removes the .tmp.
+        unrepresented = sorted(
+            label for label in repeats
+            if (extents.get(label) or [0, 0])[1] <= (extents.get(label) or [0, 0])[0]
+        )
+        if unrepresented:
+            raise SystemExit(
+                f"repeated source(s) emitted no tokens: {', '.join(unrepresented)} -- "
+                "the declared oversample never happened (no .txt files, every doc "
+                "under the 5-token floor, or every paragraph already published by an "
+                "earlier source and deduped)"
+            )
+
         # Atomic rename — only replaces output after full write succeeds
         tmp_file.replace(out_bin)
 
+    except RepeatCacheExceeded as exc:
+        # The one refusal raised inside the doc stream; it rides out as a
+        # plain Exception so pool.imap's feeder thread propagates it instead
+        # of dying silently, and becomes the clean exit it means here. A
+        # bare RuntimeError (a genuine crash) stays a crash below.
+        try:
+            if tmp_file.exists():
+                tmp_file.unlink()
+        except OSError:
+            pass
+        raise SystemExit(str(exc)) from exc
     except BaseException:
         try:
             if tmp_file.exists():
@@ -378,6 +595,8 @@ def main():
         "vocab_file": str(args.vocab) if args.vocab else "enigma_engine/vocab_model/bpe_vocab.json",
         "workers": args.workers,
         "sources_absent": absent,
+        "repeated_sources": repeats,
+        "source_token_extents": extents,
         "dupes_skipped": dupes_skipped,
         "file_size_gb": round(file_gb, 2),
         "elapsed_seconds": round(elapsed, 1),

@@ -100,7 +100,7 @@ def corpus(tmp_path_factory):
     return root, [("A", src_a), ("B", src_b)], vocab
 
 
-def _run(monkeypatch, sources, out_bin, *, vocab, dtype, workers):
+def _run(monkeypatch, sources, out_bin, *, vocab, dtype, workers, extra=()):
     monkeypatch.setattr(pd, "SOURCE_DIRS", sources)
     monkeypatch.setattr(pd, "SE_DIR", out_bin.parent / "_no_stackexchange")
     argv = [
@@ -109,6 +109,7 @@ def _run(monkeypatch, sources, out_bin, *, vocab, dtype, workers):
         "--vocab", str(vocab),
         "--dtype", dtype,
         "--workers", str(workers),
+        *extra,
     ]
     monkeypatch.setattr(sys, "argv", argv)
     pd.main()
@@ -175,9 +176,12 @@ def test_header_matches_what_the_pretrain_reader_validates(monkeypatch, corpus, 
         assert meta["pretokenizer"] == "v2"
 
 
-def test_refuses_custom_vocab_or_dtype_at_the_lineage_path(monkeypatch, corpus, tmp_path):
-    """The v1 tokens.bin is the pretrain lineage; a custom vocab/dtype aimed
-    at it would overwrite 211 GB of provenance in place.
+def test_refuses_any_write_at_the_lineage_path(monkeypatch, corpus, tmp_path):
+    """The v1 tokens.bin is the pretrain lineage, COMPLETE since 2026-07-03.
+    The old guard refused only a custom vocab/dtype there, so a bare
+    no-argument run could still overwrite it -- and since Curated joined
+    SOURCE_DIRS the rebuild would differ from the lineage regardless (new
+    source; first-wins dedup). Any write at that path is now refused.
 
     The lineage path here is a tmp STAND-IN, never the real tokens.bin.
     Under mutation testing the guard this test exercises is deliberately
@@ -190,10 +194,38 @@ def test_refuses_custom_vocab_or_dtype_at_the_lineage_path(monkeypatch, corpus, 
     monkeypatch.setattr(pd, "SOURCE_DIRS", sources)
     monkeypatch.setattr(pd, "SE_DIR", tmp_path / "_no_stackexchange")
     monkeypatch.setattr(pd, "OUTPUT_BIN", lineage)
-    for extra in (["--vocab", str(vocab)], ["--dtype", "uint16"]):
+    for extra in ([], ["--vocab", str(vocab)], ["--dtype", "uint16"]):
         monkeypatch.setattr(sys, "argv", ["pretokenize_data.py", "--output-bin", str(lineage)] + extra)
         with pytest.raises(SystemExit, match="refusing to overwrite"):
             pd.main()
+    assert not lineage.exists() and not lineage.with_suffix(".bin.tmp").exists()
+
+    # the SIDECAR is lineage too: `tokens.bin2` (any tokens.<ext> beside it)
+    # passes the bin refusal and then maps with_suffix(".json") onto the
+    # lineage receipt -- which is gitignored, so the clobber is unrecoverable
+    # (round-B audit, 2026-07-25)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["pretokenize_data.py", "--output-bin", str(lineage.parent / "tokens.bin2"),
+         "--vocab", str(vocab), "--dtype", "uint16"],
+    )
+    with pytest.raises(SystemExit, match="sidecar"):
+        pd.main()
+    assert not (lineage.parent / "tokens.json").exists(), "the lineage sidecar was clobbered"
+
+    # \\?\ extended-length spellings: resolve() keeps the prefix verbatim, so
+    # a string == let them straight past both refusals and the lineage bin
+    # AND sidecar were overwritten (round-C audit, 2026-07-25)
+    for target, what in ((lineage, "refusing to overwrite"),
+                         (lineage.parent / "tokens.bin2", "sidecar")):
+        monkeypatch.setattr(
+            sys, "argv",
+            ["pretokenize_data.py", "--output-bin", "\\\\?\\" + str(target),
+             "--vocab", str(vocab), "--dtype", "uint16"],
+        )
+        with pytest.raises(SystemExit, match=what):
+            pd.main()
+    assert not lineage.exists() and not (lineage.parent / "tokens.json").exists()
 
 
 def test_uint16_refuses_an_oversized_vocab(monkeypatch, corpus, tmp_path):
@@ -266,3 +298,163 @@ def test_failed_encode_leaves_no_partial_output(monkeypatch, corpus, tmp_path):
     assert not out.exists(), "output bin exists after a failed run"
     assert not out.with_suffix(".bin.tmp").exists(), "leftover .tmp after a failed run"
     assert not out.with_suffix(".json").exists(), "metadata written for a failed run"
+
+
+# ---------------------------------------------------------------------------
+# --repeat-sources: the curated shard's oversample (round-7 redesign).
+# Position in the corpus buys nothing (the sampler is IID, and the END of the
+# bin is val), so oversampling must live in the stream itself -- and on the
+# far side of the dedup, or it silently is not an oversample at all.
+# ---------------------------------------------------------------------------
+
+
+def test_on_disk_copies_collapse_but_repeats_do_not(tmp_path):
+    """The obvious route -- replicating the shard's files on disk -- is
+    exactly what the GLOBAL paragraph dedup deletes: copy one seeds
+    seen_hashes and every later copy of each long paragraph is dropped,
+    silently, while short paragraphs sail through (a skew, not just a
+    shrink). with_repeats runs on the walk's OUTPUT, so its copies are
+    byte-identical and untouchable by the dedup."""
+    src = tmp_path / "cur"
+    src.mkdir()
+    para = "A fact she must know, phrased long enough to be hashed by the dedup pass. " * 2
+    assert len(para) >= pd.MIN_PARAGRAPH_LENGTH
+    (src / "a.txt").write_text(para, encoding="utf-8")
+    (src / "b.txt").write_text(para, encoding="utf-8")  # the on-disk "oversample"
+
+    docs = list(pd.iter_cleaned_docs([("C", src)]))
+    assert len(docs) == 1, (
+        "fixture assumption gone: the global dedup no longer collapses "
+        "on-disk copies, so with_repeats may not be the only honest oversample"
+    )
+    assert list(pd.with_repeats(iter(docs), {"C": 3})) == docs * 3
+
+
+def test_repeats_emit_whole_passes_never_adjacent_copies():
+    """Copies of one doc must land a full source apart -- adjacent copies can
+    share a training window and teach verbatim repetition."""
+    docs = [("A", "a1"), ("A", "a2"), ("B", "b1")]
+    assert list(pd.with_repeats(iter(docs), {"A": 3})) == [
+        ("A", "a1"), ("A", "a2"),
+        ("A", "a1"), ("A", "a2"),
+        ("A", "a1"), ("A", "a2"),
+        ("B", "b1"),
+    ]
+    # a repeated FINAL source flushes at end-of-stream too
+    assert list(pd.with_repeats(iter(docs), {"B": 2})) == docs + [("B", "b1")]
+    # and no repeats means the identity stream
+    assert list(pd.with_repeats(iter(docs), {})) == docs
+
+
+def test_repeat_sources_spec_is_validated():
+    dirs = [("Curated", Path("data/pretrain/curated")), ("A", Path("x/src_a"))]
+    assert pd.parse_repeat_sources("", dirs) == {}
+    assert pd.parse_repeat_sources("curated=5", dirs) == {"Curated": 5}
+    assert pd.parse_repeat_sources("src_a=2, CURATED=3", dirs) == {"A": 2, "Curated": 3}
+    with pytest.raises(SystemExit, match="no such source"):
+        pd.parse_repeat_sources("nonesuch=2", dirs)
+    for bad in ("curated=1", "curated=0", "curated=51", "curated=x", "curated"):
+        with pytest.raises(SystemExit, match="whole number"):
+            pd.parse_repeat_sources(bad, dirs)
+
+
+def test_repeated_source_writes_byte_identical_passes_and_extents(monkeypatch, corpus, tmp_path):
+    """End to end: the repeated source's region is N byte-identical passes,
+    the sidecar records the repeat and every source's token extent (what lets
+    pretrain refuse a repeated source that reaches into the val tail), and
+    the rest of the stream is untouched."""
+    root, sources, vocab = corpus
+    base_bin, base_meta = _run(
+        monkeypatch, sources, tmp_path / "base.bin", vocab=vocab, dtype="uint16", workers=1
+    )
+    rep_bin, rep_meta = _run(
+        monkeypatch, sources, tmp_path / "rep.bin", vocab=vocab, dtype="uint16", workers=1,
+        extra=("--repeat-sources", "a=3"),
+    )
+    base, rep = json.loads(base_meta.read_text()), json.loads(rep_meta.read_text())
+    assert rep["repeated_sources"] == {"A": 3}
+    assert base["repeated_sources"] == {}
+
+    ax0, ax1 = base["source_token_extents"]["A"]
+    bx0, bx1 = base["source_token_extents"]["B"]
+    assert (ax0, bx0) == (0, ax1), "extents must tile the stream in walk order"
+    rx0, rx1 = rep["source_token_extents"]["A"]
+    assert (rx0, rx1) == (0, 3 * ax1), "repeated extent must cover all passes"
+    assert rep["total_documents"] == base["total_documents"] + 2 * 45  # source A holds 45 docs
+
+    bpt = 2  # uint16
+    base_stream = base_bin.read_bytes()[pd.HEADER_SIZE:]
+    rep_stream = rep_bin.read_bytes()[pd.HEADER_SIZE:]
+    passes = [rep_stream[i * ax1 * bpt:(i + 1) * ax1 * bpt] for i in range(3)]
+    assert passes[0] == base_stream[:ax1 * bpt], "pass 1 must equal the unrepeated stream"
+    assert passes[0] == passes[1] == passes[2], "copies must be byte-identical (dedup-proof)"
+    assert rep_stream[3 * ax1 * bpt:] == base_stream[ax1 * bpt:], "later sources shifted or changed"
+
+
+def test_a_repeat_naming_an_absent_source_refuses(monkeypatch, corpus, tmp_path):
+    """A merely-missing source WARNs; a source someone explicitly asked to
+    oversample cannot be absent by intent -- its silent loss is the failure
+    the repeat exists to prevent."""
+    root, sources, vocab = corpus
+    ghost = ("Ghost", root / "never_created_dir")
+    with pytest.raises(SystemExit, match="absent"):
+        _run(monkeypatch, sources + [ghost], tmp_path / "g.bin", vocab=vocab,
+             dtype="uint16", workers=1, extra=("--repeat-sources", "ghost=2"))
+
+
+def test_a_declared_oversample_that_never_happened_refuses(monkeypatch, corpus, tmp_path):
+    """The absent-dir check catches a missing DIRECTORY and nothing else: a
+    dir with no .txt files (or one whose every paragraph an earlier source
+    already published, first-wins dedup) emitted zero tokens while the
+    sidecar recorded the multiplier as fact -- the fix-arc audit measured a
+    stream byte-identical to a run with no such source at all, under a meta
+    claiming x5 (2026-07-25). The run must refuse, and must not leave a bin."""
+    root, sources, vocab = corpus
+    hollow = root / "hollow_dir"
+    hollow.mkdir(exist_ok=True)
+    (hollow / "notes.md").write_text("not a .txt, never walked", encoding="utf-8")
+    out = tmp_path / "hollow.bin"
+    with pytest.raises(SystemExit, match="emitted no tokens"):
+        _run(monkeypatch, sources + [("Hollow", hollow)], out, vocab=vocab,
+             dtype="uint16", workers=1, extra=("--repeat-sources", "hollow=5"))
+    assert not out.exists() and not out.with_suffix(".bin.tmp").exists()
+
+
+def test_the_repeat_cache_refuses_web_scale_sources(monkeypatch, corpus, tmp_path):
+    """The cache IS the mechanism (byte-identical passes beyond the dedup),
+    and it holds the whole source in RAM -- aimed at a web source that is an
+    OOM hours into the walk, after which the except-handler deletes the .tmp.
+    Refuse as soon as the cap is crossed instead.
+
+    The refusal must be a plain Exception, never SystemExit: with workers > 1
+    the generator is consumed inside pool.imap's task-feeder thread, whose
+    guard catches Exception only -- a SystemExit killed the feeder silently
+    and the run HUNG forever instead of refusing (round-B audit, 2026-07-25;
+    measured: workers=1 refused, workers=2 sat past a 90 s kill)."""
+    src = tmp_path / "big"
+    src.mkdir()
+    body = ("A paragraph long enough to be walked and cached without any "
+            "trouble at all, number %d.")
+    for i in range(4):
+        (src / f"doc_{i}.txt").write_text(body % i, encoding="utf-8")
+    monkeypatch.setattr(pd, "REPEAT_CACHE_MAX_BYTES", 150)
+    with pytest.raises(pd.RepeatCacheExceeded, match="repeat cache") as excinfo:
+        list(pd.with_repeats(pd.iter_cleaned_docs([("Big", src)]), {"Big": 2}))
+    assert isinstance(excinfo.value, Exception), (
+        "a BaseException-only class escapes pool.imap's feeder guard and "
+        "turns the refusal into a silent hang under --workers > 1"
+    )
+    # under the cap the same stream repeats fine
+    monkeypatch.setattr(pd, "REPEAT_CACHE_MAX_BYTES", 10_000)
+    docs = list(pd.with_repeats(pd.iter_cleaned_docs([("Big", src)]), {"Big": 2}))
+    assert len(docs) == 8
+
+    # end to end, main() converts the refusal to a clean SystemExit and
+    # removes the .tmp (the BaseException path used to leave it on kill)
+    root, sources, vocab = corpus
+    monkeypatch.setattr(pd, "REPEAT_CACHE_MAX_BYTES", 150)
+    out = tmp_path / "capped.bin"
+    with pytest.raises(SystemExit, match="repeat cache"):
+        _run(monkeypatch, sources + [("Big", src)], out, vocab=vocab,
+             dtype="uint16", workers=1, extra=("--repeat-sources", "big=2"))
+    assert not out.exists() and not out.with_suffix(".bin.tmp").exists()
