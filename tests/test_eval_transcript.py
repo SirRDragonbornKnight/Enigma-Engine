@@ -325,6 +325,46 @@ def test_grading_keys_are_verified_without_the_plaintext_on_disk(tmp_path, monke
     assert reason and "re-seal" in reason
 
 
+def test_a_manifest_with_stripped_arrays_cannot_verify(tmp_path, monkeypatch):
+    """The s/n arrays are the trainers' enforcement payload, and the trainers
+    cannot verify them (no plaintext). h-only comparison here printed "seal
+    verified" over a manifest whose arrays were emptied -- every downstream
+    training screen then ran exact-hash-only (round-B audit, 2026-07-25). The
+    guard refuses the FULL strip outright; the partial strip (indistinguishable
+    from a stopword-only probe without plaintext) is caught here, where the
+    gate run holds the plaintext and recomputes the whole payload."""
+    from eval_leak_guard import LockedProbeGuard
+
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    original = json.loads(eval_behavior.LOCKED_MANIFEST.read_text(encoding="utf-8"))
+
+    # full strip: refused by the guard before any comparison runs
+    stripped = json.loads(json.dumps(original))
+    for p in stripped["probes"]:
+        p["s"], p["n"] = [], []
+    stand_in = tmp_path / "stripped.manifest.json"
+    stand_in.write_text(json.dumps(stripped), encoding="utf-8")
+    monkeypatch.setattr(eval_behavior, "LOCKED_MANIFEST", stand_in)
+    with pytest.raises(LockedProbeGuard.Weakened):
+        eval_behavior._sealed_manifest()
+
+    # partial strip: empty the shingles of one run-free (1-content-word)
+    # probe -- loads clean, and only the full-payload comparison sees it
+    partial = json.loads(json.dumps(original))
+    victim = next((p for p in partial["probes"] if len(p["s"]) == 1 and not p["n"]), None)
+    if victim is None:
+        pytest.skip("sealed set carries no 1-content-word probe to strip")
+    victim["s"] = []
+    stand_in2 = tmp_path / "partial.manifest.json"
+    stand_in2.write_text(json.dumps(partial), encoding="utf-8")
+    monkeypatch.setattr(eval_behavior, "LOCKED_MANIFEST", stand_in2)
+    reason = eval_behavior._seal_mismatch(cases, real)
+    assert reason and "sealed arrays" in reason
+
+
 def test_a_diluted_copy_of_the_locked_set_is_still_the_locked_set(tmp_path):
     """Share alone was evadable in one direction: padding a full copy with 13
     junk strings dropped it under the bar while still carrying every sealed

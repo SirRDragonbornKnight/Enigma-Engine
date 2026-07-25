@@ -46,3 +46,56 @@ def test_generated_surfaces_disjoint_from_probes(gen):
         f"{gen.__name__} produces question surfaces that equal live probes -- "
         f"the bake would silently DROP these training records: {collisions[:5]}"
     )
+
+
+def test_a_trimmed_prompt_is_rescreened_before_it_is_emitted():
+    """The trim runs AFTER the leak screen and keeps the prompt's TAIL, so a
+    record that passed the screen could re-enter the mix carrying exactly the
+    text the screen refuses (fix-arc audit, 2026-07-25: score 0.005 pre-trim
+    -> 1.0 post-trim) -- and a rebuild re-creates the same trimmed record
+    deterministically, making this the one consume-time refusal "rebuild the
+    artifact" could not clear. fit_mix_to_block now screens every cut with
+    the builder's own predicate."""
+    import json
+
+    from make_sft_data import fit_mix_to_block
+
+    filler = " ".join(f"pad{i}" for i in range(400))
+    leaky = json.dumps({"prompt": filler + " FORBIDDEN fact at the end",
+                        "completion": "Ok."})
+    clean = json.dumps({"prompt": filler + " harmless fact at the end",
+                        "completion": "Ok."})
+
+    out, trimmed, dropped, leaked = fit_mix_to_block(
+        [leaky, clean], block=128, screen=lambda cut: "FORBIDDEN" in cut)
+    assert leaked == 1, "the leaky trimmed prompt was emitted unscreened"
+    assert trimmed == 1 and dropped == 0
+    assert len(out) == 1 and "FORBIDDEN" not in out[0]
+    # tail-keeping is the mechanism under test: the survivor still ends in
+    # its tail, not its head
+    assert "at the end" in json.loads(out[0])["prompt"]
+
+    # without a screen both records trim and pass -- the fit behavior itself
+    # is unchanged
+    out2, trimmed2, dropped2, leaked2 = fit_mix_to_block([leaky, clean], block=128)
+    assert (trimmed2, dropped2, leaked2) == (2, 0, 0) and len(out2) == 2
+
+    # A MID-prompt hit must not doom the record: "a shorter cut keeps the
+    # same tail and still leaks" was measured false (round-B audit,
+    # 2026-07-25) -- the loop keeps shrinking until a clean cut fits, and
+    # only a record with NO clean fitting cut counts as leaked. FORBIDDEN
+    # sits mid-prompt here with clean tails of every length from "inside the
+    # first fitting cut" down to "far outside it", so under the old
+    # break-on-first-leaky-cut at least the short-tail records were dropped.
+    mids = [
+        json.dumps({"prompt": filler + " FORBIDDEN fact in the middle " +
+                    " ".join(f"tail{i}word{j}" for j in range(n)),
+                    "completion": "Ok."})
+        for i, n in enumerate(range(10, 130, 8))
+    ]
+    out3, trimmed3, dropped3, leaked3 = fit_mix_to_block(
+        mids, block=128, screen=lambda cut: "FORBIDDEN" in cut)
+    assert dropped3 == 0
+    assert leaked3 == 0, "a record with a clean fitting cut was given up on"
+    assert len(out3) == len(mids) and trimmed3 == len(mids)
+    assert all("FORBIDDEN" not in json.loads(ln)["prompt"] for ln in out3)

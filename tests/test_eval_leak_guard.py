@@ -170,6 +170,97 @@ def test_quoting_a_probe_leaks_however_it_is_padded_or_edited(tmp_path):
     assert not guard.contains_probe("our solar system")
 
 
+def test_a_two_content_word_probe_is_sealed_and_survives_dilution(tmp_path):
+    """18 of the 108 sealed strings -- five of them locked memory TEACH lines
+    -- carry exactly two content words, and at floor 3 they were sealed as
+    NOTHING: a training turn held a sealed teach fact whole while the guard
+    printed a clean bill (round-7, 2026-07-25; measured 0/10 such turns
+    caught on the live mix, 10/10 at floor 2). A 2-word probe now seals its
+    single run, which padding cannot remove and jaccard dilution cannot
+    hide."""
+    guard = LockedProbeGuard(seal(["I work as a nurse."]))
+    assert [w for w in _content_words("I work as a nurse.")] == ["work", "nurse"], \
+        "fixture assumption gone: the probe no longer has exactly two content words"
+    diluted = ("These days, believe it or not, I actually work as a nurse "
+               "over at the big hospital across town.")
+    assert guard.contains_probe(diluted)
+    assert guard.leaks(diluted)
+    assert guard.score(diluted) < guard.threshold, \
+        "fixture is not exercising dilution -- jaccard alone must miss this"
+    # order still separates quoting from topic overlap
+    assert not guard.contains_probe("Any nurse might work anywhere at all.")
+    # one content word stays run-free: that is a membership test, not a
+    # quotation, and exact/jaccard are what remain for it
+    g1 = LockedProbeGuard(seal(["What's your name?"]))
+    assert not g1.contains_probe("her name was lost in the ledger pages")
+
+
+def test_a_manifest_sealed_at_another_floor_is_refused(tmp_path):
+    """The trainers never re-seal: under floor-2 code a stale floor-3 manifest
+    keeps every 2-content-word string sealed as NOTHING while the guard still
+    prints ACTIVE. Seal and test must speak the same unit, so a run-parameter
+    mismatch is a Weakened refusal, not a silent downgrade."""
+    for key, value in (("ngram_min", 3), ("ngram_n", 5)):
+        man = seal(["I work as a nurse."])
+        man[key] = value
+        with pytest.raises(LockedProbeGuard.Weakened, match="re-seal"):
+            LockedProbeGuard(man)
+    # a legacy manifest that carries runs but predates the keys was sealed at
+    # (3, 4) -- refused for the same reason
+    legacy = seal(["Which planet in our solar system has the greatest total mass overall"])
+    del legacy["ngram_min"], legacy["ngram_n"]
+    with pytest.raises(LockedProbeGuard.Weakened, match="re-seal"):
+        LockedProbeGuard(legacy)
+    # no sealed set at all stays a safe no-op, never a refusal
+    assert len(LockedProbeGuard(None)) == 0
+    assert not LockedProbeGuard(None).leaks("anything")
+
+
+def test_stripping_the_sealed_arrays_fails_closed(tmp_path):
+    """The round-5 jaccard_threshold lesson re-entering through the arrays
+    (fix-arc audit, 2026-07-25): emptying probes[].n or .s passed every
+    digest -- the seal comparison is over exact-hash lists and the file
+    digest covers the plaintext, not the sidecar -- so the quotation or
+    paraphrase tier vanished while the banner still printed ACTIVE."""
+    probe = "Which planet in our solar system has the greatest total mass overall"
+    man = seal([probe])
+    for strip in ("n", "s"):
+        crippled = json.loads(json.dumps(man))
+        for p in crippled["probes"]:
+            p[strip] = []
+        with pytest.raises(LockedProbeGuard.Weakened, match="re-seal"):
+            LockedProbeGuard(crippled)
+    # removing the key outright is the same edit
+    crippled = json.loads(json.dumps(man))
+    for p in crippled["probes"]:
+        del p["n"]
+    with pytest.raises(LockedProbeGuard.Weakened, match="re-seal"):
+        LockedProbeGuard(crippled)
+    # stripping BOTH arrays slips between the two one-sided checks -- it is
+    # also the legitimate shape of a stopword-only probe -- but a whole
+    # manifest of them can only be a strip or a pre-4-gram seal, and refuses
+    # in aggregate (round-B audit, 2026-07-25)
+    crippled = json.loads(json.dumps(man))
+    for p in crippled["probes"]:
+        p["s"], p["n"] = [], []
+    with pytest.raises(LockedProbeGuard.Weakened, match="re-seal"):
+        LockedProbeGuard(crippled)
+    # DELETING the fields (not emptying them) on one probe of a larger
+    # manifest slipped past every payload check and died as a bare KeyError
+    # at construction -- fail-closed, but a traceback where the class
+    # promises a refusal (round-C audit, 2026-07-25)
+    two = seal(["I work as a nurse.", probe])
+    for missing in ("s", "n", "h"):
+        crippled = json.loads(json.dumps(two))
+        del crippled["probes"][1][missing]
+        with pytest.raises(LockedProbeGuard.Weakened, match="re-seal"):
+            LockedProbeGuard(crippled)
+    # the genuine manifest shape stays constructible: a 1-content-word probe
+    # is legitimately run-free and must not read as "stripped"
+    ok = seal(["What's your name?", probe])
+    assert len(LockedProbeGuard(ok)) == 2
+
+
 def test_a_long_document_that_merely_shares_words_does_not_leak(tmp_path):
     """The set-based containment test fired on a 1407-word record that happened
     to use all six content words of a sealed probe. Order is what separates

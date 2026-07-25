@@ -672,6 +672,23 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
         return "this file is not byte-identical to the sealed holdout"
     if _probe_hashes(cases) != _sealed_hashes():
         return "the probe set does not match the manifest"
+    # FULL payload, not just the exact hashes. The s/n arrays are the
+    # trainers' enforcement payload, the trainers cannot verify them (no
+    # plaintext), and h-only comparison here let a manifest with those
+    # arrays stripped print "seal verified" while every downstream training
+    # screen ran exact-hash-only (round-B audit, 2026-07-25). This run holds
+    # the plaintext, so it recomputes everything the manifest claims.
+    texts = []
+    for c in cases:
+        q = c.get("q") or c.get("question") or ""
+        if q:
+            texts.append(q)
+        texts.extend(c.get("teach", []) or [])
+    fresh = eval_leak_guard.seal(texts)
+    if ([(p["h"], p["s"], p["n"]) for p in manifest.get("probes", [])]
+            != [(p["h"], p["s"], p["n"]) for p in fresh["probes"]]):
+        return ("the manifest's sealed arrays (shingles/runs) do not match this "
+                "plaintext -- stripped or edited; re-seal")
     sealed_digest = manifest.get("grading_digest")
     if not sealed_digest:
         # Fail CLOSED. A manifest predating the grading seal can only prove the

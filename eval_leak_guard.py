@@ -70,22 +70,45 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 # Words per sealed n-gram. A run of this many CONTENT words in order is the
 # unit of "this text quotes a probe". Probes shorter than NGRAM_MIN are not
-# sealed as runs at all -- one or two words in common is not a quotation --
-# and they keep the exact/jaccard tests.
+# sealed as runs at all and keep only the exact/jaccard tests.
 #
-# Swept against the live corpora, sealed strings covered vs ask-side hits
-# (measured 2026-07-25):
-#     min  sealed    mix  combined_finetune   attacks caught
-#      2   103/108   291        52            yes  <- refuses the training block
-#      3    85/108     5         6            yes  <- chosen
-#      4    50/108     4         5            yes
-#      5    26/108     0         0            NO   (min > N seals nothing)
-# Three buys 5.7x the old containment floor's coverage (15/108) for 5 records
-# in a 118k-ask mix -- and those 5 are dropped by the next rebuild, because
-# `make_sft_data._held_out` screens with THIS predicate, so "rebuild the
-# artifact" stays advice that works.
+# Floor history. The first sweep (2026-07-25) chose 3, reading min=2's extra
+# ask hits as false-positive cost and "one or two words in common" as not a
+# quotation. The round-7 audit then showed what that floor leaves open: 18 of
+# the 108 sealed strings have exactly TWO content words -- five of them locked
+# MEMORY TEACH lines -- and at floor 3 they are sealed as NOTHING, so a
+# training turn can carry a sealed teach fact whole and the guard cannot see
+# it. Re-measured on the live artifacts (2026-07-25, this session), floor 3
+# vs floor 2:
+#
+#   run coverage                 85/108 -> 103/108 (the 5 one-word strings stay
+#                                                   exact/jaccard-only: a 1-word
+#                                                   "run" tests membership, not
+#                                                   order, and is no quotation)
+#   mix asks (120,791)            5 -> 301 leak    (dropped at next rebuild --
+#                                                   `make_sft_data._held_out`
+#                                                   screens with THIS predicate,
+#                                                   so the remedy works)
+#   mix answers (116,769)        72 -> 131         (advisory: counted, never blocks)
+#   combined asks (105,203)      14 -> 58
+#   mix turns carrying a sealed   0/10 -> 10/10    (ONE 2-cw teach line occurs
+#   2-cw teach line, caught                         verbatim in 10 turns; floor 3
+#                                                   saw none of them)
+#
+# ~300 records of 120k is the price of the memory category measuring MEMORY
+# instead of pretraining. A 2-word run does fire on innocent phrase reuse --
+# that cost lands on the build as drops, not on the gate as blindness. A
+# consume-time refusal on a pre-floor-2 artifact is stale data, not a false
+# alarm: rebuild it.
+#
+# Honest limit (fix-arc audit, 2026-07-25): a single 2-word run has ZERO
+# redundancy -- one inflection ("work" -> "worked") or one interposed content
+# word breaks it, and at that point jaccard needs a near-bare sentence to
+# fire. Floor 2 buys VERBATIM carry, not paraphrase-proofing; making the 18
+# short strings paraphrase-proof means giving them DISTINCTIVE content at a
+# probe-content re-seal, which edits the holdout and is the user's call.
 NGRAM_N = 4
-NGRAM_MIN = 3
+NGRAM_MIN = 2
 
 
 def _runs(words: list[str], n: int) -> set[str]:
@@ -201,7 +224,14 @@ def seal(texts: list[str], threshold: float = DEFAULT_JACCARD,
             "s": sorted({_hw(w) for w in _content_words(t)}),
             "n": sorted(_probe_ngrams(t)),
         })
-    manifest = {"version": 1, "jaccard_threshold": threshold, "probes": probes}
+    # ngram_min/ngram_n are the RUN parameters this manifest was sealed under.
+    # They must ride in the manifest because the trainers' consume-time guard
+    # never re-seals: when the code's floor moved 3 -> 2, a stale floor-3
+    # manifest under floor-2 code would have kept every 2-content-word string
+    # sealed as NOTHING -- the exact hole the move closed -- while printing
+    # the same "ACTIVE" banner.
+    manifest = {"version": 1, "jaccard_threshold": threshold,
+                "ngram_min": NGRAM_MIN, "ngram_n": NGRAM_N, "probes": probes}
     if cases is not None:
         manifest["grading_digest"] = grading_digest(cases)
     if probe_file is not None:
@@ -246,6 +276,70 @@ class LockedProbeGuard:
                 "a threshold at or below zero refuses all training data; re-seal it"
             )
         self.threshold: float = threshold
+        # The run parameters are enforcement parameters too: seal and test
+        # must speak the same unit or a probe short enough to fall between
+        # them is sealed as nothing. Manifests that predate the keys but
+        # carry runs were all sealed at (3, 4); an empty manifest (no sealed
+        # set yet) stays a no-op and is never refused.
+        sealed_runs = any(p.get("n") for p in m.get("probes", []))
+        sealed_min = m.get("ngram_min", 3 if sealed_runs else NGRAM_MIN)
+        sealed_n = m.get("ngram_n", 4 if sealed_runs else NGRAM_N)
+        if sealed_runs and (sealed_min, sealed_n) != (NGRAM_MIN, NGRAM_N):
+            raise self.Weakened(
+                f"manifest sealed word runs at floor {sealed_min} / length {sealed_n} "
+                f"but the code tests at {NGRAM_MIN}/{NGRAM_N} -- strings that fall "
+                "between the two are sealed as nothing while the guard still prints "
+                "ACTIVE; re-seal the locked set"
+            )
+        # The ARRAYS are enforcement payload, same as the parameters: emptying
+        # `n` (or `s`) passes every digest -- the seal comparison is over the
+        # exact-hash lists and the file digest covers the PLAINTEXT, not this
+        # sidecar -- so an edit could strip the quotation or paraphrase tier
+        # while the banner still printed ACTIVE (fix-arc audit, 2026-07-25;
+        # the round-5 jaccard_threshold lesson re-entering through the
+        # arrays). Two or more distinct content words ALWAYS seal a run at
+        # floor 2, and a run always implies a shingle set, so either
+        # inconsistency is an edit, not a shape seal() can produce.
+        for p in m.get("probes", []):
+            if not all(k in p for k in ("h", "s", "n")):
+                # A probe entry with fields DELETED (not emptied) used to
+                # escape the payload checks below and die as a bare KeyError
+                # at construction -- fail-closed, but a traceback where the
+                # class promises a refusal (round-C audit, 2026-07-25).
+                raise self.Weakened(
+                    "manifest probe is missing its h/s/n fields -- an edited or "
+                    "truncated entry; re-seal the locked set"
+                )
+            if len(p.get("s") or ()) >= NGRAM_MIN and not p.get("n"):
+                raise self.Weakened(
+                    "manifest probe carries a paraphrase set but no sealed runs -- "
+                    "its quotation tier has been stripped; re-seal the locked set"
+                )
+            if p.get("n") and not p.get("s"):
+                raise self.Weakened(
+                    "manifest probe carries sealed runs but no shingle set -- "
+                    "its paraphrase tier has been stripped; re-seal the locked set"
+                )
+        # Stripping BOTH arrays evades the two one-sided checks above, because
+        # s=[] n=[] is also the legitimate shape of a stopword-only probe
+        # (round-B audit, 2026-07-25). Without plaintext a loader cannot tell
+        # the two apart PER PROBE, but a whole manifest of them can only be a
+        # strip or a pre-4-gram seal -- no real locked set is all stopwords.
+        # Honest aperture (round-C measured it wider than "partial both-array
+        # strip"): ANY array edit that keeps each probe's shape plausible --
+        # one shingle kept, runs emptied -- still loads here. The AUTHORITY on
+        # array content is the gate run, where eval_behavior recomputes the
+        # full h/s/n payload from plaintext and refuses every such edit
+        # (verified for full, partial, runs-only, shingles-only and
+        # keep-one-shingle strips); the manifest is git-tracked, so the edit
+        # is a visible diff either way.
+        probes_m = m.get("probes", [])
+        if probes_m and not any(p.get("s") for p in probes_m) and not any(p.get("n") for p in probes_m):
+            raise self.Weakened(
+                "manifest carries probes but no shingle sets and no runs at all -- "
+                "exact-hash-only enforcement is a stripped (or pre-4-gram) manifest; "
+                "re-seal the locked set"
+            )
         self.exact: set[str] = {p["h"] for p in m.get("probes", [])}
         self.shingles: list[set[str]] = [set(p["s"]) for p in m.get("probes", [])]
         # Ordered word runs from every sealed probe -- the QUOTATION test.

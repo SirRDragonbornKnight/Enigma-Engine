@@ -972,15 +972,23 @@ BLOCK = 1024  # finetune_enigma's --block default == the model's max_seq_len
 
 
 def fit_mix_to_block(
-    lines: list[str], block: int = BLOCK, vocab_path: "Path | None" = None
-) -> tuple[list[str], int, int]:
+    lines: list[str], block: int = BLOCK, vocab_path: "Path | None" = None,
+    screen=None,
+) -> tuple[list[str], int, int, int]:
     """Token-accurate pass over mix records using the TRAINER'S OWN renderer
     (render_training), so "fits" here means exactly what finetune_enigma.py
     will decide at load time. Records that fit pass through untouched.
     prompt/completion records that are too long get the PROMPT left-trimmed
     (keep the tail, nearest the completion) so the completion survives whole.
-    Records that cannot be made to fit are dropped. Returns
-    (lines, n_trimmed, n_dropped)."""
+    Records that cannot be made to fit are dropped.
+
+    `screen` (text -> bool, True = leaks) re-checks each TRIMMED prompt: the
+    trim runs AFTER the builder's leak screen and keeps the tail, which can
+    turn a passing prompt into a sealed-probe hit (score 0.005 -> 1.0 in the
+    fix-arc audit's repro, 2026-07-25) -- and a rebuild deterministically
+    re-creates the same trimmed record, so this was the one consume-time
+    refusal "rebuild the artifact" could NOT clear. Returns
+    (lines, n_trimmed, n_dropped, n_trim_leaked)."""
     from enigma_engine.core.chat_format import attach_chat_tokens, render_training
     from enigma_engine.core.tokenizer import get_tokenizer
 
@@ -989,7 +997,7 @@ def fit_mix_to_block(
     # trims and drops records that would have fit.
     tok = attach_chat_tokens(get_tokenizer("bpe", vocab_path=vocab_path) if vocab_path else get_tokenizer("bpe"))
     limit = block + 1  # the trainer keeps examples with len(ids) <= block+1
-    out, trimmed, dropped = [], 0, 0
+    out, trimmed, dropped, leaked = [], 0, 0, 0
     for line in lines:
         rec = json.loads(line)
         msgs = rec.get("messages")
@@ -1022,12 +1030,24 @@ def fit_mix_to_block(
         overhead = len(ids) - len(p_ids)  # template + completion tokens
         budget = limit - overhead - 8  # margin: BPE boundaries can shift on re-encode
         fitted = False
+        cut_leaked = False
         while budget >= 32:
             cut = tok.decode(p_ids[-budget:], skip_special_tokens=True).strip()
             ids2, _ = render_training(
                 tok, [{"role": "user", "content": cut}, {"role": "assistant", "content": completion}]
             )
             if len(ids2) <= limit:
+                if screen is not None and screen(cut):
+                    # Keep shrinking. "A shorter cut keeps the same tail and
+                    # still leaks" was measured FALSE for mid-prompt hits --
+                    # the next shorter cut can exclude the sealed text
+                    # entirely, and breaking here over-dropped records whose
+                    # clean cut the loop was one step from finding (round-B
+                    # audit, 2026-07-25). Only a record with NO clean fitting
+                    # cut is given up on.
+                    cut_leaked = True
+                    budget -= 64
+                    continue
                 rec2 = {"prompt": cut, "completion": completion}
                 if "category" in rec:
                     rec2["category"] = rec["category"]
@@ -1037,8 +1057,11 @@ def fit_mix_to_block(
                 break
             budget -= 64
         if not fitted:
-            dropped += 1  # the completion alone (nearly) fills the block
-    return out, trimmed, dropped
+            if cut_leaked:
+                leaked += 1  # every fitting cut carried sealed text
+            else:
+                dropped += 1  # the completion alone (nearly) fills the block
+    return out, trimmed, dropped, leaked
 
 
 # QA gate (Phase 1d): refusal / assistant-voice boilerplate to keep OUT of the
@@ -1155,9 +1178,29 @@ def main(argv: "list[str] | None" = None) -> None:
     # a locked set is authored, so this is a no-op on the current build.
     locked = LockedProbeGuard.load()
 
+    def _prompt_side(rec: dict):
+        """Every string the CONSUME-time guard will refuse on: user and
+        system turns (finetune_enigma.load_examples splits exactly this way;
+        flat records become a user turn there)."""
+        msgs = rec.get("messages")
+        if msgs:
+            for m in msgs:
+                if m.get("role") in ("user", "system") and isinstance(m.get("content"), str):
+                    yield m["content"]
+            return
+        q = rec.get("prompt") or rec.get("question") or rec.get("instruction")
+        if isinstance(q, str):
+            yield q
+
     def _held_out(rec: dict) -> bool:
-        q = _norm_q(rec)
-        return q in eval_qs or locked.leaks(q)
+        # Screen the SAME unit the trainers refuse on, not just the first
+        # user question. Screening only `_norm_q` left system blocks -- where
+        # the memory-read records carry their facts -- unscreened at build
+        # time while consume time REFUSES on them, so a guarded rebuild
+        # still armed a training-day refusal the builder could not clear
+        # (measured 2026-07-25 on the floor-2 reseal: 196 leaking prompt-side
+        # turns in a freshly "clean" mix; 5 even under the old floor-3 seal).
+        return _norm_q(rec) in eval_qs or any(locked.leaks(t) for t in _prompt_side(rec))
 
     if len(locked):
         print(f"locked-probe fuzzy guard ACTIVE: {len(locked)} sealed probes (jaccard >= {locked.threshold})")
@@ -1290,12 +1333,21 @@ def main(argv: "list[str] | None" = None) -> None:
                 if _held_out(rec):  # exact dev probe OR fuzzy-close to a locked probe
                     n_gen_leak += 1
                     continue
-                if locked.is_near_miss(_norm_q(rec)):  # kept, but flag for human review
+                # Kept, but flagged for human review -- over the SAME unit the
+                # drops use (all prompt-side turns), or the review band
+                # under-reports exactly where the screen was just widened.
+                # Curated/generated families stay unflagged by design: their
+                # shapes are code, reviewed as code, and would spam this file
+                # identically every build.
+                if any(locked.is_near_miss(t) for t in _prompt_side(rec)):
                     n_locked_near += 1
                     locked_near_rows.append(line)
                 mix.append(line)
                 n_general += 1
-    mix, n_trimmed, n_dropped = fit_mix_to_block(mix, block=args.block, vocab_path=vocab_path)
+    mix, n_trimmed, n_dropped, n_trim_leak = fit_mix_to_block(
+        mix, block=args.block, vocab_path=vocab_path,
+        screen=locked.leaks if len(locked) else None,
+    )
     random.Random(42).shuffle(mix)
     (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
     # The review-band records themselves -- a bare count was unactionable
@@ -1319,8 +1371,9 @@ def main(argv: "list[str] | None" = None) -> None:
         f"{n_gen_leak} dropped as eval-probe leaks; "
         f"{n_locked_near} kept but flagged near a locked probe"
         f"{' (see locked_near_misses.jsonl)' if n_locked_near else ''}; "
-        f"{n_trimmed} prompt-trimmed to fit block {BLOCK}, "
-        f"{n_dropped} dropped as unfittable)"
+        f"{n_trimmed} prompt-trimmed to fit block {args.block}, "
+        f"{n_dropped} dropped as unfittable, "
+        f"{n_trim_leak} trimmed prompts dropped as post-trim leaks)"
     )
 
 
