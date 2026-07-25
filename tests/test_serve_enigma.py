@@ -190,6 +190,71 @@ def test_forget_gate_suppresses_remember(monkeypatch):
     assert not serve._looks_forgettable("I like tea.")  # a plain fact is not a forget
 
 
+def test_a_negated_forget_is_a_save_ask_not_a_delete(monkeypatch):
+    monkeypatch.setattr(serve, "MEMORY", object())
+    # "Don't forget my birthday is in May" wears the forget verb but asks to
+    # SAVE. Reading it as a forget suppressed the save and offered deletion --
+    # the inversion of the intent, on a destructive tool.
+    for text in ("Don't forget my birthday is in May.",
+                 "Dont forget that my anniversary is June 3rd.",
+                 "Never forget my daughter is called Mia."):
+        assert not serve._looks_forgettable(text)
+        assert serve._looks_memorable(text)
+
+
+def test_the_negation_does_not_have_to_touch_the_forget_verb(monkeypatch):
+    monkeypatch.setattr(serve, "MEMORY", object())
+    # Requiring the negation to sit AGAINST the verb read all of these as
+    # deletion asks -- the same save-becomes-delete inversion, one adverb
+    # further out. Both gates read one spelling of the family, so a shape
+    # either of them recognizes cannot leave the other silent.
+    for text in ("Don't ever forget my birthday is in May.",
+                 "Never ever forget my wifi password is hunter2.",
+                 "You must not forget my anniversary is in June.",
+                 "We can't forget that my mom visits in May.",
+                 "Please don't you forget my birthday is in May."):
+        assert not serve._looks_forgettable(text), text
+        assert serve._looks_memorable(text), text
+
+
+def test_the_forget_gate_offers_the_shapes_the_store_can_handle(monkeypatch):
+    monkeypatch.setattr(serve, "MEMORY", object())
+    # The store's one-candidate rule deletes all of these correctly, but the
+    # gate's word list never offered the tool, so the store was never reached
+    # and the capability was dead from chat. A miss is a capability she can
+    # never learn to use; a false offer is one tool she declines.
+    for text in ("forget I'm tall",
+                 "please forget everything about my dog",
+                 "forget where I live",
+                 "forget my dog's name"):
+        assert serve._looks_forgettable(text), text
+
+
+def test_memorable_gate_stays_quiet_on_have_idioms(monkeypatch):
+    monkeypatch.setattr(serve, "MEMORY", object())
+    assert not serve._looks_memorable("I have no idea.")
+    assert not serve._looks_memorable("I have to go now.")
+    # ...while NEGATIVE possessions stay save-worthy: excluding the whole "no"
+    # family to catch one idiom threw these away.
+    assert serve._looks_memorable("I have no siblings.")
+    assert serve._looks_memorable("I have no allergies.")
+    assert serve._looks_memorable("I have two cats.")
+
+
+def test_correction_cues_survive_the_smalltalk_they_resemble(monkeypatch):
+    """Two attempts to pattern-exclude "Actually, it is a great question." each
+    took real corrections with them, so the smalltalk is an ACCEPTED false
+    positive: it costs one unnecessary tool offer, while excluding it cost the
+    user's correction. Pin the corrections, not the exclusion."""
+    monkeypatch.setattr(serve, "MEMORY", object())
+    for text in ("Actually, it's a Toyota not a Honda.",
+                 "No, it's a Toyota not a Honda.",
+                 "Actually, it's the blue one, not the red.",
+                 "Actually, that's a mistake, the name is Samantha.",
+                 "Actually, my dog is Bruno now."):
+        assert serve._looks_memorable(text), text
+
+
 def test_recent_user_text_spans_the_thread():
     Msg = serve.Msg
     msgs = [
@@ -805,6 +870,107 @@ def _tiny_ckpt(tmp_path):
     ckpt = tmp_path / "tiny_degrade.pth"
     torch.save({"model_state_dict": Enigma(cfg).state_dict(), "config": cfg.to_dict()}, ckpt)
     return ckpt
+
+
+def test_boot_declares_the_chat_specials_decodable(monkeypatch, tmp_path, capsys):
+    """Sampling -inf's every logit past the live vocab. The chat/tool specials
+    are registered in the FIRST alignment-padding rows and trained there, so a
+    boot that does not declare them deletes the model's own `<|tool_call|>` and
+    `<|im_end|>` from the distribution: measured on the live v8 checkpoint, a
+    weather ask put p=0.997 on `<|tool_call|>` and the server answered with an
+    empty string -- every tool, every built-in, every time.
+
+    Vocab is the real one here on purpose: a toy vocab puts the chat ids past
+    the head entirely, which is the OTHER branch (asserted below)."""
+    from enigma_engine.core.chat_format import chat_token_ids
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    real_vocab = len(get_tokenizer("bpe").token_to_id)
+    cfg = ForgeConfig(
+        vocab_size=real_vocab, dim=32, n_layers=2, n_heads=2,
+        max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
+    )
+    torch.manual_seed(0)
+    ckpt = tmp_path / "real_vocab.pth"
+    torch.save(
+        {"model_state_dict": Enigma(cfg).state_dict(), "config": cfg.to_dict(),
+         "meta": {"chat_format": CHAT_FORMAT_NAME}},
+        ckpt,
+    )
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        expected = max(chat_token_ids(serve.tokenizer).values()) + 1
+        assert serve.model.live_vocab_size == expected
+        assert expected > serve.model.config.vocab_size, "specials must sit past the real vocab"
+        # the padding BEYOND the specials stays masked -- the original guard holds
+        step = torch.zeros(1, serve.model.output.weight.shape[0])
+        masked = serve.model._live_vocab_logits(step)
+        assert torch.isfinite(masked[0, :expected]).all()
+        assert torch.isinf(masked[0, expected:]).all()
+
+        # Other branch: an INSTRUCT model whose head is too small for the chat
+        # ids cannot emit them at all. Say so and keep serving text, don't die
+        # at boot. (It must carry meta.chat_format, or the base-checkpoint rule
+        # below claims it first.)
+        small = ForgeConfig(
+            vocab_size=64, dim=32, n_layers=2, n_heads=2,
+            max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
+        )
+        small_ckpt = tmp_path / "small_head_instruct.pth"
+        torch.save({"model_state_dict": Enigma(small).state_dict(), "config": small.to_dict(),
+                    "meta": {"chat_format": CHAT_FORMAT_NAME}}, small_ckpt)
+        serve.boot(argv=["--model", str(small_ckpt), "--max-context", "128"])
+        assert getattr(serve.model, "live_vocab_size", None) is None
+        assert "tool calls and <|im_end|> are unavailable" in capsys.readouterr().out
+
+        # THIRD branch: a checkpoint declaring MORE vocab than the tokenizer
+        # table holds. Boot must still DECLARE the decodable boundary and warn
+        # about the aliasing. Two earlier versions got this wrong in opposite
+        # directions: checking only the upper bound CRASHED here, and then
+        # skipping the declaration left the mask at config.vocab_size -- which
+        # for a vocab that is a multiple of 64 masks NOTHING and hands sampling
+        # every undecodable row.
+        wide = ForgeConfig(
+            vocab_size=real_vocab + 22, dim=32, n_layers=2, n_heads=2,
+            max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
+        )
+        wide_ckpt = tmp_path / "wide_vocab.pth"
+        torch.save({"model_state_dict": Enigma(wide).state_dict(), "config": wide.to_dict(),
+                    "meta": {"chat_format": CHAT_FORMAT_NAME}}, wide_ckpt)
+        serve.boot(argv=["--model", str(wide_ckpt), "--max-context", "128"])
+        assert serve._BOOTED is True, "boot died on the vocab-mismatch pairing"
+        expected = max(chat_token_ids(serve.tokenizer).values()) + 1
+        assert serve.model.live_vocab_size == expected
+        assert expected < serve.model.config.vocab_size
+        assert "ALIAS trained vocab" in capsys.readouterr().out
+        # and the mask really bites: everything past the decodable boundary is out
+        step = torch.zeros(1, serve.model.output.weight.shape[0])
+        assert torch.isinf(serve.model._live_vocab_logits(step)[0, expected:]).all()
+
+        # FOURTH: a BASE checkpoint never trained those rows. Declaring them
+        # decodable would hand random-init rows to argmax -- the exact thing
+        # the pad-row guard exists to stop -- and the base decode path renders
+        # specials literally. T2/T3 produce this checkpoint class.
+        base = ForgeConfig(
+            vocab_size=real_vocab, dim=32, n_layers=2, n_heads=2,
+            max_seq_len=256, dropout=0.0, use_gradient_checkpointing=False,
+        )
+        base_ckpt = tmp_path / "base_no_chat.pth"
+        torch.save({"model_state_dict": Enigma(base).state_dict(), "config": base.to_dict()},
+                   base_ckpt)  # no meta.chat_format -> INSTRUCT False
+        serve.boot(argv=["--model", str(base_ckpt), "--max-context", "128"])
+        assert serve.INSTRUCT is False
+        assert getattr(serve.model, "live_vocab_size", None) is None
+        untrained = serve.model._live_vocab_logits(
+            torch.zeros(1, serve.model.output.weight.shape[0])
+        )
+        assert torch.isinf(untrained[0, base.vocab_size:]).all(), \
+            "untrained chat rows were left samplable on a base checkpoint"
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
 
 
 def test_boot_brings_real_organs_up(monkeypatch, tmp_path):

@@ -633,6 +633,27 @@ class Enigma(nn.Module):
 
         return logits
 
+    def set_live_vocab_size(self, n: int) -> None:
+        """Declare how many leading logit columns the ATTACHED TOKENIZER can
+        decode. Everything past `n` is masked before sampling.
+
+        Chat/tool specials are registered past `config.vocab_size` (the first
+        rows of the alignment padding) and are trained there, so a caller that
+        attached them must say so or sampling will mask the model's own
+        `<|tool_call|>` and `<|im_end|>` out of every reply.
+
+        `n` BELOW `config.vocab_size` is legal and is the honest answer when a
+        checkpoint declares more vocab than its tokenizer table holds: those
+        rows cannot be rendered, so emitting one crashes decode. An earlier
+        version refused that case as 'hiding real vocab', which pushed the
+        caller into declaring nothing at all -- and declaring nothing masks at
+        `config.vocab_size`, which on a checkpoint whose vocab is already a
+        multiple of 64 masks NOTHING and hands sampling every untrained row."""
+        width = self.output.weight.shape[0]
+        if not 1 <= n <= width:
+            raise ValueError(f"live vocab {n} outside [1, {width}]")
+        self.live_vocab_size = int(n)
+
     def _live_vocab_logits(self, step_logits: torch.Tensor) -> torch.Tensor:
         """Mask the vocab-alignment padding columns before sampling.
 
@@ -642,10 +663,19 @@ class Enigma(nn.Module):
         them down, but on a fresh or early checkpoint they are random-init
         rows that can win argmax/top-k -- sampling one crashes decode
         (2026-07-20 v2 gap audit). -inf them so no decode path can emit one.
+
+        The boundary is `live_vocab_size` when a caller has set it, because the
+        chat/tool specials live in the first padding rows and ARE decodable:
+        masking at config.vocab_size deleted `<|tool_call|>` from the
+        distribution (measured p=0.997 on a weather ask) and every tool call,
+        built-in loop, and `<|im_end|>` turn ending with it.
         """
-        if step_logits.shape[-1] > self.config.vocab_size:
+        live = getattr(self, "live_vocab_size", None)
+        if live is None:
+            live = self.config.vocab_size
+        if step_logits.shape[-1] > live:
             step_logits = step_logits.clone()
-            step_logits[..., self.config.vocab_size :] = float("-inf")
+            step_logits[..., live:] = float("-inf")
         return step_logits
 
     @torch.no_grad()

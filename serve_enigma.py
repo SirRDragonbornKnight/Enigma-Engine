@@ -498,6 +498,47 @@ def boot(argv: list[str] | None = None) -> None:
     # tokens is safe either way -- plain text encodes byte-identically.
     INSTRUCT = META.get("chat_format") == CHAT_FORMAT_NAME
     attach_chat_tokens(tokenizer)
+    # The chat/tool specials sit in the first alignment-padding rows and are
+    # trained there. Sampling masks everything past the live vocab, so without
+    # this the model's own <|tool_call|> and <|im_end|> are -inf'd out of every
+    # reply -- tools, built-ins and clean turn endings all die silently.
+    _live_vocab = max(chat_token_ids(tokenizer).values()) + 1
+    _head_width = model.output.weight.shape[0]
+    if not INSTRUCT:
+        # A BASE checkpoint never trained those rows -- they are random-init,
+        # exactly what the pad-row guard exists to keep out of argmax, and the
+        # base decode path renders specials literally. Only an instruct
+        # lineage has earned the declaration. (T2/T3 produce this class.)
+        pass
+    elif _live_vocab <= _head_width:
+        # Declare what the tokenizer can actually decode, ALWAYS -- including
+        # when that is below config.vocab_size. Skipping the declaration there
+        # looked harmless (the default mask "already keeps" the specials) but
+        # the default masks at config.vocab_size, so on a checkpoint whose
+        # vocab is a multiple of 64 it masks nothing at all and every
+        # undecodable row becomes samplable.
+        model.set_live_vocab_size(_live_vocab)
+        if _live_vocab < CONFIG.vocab_size:
+            # The chat ids are landing on rows this checkpoint calls REAL
+            # vocab: the tokenizer table is smaller than the checkpoint
+            # declares, so <|im_start|> and friends ALIAS learned tokens
+            # (chat_format records the measured case: id 4718 decoded as
+            # ' crashes' on a 5,996-row vocab). Turn boundaries and tool-call
+            # parsing will fire on ordinary text. Say so loudly.
+            print(
+                f"WARN: tokenizer table ends at {_live_vocab} but the checkpoint declares "
+                f"{CONFIG.vocab_size} rows; chat/tool tokens ALIAS trained vocab -- "
+                "turn boundaries and tool parsing are unreliable on this pairing",
+                flush=True,
+            )
+    else:
+        # The chat ids sit outside the head entirely -- the model cannot emit
+        # them at all. Say so rather than crashing the boot over it.
+        print(
+            f"WARN: chat tokens need {_live_vocab} rows but the model head has {_head_width}; "
+            "tool calls and <|im_end|> are unavailable on this checkpoint",
+            flush=True,
+        )
 
     MEMORY = None
     if ARGS.memory_dir:
@@ -971,6 +1012,30 @@ def _looks_arithmetic(text: str) -> bool:
     return has_digit and bool(_ARITH_KEYWORDS.search(text) or _ARITH_SYMBOLS.search(text))
 
 
+# "Don't forget my birthday is in May" is a SAVE ask wearing the forget verb.
+# Reading it as a forget ask suppressed the save and offered deletion instead
+# -- the exact inversion of the intent -- so a negated forget disarms the
+# forget gate and arms remember instead.
+#
+# The negation does NOT have to sit against the verb. Requiring adjacency read
+# "Don't ever forget my birthday", "You must not forget the vet" and "We can't
+# forget that mum visits" as DELETION asks -- the same inversion, one adverb
+# further out. Up to ~24 characters of filler are allowed between the negation
+# and the verb, which covers the natural insertions ("ever", "you", "let me",
+# "we") without reaching across a sentence boundary into an unrelated clause.
+#
+# Both gates read THIS spelling. They decide opposite things about the same
+# family, and a cue only one of them recognizes is the worst outcome: the
+# forget gate disarms, remember never matches, and the message arms nothing at
+# all -- the fact silently unsaved.
+_NEGATED_FORGET_SRC = (
+    r"(do\s*n'?o?t|does\s*n'?o?t|did\s*n'?o?t|ca\s*n'?o?t|cannot|could\s*n'?o?t|"
+    r"wo\s*n'?o?t|would\s*n'?o?t|should\s*n'?o?t|must\s*n'?o?t|never|no need to)"
+    r"[^.?!]{0,24}?\s+forget\b"
+)
+_FORGET_NEGATED = re.compile(r"\b" + _NEGATED_FORGET_SRC, re.IGNORECASE)
+
+
 # remember is offered when the message states something save-worthy: an
 # explicit remember ask, a first-person fact/preference, or a factual
 # correction. Same rationale as the calculate gate -- an ever-present tool
@@ -978,23 +1043,33 @@ def _looks_arithmetic(text: str) -> bool:
 # whether to call. (At the v2 regen the gate retires for an always-offered
 # built-in block -- ruled 2026-07-24 -- but the live v8 lineage keeps it.)
 _MEMORABLE = re.compile(
-    r"\b(remember|don'?t forget|note (that|this)|keep in mind|save (this|that)|"
+    # The negated-forget family is a SAVE cue, spelled ONCE above.
+    r"\b(remember|" + _NEGATED_FORGET_SRC + r"|note (that|this)|keep in mind|save (this|that)|"
     r"call me|my name('s| is)|"
     # "my <up to 3 words> is/are": covers "my dog's name is", "my favorite
     # season is" (two attribute words -- a single-\w+ pattern missed it,
     # measured 2026-07-06). Offering is cheap; she decides whether to call.
     r"my (\w+('s)? ){1,3}(is|are)\b|"
-    r"i (like|love|hate|prefer|live|work|drive|play|have|own|always|never|usually)\b|"
+    r"i (like|love|hate|prefer|live|work|drive|play|own|always|never|usually)\b|"
+    # "i have" minus its idioms. Excluding the whole "no" family took real
+    # facts with it ("I have no siblings", "I have no allergies" are worth
+    # saving) -- only the specific non-possession phrasings are out.
+    r"i have (?!no (?:idea|clue)\b|to \w)\w+|"
     # first-person identity/state: "I'm a nurse", "I am from Denver", "I was
     # born in 1990" -- profession and origin were unreachable before.
     r"i'?m an? \w+|i am an? \w+|i'?m (allergic|from|married|working|called)|"
     r"i (was|am) (born|from|based)|"
     r"we (renamed|changed|moved|got|now)\b|"
     # factual corrections: a correction cue with a copula/naming nearby, so the
-    # supersede path fires from natural chat ("Actually, my dog is Bruno now")
-    # without arming remember on conversational "actually"/"no".
-    r"(actually|no,? it'?s|i meant|correction[:,]|that'?s not right)\b[^.?!]{0,40}?"
-    r"\b(is|are|not|named|called|no longer)\b)",
+    # supersede path fires from natural chat ("Actually, my dog is Bruno now").
+    # ACCEPTED FALSE POSITIVE: agreement smalltalk of the exact shape
+    # "Actually, it is a great question." also arms remember. Two attempts to
+    # exclude it by pattern each took real corrections with them ("Actually,
+    # it's a Toyota, not a Honda."), and the trade is lopsided -- a false
+    # positive costs one unnecessary tool offer, a false negative loses the
+    # user's correction. Offering is cheap; she still decides whether to call.
+    r"(actually|no,? it'?s|i meant|correction[:,]|that'?s not right)\b"
+    r"[^.?!]{0,40}?\b(is|are|not|named|called|no longer)\b)",
     re.IGNORECASE,
 )
 
@@ -1002,16 +1077,29 @@ _MEMORABLE = re.compile(
 # holds. It must SUPPRESS remember: "forget that I like tea" matches "i like"
 # too, and offering remember there is the wrong direction (it would re-save the
 # thing she was told to drop).
+#
+# The verb is matched BARE rather than through a list of following words. The
+# list version ("forget (that|about|my|the|it|this)") silently dropped the very
+# asks the store's one-candidate rule was built for -- "forget I'm tall",
+# "forget everything about my dog", "forget where I live" -- so the store did
+# the right thing and was never reached. A false OFFER costs one tool she may
+# decline; a miss means no offer, no gradient, and a capability she can never
+# learn to use.
 _FORGETTABLE = re.compile(
-    r"\b(forget (that|about|my|the|it|this)|don'?t remember|stop remembering|"
+    r"\b(forget\b|don'?t remember|stop remembering|"
     r"no longer (true|the case|like|have|live|work)|not true anymore|"
-    r"scratch that|delete (that|this|the|my)|remove (that|this|the|my))\b",
+    r"scratch that|delete (that|this|the|my)|remove (that|this|the|my))",
     re.IGNORECASE,
 )
 
 
 def _looks_forgettable(text: str) -> bool:
-    return bool(text) and MEMORY is not None and bool(_FORGETTABLE.search(text))
+    return (
+        bool(text)
+        and MEMORY is not None
+        and not _FORGET_NEGATED.search(text)
+        and bool(_FORGETTABLE.search(text))
+    )
 
 
 def _looks_memorable(text: str) -> bool:
@@ -1106,7 +1194,11 @@ def _execute_builtin(name: str, arguments: dict) -> str:
         text = str(arguments.get("text", "")).strip()
         if not text:
             return "error: nothing to forget"
-        removed = MEMORY.forget(text)
+        try:
+            removed = MEMORY.forget(text)
+        except MEMORY.TooBroad as exc:
+            # Honest refusal beats a silent mass delete: memories have no .bak.
+            return f"error: {exc}"
         if not removed:
             return f"no matching memory to forget for: {text}"
         return "forgot: " + "; ".join(r["text"] for r in removed)
@@ -1142,7 +1234,10 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
     built-in calculate tool is ALWAYS offered alongside any client tools."""
     extra = []
     if MEMORY is not None:
-        mem = MEMORY.render_context(_recent_user_text(req.messages), tokenizer, max_ids=128)
+        mem = MEMORY.render_context(
+            _recent_user_text(req.messages), tokenizer, max_ids=128,
+            focus_query=_last_user_text(req.messages),
+        )
         if mem:
             extra.append(mem)
     # Built-ins are gated on intent (see _builtin_tools); client tools are
@@ -1682,7 +1777,10 @@ def chat(req: ChatReq):
         return _chat_instruct(req)
     messages = list(req.messages)
     if MEMORY is not None:
-        mem = MEMORY.render_context(_recent_user_text(messages), tokenizer, max_ids=128)
+        mem = MEMORY.render_context(
+            _recent_user_text(messages), tokenizer, max_ids=128,
+            focus_query=_last_user_text(messages),
+        )
         if mem:
             messages = [Msg(role="system", content=mem)] + messages
     prompt = _render_transcript(messages)

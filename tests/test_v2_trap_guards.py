@@ -85,6 +85,47 @@ def test_live_vocab_logits_noop_when_head_unpadded():
     assert torch.equal(out, step)
 
 
+def test_declared_chat_specials_survive_the_pad_mask():
+    """The chat/tool specials are registered in the FIRST padding rows and are
+    trained there. Masking at config.vocab_size deleted `<|tool_call|>` from
+    the distribution -- measured p=0.997 on a live weather ask -- so every tool
+    call, every built-in loop, and the `<|im_end|>` turn ending died silently
+    while plain chat still looked fine."""
+    model = _tiny(vocab_size=100)  # padded head = 128; specials would sit at 100..105
+    model.set_live_vocab_size(106)
+    step = torch.zeros(1, 128)
+    step[0, 100] = 99.0  # a declared special dominating, like <|tool_call|> does
+
+    out = model._live_vocab_logits(step)
+
+    assert torch.isfinite(out[0, :106]).all(), "a declared special was masked out"
+    assert out[0, 100] == 99.0
+    # the REST of the padding stays masked -- the original guard still holds
+    assert torch.isinf(out[0, 106:]).all() and (out[0, 106:] < 0).all()
+
+
+def test_live_vocab_size_refuses_a_boundary_outside_the_head():
+    model = _tiny(vocab_size=100)  # padded head = 128
+    with pytest.raises(ValueError):
+        model.set_live_vocab_size(129)  # past the head
+    with pytest.raises(ValueError):
+        model.set_live_vocab_size(0)
+    assert getattr(model, "live_vocab_size", None) is None  # nothing committed
+
+
+def test_a_boundary_below_the_declared_vocab_is_legal_and_masks():
+    """A checkpoint can declare more vocab than its tokenizer table holds; those
+    rows cannot be decoded, so emitting one crashes decode. Refusing to declare
+    the lower boundary pushed the caller into declaring NOTHING, and the default
+    masks at config.vocab_size -- which on a vocab that is already a multiple of
+    64 masks nothing at all and hands sampling every undecodable row."""
+    model = _tiny(vocab_size=128)  # head == config.vocab_size: no padding to hide behind
+    model.set_live_vocab_size(120)
+    out = model._live_vocab_logits(torch.zeros(1, 128))
+    assert torch.isfinite(out[0, :120]).all()
+    assert torch.isinf(out[0, 120:]).all(), "undecodable rows stayed samplable"
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_pad_ids_never_sampled(streaming):
     # Fresh random weights: pad logits are the same magnitude as real ones, so
