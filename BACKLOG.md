@@ -554,13 +554,19 @@ The block, in execution order:
   last lineage), 5-10 paraphrase variants of every must-know fact IN the
   corpus, decay-tail annealing set (~2-3B best tokens); then the rust
   retokenize (~42 min). Decide doc-boundary attention masking here.
-    - **The anneal needs a MECHANISM, not just a token set.** `get_batch`
-      draws uniformly at random over `[0, train_end)`, so position in the
-      corpus means nothing and a "best tokens at the end" file changes
-      nothing on its own. Either write the anneal set as its own bin and
-      switch `--tokens-bin` at the decay step, or teach the sampler a phase.
-      Decide and build this BEFORE T3 — the WSD win the schedule is chosen
-      for is a data-curriculum win.
+    - ~~**The anneal needs a MECHANISM, not just a token set.**~~ **BUILT
+      2026-07-25.** `get_batch` drew uniformly over `[0, train_end)`, so
+      position in the corpus meant nothing and a "best tokens at the end" file
+      would have changed nothing. The sampler now knows a phase:
+      `--anneal-tokens N` names the last N tokens of the train stream as the
+      CURATED region and `--anneal-frac F` (default 0.5) sets how much of each
+      micro-batch is drawn from it once the WSD decay phase begins. Both are
+      recorded in the checkpoint `schedule`, because they change WHAT the tail
+      sees — a resume that dropped them would finish on a different diet than
+      it started. OFF by default (`--anneal-tokens 0`), so the sampler is the
+      same single uniform draw the live lineage used.
+      **What T1 still owes it: write the curated shard LAST** at tokenize time,
+      so the region the flag points at is actually the good tokens.
     - **Paraphrases of must-know facts enter through `pretokenize_data.py`,
       which has no leak screen** (the guard is wired into make_sft_data,
       make_facts_pretrain_data and make_dpo_data). Screen that text against

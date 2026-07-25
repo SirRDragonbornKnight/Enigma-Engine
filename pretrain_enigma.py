@@ -52,6 +52,25 @@ TOKENS_META = ROOT / "data" / "pretrain" / "tokens.json"
 HEADER_BYTES = 256  # ETOK reserved header (see pretokenize_data.py)
 
 
+def anneal_first_step(total_steps: int, decay_frac: float) -> int:
+    """The step the decay phase -- and so the anneal -- begins at."""
+    return int(total_steps * (1.0 - decay_frac))
+
+
+def anneal_counts(micro_batch: int, anneal_frac: float) -> tuple[int, int]:
+    """(curated, general) draws for one micro-batch during the decay phase.
+
+    Clamped both ends: a fraction outside [0, 1] must not produce a negative
+    draw count or ask for more rows than the batch holds. NaN means "no
+    anneal" rather than an exception -- this runs inside the training loop and
+    first fires at the decay boundary, days into a run, where a crash costs the
+    most. Boot refuses a NaN fraction outright so it never gets this far."""
+    if anneal_frac != anneal_frac:  # NaN
+        return 0, micro_batch
+    k = min(max(int(round(micro_batch * anneal_frac)), 0), micro_batch)
+    return k, micro_batch - k
+
+
 def apply_seed(seed: int | None) -> bool:
     """Seed every stream a run draws from, and report whether it seeded.
 
@@ -174,6 +193,22 @@ def main() -> None:
     )
     ap.add_argument(
         "--wsd-decay-frac", type=float, default=0.10, help="fraction of total steps spent in the WSD decay phase"
+    )
+    ap.add_argument(
+        "--anneal-tokens",
+        type=int,
+        default=0,
+        help="decay-tail anneal: treat the last N tokens of the train stream as the "
+        "CURATED region and oversample it during the decay phase. 0 = off (the "
+        "sampler draws uniformly, as the live lineage did). The curated shard has to "
+        "be written last at tokenize time for this to point at anything",
+    )
+    ap.add_argument(
+        "--anneal-frac",
+        type=float,
+        default=0.5,
+        help="fraction of each micro-batch drawn from the curated region once the "
+        "decay phase starts (only meaningful with --anneal-tokens)",
     )
     ap.add_argument("--save-every", type=int, default=250, help="steps between checkpoints")
     ap.add_argument("--eval-every", type=int, default=250, help="steps between val-loss checks")
@@ -474,14 +509,58 @@ def main() -> None:
 
     block = args.block
 
-    def get_batch(split: str):
+    # Decay-tail anneal: during the WSD decay phase, oversample a curated
+    # region of the corpus instead of continuing to draw uniformly.
+    #
+    # The v2 recipe called for "anneal on the best ~2-3B tokens" and there was
+    # nowhere for that to land -- get_batch samples IID over the whole train
+    # stream, so a file of hand-picked tokens changes nothing about what the
+    # model actually sees. The curated region is the TAIL of the train stream
+    # (pretokenize writes that shard last); during decay a fraction of every
+    # micro-batch is drawn from it and the rest from the general region.
+    #
+    # OFF by default: with --anneal-tokens 0 this is the same single draw the
+    # sampler always made, so the live lineage's data order is untouched.
+    if args.anneal_tokens < 0:
+        raise SystemExit(f"--anneal-tokens {args.anneal_tokens} must not be negative")
+    anneal_lo = (train_end - args.anneal_tokens) if args.anneal_tokens else None
+    if anneal_lo is not None and anneal_lo <= block + 1:
+        raise SystemExit(
+            f"--anneal-tokens {args.anneal_tokens:,} leaves no general region ahead of it "
+            f"(train stream holds {train_end:,} tokens)"
+        )
+    if anneal_lo is not None and not 0.0 <= args.anneal_frac <= 1.0:
+        # Refuse at BOOT. The sampler clamps too, but a run that silently
+        # annealed at a fraction nobody asked for is a lineage nobody can
+        # reproduce -- and this first fires days in, at the decay boundary.
+        raise SystemExit(
+            f"--anneal-frac {args.anneal_frac} must be between 0 and 1"
+        )
+    def _draw(lo: int, hi: int, size: int):
+        # dtype is load-bearing: legacy randint defaults to C-long (int32 on
+        # Windows) and hi is ~56.7e9.
+        return np.random.randint(lo, hi - block - 1, size=size, dtype=np.int64)
+
+    def get_batch(split: str, step: int | None = None):
         if split == "train":
             lo, hi = 0, train_end
         elif split == "val":
             lo, hi = train_end, n
         else:  # "val_gen" — pre-append general-domain window
             lo, hi = vg_lo, vg_end
-        ix = np.random.randint(lo, hi - block - 1, size=args.micro_batch, dtype=np.int64)
+        # total_steps is bound further down; read it at CALL time, which is
+        # always after the schedule is settled.
+        if (split == "train" and anneal_lo is not None and step is not None
+                and step >= anneal_first_step(total_steps, args.wsd_decay_frac)):
+            curated, general = anneal_counts(args.micro_batch, args.anneal_frac)
+            parts = []
+            if curated:
+                parts.append(_draw(anneal_lo, train_end, curated))
+            if general:
+                parts.append(_draw(lo, anneal_lo, general))
+            ix = np.concatenate(parts)
+        else:
+            ix = _draw(lo, hi, args.micro_batch)
         if split == "train" and use_val_gen:
             # Fence: re-draw the rare index (~0.02% chance) whose sample
             # [i, i+block] would overlap the val-gen window, keeping it
@@ -570,8 +649,22 @@ def main() -> None:
             "wsd_decay_frac",
             "tokens_bin",
             "sdpa_backend",
+            # The anneal changes WHAT the model sees in the decay phase, so it
+            # is run math, not an operational knob: a resume that dropped it
+            # would finish the tail on a different diet than it started.
+            "anneal_tokens",
+            "anneal_frac",
         )
     }
+
+    if anneal_lo is not None:
+        first = int(total_steps * (1.0 - args.wsd_decay_frac))
+        print(
+            f"decay-tail anneal: last {args.anneal_tokens:,} train tokens are the curated "
+            f"region (offset {anneal_lo:,}); from step {first:,}/{total_steps:,} "
+            f"{args.anneal_frac:.0%} of each micro-batch is drawn from it",
+            flush=True,
+        )
 
     if args.out:
         out = Path(args.out)
@@ -758,7 +851,7 @@ def main() -> None:
         optim.zero_grad(set_to_none=True)
         loss_acc = 0.0
         for _ in range(args.grad_accum):
-            X, Y = get_batch("train")
+            X, Y = get_batch("train", step)
             with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=(device == "cuda")):
                 _, loss = model(X, targets=Y)
                 loss = loss / args.grad_accum

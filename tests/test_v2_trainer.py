@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ema_checkpoints
+import pretrain_enigma
 from ema_checkpoints import ema_state_dicts
 from enigma_engine.core.optim import get_lr
 
@@ -139,6 +140,49 @@ def test_cli_refuses_wrong_order(tmp_path):
     b = _ckpt(tmp_path, "b.pth", 1.0, 100)
     with pytest.raises(SystemExit, match="oldest first"):
         ema_checkpoints.main([str(a), str(b), "--out", str(tmp_path / "e.pth")])
+
+
+def test_the_anneal_starts_with_the_decay_phase():
+    """The recipe's "anneal on the best tokens" had nowhere to land: the
+    sampler drew uniformly over the whole train stream, so a file of curated
+    tokens changed nothing about what the model saw."""
+    assert pretrain_enigma.anneal_first_step(1000, 0.10) == 900
+    assert pretrain_enigma.anneal_first_step(1000, 0.0) == 1000   # no decay, no anneal
+    assert pretrain_enigma.anneal_first_step(1000, 1.0) == 0      # all decay
+
+
+@pytest.mark.parametrize("frac,curated", [(0.0, 0), (0.25, 2), (0.5, 4), (1.0, 8)])
+def test_the_anneal_fraction_splits_the_micro_batch(frac, curated):
+    assert pretrain_enigma.anneal_counts(8, frac) == (curated, 8 - curated)
+
+
+@pytest.mark.parametrize("frac", [-1.0, 1.5, float("nan")])
+def test_an_out_of_range_anneal_fraction_cannot_break_the_batch(frac):
+    """This runs INSIDE the training loop and first fires at the decay
+    boundary, days into a run. A negative count would ask numpy for a negative
+    draw size, one over the batch size would return more rows than the step
+    expects, and NaN raised outright -- all at the most expensive moment."""
+    curated, general = pretrain_enigma.anneal_counts(8, frac)
+    assert 0 <= curated <= 8
+    assert curated + general == 8
+
+
+def test_the_anneal_is_off_by_default_and_is_run_math_when_on():
+    """Off, the sampler is the same single uniform draw the live lineage used.
+    On, it changes WHAT the decay phase sees, so it belongs in the checkpoint's
+    schedule -- a resume that dropped it would finish the tail on a different
+    diet than it started."""
+    import inspect
+
+    src = inspect.getsource(pretrain_enigma.main)
+    assert '"anneal_tokens",' in src and '"anneal_frac",' in src, \
+        "the anneal must be recorded in the schedule, not treated as a CLI knob"
+    assert "--anneal-tokens" in src
+    # default 0 is what keeps the live lineage's data order untouched
+    after = src.split('"--anneal-tokens"', 1)[1][:300]
+    assert "default=0" in after.replace(" ", "")
+    # and the sampler only diverges from the uniform draw when it is ON
+    assert "anneal_lo is not None" in src
 
 
 def _stamp(path, meta):
