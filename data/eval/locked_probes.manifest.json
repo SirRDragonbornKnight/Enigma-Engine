@@ -944,5 +944,6 @@
       ]
     }
   ],
-  "grading_digest": "784499b78fce2ab758ee511323675544d490927a3bdf1f00dbec3bf61f268754"
+  "grading_digest": "784499b78fce2ab758ee511323675544d490927a3bdf1f00dbec3bf61f268754",
+  "probe_file_sha256": "f22d93895e0f87dfdd33c4a58d6ff808ebbe654d432ad9c2068bdca15b0ea62e"
 }

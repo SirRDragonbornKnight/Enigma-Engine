@@ -408,6 +408,57 @@ beside the older ones as `locked_probes.manifest.PRE-RESEAL-R5-2026-07-25.json`
 (verified `43f2e5d3…`, matching the repo byte for byte -- the round-4 archive
 had been LF-normalized on copy and no longer reproduced its own receipt).
 
+## ROUND-6 AUDIT 2026-07-25: the seal answered the wrong question
+
+Two adversarial agents; one drove a LIVE served checkpoint. Both CRITs were in
+code the previous round had just added.
+
+- **CRITICAL -- the seal was whitespace-blind while the server is not.** Round
+  5 replaced `_norm` (case/punctuation/non-Latin blind) with whitespace
+  collapsing, which is itself lossy in the whitespace dimension. Doubling every
+  space inside `q` and `teach` left the grading digest and all 108 probe hashes
+  IDENTICAL -- `seal verified` printed -- while changing the bytes posted to the
+  model for **96 of 96 questions**. Measured live: **18 of 96 verdicts moved (4
+  fail->pass, 14 pass->fail) and 5 of 8 gated categories shifted**, on a gate
+  that is otherwise bit-deterministic. That is a searchable rigging channel: 96
+  knobs, keep the flips you like.
+  **The lesson is structural, not a bug.** One normalized hash set was serving
+  two jobs with opposite tolerance requirements: identity ("is this file the
+  holdout?") needs ZERO tolerance, paraphrase screening ("is this training ask a
+  rewrite of a probe?") needs a LOT. Every widening job 2 required became a
+  blind spot in job 1, which is why a new dimension fell every round -- case,
+  punctuation, script, whitespace.
+  **FIX: identity is now the file's BYTES.** `probe_file_sha256` is sealed into
+  the manifest and a gate run must match it; a manifest without it fails closed.
+  The hash-set tests stay as the "this looks like the holdout, renamed"
+  detector, where a false positive costs a sentence rather than a refused run.
+  Re-sealed: manifest `87baa8a1` -> `971f23c3`, grading digest and probe hashes
+  UNCHANGED, plaintext still `f22d9389`.
+- **HIGH -- a stale verdict was stamped into checkpoints.** The INACTIVE path
+  returned without touching the verdict file, so `last_verdict` handed back a
+  previous run's "108 sealed probes enforced" and finetune stamped it into a
+  model screened by nothing. Absence of a write was read as a passing result.
+  FIX: INACTIVE overwrites the verdict with `active: false`, and every verdict
+  now records the artifact's own sha256.
+- **HIGH -- a non-gate run printed a bare `RESULT: PASS`.** Gate-ness was a
+  positive assertion whose absence was silent, so a file built to look like a
+  scorecard (11 sealed strings + 160 junk probes) passed every category with no
+  line saying it was not the holdout. FIX: every run now prints `SEALED GATE
+  RUN` or `NOT THE SEALED HOLDOUT` beside the result, and the transcript records
+  `sealed_gate_run`.
+
+**Open from round 6, NOT fixed (the next arc):** the containment floor of 6
+protects only 15 of 108 sealed strings and still false-fires once on a
+1407-word record in `combined_finetune.jsonl`; one substituted word re-opens
+dilution; a probe split across consecutive user turns evades the per-string
+predicate. The auditor's proposal is to seal hashed word 4-GRAMS for paraphrase
+screening -- dilution-proof at any probe length, order-sensitive so a long
+document cannot false-fire, and it retires `_CONTAINMENT_MIN_WORDS` and its
+tuning problem. Also open: `eval_behavior` reads the manifest with bare
+`json.loads`, so the `Weakened` threshold rule the TRAINERS enforce is not
+applied by the file whose result decides adoption; `locked_probes_pool.jsonl`
+can never be run (its name matches the locked test).
+
 **A CORRECTION, recorded because the lesson is the point:** the vocab-mask agent
 reported as HIGH that a BASE checkpoint with a multiple-of-64 vocab leaves
 untrained rows samplable, and named the v2 pretrain as the live trigger. The

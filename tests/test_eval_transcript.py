@@ -15,6 +15,7 @@ import json
 import pytest
 
 import eval_behavior
+import eval_leak_guard
 
 # Longer than the 60-char console line: a transcript that stored `detail`
 # instead of the answer would silently truncate exactly the evidence a
@@ -342,6 +343,62 @@ def test_a_diluted_copy_of_the_locked_set_is_still_the_locked_set(tmp_path):
         assert eval_behavior._seal_mismatch(diluted, real) is not None
 
 
+def test_the_gate_is_identified_by_its_bytes(tmp_path):
+    """Every hash-set test answers "does this file MEAN the same thing", which
+    is the wrong question for identity: it was evaded once per audit round
+    through whichever normalization dimension was left over -- case,
+    punctuation, non-Latin script, then whitespace, where doubling every space
+    kept the seal intact while changing what all 96 questions posted to the
+    model. Bytes have no dimensions left to evade."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert eval_behavior._seal_mismatch(cases, real) is None
+
+    def written(name, recs):
+        p = tmp_path / name
+        p.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in recs),
+                     encoding="utf-8", newline="\n")
+        return p, recs
+
+    # the whitespace channel: same grading digest, same probe hashes, different bytes
+    spaced = [dict(c, q=(c.get("q") or "").replace(" ", "  "),
+                   teach=[t.replace(" ", "  ") for t in (c.get("teach") or [])])
+              for c in cases]
+    p, recs = written("spaced.jsonl", spaced)
+    assert eval_leak_guard.grading_digest(recs) == eval_leak_guard.grading_digest(cases), (
+        "fixture assumption gone: whitespace now moves the grading digest, so this "
+        "test no longer exercises the channel bytes were introduced to close"
+    )
+    assert eval_behavior._seal_mismatch(recs, p) == "this file is not byte-identical to the sealed holdout"
+
+    # and every other single-dimension edit falls to the same check
+    for name, recs in (
+        ("gutted.jsonl", [dict(c, want_any=[], deny_any=[]) for c in cases]),
+        ("reordered.jsonl", list(reversed(cases))),
+        ("dropped.jsonl", cases[:-1]),
+    ):
+        p, recs = written(name, recs)
+        assert eval_behavior._seal_mismatch(recs, p) is not None, name
+
+
+def test_a_manifest_without_the_file_seal_is_refused(tmp_path, monkeypatch):
+    """Fail CLOSED, the same way the grading seal does: a manifest that cannot
+    prove byte identity cannot prove this file is the holdout."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    legacy = json.loads(eval_behavior.LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    legacy.pop("probe_file_sha256", None)
+    stand_in = tmp_path / "legacy.manifest.json"
+    stand_in.write_text(json.dumps(legacy), encoding="utf-8")
+    monkeypatch.setattr(eval_behavior, "LOCKED_MANIFEST", stand_in)
+    reason = eval_behavior._seal_mismatch(cases, real)
+    assert reason and "re-seal" in reason
+
+
 def test_trimming_one_string_and_padding_does_not_defeat_both_detectors(tmp_path):
     """Containment and share are both PROPORTIONS of the file, so one lever bends
     both: drop a single sealed string (containment fails) and pad with a dozen
@@ -369,7 +426,13 @@ def test_trimming_one_string_and_padding_does_not_defeat_both_detectors(tmp_path
         for c in rigged:  # and rig the grading so any answer passes
             c["want_any"], c["deny_any"], c["expect_tool"] = [], [], None
         assert eval_behavior._touches_sealed_probes(rigged), f"evaded with {junk} junk strings"
-        assert eval_behavior._seal_mismatch(rigged, tmp_path / "rigged.jsonl") is not None
+        # written out, because the seal check reads the file to digest it
+        rigged_path = tmp_path / f"rigged_{junk}.jsonl"
+        rigged_path.write_text(
+            "".join(json.dumps(c, ensure_ascii=False) + "\n" for c in rigged),
+            encoding="utf-8", newline="\n",
+        )
+        assert eval_behavior._seal_mismatch(rigged, rigged_path) is not None
 
 
 def test_gutted_grading_keys_are_caught_even_though_the_questions_match(tmp_path, monkeypatch, capsys):
@@ -391,7 +454,11 @@ def test_gutted_grading_keys_are_caught_even_though_the_questions_match(tmp_path
     _fake_server(monkeypatch, LONG_ANSWER)
 
     assert eval_behavior.run(URL, TEMP, MAXTOK, gutted, None) == 2
-    assert "grading keys" in capsys.readouterr().out
+    # The byte check now refuses this file before the grading digest is
+    # consulted -- an earlier and stronger refusal for the same edit.
+    out = capsys.readouterr().out
+    assert "not the sealed holdout" in out
+    assert "byte-identical" in out or "grading keys" in out
 
 
 def test_the_dev_set_is_not_mistaken_for_the_locked_set():

@@ -337,14 +337,14 @@ def main() -> None:
     # no evidence the gate had been protected.
     guard_verdict = last_verdict(Path(args.data))
 
+    def _guard_meta(v: dict) -> dict:
+        return {k: v[k] for k in ("active", "source_sha256", "manifest_sha256",
+                                  "sealed_probes", "jaccard_threshold",
+                                  "asks_screened", "answer_side_flagged") if k in v}
+
     meta = dict(ck.get("meta") or {})
     if guard_verdict:
-        meta["leak_guard"] = {
-            k: guard_verdict[k]
-            for k in ("manifest_sha256", "sealed_probes", "jaccard_threshold",
-                      "asks_screened", "answer_side_flagged")
-            if k in guard_verdict
-        }
+        meta["leak_guard"] = _guard_meta(guard_verdict)
     if meta.get("chat_format") != CHAT_FORMAT_NAME:
         rows = reinit_chat_rows(raw_model, tokenizer)
         print(
@@ -354,12 +354,7 @@ def main() -> None:
         )
         meta = {"chat_format": CHAT_FORMAT_NAME, "init_from": str(src), "base_step": int(ck.get("step", 0))}
         if guard_verdict:
-            meta["leak_guard"] = {
-                k: guard_verdict[k]
-                for k in ("manifest_sha256", "sealed_probes", "jaccard_threshold",
-                          "asks_screened", "answer_side_flagged")
-                if k in guard_verdict
-            }
+            meta["leak_guard"] = _guard_meta(guard_verdict)
 
     optim = build_optimizer(raw_model, args.optimizer, args.lr, args.weight_decay)
     start_step = 0

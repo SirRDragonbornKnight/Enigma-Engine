@@ -117,8 +117,26 @@ def grading_digest(cases: list[dict]) -> str:
     return hashlib.sha256(repr(keyed).encode("utf-8")).hexdigest()
 
 
+def file_digest(path: Path) -> str:
+    """Digest of a probe file's CONTENT, line-endings normalized.
+
+    This is the gate's IDENTITY. Every hash-set test answers "does this file
+    mean the same thing", which is the wrong question for identity and has now
+    been evaded once per audit round through whichever normalization dimension
+    was left over -- case, punctuation, non-Latin script, and finally
+    whitespace, where doubling every space kept the seal intact while changing
+    the bytes posted to the model for all 96 questions. Bytes have no
+    dimensions left to evade.
+
+    Line endings are normalized because the repo normalizes them on checkout,
+    so raw bytes would make the same sealed blob hash differently on two
+    clones."""
+    raw = Path(path).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def seal(texts: list[str], threshold: float = DEFAULT_JACCARD,
-         cases: list[dict] | None = None) -> dict:
+         cases: list[dict] | None = None, probe_file: Path | None = None) -> dict:
     """Build a sealed manifest from locked-probe plaintext. Ships only hashes,
     never the words.
 
@@ -132,6 +150,8 @@ def seal(texts: list[str], threshold: float = DEFAULT_JACCARD,
     manifest = {"version": 1, "jaccard_threshold": threshold, "probes": probes}
     if cases is not None:
         manifest["grading_digest"] = grading_digest(cases)
+    if probe_file is not None:
+        manifest["probe_file_sha256"] = file_digest(probe_file)
     return manifest
 
 
@@ -253,6 +273,12 @@ def refuse_if_leaky(texts: list[str], source: Path, manifest: Path = LOCKED_MANI
         # path that actually touches the weights.
         print(f"leak guard: INACTIVE for {source} (no sealed probes at {manifest}); "
               "nothing is being enforced", flush=True)
+        # ...and OVERWRITE any verdict an earlier run left beside this artifact.
+        # Returning without touching it let `last_verdict` hand back a previous
+        # run's "108 sealed probes enforced", which finetune then stamped into a
+        # checkpoint that had been screened by nothing at all. Absence of a
+        # write was being read as a passing result.
+        _write_inactive_verdict(source, manifest)
         return
     leaks = sum(1 for t in texts if guard.leaks(t))
     if leaks:
@@ -292,6 +318,20 @@ def _verdict_path(source: Path) -> Path:
     return Path(source).with_name(Path(source).name + ".leakguard.json")
 
 
+def _write_inactive_verdict(source: Path, manifest: Path) -> None:
+    """Record that NOTHING was enforced, replacing any earlier verdict."""
+    try:
+        _verdict_path(source).write_text(
+            json.dumps({"source": str(source), "manifest": str(manifest),
+                        "active": False, "sealed_probes": 0,
+                        "note": "no sealed probes were available; nothing was enforced"},
+                       indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"WARN: could not clear the leak-guard verdict beside {source} ({exc})", flush=True)
+
+
 def _write_verdict(source: Path, manifest: Path, guard: "LockedProbeGuard",
                    n_asks: int, advisory: list[str], flagged: list[str]) -> None:
     """Record the verdict beside the artifact.
@@ -305,8 +345,17 @@ def _write_verdict(source: Path, manifest: Path, guard: "LockedProbeGuard",
         manifest_sha = hashlib.sha256(Path(manifest).read_bytes()).hexdigest() if Path(manifest).exists() else None
     except OSError:
         manifest_sha = None
+    try:
+        source_sha = file_digest(source)
+    except OSError:
+        source_sha = None
     verdict = {
         "source": str(source),
+        # A receipt that can be inferred is a receipt that can be wrong: without
+        # the artifact's own digest, a verdict beside a file says nothing about
+        # WHICH bytes were screened.
+        "source_sha256": source_sha,
+        "active": True,
         "manifest": str(manifest),
         "manifest_sha256": manifest_sha,
         "sealed_probes": len(guard),
@@ -349,13 +398,15 @@ def _cli_seal(src: str) -> int:
     for t in texts:
         if not _content_words(t):
             print(f"WARN: probe has no content words (verbatim-match only): {t!r}")
-    manifest = seal(texts, cases=cases)
+    manifest = seal(texts, cases=cases, probe_file=src_path)
     LOCKED_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     LOCKED_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"sealed {len(texts)} locked probe strings -> {LOCKED_MANIFEST.name} "
           f"(jaccard>={manifest['jaccard_threshold']}); manifest carries hashes only")
     print(f"grading keys sealed too (digest {manifest['grading_digest'][:12]}...): "
           "want/deny/expect_tool/category are now tamper-evident without the plaintext")
+    print(f"probe file sealed by CONTENT (sha256 {manifest['probe_file_sha256'][:12]}...): "
+          "a gate run must be byte-identical to this file, not merely equivalent to it")
     return 0
 
 

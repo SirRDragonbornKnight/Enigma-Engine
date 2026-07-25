@@ -39,8 +39,12 @@ re-seals the file at run start
 instead of trusting its name, and the manifest seals the GRADING KEYS as well
 as the question text (re-sealed 2026-07-25 after an audit found a file with its
 wants and denies emptied re-sealed perfectly; re-sealed AGAIN the same day when
-teach lines proved mutable through the normalizer — manifest
-`87baa8a1`, grading digest `784499b7`, plaintext unchanged at `f22d9389`).
+teach lines proved mutable through the normalizer; re-sealed a THIRD time when
+the seal proved whitespace-blind — **identity is now the probe file's own
+sha256, so a gate run must be byte-identical, not merely equivalent** —
+manifest `971f23c3`, grading digest `784499b7`, plaintext unchanged at
+`f22d9389`). Every run prints `SEALED GATE RUN` or `NOT THE SEALED HOLDOUT`
+beside its result, and the transcript records which it was.
 P2 has now run against it — see
 the baseline above; `unknown` scored 0/12 on BOTH lineages and is the clearest
 single target for the v2 SFT regen.

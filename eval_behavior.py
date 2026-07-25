@@ -642,9 +642,24 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     able to drop a rigged file could overwrite the reference beside it. All
     three routes ended in the same place -- 'seal verified' printed over
     unverified grading keys."""
+    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    # IDENTITY FIRST, and by bytes. Every hash-set test below answers "does
+    # this file MEAN the same thing", which is the wrong question for identity
+    # and was evaded once per audit round through whichever normalization
+    # dimension was left: case, punctuation, non-Latin script, then whitespace
+    # -- doubling every space kept the seal intact while changing what all 96
+    # questions posted to the model. The digest of the file itself has no
+    # dimensions left to evade, and the run already computed it for the
+    # receipt without comparing it to anything.
+    sealed_file = manifest.get("probe_file_sha256")
+    if not sealed_file:
+        return ("this manifest predates the probe-file seal and cannot prove the file is "
+                "the sealed holdout byte for byte -- re-seal with "
+                "`python eval_leak_guard.py seal <locked file>`")
+    if _probe_digest(probes) != sealed_file:
+        return "this file is not byte-identical to the sealed holdout"
     if _probe_hashes(cases) != _sealed_hashes():
         return "the probe set does not match the manifest"
-    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
     sealed_digest = manifest.get("grading_digest")
     if not sealed_digest:
         # Fail CLOSED. A manifest predating the grading seal can only prove the
@@ -778,6 +793,13 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         all_pass = False
     else:
         print("RESULT:", "PASS" if all_pass else "FAIL")
+    # Gate-ness was a positive assertion whose ABSENCE was silent: a file built
+    # to look like a scorecard printed a bare PASS with no line saying it was
+    # not the holdout. State it either way, next to the result that gets quoted.
+    if is_gate_run:
+        print("       SEALED GATE RUN -- this result decides adoption")
+    else:
+        print("       NOT THE SEALED HOLDOUT -- this result does not decide adoption")
 
     if transcript is not None:
         rows.append({
@@ -786,6 +808,10 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
             "overall_hits": overall_hits,
             "overall_n": overall_n,
             "result": "PASS" if all_pass else "FAIL",
+            # The transcript IS the adoption receipt, and it recorded nothing
+            # about the seal: a rigged run's transcript was structurally
+            # identical to a gate run's.
+            "sealed_gate_run": is_gate_run,
         })
         _write_transcript(transcript, rows)
     return 0 if all_pass else 1

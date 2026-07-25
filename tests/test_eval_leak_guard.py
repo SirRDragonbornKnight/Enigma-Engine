@@ -180,6 +180,27 @@ def test_the_guard_records_a_durable_verdict(tmp_path):
     assert last_verdict(tmp_path / "never_screened.jsonl") is None
 
 
+def test_an_inactive_run_replaces_any_earlier_verdict(tmp_path):
+    """Returning without touching the verdict let `last_verdict` hand back a
+    previous run's "108 sealed probes enforced", which finetune then stamped
+    into a checkpoint screened by nothing at all. Absence of a write was being
+    read as a passing result."""
+    from eval_leak_guard import last_verdict
+
+    manifest = _manifest_file(tmp_path, ["What is the capital city of France?"])
+    src = tmp_path / "mix.jsonl"
+    src.write_text("{}\n", encoding="utf-8")
+
+    refuse_if_leaky(["Say hello."], src, manifest)
+    active = last_verdict(src)
+    assert active["active"] is True and active["sealed_probes"] == 1
+    assert active["source_sha256"], "a verdict must name WHICH bytes were screened"
+
+    refuse_if_leaky(["Say hello."], src, tmp_path / "absent.json")
+    after = last_verdict(src)
+    assert after["active"] is False and after["sealed_probes"] == 0
+
+
 def test_a_clean_artifact_trains(tmp_path):
     manifest = _manifest_file(tmp_path, ["What's the capital city of France?"])
     refuse_if_leaky(["What is the tallest mountain?", "Say hello."], tmp_path / "ok.jsonl", manifest)
