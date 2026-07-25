@@ -3,7 +3,7 @@ not in the frozen weights. Stdlib BM25 over inspectable JSONL."""
 
 import pytest
 
-from enigma_engine.core.memory_store import MemoryStore
+from enigma_engine.core.memory_store import MemoryStore, _strip_lead_in
 from enigma_engine.core.tokenizer import get_tokenizer
 
 
@@ -54,6 +54,28 @@ def test_render_context_respects_budget_and_silence(tmp_path, tok):
     assert n_ids <= 88  # budget held (small slack for the header line)
     # irrelevant query -> no context injected, never noise
     assert m.render_context("quantum frogs", tok) == ""
+
+
+def test_the_current_ask_keeps_a_recall_slot(tmp_path, tok):
+    # Widening recall to the recent thread let prior-turn chatter fill every
+    # slot and evict the answer to the question actually being asked. k=2 is
+    # the smallest budget where the eviction is unambiguous; the reserved-slot
+    # mechanism is the same at the production k.
+    m = MemoryStore(tmp_path)
+    for text in ("User's dog Rex is 4 years old.", "User's dog Rex eats twice daily.",
+                 "User walks Rex every morning.", "User's fish is called Bubbles."):
+        m.add(text)
+    ask = "what is my fish called"
+    thread = f"is Rex eating twice daily how old is Rex does Rex walk every morning {ask}"
+    # precondition: the thread query really does rank the answer out of the slots
+    assert "Bubbles" not in [h["text"] for h in m.search(thread, k=2)]
+    assert m.search(ask, k=1)[0]["text"] == "User's fish is called Bubbles."
+
+    assert "Bubbles" not in m.render_context(thread, tok, max_ids=512, k=2)
+    focused = m.render_context(thread, tok, max_ids=512, k=2, focus_query=ask)
+    assert "Bubbles" in focused
+    assert focused.splitlines()[1] == "- User's fish is called Bubbles."  # first slot
+    assert len(focused.splitlines()) == 3  # header + k lines, never more
 
 
 def test_empty_memory_rejected(tmp_path):
@@ -122,6 +144,213 @@ def test_forget_never_touches_an_unrelated_memory(tmp_path):
     m.remember("User's dog is named Rex.")
     assert m.forget("forget that I like tea") == []
     assert len(m) == 1
+
+
+def test_forget_spares_facts_that_merely_share_a_word(tmp_path):
+    # The adversarial case: three facts share the verb "like". Deleting every
+    # scoring record took the dogs and the jazz out with the tea.
+    m = MemoryStore(tmp_path)
+    for text in ("User likes tea.", "User likes dogs.", "User likes jazz."):
+        m.remember(text)
+    assert [r["text"] for r in m.forget("that I like tea")] == ["User likes tea."]
+    assert {r["text"] for r in m.all()} == {"User likes dogs.", "User likes jazz."}
+
+
+def test_forget_spares_a_sibling_sharing_the_attribute(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.remember("User's sister is named Amy.")
+    m.remember("User's brother is named Leo.")
+    assert [r["text"] for r in m.forget("my sister's name")] == ["User's sister is named Amy."]
+    assert [r["text"] for r in m.all()] == ["User's brother is named Leo."]
+
+
+def test_forget_refuses_a_sweep_instead_of_half_doing_it(tmp_path):
+    # Two failure modes, one fix. Deleting the top 3 of 5 matches reported
+    # "forgot" while the fact class survived; deleting all 5 on a one-word ask
+    # is an unrecoverable sweep (no .bak). An ambiguous ask refuses WHOLE and
+    # says how many it found, so the user can name one.
+    m = MemoryStore(tmp_path)
+    for i in range(5):
+        m.remember(f"User likes tea blend {i}.")
+    with pytest.raises(MemoryStore.TooBroad) as err:
+        m.forget("tea")
+    assert "5 memories" in str(err.value)
+    assert len(m) == 5, "a refused forget must not delete anything"
+
+
+@pytest.mark.parametrize("ask", [
+    "forget that I am tall", "forget I'm tall", "forget that I'm tall now", "tall",
+])
+def test_a_one_term_fact_stays_reachable_however_it_is_phrased(tmp_path, ask):
+    """A revision that demanded an EXACT term-set match made one-term facts
+    nearly undeletable: "forget that I am tall" worked while "forget I'm tall"
+    did not, because the tokenizer leaves an "m" fragment behind. Identical
+    sentences, opposite outcomes, decided by something the user cannot see."""
+    m = MemoryStore(tmp_path / str(abs(hash(ask)) % 999983))
+    m.remember("User is tall.")
+    m.remember("User's dog is named Rex.")
+    assert [r["text"] for r in m.forget(ask)] == ["User is tall."]
+    assert [r["text"] for r in m.all()] == ["User's dog is named Rex."]
+
+
+def test_one_term_facts_cannot_be_swept_in_one_call(tmp_path):
+    """Five unrelated facts went in a single call when the matcher tried to
+    decide which of several matches was meant. It does not decide any more."""
+    m = MemoryStore(tmp_path / "sweep")
+    for word in ("happy", "tall", "married", "rich", "calm"):
+        m.remember(f"User is {word}.")
+    with pytest.raises(MemoryStore.TooBroad) as err:
+        m.forget("the happy tall married rich calm neighbor story")
+    assert "5 memories" in str(err.value)
+    assert "User is happy." in str(err.value), "the refusal must NAME the candidates"
+    assert len(m) == 5
+
+
+def test_an_ask_about_someone_else_never_takes_the_users_facts(tmp_path):
+    """The sharpest repro of the old rule: an ask about the SISTER and the
+    BROTHER deleted two facts about the user, silently, because each stored
+    record's terms happened to appear somewhere in the sentence."""
+    m = MemoryStore(tmp_path / "others")
+    for text in ("User likes tea.", "User hates jazz.", "User plays guitar."):
+        m.remember(text)
+    with pytest.raises(MemoryStore.TooBroad):
+        m.forget("forget that my sister likes tea and my brother hates jazz")
+    assert len(m) == 3
+
+
+def test_two_records_sharing_a_term_set_are_never_both_deleted(tmp_path):
+    """Two different facts can normalize to the same content terms. An exact
+    naming used to delete BOTH -- an exact match is not a licence."""
+    m = MemoryStore(tmp_path / "twins")
+    m.add("User's sister is taller than user's brother.")
+    m.add("User's brother is taller than user's sister.")
+    with pytest.raises(MemoryStore.TooBroad):
+        m.forget("forget that my sister is taller than my brother")
+    assert len(m) == 2
+
+
+def test_the_forget_cap_refuses_a_large_restatement_batch(tmp_path):
+    """The cap branch had no coverage: the sweep test raised via the AMBIGUOUS
+    pointer rule, so `_FORGET_MAX = 500` passed the whole suite. This pins the
+    cap itself -- many multi-term facts all restated by one long ask."""
+    m = MemoryStore(tmp_path / "cap")
+    colours = ("red", "blue", "green", "black", "white", "amber")
+    for colour in colours:
+        m.remember(f"User owns a {colour} mug.")
+    ask = "forget that I own a " + " ".join(f"{c} mug" for c in colours)
+    with pytest.raises(MemoryStore.TooBroad) as err:
+        m.forget(ask)
+    assert f"{len(colours)} memories" in str(err.value)
+    assert len(m) == len(colours), "a refused forget must not delete anything"
+
+
+def test_forget_refuses_an_ambiguous_pointer(tmp_path):
+    # "my name" reaches the user's name, the dog's name and the sister's. The
+    # ask points at ONE fact and matched three, so it names none of them.
+    m = MemoryStore(tmp_path)
+    for text in ("User's name is Sam.", "User's dog is named Rex.",
+                 "User's sister is named Amy."):
+        m.remember(text)
+    with pytest.raises(MemoryStore.TooBroad):
+        m.forget("my name")
+    assert len(m) == 3
+
+
+def test_forget_on_a_contentless_query_deletes_nothing(tmp_path):
+    # "forget everything" is an unbounded wipe; that belongs to clear(), behind
+    # its own explicit ask, not to a fuzzy match.
+    m = MemoryStore(tmp_path)
+    m.remember("User likes tea.")
+    assert m.forget("forget everything") == []
+    assert len(m) == 1
+
+
+def test_a_wipe_ask_does_not_become_a_needle_via_filler(tmp_path):
+    # "forget everything now" is the same unbounded wipe. "now" is not a
+    # subject, but it survived the noise filter as the ask's only term -- and
+    # then deleted the one record containing that word, which is a record
+    # supersede itself writes ("...is named Bruno now.").
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+    m.remember("Actually, my dog is named Bruno now.")
+    assert m.forget("forget everything now") == []
+    assert m.forget("forget everything, thanks") == []
+    assert len(m.all()) == 1  # the supersede collapsed the pair, the wipe took nothing
+
+
+def test_naming_a_nested_fact_word_for_word_resolves_the_tie(tmp_path):
+    # Nested facts made every ask that covers one cover the other, so BOTH
+    # spellings refused and repeating either named candidate refused again --
+    # advice that could not be followed. An ask whose terms EQUAL one record's
+    # is that record being named, so it wins.
+    m = MemoryStore(tmp_path)
+    m.remember("User likes tea.")
+    m.remember("User likes green tea.")
+    assert [r["text"] for r in m.forget("forget that I like green tea")] == [
+        "User likes green tea."
+    ]
+    assert [r["text"] for r in m.all()] == ["User likes tea."]
+    assert [r["text"] for r in m.forget("forget that I like tea")] == ["User likes tea."]
+
+
+def test_an_ask_covering_both_nested_facts_still_refuses(tmp_path):
+    # The exact-name rule must not become a licence to delete on a superset ask
+    # that names neither record.
+    m = MemoryStore(tmp_path)
+    m.remember("User likes tea.")
+    m.remember("User likes green tea.")
+    with pytest.raises(MemoryStore.TooBroad) as err:
+        m.forget("forget that I like green tea and coffee")
+    assert "word for word" in str(err.value)
+    assert len(m.all()) == 2
+
+
+def test_a_correction_with_a_lead_in_supersedes_the_stale_value(tmp_path):
+    # "Actually, ..." defeated both ^-anchored fact parses, so the correction
+    # coexisted and BM25 ranked the stale value first.
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+    rec = m.remember("Actually, my dog is named Bruno now.")
+    assert rec["superseded"] == "User's dog is named Rex."
+    assert [r["text"] for r in m.all()] == ["Actually, my dog is named Bruno now."]
+    assert m.search("what is my dog's name", k=3)[0]["text"].endswith("Bruno now.")
+
+
+def test_forget_reaches_a_fact_the_ask_only_points_at(tmp_path):
+    # "forget about my dog" carries fewer terms than the record it names, so
+    # the match runs the other way -- but only once the asking words are out of
+    # the query, or "forget" itself blocks every subset.
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+    m.remember("User's car is a silver hatchback.")
+    assert [r["text"] for r in m.forget("please forget everything about my dog")] == [
+        "User's dog is named Rex."
+    ]
+    assert [r["text"] for r in m.all()] == ["User's car is a silver hatchback."]
+
+
+def test_stripping_a_lead_in_never_empties_the_text():
+    # A text that is nothing BUT a marker keeps its words rather than becoming
+    # an empty, keyless string.
+    assert _strip_lead_in("No,") == "No,"
+    assert _strip_lead_in("Actually, my dog is Bruno.") == "my dog is Bruno."
+
+
+@pytest.mark.parametrize("stored, hedged", [
+    ("User drives a Toyota.", "Sorry, I drive a rental this week."),
+    ("User lives in Denver.", "Oh, I live in a hotel right now."),
+    ("User works as a nurse.", "Well, I work as a volunteer at weekends."),
+])
+def test_a_hedge_is_not_a_correction(tmp_path, stored, hedged):
+    """Stripping general hedges as if they were correction markers fed ordinary
+    additions to the DESTRUCTIVE path: these three relations are single-valued,
+    so "Sorry, I drive a rental this week" DELETED the Toyota. Before the strip
+    they keyed None and coexisted; only markers that announce a replacement
+    belong in the list."""
+    m = MemoryStore(tmp_path / str(abs(hash(stored)) % 999983))
+    m.remember(stored)
+    m.remember(hedged)
+    assert len(m) == 2, "a hedged addition deleted the fact it hedged"
 
 
 def test_forget_empty_query_is_a_noop(tmp_path):

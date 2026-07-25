@@ -146,12 +146,67 @@ _SINGLE_VALUED_RELATIONS = frozenset({
     ("sleep", ""), ("wake", ""),
 })
 
+# Words a forget ask carries about the ASKING, not about the fact. They are
+# stripped from a forget query so "forget that I like tea" keys on {like, tea}
+# and cannot subsume a record by sharing "forget". "everything"/"all" land here
+# too: a query that survives the filter with nothing left deletes nothing.
+_FORGET_NOISE = frozenset(_stem(w) for w in (
+    "forget", "forgot", "forgetting", "remember", "remembered", "remembering",
+    "delete", "deleted", "remove", "removed", "erase", "erased", "scratch",
+    "drop", "everything", "anything", "something", "all", "any", "stuff",
+    "thing", "things", "memory", "memories", "fact", "facts", "please",
+    "longer", "anymore", "true", "said", "told",
+    # Contraction fragments: the tokenizer splits "don't" into "don" + "t",
+    # and a junk term in the query defeats every subset test ("I don't like
+    # tea any more, forget it" matched nothing at all).
+    "don", "doesn", "didn", "isn", "aren", "wasn", "cant",
+    # ...and the fragments the tokenizer leaves behind from "I'm", "I've",
+    # "I'll", "don't": these are not content, and leaving them in made
+    # "forget I'm tall" behave differently from "forget that I am tall".
+    "m", "ve", "re", "ll", "t",
+    # Temporal and conversational filler. These are not subjects, and leaving
+    # them in turned a WIPE ask into a needle: "forget everything now" filtered
+    # down to {now} and deleted the one record that happened to contain that
+    # word -- which supersede itself writes ("...my dog is named Bruno now.").
+    # A scoped wipe ("forget everything about my dog") still keeps its subject
+    # and still deletes, which is why this belongs here and not in a blanket
+    # "any ask containing everything/all is a wipe" rule.
+    "now", "today", "yesterday", "tomorrow", "again", "still", "just",
+    "already", "ok", "okay", "thanks", "thank", "anyway", "right", "yet",
+))
+
 _NAMING_HEAD = re.compile(r"^(?:named|called|known\s+as)\b", re.IGNORECASE)
 _NAME_STEM = _stem("name")  # the attribute spelling of a naming ("name is Sam")
 
 # Lexical fallback for texts neither parse recognizes. Deliberately high:
 # a missed supersede leaves two records to rank, a wrong one DESTROYS a fact.
 _SUPERSEDE_MIN = 0.75
+
+
+# CORRECTION lead-ins only. Both fact parses are ^-anchored, so a correction
+# that opens with one ("Actually, my dog is named Bruno now.") parsed as
+# nothing, keyed as nothing, and COEXISTED with the value it corrected --
+# leaving the stale value to outrank it.
+#
+# The list is deliberately narrow. Stripping general hedges too (sorry, oh,
+# well, by the way, wait) turned every hedged ADDITION into a correction and
+# fed it to the destructive path: "Sorry, I drive a rental this week" deleted
+# "User drives a Toyota", where before the strip it keyed None and coexisted.
+# A marker earns its place here only if it announces that what follows
+# REPLACES something -- not merely that the speaker is being tentative.
+_LEAD_IN = re.compile(
+    r"^\s*(?:(?:actually|no|nope|correction|i meant|oops|scratch that)\b[\s,:;-]+)+",
+    re.IGNORECASE,
+)
+
+
+
+def _strip_lead_in(text: str) -> str:
+    """Drop leading conversational markers so a correction parses as the fact
+    it asserts. Never strips the whole text: a bare "Actually." keeps its
+    words rather than becoming an empty, keyless string."""
+    stripped = _LEAD_IN.sub("", text).strip()
+    return stripped or text
 
 
 def _value_kind(val: str) -> str:
@@ -175,7 +230,7 @@ def _fact_key(text: str) -> frozenset[str] | None:
     A name correction rides the copula path as "User's name is X"; there is no
     dedicated 'call me'/'goes by' key -- both double as travel/phone and
     guessing wrong deletes (audit 2026-07-22 r4)."""
-    clean = " ".join(str(text).split())
+    clean = _strip_lead_in(" ".join(str(text).split()))
     match = _FACT.match(clean)
     if match:
         key = _content_terms(match.group("attr"))
@@ -233,6 +288,9 @@ def _valid_id(value: Any) -> bool:
 
 class MemoryStore:
     """Append-mostly JSONL store with BM25 search and budgeted rendering."""
+
+    class TooBroad(ValueError):
+        """A forget ask that names more memories than it may delete at once."""
 
     def __init__(self, path: str | Path):
         self.dir = Path(path)
@@ -388,32 +446,67 @@ class MemoryStore:
                     return True
             return False
 
-    def forget(self, query: str, limit: int = 3) -> list[dict]:
-        """Remove the memories that best match `query`; return what was removed.
+    def forget(self, query: str) -> list[dict]:
+        """Delete the ONE memory the query names; return it as a list.
 
-        The correct-on-the-spot primitive: "forget that I like tea" resolves to
-        the stored fact and deletes it. Ranking is the same BM25 as recall, so
-        an unrelated memory (shares no content term, score 0) is never touched
-        -- forget removes what recall would have surfaced, nothing more. Returns
-        [] when the query is empty or matches no stored fact."""
+        One rule: a record is a candidate when its content terms and the ask's
+        are a subset one way or the other -- the ask restates the record
+        ("forget that I like tea" covers "User likes tea.") or points at it
+        ("forget about my dog" covers "User's dog is named Rex."). Exactly one
+        candidate is deleted. Two or more raises TooBroad naming them, and
+        nothing is touched.
+
+        This is deliberately the least clever version. Four earlier revisions
+        tried to decide WHICH of several matches the user meant -- by BM25
+        rank, by match direction, by counting a record's terms -- and each one
+        shipped a different unrecoverable delete: an ask about a sister
+        removing the user's own facts, five one-term facts swept at once, two
+        records with the same term set both going. Deletion has no .bak, so
+        the matcher does not get to guess. Ambiguity is handed back as a
+        question, and `delete(id)` is there for the answer.
+
+        Naming a record EXACTLY resolves an ambiguity the subset rule cannot:
+        nested facts ("User likes tea." inside "User likes green tea.") make
+        every ask that covers one cover the other, so both spellings raised
+        TooBroad and repeating either named candidate raised it again -- advice
+        that could not be followed, with no delete-by-name way out. An ask whose
+        terms EQUAL one record's terms is that record being named, not a pointer
+        at a group, so it wins. Two records with the same terms still tie, which
+        is the one case that really is ambiguous.
+
+        A query left contentless by the noise filter ("forget everything",
+        "forget everything now") matches nothing -- an unbounded wipe belongs to
+        clear(), behind its own explicit ask. A SCOPED wipe keeps its subject
+        ("forget everything about my dog" -> {dog}) and still deletes."""
         if not str(query).strip():
             return []
-        hits = self.search(query, k=limit)  # score > 0 required, takes the lock
-        if not hits:
+        q_terms = {t for t in _content_terms(query) if t not in _FORGET_NOISE}
+        if not q_terms:
             return []
-        ids = {h["id"] for h in hits}
-        removed: list[dict] = []
         with self._lock:
-            keep = []
+            candidates, keep = [], []
             for rec in self._records:
-                if rec["id"] in ids:
-                    removed.append(rec)
+                r_terms = _content_terms(rec["text"])
+                if r_terms and (r_terms <= q_terms or q_terms <= r_terms):
+                    candidates.append(rec)
                 else:
                     keep.append(rec)
-            if removed:
+            if len(candidates) > 1:
+                named_exactly = [r for r in candidates
+                                 if _content_terms(r["text"]) == q_terms]
+                if len(named_exactly) == 1:
+                    keep += [r for r in candidates if r is not named_exactly[0]]
+                    candidates = named_exactly
+                else:
+                    named = "; ".join(r["text"] for r in candidates)
+                    raise self.TooBroad(
+                        f"{len(candidates)} memories match that -- say the one you mean "
+                        f"word for word, or delete it by id: {named}"
+                    )
+            if candidates:
                 self._records = keep
                 self._rewrite()
-        return removed
+        return candidates
 
     def clear(self) -> int:
         """Remove ALL memories; returns how many were dropped."""
@@ -482,10 +575,26 @@ class MemoryStore:
         scored.sort(key=lambda s: (-s[0], -s[1]["id"]))
         return [rec for _, rec in scored[:k]]
 
-    def render_context(self, query: str, tokenizer, max_ids: int = 128, k: int = 3) -> str:
+    def render_context(
+        self, query: str, tokenizer, max_ids: int = 128, k: int = 3,
+        focus_query: str | None = None,
+    ) -> str:
         """Top-k matches as a system-prompt block, trimmed to a token budget.
-        Empty string when nothing relevant — never pad her context with noise."""
-        hits = self.search(query, k=k)
+        Empty string when nothing relevant — never pad her context with noise.
+
+        `focus_query` is the CURRENT ask when `query` widens to the recent
+        thread. Its best match takes the first slot, so prior-turn chatter
+        cannot fill all k and evict the answer to the question being asked."""
+        hits: list[dict] = []
+        if focus_query and k > 0:
+            hits = self.search(focus_query, k=1)
+        seen = {r["id"] for r in hits}
+        for rec in self.search(query, k=k):
+            if len(hits) >= k:
+                break
+            if rec["id"] not in seen:
+                hits.append(rec)
+                seen.add(rec["id"])
         if not hits:
             return ""
         lines = ["Things you remember:"]
