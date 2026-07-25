@@ -82,12 +82,19 @@ THRESHOLDS = {
 
 # Categories that are MEASURED and reported but deliberately do not gate.
 #
-# `vision` is here for two reasons, both temporary. There is no baseline for it
-# yet, so any bar would be invented rather than measured; and the SEALED locked
-# set is fixed at the eight gated categories above -- it cannot contain vision
-# probes, so gating vision would make the honest gate fail on a category it is
-# structurally incapable of measuring. Promote it once a lineage has a receipt.
-INFORMATIONAL_CATEGORIES = frozenset({"vision"})
+# `vision`, `speech` and `imagery` are here for two reasons, both temporary.
+# There is no baseline for them yet, so any bar would be invented rather than
+# measured; and the SEALED locked set is fixed at the eight gated categories
+# above -- it cannot contain organ probes, so gating one would make the honest
+# gate fail on a category it is structurally incapable of measuring. Promote
+# each once a lineage has a receipt.
+#
+# They exist because four organs had NO eval at all: every defect in them --
+# a gate that misses "Draw me a dragon", a caption that fires the painter --
+# showed up as a green suite. `speech` and `imagery` grade the ROUTING (does
+# the right built-in fire, and stay quiet when told not to), which is what can
+# be measured without audio hardware or a diffusion pass.
+INFORMATIONAL_CATEGORIES = frozenset({"vision", "speech", "imagery"})
 
 WEATHER_TOOL = [
     {
@@ -109,6 +116,25 @@ def _post(base_url: str, payload: dict) -> dict:
     )
     with urllib.request.urlopen(req, timeout=180) as r:
         return json.loads(r.read().decode())
+
+
+def _capabilities(base_url: str) -> dict:
+    """Which organs the target booted with, or {} if it is too old to say.
+
+    An organ probe that scores 0 because the server was started without that
+    organ is not a capability measurement, and a scorecard that cannot tell the
+    two apart invites reading a launch-flag mistake as a regression."""
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/v1/capabilities")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got = json.loads(r.read().decode())
+        return got if isinstance(got, dict) else {}
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return {}
+
+
+# Which organ each probe category needs on the server to mean anything.
+CATEGORY_ORGAN = {"vision": "eyes", "speech": "voice", "imagery": "image_gen"}
 
 
 def _clear_memory(base_url: str) -> None:
@@ -435,6 +461,7 @@ def _run_conditions(probes: Path, base_url: str, temperature: float, max_tokens:
         "max_tokens": max_tokens,
         "git_sha": git_sha,
         "git_dirty": git_dirty,
+        "capabilities": _capabilities(base_url),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -473,7 +500,12 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
         # transcript that only looked at tool/restraint could not show it.
         calls = msg.get("tool_calls") or []
         called = calls[0]["function"]["name"] if calls else None
-        if cat in ("tool", "restraint"):
+        # Grade by the probe's SHAPE, not by its category name. Keying on
+        # ("tool", "restraint") meant any other category carrying `expect_tool`
+        # fell through to text grading -- and text grading with no wants and no
+        # denies passes ANY answer, so a whole organ category would have scored
+        # a silent 100% without a single tool call being checked.
+        if "expect_tool" in c:
             ok = (called == c.get("expect_tool"))
             detail = f"tool={called}"
         else:
@@ -684,11 +716,20 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     all_pass = True
     gated = 0
     overall_hits = overall_n = 0
+    caps = (rows[0].get("capabilities") if rows else {}) or {}
     for cat, results in by_cat.items():
         hits, n = sum(results), len(results)
         overall_hits += hits
         overall_n += n
         rate = hits / n
+        # An organ probe measures nothing when the server was started without
+        # that organ: she is never offered the tool, so the score reports a
+        # launch flag rather than an ability. Say which it was.
+        organ = CATEGORY_ORGAN.get(cat)
+        if organ and caps and not caps.get(organ):
+            print(f"  {cat:12} {hits}/{n} = {rate:5.0%}  "
+                  f"(NOT MEASURED -- server has no {organ}; start serve with --{organ.replace('_', '-')})")
+            continue
         # A category with no threshold must SAY so, not gate at >= 0% and
         # print PASS -- a typo'd category name was invisible green before.
         thr = THRESHOLDS.get(cat)

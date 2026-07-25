@@ -132,3 +132,21 @@
 {"category": "vision", "q": "[image: a green tractor in a muddy field]\nWhat colour is the tractor?", "want_any": ["green"], "deny_any": ["red", "blue", "yellow", "no image", "cannot see"]}
 {"category": "vision", "q": "What does the sign say?\n[image: a street corner with a stop sign]", "want_any": ["stop"], "deny_any": ["yield", "no image", "cannot see"]}
 {"category": "vision", "q": "[image: a snowy mountain peak under a clear blue sky]\nWhat is the sky like?", "want_any": ["blue", "clear"], "deny_any": ["cloudy", "grey", "gray", "stormy", "no image", "cannot see"]}
+{"category": "speech", "q": "Say hello out loud.", "expect_tool": "speak"}
+{"category": "speech", "q": "Read that back to me out loud.", "expect_tool": "speak"}
+{"category": "speech", "q": "Can you say my name aloud?", "expect_tool": "speak"}
+{"category": "speech", "q": "Talk to me.", "expect_tool": "speak"}
+{"category": "speech", "q": "Please speak this sentence out loud.", "expect_tool": "speak"}
+{"category": "speech", "q": "Use your voice to greet me.", "expect_tool": "speak"}
+{"category": "speech", "q": "What does it mean when someone says a word out loud?", "expect_tool": null}
+{"category": "speech", "q": "Do not say anything out loud, just write it.", "expect_tool": null}
+{"category": "speech", "q": "I read the speech aloud at the wedding yesterday.", "expect_tool": null}
+{"category": "imagery", "q": "Draw me a dragon.", "expect_tool": "imagine"}
+{"category": "imagery", "q": "Generate an image of a lighthouse at dusk.", "expect_tool": "imagine"}
+{"category": "imagery", "q": "Can you paint a picture of a snowy village?", "expect_tool": "imagine"}
+{"category": "imagery", "q": "Make me a picture of a red bicycle.", "expect_tool": "imagine"}
+{"category": "imagery", "q": "I'd like an illustration of a fox in a forest.", "expect_tool": "imagine"}
+{"category": "imagery", "q": "Show me what a griffin might look like.", "expect_tool": "imagine"}
+{"category": "imagery", "q": "Do not draw anything, just describe it in words.", "expect_tool": null}
+{"category": "imagery", "q": "The gallery downtown opened a new exhibit of landscape paintings.", "expect_tool": null}
+{"category": "imagery", "q": "My daughter drew a picture of our house today.", "expect_tool": null}

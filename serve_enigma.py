@@ -2103,6 +2103,35 @@ def audio_status():
     return status
 
 
+@app.get("/v1/capabilities")
+def capabilities():
+    """Which organs this server actually booted with.
+
+    Organs are flag-gated, so an ability can be absent for two very different
+    reasons: she cannot do it, or it was never started. Nothing exposed that
+    difference, which left two consumers guessing -- an eval scored a silent
+    0/N for a tool the server never offered, and the chat page had to decide
+    whether to show a mic or an image control with no way to ask.
+
+    Read-only and cheap: no organ is touched, only whether one was built."""
+    return {
+        "memory": MEMORY is not None,
+        "voice": SPEAKER is not None,
+        "ears": EARS is not None,
+        "eyes": EYES is not None,
+        "image_gen": PAINTER is not None,
+        "instruct": INSTRUCT,
+        # The built-ins that can actually run right now. The model is offered a
+        # subset of these per request, by intent.
+        "builtins": sorted(
+            n for n in _BUILTIN_NAMES
+            if not (n in ("remember", "forget") and MEMORY is None)
+            and not (n == "speak" and SPEAKER is None)
+            and not (n == "imagine" and PAINTER is None)
+        ),
+    }
+
+
 class VoiceReq(BaseModel):
     """Any subset of the recipe; omitted fields keep their current value."""
 

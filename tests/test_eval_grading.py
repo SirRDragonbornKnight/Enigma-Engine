@@ -25,6 +25,40 @@ from identity_paraphrases import (
 )
 
 
+def test_organ_categories_are_graded_by_shape_not_by_category_name():
+    """Grading keyed on ("tool", "restraint"), so any OTHER category carrying
+    `expect_tool` fell through to text grading -- and text grading with no wants
+    and no denies passes any answer at all. A whole organ category would have
+    scored a silent 100% without one tool call being checked."""
+    from pathlib import Path
+
+    import eval_behavior
+
+    src = Path(eval_behavior.__file__).read_text(encoding="utf-8")
+    assert '"expect_tool" in c' in src, "grading must key on the probe's shape"
+
+    dev = [json.loads(x) for x in PROBES.read_text(encoding="utf-8").splitlines() if x.strip()]
+    autopass = [c for c in dev if "expect_tool" not in c and not c.get("want_any")]
+    assert not autopass, f"{len(autopass)} dev probes would pass any answer at all"
+    assert _grade_text("literally anything", [], []) is True, (
+        "fixture assumption gone: empty wants+denies no longer auto-pass, so the "
+        "shape check above stopped being load-bearing"
+    )
+
+
+def test_an_absent_organ_cannot_be_read_as_a_capability_failure():
+    """An organ probe scores 0 when the server was started without that organ:
+    she is never offered the tool. That is a launch flag, not an ability, so the
+    category must be reported rather than gated."""
+    import eval_behavior
+
+    assert eval_behavior.CATEGORY_ORGAN, "no organ categories are declared"
+    for cat, organ in eval_behavior.CATEGORY_ORGAN.items():
+        assert cat in eval_behavior.INFORMATIONAL_CATEGORIES, f"{cat} must not gate"
+        assert cat not in THRESHOLDS
+        assert organ in {"eyes", "voice", "image_gen", "ears"}
+
+
 def _probe(q: str) -> dict:
     for line in PROBES.read_text(encoding="utf-8").splitlines():
         if line.strip():

@@ -39,6 +39,9 @@ TOOL_CATEGORIES = {"tool", "restraint"}
 KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool", "note"}
 # The one client tool the eval injects for tool/restraint probes.
 VALID_EXPECT_TOOLS = {None, "get_weather"}
+# Organ probes call the server's OWN built-ins instead: no client tool is
+# injected, so what they measure is whether her intent gate offers the organ.
+ORGAN_EXPECT_TOOLS = {None, "speak", "imagine", "remember", "forget", "calculate"}
 
 # A deny key only stays a deny key if a CORRECT answer cannot contain it.
 # "just a wrapper" fires on "I am not just a wrapper"; "i am a wrapper" does
@@ -60,16 +63,24 @@ def _norm(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9']+", text.lower()))
 
 
-def _load_training_questions() -> tuple[set[str], list[str], list[str]]:
+def _load_training_questions(exclude: Path | None = None) -> tuple[set[str], list[str], list[str]]:
     """(normalized user turns, RAW user turns, sources scanned). The raw list
     feeds the fuzzy scan; the sources list keeps the scan honest -- a missing
-    mix file must be REPORTED, not silently scanned as empty."""
+    mix file must be REPORTED, not silently scanned as empty.
+
+    `exclude` is the file under validation. Without it, checking the dev set
+    compared that file against a corpus CONTAINING it, so every probe reported
+    itself as already-in-training and 150 real findings hid behind the noise --
+    the same compare-a-file-with-itself shape that once let a seal check pass
+    over unverified grading keys."""
     seen: set[str] = set()
     raw: list[str] = []
     scanned: list[str] = []
     for rel in ("data/sft/mix.jsonl", "data/eval/behavior_probes.jsonl"):
         path = ROOT / rel
         if not path.exists():
+            continue
+        if exclude is not None and path.resolve() == Path(exclude).resolve():
             continue
         scanned.append(rel)
         with open(path, encoding="utf-8") as handle:
@@ -149,7 +160,7 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
     if skip_leak:
         training, training_raw, scanned = set(), [], []
     else:
-        training, training_raw, scanned = _load_training_questions()
+        training, training_raw, scanned = _load_training_questions(exclude=path)
         if "data/sft/mix.jsonl" not in scanned:
             warns.append(
                 "training-overlap scan ran WITHOUT data/sft/mix.jsonl (missing) -- "
@@ -206,18 +217,24 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
                 "measures memorization, and sealing it deletes the matching training records"
             )
 
-        if cat in TOOL_CATEGORIES:
+        # Tool-graded by SHAPE, matching the grader. Keying on the category name
+        # alone told an organ probe (which grades on `expect_tool` too) that its
+        # empty want list "passes on ANY output" -- advice that would have had
+        # the author add wants the grader never reads.
+        if cat in TOOL_CATEGORIES or "expect_tool" in rec:
             if "expect_tool" not in rec:
                 errors.append(
                     f"{where}: {cat} probe has no 'expect_tool' -- it silently grades as a "
                     "restraint probe (expects NO tool call)"
                 )
-            elif rec.get("expect_tool") not in VALID_EXPECT_TOOLS:
-                errors.append(
-                    f"{where}: expect_tool {rec.get('expect_tool')!r} is not a tool the eval "
-                    f"offers ({sorted(t for t in VALID_EXPECT_TOOLS if t)}) -- this probe can "
-                    "never pass"
-                )
+            else:
+                valid = VALID_EXPECT_TOOLS if cat in TOOL_CATEGORIES else ORGAN_EXPECT_TOOLS
+                if rec.get("expect_tool") not in valid:
+                    errors.append(
+                        f"{where}: expect_tool {rec.get('expect_tool')!r} is not a tool this "
+                        f"category can call ({sorted(t for t in valid if t)}) -- this probe can "
+                        "never pass"
+                    )
             if rec.get("want_any") or rec.get("deny_any"):
                 warns.append(f"{where}: {cat} probes grade on the tool call; want/deny are ignored")
             continue
