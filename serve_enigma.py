@@ -55,6 +55,7 @@ from enigma_engine.core.imagegen import ImageGenError, Painter
 from enigma_engine.core.tts import Speaker, TTSError
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
+from enigma_engine.core.persona import Persona
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
 try:  # Windows consoles default to cp1252 and crash printing unicode.
@@ -212,10 +213,15 @@ _GEN_LOCK = threading.Lock()
 # the same state file (2026-07-17 audit).
 _MUTE_STATE = Path(__file__).resolve().parent / "data" / "mute_state.json"
 
+# WHO this server is serving. Identity lives in a persona pack so the trainer
+# can mold a different AI instead of a second Enigma; with no pack this IS
+# Enigma, and every string below is what the literals it replaced already said.
+PERSONA = Persona.load()
+
 # The runtime-editable voice recipe (Kokoro blend + speed). Lives in the
 # engine's data home so set_voice edits survive restarts and are shared by any
 # launcher, wherever it was started from. Absent = the shipped Cortana default.
-_VOICE_STATE = Path.home() / ".enigma_engine" / "voice.json"
+_VOICE_STATE = PERSONA.home / "voice.json"
 
 # Talk-mode: when ON, the chat window speaks EVERY reply out loud (conversation
 # mode); when OFF, she stays quiet unless a reply used the speak tool. Distinct
@@ -247,7 +253,7 @@ def _write_state_atomic(path: Path, obj: dict) -> None:
 
 # Where the imagine tool and /v1/images/generations drop their PNGs: the
 # engine's data home, not the repo checkout.
-IMAGES_DIR = Path.home() / ".enigma_engine" / "images"
+IMAGES_DIR = PERSONA.home / "images"
 
 
 def _load_eyes(ckpt_path: Path, preset: str):
@@ -662,7 +668,7 @@ async def _require_boot(request, call_next):
 
 # Transcript turn markers: a base model will happily continue the whole
 # conversation, so cut her off when she starts writing the next turn.
-_STOP_TEXTS = ("\nUser:", "\nEnigma:")
+_STOP_TEXTS = ("\nUser:", PERSONA.transcript_label)
 
 
 class Msg(BaseModel):
@@ -1300,10 +1306,7 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
             # (make_sft_data._system, single \n before "Available tools:");
             # a system message that OPENS with "Available tools:" is a shape
             # the model never saw.
-            tools_block = (
-                "You are Enigma. You can use tools when they are needed; "
-                "answer directly when they are not.\n" + tools_block
-            )
+            tools_block = PERSONA.tools_preamble + "\n" + tools_block
         extra.append(tools_block)
     if not extra:
         return msgs

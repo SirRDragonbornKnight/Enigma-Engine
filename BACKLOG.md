@@ -660,11 +660,23 @@ Recorded because it existed only in conversation:
   re-check). Both appear only when `GET /v1/capabilities` says the organ
   booted. Still absent: image UPLOAD from the page (eyes are reachable only by
   an API client sending a data: URL).
-- Stage 7 persona pack + `--name` spawn scaffold: trainer/tokenizer/registry
-  need zero edits; persona literals are scattered across ~12-15 files, with
-  the mass in identity_anchors/identity_paraphrases and make_sft_data.
-  Shared-home collisions (`~/.enigma_engine`, tray mutex, port 8000) are the
-  real one-AI-per-machine guards.
+- Stage 7 persona pack + `--name` spawn scaffold. **Foundation landed
+  2026-07-25**: `enigma_engine/core/persona.py` holds identity as DATA, and
+  `Persona.load()` with no pack IS Enigma -- every value verified byte-identical
+  to the literal it replaced, so nothing about her moved. Serve reads it for the
+  data home (voice recipe + generated images), the transcript stop marker and
+  the tools-block system line, so a second AI on this box no longer overwrites
+  the first one's voice and pictures. Unsafe packs (a path separator or newline
+  in the name, which reaches a directory name AND a stop sequence) refuse.
+  **Design finding worth keeping: the identity data is NOT mechanically
+  parameterizable.** Her answers explain what the WORD "Enigma" means ("a
+  closed box, in the good sense"), so a pack carries `name_meaning` rather than
+  a template deriving it. STILL TO DO: `identity_anchors.py` (26 sites),
+  `identity_paraphrases.py` (15), `make_sft_data.py` (14) and `teach_enigma.py`
+  (9) still hold literals; the tray mutex `Local\EnigmaTray` and the fixed
+  serve port are the remaining one-AI-per-machine guards; the `--name` spawn
+  scaffold itself is unwritten. `personas_dir` in `config/defaults.py:145` is
+  still the vestigial hook it always was.
 
 Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
 REJECTED -- her serving path is our own code. Consequence: the vendored
