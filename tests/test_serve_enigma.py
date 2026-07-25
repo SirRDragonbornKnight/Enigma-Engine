@@ -217,6 +217,59 @@ def test_the_negation_does_not_have_to_touch_the_forget_verb(monkeypatch):
         assert serve._looks_memorable(text), text
 
 
+def test_generated_images_are_served_only_from_the_images_dir(monkeypatch, tmp_path):
+    """The imagine tool answers with a filesystem path, so the page could only
+    print it as a sentence. Serving it needs a fetchable URL -- and that URL is
+    the one place a name from a reply reaches the filesystem, so it takes a bare
+    name, matches a strict pattern, and re-checks the resolved parent."""
+    from fastapi.testclient import TestClient
+
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "imagine_ab12cd34.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
+    (tmp_path / "secret.png").write_bytes(b"\x89PNG\r\n\x1a\nSECRET")
+    monkeypatch.setattr(serve, "IMAGES_DIR", images)
+    monkeypatch.setattr(serve, "_BOOTED", True)
+    client = TestClient(serve.app)
+
+    ok = client.get("/v1/images/file/imagine_ab12cd34.png")
+    assert ok.status_code == 200 and ok.content.startswith(b"\x89PNG")
+
+    for attack in ("../secret.png", "..%2Fsecret.png", "..\\secret.png",
+                   "%2e%2e%2fsecret.png", "/etc/passwd", "C:/Windows/win.ini",
+                   "imagine_ab12cd34.png.txt", "nope.png", ".png"):
+        r = client.get("/v1/images/file/" + attack)
+        assert r.status_code == 404, f"{attack} was served"
+        assert b"SECRET" not in r.content, f"{attack} leaked a file outside the images dir"
+
+
+def test_the_page_shows_a_sense_control_only_when_its_organ_exists(monkeypatch):
+    """A control that 404s teaches the user the feature is broken rather than
+    absent, so the mic starts hidden and /v1/capabilities is what reveals it."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(serve, "_BOOTED", True)
+    for organ in ("MEMORY", "SPEAKER", "EARS", "EYES", "PAINTER"):
+        monkeypatch.setattr(serve, organ, None)
+    client = TestClient(serve.app)
+
+    caps = client.get("/v1/capabilities").json()
+    assert caps["ears"] is False and caps["image_gen"] is False
+    assert "speak" not in caps["builtins"] and "imagine" not in caps["builtins"]
+    assert "calculate" in caps["builtins"]
+
+    monkeypatch.setattr(serve, "EARS", object())
+    monkeypatch.setattr(serve, "PAINTER", object())
+    caps = client.get("/v1/capabilities").json()
+    assert caps["ears"] is True and "imagine" in caps["builtins"]
+
+    page = client.get("/").text
+    assert 'id="mic"' in page and "hidden" in page, "the mic must not show before it is confirmed"
+    assert "/v1/capabilities" in page, "the page never asks which organs exist"
+    assert "/v1/audio/transcriptions" in page, "the mic posts nowhere"
+    assert "/v1/images/file/" in page, "generated images are never rendered"
+
+
 def test_an_ambiguous_forget_can_be_answered_with_an_id(monkeypatch, tmp_path):
     """The store refuses an ambiguous forget rather than guessing, and names the
     candidates. Without an id door that refusal was unanswerable from chat:

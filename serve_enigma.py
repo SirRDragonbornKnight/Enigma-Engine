@@ -35,7 +35,7 @@ from pathlib import Path
 import torch
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
@@ -1597,6 +1597,11 @@ _CHAT_PAGE = """<!doctype html>
   #box:focus { border-color:var(--accent); }
   #send { background:var(--accent); color:#08121c; border:0; border-radius:8px;
           padding:0 22px; font-size:15px; font-weight:700; cursor:pointer; }
+  #mic { background:#16222e; color:var(--fg); border:1px solid #24384a; border-radius:8px;
+         padding:0 16px; font-size:15px; cursor:pointer; }
+  #mic.rec { background:#7a2020; border-color:#a83232; }
+  img.shot { display:block; max-width:min(420px, 100%); border-radius:10px;
+             margin:6px 0 10px; border:1px solid #24384a; }
   button:disabled { opacity:.5; cursor:default; }
 </style></head><body>
 <header>
@@ -1607,7 +1612,8 @@ _CHAT_PAGE = """<!doctype html>
   <button id="mute" type="button">Mute</button>
 </header>
 <div id="log"></div>
-<form id="f"><input id="box" autocomplete="off" placeholder="Say something to her..." autofocus>
+<form id="f"><button id="mic" type="button" title="Hold to talk (needs --ears)" hidden>Mic</button>
+<input id="box" autocomplete="off" placeholder="Say something to her..." autofocus>
 <button id="send" type="submit">Send</button></form>
 <script>
 "use strict";
@@ -1635,6 +1641,22 @@ function add(cls, text) {
   log.appendChild(d);
   log.scrollTop = log.scrollHeight;
   return d;
+}
+// "image saved to <dir>/imagine_ab12cd34.png" -- the imagine tool answers with
+// a filesystem path, so a picture she made could only be read as a sentence.
+// Only the bare NAME is taken, and it is put in an img src, never in the DOM as
+// markup: the reply text itself is always rendered with textContent.
+var IMG_NAME = /image saved to\\s+\\S*?([A-Za-z0-9_-]+\\.png)/i;
+function addImage(text) {
+  var m = IMG_NAME.exec(text);
+  if (!m) return;
+  var img = document.createElement("img");
+  img.className = "shot";
+  img.alt = "image she generated";
+  img.src = "/v1/images/file/" + encodeURIComponent(m[1]);
+  img.onerror = function () { img.remove(); };   // organ off or file gone: no broken icon
+  log.appendChild(img);
+  log.scrollTop = log.scrollHeight;
 }
 var speakSeq = 0;        // the newest speak() call owns playback; a hush outbids them all
 function clearClip() {   // cleanup only -- NEVER a cancel signal (a clip ending naturally
@@ -1750,6 +1772,7 @@ document.getElementById("f").onsubmit = function (ev) {
         return;
       }
       add("her", reply);
+      addImage(reply);
       history_.push({ role: "assistant", content: reply });
       if (talkMode && !(data.enigma && data.enigma.spoke)) speak(reply);
     })
@@ -1759,6 +1782,62 @@ document.getElementById("f").onsubmit = function (ev) {
     })
     .then(function () { send.disabled = false; box.focus(); });
 };
+// Mic: hold to record, release to transcribe into the box. Shown only when the
+// server actually booted --ears; an always-visible control that 404s teaches
+// the user the feature is broken rather than absent.
+var micBtn = document.getElementById("mic");
+var recorder = null, chunks = [], micBusy = false;
+function micLabel(t) {
+  micBtn.textContent = t;
+  micBtn.className = (t === "Rec") ? "rec" : "";
+}
+function stopRecording() {
+  if (recorder && recorder.state === "recording") recorder.stop();
+}
+function startRecording() {
+  if (micBusy || recorder) return;
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    add("sys", "this browser cannot record audio");
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = function (ev) { if (ev.data.size) chunks.push(ev.data); };
+    recorder.onstop = function () {
+      stream.getTracks().forEach(function (t) { t.stop(); });   // release the device
+      recorder = null;
+      micLabel("Mic");
+      if (!chunks.length) return;
+      micBusy = true;
+      micLabel("...");
+      var fd = new FormData();
+      fd.append("file", new Blob(chunks, { type: "audio/webm" }), "clip.webm");
+      fetch("/v1/audio/transcriptions", { method: "POST", body: fd })
+        .then(function (r) { if (!r.ok) throw new Error("transcription failed"); return r.json(); })
+        .then(function (d) {
+          var said = (d && typeof d.text === "string") ? d.text.trim() : "";
+          if (said) { box.value = box.value ? box.value + " " + said : said; box.focus(); }
+          else add("sys", "[heard nothing]");
+        })
+        .catch(function (e) { add("sys", "error: " + e.message); })
+        .then(function () { micBusy = false; micLabel("Mic"); });
+    };
+    recorder.start();
+    micLabel("Rec");
+  }).catch(function () { add("sys", "microphone unavailable (permission denied?)"); });
+}
+micBtn.addEventListener("mousedown", startRecording);
+micBtn.addEventListener("mouseup", stopRecording);
+micBtn.addEventListener("mouseleave", stopRecording);
+micBtn.addEventListener("touchstart", function (ev) { ev.preventDefault(); startRecording(); });
+micBtn.addEventListener("touchend", function (ev) { ev.preventDefault(); stopRecording(); });
+
+fetch("/v1/capabilities")
+  .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+  .then(function (c) { if (c && c.ears) micBtn.hidden = false; })
+  .catch(function () {});
+
 fetch("/v1/audio/voices")
   .then(function (r) { if (!r.ok) throw new Error(); voiceReady = true; })
   .catch(function () { voiceReady = false; })
@@ -2101,6 +2180,30 @@ def audio_status():
     if voice == "error":
         status["voice_error"] = str(SPEAKER.last_error)[:200]
     return status
+
+
+@app.get("/v1/images/file/{name}")
+def image_file(name: str):
+    """Serve ONE generated PNG out of the images dir, by bare filename.
+
+    The imagine tool answers with a filesystem path, which the chat page could
+    only show as literal text -- she could make a picture nobody could see
+    without opening a file manager. Rendering it needs a way to fetch it.
+
+    Bare name only, matched against a strict pattern and then re-checked
+    against the resolved directory: a name is never joined to a path it could
+    escape, so `..`, absolute paths, alternate separators and symlinked
+    lookalikes all fail before any read happens."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}\.png", name):
+        raise HTTPException(status_code=404, detail="no such image")
+    target = (IMAGES_DIR / name).resolve()
+    try:
+        root = IMAGES_DIR.resolve()
+    except OSError:
+        raise HTTPException(status_code=404, detail="no such image") from None
+    if target.parent != root or not target.is_file():
+        raise HTTPException(status_code=404, detail="no such image")
+    return FileResponse(str(target), media_type="image/png")
 
 
 @app.get("/v1/capabilities")
