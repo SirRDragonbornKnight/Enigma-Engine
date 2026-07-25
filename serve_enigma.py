@@ -1699,9 +1699,10 @@ _CHAT_PAGE = """<!doctype html>
   #box:focus { border-color:var(--accent); }
   #send { background:var(--accent); color:#08121c; border:0; border-radius:8px;
           padding:0 22px; font-size:15px; font-weight:700; cursor:pointer; }
-  #mic { background:#16222e; color:var(--fg); border:1px solid #24384a; border-radius:8px;
-         padding:0 16px; font-size:15px; cursor:pointer; }
+  #mic, #pic { background:#16222e; color:var(--text); border:1px solid #24384a;
+               border-radius:8px; padding:0 16px; font-size:15px; cursor:pointer; }
   #mic.rec { background:#7a2020; border-color:#a83232; }
+  #pic.on { background:#1f4a3a; border-color:#2f7a5f; }
   img.shot { display:block; max-width:min(420px, 100%); border-radius:10px;
              margin:6px 0 10px; border:1px solid #24384a; }
   button:disabled { opacity:.5; cursor:default; }
@@ -1715,6 +1716,8 @@ _CHAT_PAGE = """<!doctype html>
 </header>
 <div id="log"></div>
 <form id="f"><button id="mic" type="button" title="Hold to talk (needs --ears)" hidden>Mic</button>
+<button id="pic" type="button" title="Show her a picture (needs --eyes)" hidden>Img</button>
+<input id="file" type="file" accept="image/*" hidden>
 <input id="box" autocomplete="off" placeholder="Say something to her..." autofocus>
 <button id="send" type="submit">Send</button></form>
 <script>
@@ -1849,13 +1852,55 @@ function speak(text) {
       a.play().catch(function () {});
     }).catch(function () {});
 }
+// A picture waiting to go with the next message, as a data: URL. The server
+// captions image content into "[image: ...]" text before anything else sees
+// it, so eyes were reachable from an API client and NOT from her own window --
+// she could not be shown anything by the person using her.
+var pendingImage = null;
+var picBtn = document.getElementById("pic");
+var fileInput = document.getElementById("file");
+picBtn.addEventListener("click", function () { fileInput.click(); });
+fileInput.addEventListener("change", function () {
+  var f = fileInput.files && fileInput.files[0];
+  fileInput.value = "";                       // re-picking the same file re-fires
+  if (!f) return;
+  if (f.size > 8 * 1024 * 1024) { add("sys", "that image is too large (8 MB max)"); return; }
+  var fr = new FileReader();
+  fr.onload = function () {
+    pendingImage = String(fr.result);
+    picBtn.className = "on";
+    picBtn.textContent = "Img*";
+    box.placeholder = "Describe or ask about the picture...";
+  };
+  fr.onerror = function () { add("sys", "could not read that image"); };
+  fr.readAsDataURL(f);                        // data: URL -- the only form serve accepts
+});
+function clearPending() {
+  pendingImage = null;
+  picBtn.className = "";
+  picBtn.textContent = "Img";
+  box.placeholder = "Say something to her...";
+}
 document.getElementById("f").onsubmit = function (ev) {
   ev.preventDefault();
   var text = box.value.trim();
   if (!text || send.disabled) return;
   box.value = "";
   add("me", text);
-  history_.push({ role: "user", content: text });
+  if (pendingImage) {
+    var shown = document.createElement("img");
+    shown.className = "shot";
+    shown.alt = "picture you showed her";
+    shown.src = pendingImage;
+    log.appendChild(shown);
+    history_.push({ role: "user", content: [
+      { type: "text", text: text },
+      { type: "image_url", image_url: { url: pendingImage } },
+    ] });
+    clearPending();
+  } else {
+    history_.push({ role: "user", content: text });
+  }
   send.disabled = true;
   var thinking = add("sys", "...");
   fetch("/v1/chat/completions", { method: "POST",
@@ -1937,7 +1982,10 @@ micBtn.addEventListener("touchend", function (ev) { ev.preventDefault(); stopRec
 
 fetch("/v1/capabilities")
   .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-  .then(function (c) { if (c && c.ears) micBtn.hidden = false; })
+  .then(function (c) {
+    if (c && c.ears) micBtn.hidden = false;
+    if (c && c.eyes) picBtn.hidden = false;
+  })
   .catch(function () {});
 
 fetch("/v1/audio/voices")

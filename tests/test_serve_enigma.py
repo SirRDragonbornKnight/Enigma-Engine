@@ -309,9 +309,13 @@ def test_the_page_shows_a_sense_control_only_when_its_organ_exists(monkeypatch):
 
     page = client.get("/").text
     assert 'id="mic"' in page and "hidden" in page, "the mic must not show before it is confirmed"
+    assert 'id="pic"' in page, "no way to show her a picture"
     assert "/v1/capabilities" in page, "the page never asks which organs exist"
     assert "/v1/audio/transcriptions" in page, "the mic posts nowhere"
     assert "/v1/images/file/" in page, "generated images are never rendered"
+    # eyes are reached by sending image_url content, which serve captions before
+    # anything else sees it -- data: URLs only.
+    assert "image_url" in page and "readAsDataURL" in page
 
 
 def test_an_ambiguous_forget_can_be_answered_with_an_id(monkeypatch, tmp_path):
