@@ -141,6 +141,38 @@ def test_cli_refuses_wrong_order(tmp_path):
         ema_checkpoints.main([str(a), str(b), "--out", str(tmp_path / "e.pth")])
 
 
+def _stamp(path, meta):
+    ck = torch.load(path, weights_only=False)
+    ck["meta"] = meta
+    torch.save(ck, path)
+    return path
+
+
+def test_the_ema_carries_the_instruct_marker_through(tmp_path):
+    """serve reads meta.chat_format to decide a checkpoint is INSTRUCT, and only
+    an INSTRUCT checkpoint gets its trained chat/tool rows declared decodable.
+    Dropping meta turned an EMA of SFT checkpoints into a BASE-looking file whose
+    <|tool_call|> row is masked out of every reply -- the same silent tool death
+    the live-vocab fix exists to prevent, re-entered through a lineage tool."""
+    instruct = {"chat_format": "enigma-chat-v1"}
+    a = _stamp(_ckpt(tmp_path, "a.pth", 0.0, 100), instruct)
+    b = _stamp(_ckpt(tmp_path, "b.pth", 1.0, 200), instruct)
+    out = tmp_path / "ema.pth"
+    assert ema_checkpoints.main([str(a), str(b), "--out", str(out)]) == 0
+    assert torch.load(out, weights_only=False)["meta"] == instruct
+
+    # a base lineage must not have one invented for it
+    c = _ckpt(tmp_path, "c.pth", 0.0, 100)
+    d = _ckpt(tmp_path, "d.pth", 1.0, 200)
+    base_out = tmp_path / "base.pth"
+    assert ema_checkpoints.main([str(c), str(d), "--out", str(base_out)]) == 0
+    assert "meta" not in torch.load(base_out, weights_only=False)
+
+    # ...and mixing lineages is refused, as it already is for config
+    with pytest.raises(SystemExit, match="disagree on `meta`"):
+        ema_checkpoints.main([str(c), str(b), "--out", str(tmp_path / "mixed.pth")])
+
+
 def test_cli_refuses_cross_lineage_configs(tmp_path):
     a = _ckpt(tmp_path, "a.pth", 0.0, 100)
     b = _ckpt(tmp_path, "b.pth", 1.0, 200, config={**VALID_CFG, "dim": 64, "n_heads": 4})

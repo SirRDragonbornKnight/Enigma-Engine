@@ -23,6 +23,7 @@ pretrain_enigma refuses to --resume it (use --init-from to continue from it).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -37,8 +38,15 @@ def _load(path: Path) -> dict:
     if "model_state_dict" not in ck or "config" not in ck:
         raise SystemExit(f"{path}: not a training checkpoint (missing model_state_dict/config)")
     # Keep only what the EMA needs -- the optimizer moments are 2/3 of a
-    # checkpoint's bytes and this tool never reads them.
-    return {"model_state_dict": ck["model_state_dict"], "config": ck["config"], "step": ck.get("step")}
+    # checkpoint's bytes and this tool never reads them. `meta` is NOT optional
+    # ballast: serve reads meta.chat_format to decide a checkpoint is INSTRUCT,
+    # and only an INSTRUCT checkpoint gets its trained chat/tool rows declared
+    # decodable. Dropping it turned an EMA of SFT checkpoints into a BASE-looking
+    # file whose <|tool_call|> row is masked out of every reply -- the exact
+    # silent tool death the live-vocab fix exists to prevent, re-entered through
+    # a lineage tool instead of through the mask.
+    return {"model_state_dict": ck["model_state_dict"], "config": ck["config"],
+            "step": ck.get("step"), "meta": ck.get("meta")}
 
 
 def ema_state_dicts(states: Iterable[dict], beta: float) -> dict:
@@ -122,12 +130,14 @@ def main(argv: list[str]) -> int:
     steps: list = []
     cfg_raw0: dict = {}
     cfg_norm0: dict = {}
+    metas: list = []
 
     def _stream():
         last_step = None
         last_step_path = None
         for i, p in enumerate(paths):
             ck = _load(p)
+            metas.append(ck.get("meta"))
             try:
                 cfg_norm = _normalized_config(ck["config"])
             except Exception as exc:  # malformed blobs raise Type/Attr/KeyError too (round-3 audit)
@@ -162,16 +172,28 @@ def main(argv: list[str]) -> int:
 
     from enigma_engine.core.safe_save import atomic_torch_save
 
+    # Carry the lineage marker through. Averaging an INSTRUCT lineage into a
+    # meta-less file makes serve read it as BASE and mask the trained chat/tool
+    # rows -- tool calling silently dead, with "| base (transcript bridge)" as
+    # the only tell. Inputs that disagree are not one lineage, and this tool
+    # already refuses those on config, so it refuses here too rather than
+    # picking one.
+    distinct = {json.dumps(m, sort_keys=True, default=str) for m in metas}
+    if len(distinct) > 1:
+        raise SystemExit(
+            "checkpoints disagree on `meta` (mixed base/instruct lineages?) -- "
+            "refusing to average; EMA one lineage at a time"
+        )
+    out_blob = {
+        "model_state_dict": ema,
+        "config": cfg_raw0,
+        "step": steps[-1],
+        "ema": {"beta": args.beta, "n": len(steps), "steps": steps, "sources": [str(p) for p in paths]},
+    }
+    if metas and metas[0] is not None:
+        out_blob["meta"] = metas[0]
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_torch_save(
-        {
-            "model_state_dict": ema,
-            "config": cfg_raw0,
-            "step": steps[-1],
-            "ema": {"beta": args.beta, "n": len(steps), "steps": steps, "sources": [str(p) for p in paths]},
-        },
-        str(out_path),
-    )
+    atomic_torch_save(out_blob, str(out_path))
     print(
         f"ema: {len(steps)} checkpoints (beta {args.beta}, steps {steps[0]}..{steps[-1]}) -> {out_path}",
         flush=True,
