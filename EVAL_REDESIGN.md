@@ -447,17 +447,39 @@ code the previous round had just added.
   RUN` or `NOT THE SEALED HOLDOUT` beside the result, and the transcript records
   `sealed_gate_run`.
 
-**Open from round 6, NOT fixed (the next arc):** the containment floor of 6
-protects only 15 of 108 sealed strings and still false-fires once on a
-1407-word record in `combined_finetune.jsonl`; one substituted word re-opens
-dilution; a probe split across consecutive user turns evades the per-string
-predicate. The auditor's proposal is to seal hashed word 4-GRAMS for paraphrase
-screening -- dilution-proof at any probe length, order-sensitive so a long
-document cannot false-fire, and it retires `_CONTAINMENT_MIN_WORDS` and its
-tuning problem. Also open: `eval_behavior` reads the manifest with bare
-`json.loads`, so the `Weakened` threshold rule the TRAINERS enforce is not
-applied by the file whose result decides adoption; `locked_probes_pool.jsonl`
-can never be run (its name matches the locked test).
+**Round 6's remaining items, now CLOSED 2026-07-25.** Paraphrase screening
+moved from a set to ORDERED CONTENT-WORD RUNS, which is the split the whole
+series was missing: identity is the file's bytes, quotation is a run, and
+similarity stays jaccard. A ratio dilutes when the quote is padded; a set with
+no order fires on any long document reusing the words (a 1407-word record
+matched a 6-word probe); a run does neither, at any probe length, with no floor
+to tune. `_CONTAINMENT_MIN_WORDS` is gone.
+
+Run length was chosen by measurement, not preference -- sealed strings covered
+vs ask-side hits on the live corpora:
+
+| min | sealed covered | mix | combined_finetune | attacks caught |
+|-----|----------------|-----|-------------------|----------------|
+| 2   | 103/108        | 291 | 52                | yes (refuses the training block) |
+| **3** | **85/108**   | **5** | **6**           | **yes -- chosen** |
+| 4   | 50/108         | 4   | 5                 | yes |
+| 5   | 26/108         | 0   | 0                 | NO (seals nothing) |
+
+Coverage is 5.7x the old floor's 15/108, and the three attacks it missed --
+padding, one substituted word, a probe split across consecutive turns -- are
+all caught. **Consequence: 5 asks in the current `mix.jsonl` now match a sealed
+run, so that artifact refuses until rebuilt.** All 5 are visible to
+`make_sft_data._held_out`, which screens with this same predicate, so a rebuild
+clears them. Honest limit: a fragment shorter than one run is not a quotation
+and is not screened -- splitting finely enough defeats any quotation test, and
+jaccard is what remains there.
+
+Also closed: `eval_behavior` now reads the manifest through `LockedProbeGuard`,
+so the `Weakened` rule the trainers enforce applies to the file that decides
+adoption; a threshold at or below zero is refused (it read as "stricter" and
+made the guard refuse every artifact); and gate-ness keys on the exact locked
+filename, so `locked_probes_pool.jsonl` -- the authoring pool -- can be run
+again instead of failing the seal.
 
 **A CORRECTION, recorded because the lesson is the point:** the vocab-mask agent
 reported as HIGH that a BASE checkpoint with a multiple-of-64 vocab leaves

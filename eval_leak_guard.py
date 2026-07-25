@@ -46,15 +46,6 @@ _STOP_WORDS = (
 _STOP = frozenset(_STOP_WORDS.split())
 DEFAULT_JACCARD = 0.6
 
-# Content words a sealed probe needs before CONTAINING it counts as a leak on
-# its own. Measured against the live training asks: a floor of 5 still flags 3
-# ordinary records, 6 flags none in mix/tool_calls/identity, and a padded
-# verbatim probe is caught at every padding level either way. Sealed strings
-# shorter than this keep the ratio test only -- a two-word probe is not
-# distinctive enough for containment to mean anything. (measured 2026-07-25)
-_CONTAINMENT_MIN_WORDS = 6
-
-
 def _norm(text: str) -> str:
     return " ".join(_WORD.findall(text.lower()))
 
@@ -75,6 +66,65 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+# Words per sealed n-gram. A run of this many CONTENT words in order is the
+# unit of "this text quotes a probe". Probes shorter than NGRAM_MIN are not
+# sealed as runs at all -- one or two words in common is not a quotation --
+# and they keep the exact/jaccard tests.
+#
+# Swept against the live corpora, sealed strings covered vs ask-side hits
+# (measured 2026-07-25):
+#     min  sealed    mix  combined_finetune   attacks caught
+#      2   103/108   291        52            yes  <- refuses the training block
+#      3    85/108     5         6            yes  <- chosen
+#      4    50/108     4         5            yes
+#      5    26/108     0         0            NO   (min > N seals nothing)
+# Three buys 5.7x the old containment floor's coverage (15/108) for 5 records
+# in a 118k-ask mix -- and those 5 are dropped by the next rebuild, because
+# `make_sft_data._held_out` screens with THIS predicate, so "rebuild the
+# artifact" stays advice that works.
+NGRAM_N = 4
+NGRAM_MIN = 3
+
+
+def _runs(words: list[str], n: int) -> set[str]:
+    return {_hw(" ".join(words[i:i + n])) for i in range(len(words) - n + 1)}
+
+
+def _probe_ngrams(text: str) -> set[str]:
+    """The runs to SEAL for one probe.
+
+    A probe of four or more content words is sealed as its 4-word runs. A
+    shorter one is sealed as the single run it is, down to two words, so a
+    two-word probe is still quotable rather than unscreened."""
+    words = _content_words(text)
+    if len(words) < NGRAM_MIN:
+        return set()
+    return _runs(words, min(NGRAM_N, len(words)))
+
+
+def _text_ngrams(text: str) -> set[str]:
+    """The runs to TEST a candidate text against, at every sealed length.
+
+    The set-based tests could not screen a quotation without a length rule, and
+    every length rule was wrong somewhere. A ratio (jaccard) shrinks when the
+    quote is padded, so a verbatim probe plus filler slipped through. Raw
+    containment does not shrink, but having no order it fires on any long
+    document that happens to reuse the words -- a 1407-word record matched a
+    6-word probe that way.
+
+    An ordered run has neither failure. Padding cannot remove a run that is
+    present, so dilution is powerless at ANY probe length -- which is what the
+    58 of 108 sealed strings below four content words actually needed -- and
+    reproducing a probe's own word ORDER is something unrelated documents do
+    not do by accident."""
+    words = _content_words(text)
+    out: set[str] = set()
+    for n in range(NGRAM_MIN, NGRAM_N + 1):
+        if len(words) >= n:
+            out |= _runs(words, n)
+    return out
 
 
 def grading_digest(cases: list[dict]) -> str:
@@ -146,7 +196,11 @@ def seal(texts: list[str], threshold: float = DEFAULT_JACCARD,
     a gate until it is re-sealed."""
     probes = []
     for t in texts:
-        probes.append({"h": _h(_norm(t)), "s": sorted({_hw(w) for w in _content_words(t)})})
+        probes.append({
+            "h": _h(_norm(t)),
+            "s": sorted({_hw(w) for w in _content_words(t)}),
+            "n": sorted(_probe_ngrams(t)),
+        })
     manifest = {"version": 1, "jaccard_threshold": threshold, "probes": probes}
     if cases is not None:
         manifest["grading_digest"] = grading_digest(cases)
@@ -183,19 +237,24 @@ class LockedProbeGuard:
                 f"{DEFAULT_JACCARD} -- a raised threshold silently stops refusing "
                 "paraphrases of sealed probes; restore it or re-seal deliberately"
             )
+        if threshold <= 0:
+            # The bound was one-sided, so 0.0 and -1.0 read as "stricter than
+            # asked" and made the guard refuse EVERY artifact -- a broken
+            # manifest blaming the data it was screening.
+            raise self.Weakened(
+                f"manifest jaccard_threshold {threshold} would match every string -- "
+                "a threshold at or below zero refuses all training data; re-seal it"
+            )
         self.threshold: float = threshold
         self.exact: set[str] = {p["h"] for p in m.get("probes", [])}
         self.shingles: list[set[str]] = [set(p["s"]) for p in m.get("probes", [])]
-        # Probes distinctive enough that CONTAINING one is itself the leak.
-        # Jaccard is a ratio, so padding a verbatim probe with unrelated words
-        # shrinks it below the threshold while the probe sits intact inside the
-        # text (measured: a 10-word probe drops to 0.529 at 8 filler words and
-        # trains freely). Containment does not divide by the added words, so it
-        # cannot be diluted -- but it is only safe above a length floor, since
-        # any text mentioning a 2-word probe's words "contains" it.
-        self.long_shingles: list[set[str]] = [
-            s for s in self.shingles if len(s) >= _CONTAINMENT_MIN_WORDS
-        ]
+        # Ordered word runs from every sealed probe -- the QUOTATION test.
+        # Padding cannot remove a run that is present, so it does not dilute
+        # like a ratio; and a run is ordered, so it does not fire on a long
+        # document that merely reuses the same vocabulary. That covers both
+        # failures the set-based tests traded against each other, at every
+        # probe length, with no floor to tune.
+        self.ngrams: set[str] = {n for p in m.get("probes", []) for n in p.get("n", [])}
 
     @classmethod
     def load(cls, path: Path = LOCKED_MANIFEST) -> "LockedProbeGuard":
@@ -218,17 +277,17 @@ class LockedProbeGuard:
         return max((_jaccard(q, s) for s in self.shingles), default=0.0)
 
     def contains_probe(self, text: str) -> bool:
-        """True when a distinctive sealed probe sits INTACT inside `text`.
+        """True when `text` QUOTES a sealed probe -- reproduces a run of its
+        content words in order.
 
         The dilution answer to `score`: adding words can only lower a ratio, so
         a padded verbatim probe scores under the threshold while still teaching
-        the gate. Restricted to probes of at least `_CONTAINMENT_MIN_WORDS`
-        content words -- below that a probe is not distinctive enough for
-        containment to mean anything."""
-        if not self.long_shingles:
+        the gate. A run does not shrink when the text around it grows, and it
+        cannot be reproduced by an unrelated document that happens to share
+        vocabulary."""
+        if not self.ngrams:
             return False
-        t = {_hw(w) for w in _content_words(text)}
-        return any(s <= t for s in self.long_shingles)
+        return bool(_text_ngrams(text) & self.ngrams)
 
     def leaks(self, text: str) -> bool:
         return self.score(text) >= self.threshold or self.contains_probe(text)

@@ -49,6 +49,7 @@ import eval_leak_guard
 
 ROOT = Path(__file__).resolve().parent
 PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
+LOCKED_PROBES = ROOT / "data" / "eval" / "locked_probes.jsonl"
 LOCKED_MANIFEST = ROOT / "data" / "eval" / "locked_probes.manifest.json"
 
 # The documented scratch port for an eval server (a throwaway --memory-dir on
@@ -562,13 +563,24 @@ def _is_scratch_target(base_url: str) -> bool:
     return port in SCRATCH_PORTS
 
 
-def _sealed_hashes() -> list[str]:
+def _sealed_manifest() -> dict:
+    """The manifest, read through the guard that enforces its own rules.
+
+    Reading it with a bare `json.loads` meant the `Weakened` check -- which
+    makes every TRAINER refuse a manifest whose threshold was raised to admit
+    paraphrases -- was not applied by the file whose result decides adoption.
+    The gate blessed a manifest the training scripts would have rejected."""
     manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
-    return sorted(p["h"] for p in manifest.get("probes", []))
+    eval_leak_guard.LockedProbeGuard(manifest)  # raises Weakened on a loosened threshold
+    return manifest
+
+
+def _sealed_hashes() -> list[str]:
+    return sorted(p["h"] for p in _sealed_manifest().get("probes", []))
 
 
 def _probe_hashes(cases: list[dict]) -> list[str]:
-    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    manifest = _sealed_manifest()
     texts = [c.get("q") or "" for c in cases] + [t for c in cases for t in c.get("teach", [])]
     fresh = eval_leak_guard.seal(texts, manifest.get("jaccard_threshold", 0.6))
     # SORTED LIST, not a set: a set hides a duplicated probe (which inflates a
@@ -642,7 +654,7 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     able to drop a rigged file could overwrite the reference beside it. All
     three routes ended in the same place -- 'seal verified' printed over
     unverified grading keys."""
-    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    manifest = _sealed_manifest()
     # IDENTITY FIRST, and by bytes. Every hash-set test below answers "does
     # this file MEAN the same thing", which is the wrong question for identity
     # and was evaded once per audit round through whichever normalization
@@ -692,8 +704,11 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
 
     # Gate-ness is decided by CONTENT, not by the filename: a copy under
-    # another name used to skip this check completely.
-    named_locked = "locked_probes" in probes.name
+    # another name used to skip this check completely. The name is still worth
+    # checking so a MISSING manifest cannot turn the gate file into an ordinary
+    # run -- but as a substring it also caught `locked_probes_pool.jsonl`, the
+    # authoring pool, which then failed the seal and could never be run at all.
+    named_locked = probes.name == LOCKED_PROBES.name
     is_gate_run = False
     if named_locked and not LOCKED_MANIFEST.exists():
         print(f"FAIL: {probes.name} needs its seal manifest ({LOCKED_MANIFEST.name}) to gate anything")

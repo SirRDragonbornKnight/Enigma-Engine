@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from eval_leak_guard import LockedProbeGuard, refuse_if_leaky, seal
+from eval_leak_guard import LockedProbeGuard, _content_words, refuse_if_leaky, seal
 
 
 def _manifest_file(tmp_path, texts):
@@ -139,11 +139,13 @@ def test_the_answer_side_is_reported_but_never_blocks(tmp_path, capsys):
     assert "ASKS that match" in str(err.value)
 
 
-def test_padding_a_verbatim_probe_does_not_hide_it(tmp_path):
+def test_quoting_a_probe_leaks_however_it_is_padded_or_edited(tmp_path):
     """Jaccard is a ratio, so unrelated words shrink it while the probe sits
     intact inside the text: a 10-content-word probe drops to 0.529 at eight
-    filler words and trained freely. Containment cannot be diluted, because
-    padding only ever adds words."""
+    filler words and trained freely. A ratio and a set both had to trade
+    dilution against false-firing on long documents; an ORDERED run trades
+    neither, because padding cannot remove a run and an unrelated document does
+    not reproduce a probe's word order by accident."""
     probe = "Which planet in our solar system has the greatest total mass overall"
     guard = LockedProbeGuard(seal([probe]))
     filler = ("bicycle tyre lever puncture repair kit spanner workshop garage "
@@ -154,10 +156,42 @@ def test_padding_a_verbatim_probe_does_not_hide_it(tmp_path):
     assert guard.score(probe + " " + " ".join(filler)) < guard.threshold, \
         "fixture is not exercising dilution -- the ratio must fall below the bar"
 
-    # ...and a SHORT probe keeps the ratio test only: too few content words for
-    # containment to distinguish a leak from an ordinary mention.
-    short = LockedProbeGuard(seal(["Largest planet?"]))
-    assert not short.contains_probe("The largest planet question came up at dinner tonight")
+    # one substituted word used to re-open dilution: the run survives it
+    swapped = "Which zebra in our solar system has the greatest total mass overall"
+    assert guard.leaks(swapped + " " + " ".join(filler))
+
+    # ...and a probe split across turns is still quoted by any PART that keeps a
+    # whole run. The set-based predicate saw a 3-way split as three innocent
+    # fragments (0.222/0.444/0.444) and trained the whole probe.
+    assert guard.leaks("planet in our solar system has the greatest")
+    # The honest boundary: a fragment shorter than one run is not a quotation
+    # and is not screened -- splitting finely enough always defeats any
+    # quotation test, and at that point the jaccard net is what remains.
+    assert not guard.contains_probe("our solar system")
+
+
+def test_a_long_document_that_merely_shares_words_does_not_leak(tmp_path):
+    """The set-based containment test fired on a 1407-word record that happened
+    to use all six content words of a sealed probe. Order is what separates
+    quoting a probe from writing about the same subject."""
+    probe = "Which planet in our solar system has the greatest total mass overall"
+    guard = LockedProbeGuard(seal([probe]))
+    scattered = (
+        "The total mass of a star dwarfs every planet around it. Our solar "
+        "neighbourhood formed from one cloud, and the greatest share of that "
+        "material never became a planet at all. Which of the bodies kept the "
+        "most is a question of accretion, not of overall size."
+    )
+    assert not guard.contains_probe(scattered), "word soup read as a quotation"
+    assert not guard.leaks(scattered)
+
+    # The load-bearing case: the SAME words, ADJACENT, in a different order.
+    # Distance alone would be caught by an unordered containment test too, so
+    # only a permutation proves the run is what is being matched.
+    permuted = "A greatest system solar planet argument settles nothing here."
+    assert set(_content_words(permuted)) >= {"planet", "solar", "system", "greatest"}, \
+        "fixture assumption gone: the permutation no longer carries the probe's words"
+    assert not guard.contains_probe(permuted), "an out-of-order run read as a quotation"
 
 
 def test_the_guard_records_a_durable_verdict(tmp_path):
@@ -326,6 +360,29 @@ def test_manifest_seals_the_plaintext():
 def test_a_stricter_threshold_is_carried_through_the_manifest():
     g = LockedProbeGuard(seal(["Who built you and why?"], threshold=0.4))
     assert g.threshold == 0.4
+
+
+def test_a_threshold_at_or_below_zero_is_refused():
+    """The bound was one-sided, so 0.0 and -1.0 read as "stricter than asked"
+    and made the guard refuse EVERY artifact -- a broken manifest blaming the
+    data it was screening."""
+    for bad in (0.0, -1.0):
+        with pytest.raises(LockedProbeGuard.Weakened) as err:
+            LockedProbeGuard(seal(["Who built you and why?"], threshold=bad))
+        assert "every string" in str(err.value)
+
+
+def test_the_eval_applies_the_threshold_rule_the_trainers_enforce():
+    """`eval_behavior` read the manifest with a bare `json.loads`, so the
+    Weakened check that makes every TRAINER refuse a loosened manifest was not
+    applied by the file whose result decides adoption."""
+    import eval_behavior
+
+    src = inspect.getsource(eval_behavior._sealed_manifest)
+    assert "LockedProbeGuard" in src
+    for fn in (eval_behavior._sealed_hashes, eval_behavior._probe_hashes,
+               eval_behavior._seal_mismatch):
+        assert "json.loads(LOCKED_MANIFEST" not in inspect.getsource(fn), fn.__name__
 
 
 def test_a_weakened_threshold_in_the_manifest_is_refused():
