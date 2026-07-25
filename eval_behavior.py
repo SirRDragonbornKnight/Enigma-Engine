@@ -41,11 +41,21 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import eval_leak_guard
+
 ROOT = Path(__file__).resolve().parent
 PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
+LOCKED_MANIFEST = ROOT / "data" / "eval" / "locked_probes.manifest.json"
+
+# The documented scratch port for an eval server (a throwaway --memory-dir on
+# 8123). The run CLEARS the target's memory store before probing, so pointing
+# it at the daily server on 8000 would wipe her real memories and then write
+# probe facts into it. Any other target needs the flag that says so out loud.
+SCRATCH_PORTS = frozenset({8123})
 
 # Per-category pass thresholds. Identity/tools are the exit criteria.
 # A None threshold is INFORMATIONAL -- measured but non-gating.
@@ -69,6 +79,15 @@ THRESHOLDS = {
     # deny_any carries the fabrication this question invites.
     "unknown": 0.50,
 }
+
+# Categories that are MEASURED and reported but deliberately do not gate.
+#
+# `vision` is here for two reasons, both temporary. There is no baseline for it
+# yet, so any bar would be invented rather than measured; and the SEALED locked
+# set is fixed at the eight gated categories above -- it cannot contain vision
+# probes, so gating vision would make the honest gate fail on a category it is
+# structurally incapable of measuring. Promote it once a lineage has a receipt.
+INFORMATIONAL_CATEGORIES = frozenset({"vision"})
 
 WEATHER_TOOL = [
     {
@@ -471,6 +490,15 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
             "teach": c.get("teach", []),
             "content": content,
             "tool_called": called,
+            # Grading reads the first call's NAME only, so a right tool with
+            # wrong arguments scores the same as a right one. Recording every
+            # call with its arguments keeps that difference visible to a
+            # re-grade instead of discarding it at run time.
+            "tool_calls_full": [
+                {"name": t.get("function", {}).get("name"),
+                 "arguments": t.get("function", {}).get("arguments")}
+                for t in calls
+            ],
             "expect_tool": c.get("expect_tool"),
             "want_any": c.get("want_any", []),
             "deny_any": c.get("deny_any", []),
@@ -480,8 +508,113 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
         print(f"[{cat:11} {'ok' if ok else 'XX'}] {_ascii(c['q'][:44]):44} -> {detail}")
 
 
+def _is_scratch_target(base_url: str) -> bool:
+    """True when base_url names a documented throwaway eval server."""
+    try:
+        port = urllib.parse.urlsplit(base_url).port
+    except ValueError:
+        return False
+    return port in SCRATCH_PORTS
+
+
+def _sealed_hashes() -> list[str]:
+    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    return sorted(p["h"] for p in manifest.get("probes", []))
+
+
+def _probe_hashes(cases: list[dict]) -> list[str]:
+    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    texts = [c.get("q") or "" for c in cases] + [t for c in cases for t in c.get("teach", [])]
+    fresh = eval_leak_guard.seal(texts, manifest.get("jaccard_threshold", 0.6))
+    # SORTED LIST, not a set: a set hides a duplicated probe (which inflates a
+    # category and shifts its rate) and hides a teach line moved to another
+    # question. Counts have to match, not just membership.
+    return sorted(p["h"] for p in fresh["probes"])
+
+
+# A file this much of which is sealed content IS the locked set, whatever it
+# has been renamed to -- this catches a TRIMMED copy, every string of which is
+# a sealed one (share 1.0). Well above the dev set's incidental overlap.
+_LOCKED_CONTENT_SHARE = 0.9
+
+# ...and a file carrying this many sealed strings is the locked set however
+# much padding sits beside it. Share and containment are both PROPORTIONS of
+# the file, so both bend to the same lever: drop one sealed string (containment
+# fails) and pad with a dozen junk ones (share falls under the bar), and a copy
+# still carrying 95 of 96 sealed questions ran ungated and printed PASS. The
+# cheapest padding was junk `teach` lines on a non-memory probe -- counted by
+# _probe_hashes, never posted, never graded, invisible in the scorecard.
+#
+# An ABSOLUTE floor cannot be diluted, because padding only ever adds strings.
+# Measured exact-hash overlap against the sealed 108 (2026-07-25):
+# behavior_probes 1, locked_probes_pool 4, benchmark_extra 0,
+# benchmark_future_capabilities 0. Twelve clears the pool by 3x and sits far
+# under the 108 a real copy carries, so no honest file trips it and no rigged
+# one escapes it by padding.
+_LOCKED_CONTENT_MIN = 12
+
+
+def _touches_sealed_probes(cases: list[dict]) -> bool:
+    """True when this file is a copy of the locked set, whatever it is called.
+
+    Gate-ness cannot key on the filename: a copy under another name skipped the
+    seal check entirely, and a trimmed copy then scored one category and printed
+    PASS. It cannot key on a single shared string either -- that reads the dev
+    set as a tampered holdout and refuses to run it at all.
+
+    Three tests, because each of the first two is evadable ALONE and they share
+    an evasion when combined: containment falls to trimming one string, share
+    falls to padding, and doing both at once defeated the pair. The absolute
+    count is the one an attacker cannot lower by adding material."""
+    hashes = _probe_hashes(cases)
+    if not hashes:
+        return False
+    sealed = set(_sealed_hashes())
+    if not sealed:
+        return False
+    if sealed <= set(hashes):  # a full copy, diluted or not
+        return True
+    hits = sum(h in sealed for h in hashes)
+    if hits >= min(_LOCKED_CONTENT_MIN, len(sealed)):
+        return True
+    return hits / len(hashes) >= _LOCKED_CONTENT_SHARE
+
+
+def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
+    """The reason this file is not the sealed holdout, or None when it is.
+
+    Re-sealing the QUESTIONS is not enough. `want_any`, `deny_any`,
+    `expect_tool` and `category` decide every score and are not sealed TEXT, so
+    a file with its grading keys emptied re-seals perfectly and then passes
+    every text category unconditionally (`_grade_text` with no wants and no
+    denies is an unconditional True).
+
+    Those keys are therefore sealed into the MANIFEST, not compared against a
+    copy of the plaintext on disk. The earlier reference-file version could not
+    work: the plaintext is gitignored, so on a fresh clone there was nothing to
+    compare against and the check passed silently; the canonical run points
+    --probes AT the reference, so it compared the file with itself; and anyone
+    able to drop a rigged file could overwrite the reference beside it. All
+    three routes ended in the same place -- 'seal verified' printed over
+    unverified grading keys."""
+    if _probe_hashes(cases) != _sealed_hashes():
+        return "the probe set does not match the manifest"
+    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    sealed_digest = manifest.get("grading_digest")
+    if not sealed_digest:
+        # Fail CLOSED. A manifest predating the grading seal can only prove the
+        # questions; treating that as a verified gate is what this whole check
+        # exists to stop.
+        return ("this manifest predates the grading seal and cannot prove "
+                "want/deny/expect_tool/category are intact -- re-seal with "
+                "`python eval_leak_guard.py seal <locked file>`")
+    if eval_leak_guard.grading_digest(cases) != sealed_digest:
+        return "the grading keys (want/deny/expect_tool/category) were edited"
+    return None
+
+
 def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES,
-        transcript: Path | None = None) -> int:
+        transcript: Path | None = None, allow_live_server: bool = False) -> int:
     # Load probes and name the run's conditions BEFORE touching the server
     # (EVAL_REDESIGN section D + audit 2026-07-20: a missing probe file used
     # to clear the memory store and then die with a raw traceback, and a down
@@ -493,7 +626,32 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         # Fail here, not after a full suite has run against a live server.
         _refuse_unsealing_path(transcript)
     cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not cases:
+        print(f"FAIL: probe file has no cases: {probes}")
+        return 2
     print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
+
+    # Gate-ness is decided by CONTENT, not by the filename: a copy under
+    # another name used to skip this check completely.
+    named_locked = "locked_probes" in probes.name
+    is_gate_run = False
+    if named_locked and not LOCKED_MANIFEST.exists():
+        print(f"FAIL: {probes.name} needs its seal manifest ({LOCKED_MANIFEST.name}) to gate anything")
+        return 2
+    if LOCKED_MANIFEST.exists() and (named_locked or _touches_sealed_probes(cases)):
+        reason = _seal_mismatch(cases, probes)
+        if reason:
+            print(f"FAIL: {probes.name} is not the sealed holdout -- {reason}")
+            return 2
+        is_gate_run = True
+        print(f"seal verified: probes and grading keys match {LOCKED_MANIFEST.name}")
+
+    if not _is_scratch_target(base_url) and not allow_live_server:
+        print(f"FAIL: {base_url} is not a scratch eval server (ports {sorted(SCRATCH_PORTS)}).")
+        print("      This run CLEARS the target's memory store and then writes probe facts into it.")
+        print("      Start serve on --port 8123 with a throwaway --memory-dir, or pass")
+        print("      --allow-live-server if this target really is disposable.")
+        return 2
 
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
@@ -524,6 +682,7 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
 
     print("\n=== SCORECARD ===")
     all_pass = True
+    gated = 0
     overall_hits = overall_n = 0
     for cat, results in by_cat.items():
         hits, n = sum(results), len(results)
@@ -536,11 +695,35 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         if thr is None:  # informational: reported, never gates
             print(f"  {cat:12} {hits}/{n} = {rate:5.0%}  (informational -- no threshold defined, does not gate)")
             continue
+        gated += 1
         passed = rate >= thr
         all_pass &= passed
         print(f"  {cat:12} {hits}/{n} = {rate:5.0%}  (>= {thr:.0%})  {'PASS' if passed else 'FAIL'}")
+    # The other direction of the same defect: a gated category the probe file
+    # never exercises is never visited, so its threshold passes by being
+    # absent. Always say so. On the LOCKED set -- the file whose result decides
+    # adoption -- an unmeasured gate is not a met gate and fails the run; on any
+    # other file the line is a warning, since a partial file never claimed to
+    # measure the whole gate.
+    missing = sorted(set(THRESHOLDS) - set(by_cat))
+    for cat in missing:
+        print(f"  {cat:12} {'--':>9}  (>= {THRESHOLDS[cat]:.0%})  NOT MEASURED -- no probes in this file")
+    if missing:
+        if is_gate_run:
+            all_pass = False
+        else:
+            print(f"  (not a locked run: {len(missing)} unmeasured gate(s) do not decide this result)")
+    if not overall_n:
+        print("FAIL: no probe was graded")
+        return 2
     print(f"  {'OVERALL':12} {overall_hits}/{overall_n} = {overall_hits / overall_n:5.0%}")
-    print("RESULT:", "PASS" if all_pass else "FAIL")
+    if not gated:
+        # Nothing in this file has a threshold, so "PASS" would mean only that
+        # nothing was checked.
+        print("RESULT: NOT GATED -- no category in this probe file has a threshold")
+        all_pass = False
+    else:
+        print("RESULT:", "PASS" if all_pass else "FAIL")
 
     if transcript is not None:
         rows.append({
@@ -561,9 +744,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=60)
     ap.add_argument("--probes", default=str(PROBES), help="probe file; point at data/eval/locked_probes.jsonl for the sealed-holdout re-measure (EVAL_REDESIGN)")
     ap.add_argument("--transcript", default=None, help="write every full answer + the run conditions (probe sha, git sha, decode config) to this JSONL; required for the locked baseline receipt and for any second-grader pass")
+    ap.add_argument("--allow-live-server", action="store_true", help="permit a target outside the scratch ports; the run CLEARS that server's memory store first, so only pass this for a disposable one")
     args = ap.parse_args()
     raise SystemExit(run(args.base_url, args.temperature, args.max_tokens, Path(args.probes),
-                         Path(args.transcript) if args.transcript else None))
+                         Path(args.transcript) if args.transcript else None,
+                         allow_live_server=args.allow_live_server))
 
 
 if __name__ == "__main__":

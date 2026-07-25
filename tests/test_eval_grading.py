@@ -322,16 +322,25 @@ def test_contraction_denials_still_pass():
         assert not _false_origin_conceded(text), text
 
 
-def test_every_probe_category_is_gated():
-    """A category absent from THRESHOLDS gates at THRESHOLDS.get(cat, 0.0) = 0%,
-    so it PASSES on any output at all -- a phantom category that reads as a
-    green row. Every category the probe files actually use must be gated."""
+def test_every_probe_category_is_gated_or_declared_informational():
+    """A category absent from THRESHOLDS used to gate at THRESHOLDS.get(cat,
+    0.0) = 0%, so it PASSED on any output at all -- a phantom green row. The
+    scorecard closes that hole now, but a category still must not appear by
+    ACCIDENT: every one the probe files use is either gated or listed in
+    INFORMATIONAL_CATEGORIES, where the reason it does not gate is written
+    down."""
+    from eval_behavior import INFORMATIONAL_CATEGORIES
+
     used = set()
     for line in PROBES.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
             used.add(json.loads(line)["category"])
-    assert used <= set(THRESHOLDS), f"ungated categories: {sorted(used - set(THRESHOLDS))}"
+    undeclared = used - set(THRESHOLDS) - set(INFORMATIONAL_CATEGORIES)
+    assert not undeclared, f"neither gated nor declared informational: {sorted(undeclared)}"
+    # The two lists must not overlap, or a gated category could read as
+    # informational depending on which check ran first.
+    assert not (set(THRESHOLDS) & set(INFORMATIONAL_CATEGORIES))
 
 
 def test_unknown_category_scores_declining_over_fabricating():

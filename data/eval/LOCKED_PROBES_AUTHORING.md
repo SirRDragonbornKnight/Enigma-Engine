@@ -7,7 +7,7 @@ is already landed. See EVAL_REDESIGN.md for the full design.
 
 ## Why blind, in one paragraph
 
-The current 90-probe dev set guided data authoring, so parts of it measure
+The dev set (134 probes today) guided data authoring, so parts of it measure
 memorized twins, not capability. The locked set is the number you never train
 toward: author it once from what Enigma SHOULD be able to do, seal it to a
 hash manifest, and judge every future adoption on it. If it was written while
@@ -90,23 +90,30 @@ numbers is the honest one (expect it smaller than the dev-set 70 -> 79, and
 expect lower absolute scores -- that is the point, not a regression).
 
 ```
-# v8 (served checkpoint)
-python serve_enigma.py --port 8123 --model models/enigma_dpo/model.pth --memory-dir data/memory_eval
-python eval_behavior.py --probes data/eval/locked_probes.jsonl
+# v8 (serve the RECEIPTED backup, so the live checkpoint is never in play)
+python serve_enigma.py --port 8123 --model "C:/Users/SirKn/Enigma Backups/enigma_dpo_v8_adopted/model.pth" --memory-dir data/memory_eval
+python eval_behavior.py --probes data/eval/locked_probes.jsonl --transcript "C:/Users/SirKn/Enigma Backups/locked_baseline_v8.jsonl"
 
 # v5 (receipted backup -- serve from the backup dir so config/vocab match v5)
 python serve_enigma.py --port 8123 --model "C:/Users/SirKn/Enigma Backups/enigma_dpo_v5_adopted/model.pth" --memory-dir data/memory_eval
-python eval_behavior.py --probes data/eval/locked_probes.jsonl
+python eval_behavior.py --probes data/eval/locked_probes.jsonl --transcript "C:/Users/SirKn/Enigma Backups/locked_baseline_v5.jsonl"
 ```
 
-`--memory-dir` must point at a THROWAWAY dir (the harness clears it), never
-at her real memory. Record both scorecards in EVAL_REDESIGN.md as the locked
-baseline; locked scores gate adoption from then on, dev scores become the
-fast iteration signal only.
+`--transcript` is REQUIRED for a baseline: a scorecard with no saved answers
+cannot be re-graded, handed to a second grader, or defended once the server is
+gone. Write it OUTSIDE the repo -- a locked-set transcript is every sealed
+question and answer verbatim, and the harness refuses any path git would track.
 
-TIMING WARNING (audit 2026-07-20): serve loads the tokenizer from the repo's
-`enigma_engine/vocab_model`, NOT from the --model directory, and a mismatch
-only WARNs. Today the repo vocab is sha256-identical to the v5/v8 backups, so
-the commands above are correct -- but run this re-measure BEFORE any
-tokenizer-v2 vocab adoption, or v5/v8 would be scored under the wrong vocab
-and the locked baseline would be garbage.
+`--memory-dir` must point at a THROWAWAY dir, never at her real memory: the
+harness CLEARS the target's store before probing and then writes the 12 sealed
+teach facts into it. It also enforces this from its own side, refusing any
+target off port 8123 unless `--allow-live-server` is passed. Record both
+scorecards in EVAL_REDESIGN.md as the locked baseline; locked scores gate
+adoption from then on, dev scores become the fast iteration signal only.
+
+TIMING: run this re-measure BEFORE the v2 lineage is adopted, so both sides of
+the comparison come from the same harness and serve sha. (An older warning here
+claimed serve loads the tokenizer from `enigma_engine/vocab_model` rather than
+from the --model directory. That is FALSE and was removed: serve and finetune
+both select the vocab from the checkpoint's own `vocab_size` -- which is
+exactly why v1 and v2 checkpoints coexist in one checkout.)

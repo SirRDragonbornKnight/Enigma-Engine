@@ -27,11 +27,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from eval_behavior import THRESHOLDS, _grade_identity, _grade_text  # noqa: E402
+from eval_behavior import INFORMATIONAL_CATEGORIES, THRESHOLDS, _grade_identity, _grade_text  # noqa: E402
 from eval_leak_guard import LockedProbeGuard, seal as _seal_texts  # noqa: E402
 from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
 
-CATEGORIES = set(THRESHOLDS)
+# Gated categories PLUS the ones declared measured-but-ungated. A category
+# outside both is a typo: it would be reported informationally and decide
+# nothing, which is not what an author writing a probe intends.
+CATEGORIES = set(THRESHOLDS) | set(INFORMATIONAL_CATEGORIES)
 TOOL_CATEGORIES = {"tool", "restraint"}
 KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool", "note"}
 # The one client tool the eval injects for tool/restraint probes.
@@ -161,7 +164,7 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if cat not in CATEGORIES:
             errors.append(
                 f"{where}: category {cat!r} is not one of {sorted(CATEGORIES)} -- "
-                "an unknown category gates at 0% and PASSES on any output"
+                "an undeclared category is reported informationally and gates nothing"
             )
             continue
         counts[cat] = counts.get(cat, 0) + 1

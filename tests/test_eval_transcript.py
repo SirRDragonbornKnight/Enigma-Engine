@@ -44,6 +44,9 @@ def _probe_file(tmp_path, name="probes.jsonl", q="Largest planet?"):
 def _fake_server(monkeypatch, answer: str, tool_on_text: str | None = None):
     monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
     monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: None)
+    # The run refuses a target outside the scratch ports because it wipes that
+    # server's memory store first; this fake host is disposable by definition.
+    monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
 
     def fake_post(base_url, payload):
         if payload.get("tools"):
@@ -248,6 +251,245 @@ def test_ungated_category_reports_informational_and_never_gates(tmp_path, monkey
     assert rc == 0, "an ungated category's failure leaked into the gate"
 
 
+def test_a_non_scratch_target_is_refused_before_anything_is_cleared(tmp_path, monkeypatch):
+    """The run DELETES the target server's memories before probing. Pointed at
+    the daily server it wiped her real store, then wrote probe facts into it --
+    so the refusal has to land before the clear, not after."""
+    probes = _probe_file(tmp_path)
+    cleared = []
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: cleared.append(1))
+    monkeypatch.setattr(eval_behavior, "_post", lambda *a, **k: pytest.fail("probed a live server"))
+
+    rc = eval_behavior.run("http://127.0.0.1:8000", TEMP, MAXTOK, probes, None)
+
+    assert rc == 2
+    assert cleared == [], "the memory store was cleared before the refusal"
+    # ...and the escape hatch still works for a server the caller vouches for.
+    monkeypatch.setattr(eval_behavior, "_post",
+                        lambda *a, **k: {"choices": [{"message": {"content": LONG_ANSWER}}]})
+    assert eval_behavior.run("http://127.0.0.1:8000", TEMP, MAXTOK, probes, None,
+                             allow_live_server=True) in (0, 1)
+    assert cleared == [1]
+
+
+def test_an_edited_locked_file_cannot_be_scored(tmp_path, monkeypatch, capsys):
+    """The transcript records a probe sha AFTER the fact. Nothing checked that
+    the holdout still WAS the sealed set, so an edited gate produced a
+    perfectly normal-looking scorecard."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    cases[0]["q"] += " (edited)"
+    tampered = tmp_path / "locked_probes.jsonl"
+    tampered.write_text("\n".join(json.dumps(c, ensure_ascii=False) for c in cases) + "\n",
+                        encoding="utf-8")
+    _fake_server(monkeypatch, LONG_ANSWER)
+
+    assert eval_behavior.run(URL, TEMP, MAXTOK, tampered, None) == 2
+    assert "not the sealed holdout" in capsys.readouterr().out
+    # the untouched file still verifies, or the check would be refusing everything
+    intact = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert eval_behavior._seal_mismatch(intact, real) is None
+
+
+def test_grading_keys_are_verified_without_the_plaintext_on_disk(tmp_path, monkeypatch):
+    """The reference-file version of this check failed OPEN three ways: the
+    plaintext is gitignored (absent on a clone), the canonical run compares the
+    file with ITSELF, and anyone able to drop a rig could overwrite the
+    reference. All three printed 'seal verified' over unverified keys. The
+    digest now lives in the manifest, so none of them depend on disk state."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+    # the canonical run: probes IS the reference, and tampering is still caught
+    assert eval_behavior._seal_mismatch(cases, real) is None
+    gutted = [dict(c) for c in cases]
+    for c in gutted:
+        c["want_any"], c["deny_any"] = [], []
+        if "expect_tool" in c:
+            c["expect_tool"] = None
+    assert "grading keys" in (eval_behavior._seal_mismatch(gutted, real) or "")
+
+    # a manifest predating the grading seal must FAIL CLOSED, not pass quietly
+    legacy = json.loads(eval_behavior.LOCKED_MANIFEST.read_text(encoding="utf-8"))
+    legacy.pop("grading_digest", None)
+    stand_in = tmp_path / "legacy.manifest.json"
+    stand_in.write_text(json.dumps(legacy), encoding="utf-8")
+    monkeypatch.setattr(eval_behavior, "LOCKED_MANIFEST", stand_in)
+    reason = eval_behavior._seal_mismatch(cases, real)
+    assert reason and "re-seal" in reason
+
+
+def test_a_diluted_copy_of_the_locked_set_is_still_the_locked_set(tmp_path):
+    """Share alone was evadable in one direction: padding a full copy with 13
+    junk strings dropped it under the bar while still carrying every sealed
+    question, so it ran ungated and printed PASS. Junk cannot REMOVE sealed
+    content."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    for pad in (13, 60):
+        diluted = cases + [
+            {"category": "factual", "q": f"unrelated filler question {i}", "want_any": ["x"]}
+            for i in range(pad)
+        ]
+        assert eval_behavior._touches_sealed_probes(diluted), f"evaded with {pad} junk strings"
+        assert eval_behavior._seal_mismatch(diluted, real) is not None
+
+
+def test_trimming_one_string_and_padding_does_not_defeat_both_detectors(tmp_path):
+    """Containment and share are both PROPORTIONS of the file, so one lever bends
+    both: drop a single sealed string (containment fails) and pad with a dozen
+    junk ones (share falls under the bar). A copy still carrying 95 of 96 sealed
+    questions then ran ungated and printed RESULT: PASS, differing from a real
+    gate run by one missing line. The cheapest padding was junk `teach` lines on
+    a non-memory probe -- counted by _probe_hashes, never posted, never graded,
+    invisible in the scorecard. An absolute floor cannot be diluted, because
+    padding only ever adds strings."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+    for junk in (12, 13, 40, 200):
+        rigged = [dict(c) for c in cases]
+        for c in rigged:  # kill containment: one sealed teach line removed
+            if c.get("category") == "memory" and c.get("teach"):
+                c["teach"] = []
+                break
+        for c in rigged:  # kill share: ballast that never reaches the server
+            if c.get("category") != "memory":
+                c["teach"] = [f"ballast string {i}" for i in range(junk)]
+                break
+        for c in rigged:  # and rig the grading so any answer passes
+            c["want_any"], c["deny_any"], c["expect_tool"] = [], [], None
+        assert eval_behavior._touches_sealed_probes(rigged), f"evaded with {junk} junk strings"
+        assert eval_behavior._seal_mismatch(rigged, tmp_path / "rigged.jsonl") is not None
+
+
+def test_gutted_grading_keys_are_caught_even_though_the_questions_match(tmp_path, monkeypatch, capsys):
+    """The questions are sealed; `want_any`, `deny_any`, `expect_tool` and
+    `category` are NOT, and they decide every score. Emptying them re-seals
+    perfectly and then passes five of eight gated categories unconditionally
+    (`_grade_text` with no wants and no denies returns True for any answer)."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    for c in cases:  # every question untouched, every grading key neutered
+        c["want_any"], c["deny_any"] = [], []
+        if "expect_tool" in c:
+            c["expect_tool"] = None
+    gutted = tmp_path / "locked_probes.jsonl"
+    gutted.write_text("\n".join(json.dumps(c, ensure_ascii=False) for c in cases) + "\n",
+                      encoding="utf-8")
+    _fake_server(monkeypatch, LONG_ANSWER)
+
+    assert eval_behavior.run(URL, TEMP, MAXTOK, gutted, None) == 2
+    assert "grading keys" in capsys.readouterr().out
+
+
+def test_the_dev_set_is_not_mistaken_for_the_locked_set():
+    """Content-based gate detection has to tell a COPY of the sealed set from a
+    file that merely shares a string with it. The dev set shares exactly one (a
+    memory teach line), and keying on 'any sealed string present' read it as a
+    tampered holdout and refused to run the dev eval at all."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+
+    def cases(path):
+        return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+    dev = cases(eval_behavior.PROBES)
+    locked = cases(real)
+    assert not eval_behavior._touches_sealed_probes(dev), "the dev set reads as the locked set"
+    assert eval_behavior._touches_sealed_probes(locked)
+    # a TRIMMED copy is still locked content -- that was the PASS-on-12-probes hole
+    assert eval_behavior._touches_sealed_probes(locked[:12])
+    # ...and the overlap really is nonzero, or this test would pass vacuously
+    sealed = set(eval_behavior._sealed_hashes())
+    shared = sum(h in sealed for h in eval_behavior._probe_hashes(dev))
+    assert shared >= 1, "fixture assumption gone: dev and sealed no longer overlap at all"
+
+
+def test_renaming_the_locked_set_does_not_dodge_the_seal_check(tmp_path, monkeypatch, capsys):
+    """Gate-ness keyed on the FILENAME: a copy called anything else skipped
+    verification entirely, and a trimmed copy then scored one category and
+    printed PASS with seven gates unmeasured."""
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in real.read_text(encoding="utf-8").splitlines() if x.strip()]
+    trimmed = [c for c in cases if c.get("category") == "factual"]
+    assert trimmed, "fixture needs at least one factual probe"
+    sneaky = tmp_path / "my_probes.jsonl"  # nothing in the name says locked
+    sneaky.write_text("\n".join(json.dumps(c, ensure_ascii=False) for c in trimmed) + "\n",
+                      encoding="utf-8")
+    _fake_server(monkeypatch, LONG_ANSWER)
+
+    rc = eval_behavior.run(URL, TEMP, MAXTOK, sneaky, None)
+
+    out = capsys.readouterr().out
+    assert rc == 2, "a renamed subset of the sealed set was scored as an ordinary file"
+    assert "not the sealed holdout" in out
+    assert "RESULT: PASS" not in out
+
+
+def test_a_file_with_no_gated_category_never_reports_pass(tmp_path, monkeypatch, capsys):
+    """PASS on a file where nothing has a threshold means only that nothing was
+    checked -- benchmark_future_capabilities.jsonl is entirely such categories."""
+    p = tmp_path / "probes.jsonl"
+    p.write_text(json.dumps({"category": "creative", "q": "Write a haiku.", "want_any": []}) + "\n",
+                 encoding="utf-8")
+    _fake_server(monkeypatch, LONG_ANSWER)
+
+    rc = eval_behavior.run(URL, TEMP, MAXTOK, p, None)
+
+    out = capsys.readouterr().out
+    assert "NOT GATED" in out
+    assert "RESULT: PASS" not in out
+    assert rc == 1
+
+
+def test_an_empty_probe_file_is_an_error_before_the_store_is_touched(tmp_path, monkeypatch):
+    """It used to divide by zero at the scorecard -- after clearing the target's
+    memories. Nothing worth wiping a store for happens with no probes."""
+    p = tmp_path / "probes.jsonl"
+    p.write_text("", encoding="utf-8")
+    cleared = []
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: cleared.append(1))
+    monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
+
+    assert eval_behavior.run(URL, TEMP, MAXTOK, p, None) == 2
+    assert cleared == []
+
+
+def test_tool_arguments_reach_the_transcript(tmp_path, monkeypatch):
+    """Grading reads the first call's NAME only, so a right tool with wrong
+    arguments scores identically. The evidence has to survive the run."""
+    probes = _probe_file(tmp_path)
+    out = tmp_path / "transcript.jsonl"
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: None)
+    monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
+    monkeypatch.setattr(eval_behavior, "_post", lambda base_url, payload: {"choices": [{"message": {
+        "content": "",
+        "tool_calls": [{"function": {"name": "get_weather", "arguments": '{"city": "Sydney"}'}}],
+    }}]})
+
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+
+    tool = next(r for r in _rows(out) if r.get("category") == "tool")
+    assert tool["tool_calls_full"] == [{"name": "get_weather", "arguments": '{"city": "Sydney"}'}]
+
+
 def test_main_wires_the_transcript_flag(monkeypatch):
     """run() being correct is worthless if the CLI never passes the flag."""
     import inspect
@@ -255,11 +497,13 @@ def test_main_wires_the_transcript_flag(monkeypatch):
     # The fake below hides run's real signature, so pin it separately: a drift
     # in the parameter name would otherwise slip past this test.
     assert "transcript" in inspect.signature(eval_behavior.run).parameters
+    assert "allow_live_server" in inspect.signature(eval_behavior.run).parameters
 
     seen = {}
 
-    def fake_run(base_url, temperature, max_tokens, probes, transcript):
+    def fake_run(base_url, temperature, max_tokens, probes, transcript, allow_live_server=False):
         seen["transcript"] = transcript
+        seen["allow_live_server"] = allow_live_server
         return 0
 
     monkeypatch.setattr(eval_behavior, "run", fake_run)
@@ -270,3 +514,9 @@ def test_main_wires_the_transcript_flag(monkeypatch):
 
     assert seen["transcript"] is not None
     assert seen["transcript"].name == "t.jsonl"
+    assert seen["allow_live_server"] is False  # the guard is on unless asked for
+
+    monkeypatch.setattr("sys.argv", ["eval_behavior.py", "--allow-live-server"])
+    with pytest.raises(SystemExit):
+        eval_behavior.main()
+    assert seen["allow_live_server"] is True

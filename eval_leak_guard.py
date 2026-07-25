@@ -69,13 +69,62 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def seal(texts: list[str], threshold: float = DEFAULT_JACCARD) -> dict:
+def grading_digest(cases: list[dict]) -> str:
+    """A digest over everything that decides a score but is not sealed TEXT.
+
+    `want_any`, `deny_any`, `expect_tool` and `category` never enter the probe
+    hashes, yet they decide every verdict: a file with its wants and denies
+    emptied re-seals perfectly and then passes any answer at all. Sealing this
+    digest INTO the manifest is what lets a run verify them without the
+    plaintext on disk -- comparing against an unsealed copy of the file could
+    not work, because that copy is exactly what an edit would also change (and
+    the canonical run compares the file against itself)."""
+    keyed = [
+        (
+            " ".join(str(c.get("q") or "").split()),
+            c.get("category") or "",
+            "<absent>" if "expect_tool" not in c else repr(c.get("expect_tool")),
+            tuple(sorted(c.get("want_any") or [])),
+            tuple(sorted(c.get("deny_any") or [])),
+            # Teach CONTENT, hashed (never plaintext), not a count. Every locked
+            # memory probe carries exactly one teach line, so a count let all
+            # twelve be permuted while the seal still verified -- and the run
+            # posts each case's teach lines immediately before that case's
+            # question, so a swap changes what the memory category measures.
+            #
+            # Hashed the way `q` is (whitespace-collapsed, nothing else), NOT
+            # through _norm. _norm keeps only [a-z0-9] runs, so sealing teach
+            # through it left case, punctuation and every non-Latin script free:
+            # the twelve teach lines could be uppercased, or have Cyrillic and
+            # emoji appended, and still verify -- while the run POSTS the
+            # mutated text to the server. That is an injection channel into the
+            # sealed memory probes, not a formatting nicety.
+            tuple(_h(" ".join(str(t).split())) for t in (c.get("teach") or [])),
+        )
+        for c in cases
+    ]
+    # NOT sorted: file order is part of what the holdout IS. The store is
+    # cleared once per run and then accumulates every taught fact, so moving a
+    # memory probe past another probe changes what the later one can recall.
+    return hashlib.sha256(repr(keyed).encode("utf-8")).hexdigest()
+
+
+def seal(texts: list[str], threshold: float = DEFAULT_JACCARD,
+         cases: list[dict] | None = None) -> dict:
     """Build a sealed manifest from locked-probe plaintext. Ships only hashes,
-    never the words."""
+    never the words.
+
+    Pass `cases` (the parsed probe records) to seal the grading keys too. A
+    manifest without `grading_digest` can only prove the QUESTIONS are intact,
+    which is half a gate -- eval_behavior refuses to treat such a manifest as
+    a gate until it is re-sealed."""
     probes = []
     for t in texts:
         probes.append({"h": _h(_norm(t)), "s": sorted({_hw(w) for w in _content_words(t)})})
-    return {"version": 1, "jaccard_threshold": threshold, "probes": probes}
+    manifest = {"version": 1, "jaccard_threshold": threshold, "probes": probes}
+    if cases is not None:
+        manifest["grading_digest"] = grading_digest(cases)
+    return manifest
 
 
 class LockedProbeGuard:
@@ -83,9 +132,30 @@ class LockedProbeGuard:
     LOCKED probe, working only from the sealed manifest. Empty (no manifest) =
     a no-op that leaks nothing, so the build is safe before a locked set exists."""
 
+    class Weakened(ValueError):
+        """The manifest asks for less enforcement than the code allows."""
+
     def __init__(self, manifest: dict | None = None):
         m = manifest or {}
-        self.threshold: float = m.get("jaccard_threshold", DEFAULT_JACCARD)
+        threshold = m.get("jaccard_threshold", DEFAULT_JACCARD)
+        # The threshold is the ONE enforcement parameter that lived in an
+        # editable sidecar while nothing verified it: the probe hashes and the
+        # grading digest are identical under any threshold, so eval still
+        # printed "seal verified" over a manifest edited to 0.99 -- and every
+        # paraphrase then trained freely. Raising it is purely a weakening, so
+        # a manifest above the code default is refused rather than obeyed.
+        # Below it is stricter than the code asks for and is honoured.
+        if not isinstance(threshold, (int, float)) or threshold != threshold:
+            raise self.Weakened(
+                f"manifest jaccard_threshold is not a number ({threshold!r}); re-seal it"
+            )
+        if threshold > DEFAULT_JACCARD:
+            raise self.Weakened(
+                f"manifest jaccard_threshold {threshold} is weaker than the code default "
+                f"{DEFAULT_JACCARD} -- a raised threshold silently stops refusing "
+                "paraphrases of sealed probes; restore it or re-seal deliberately"
+            )
+        self.threshold: float = threshold
         self.exact: set[str] = {p["h"] for p in m.get("probes", [])}
         self.shingles: list[set[str]] = [set(p["s"]) for p in m.get("probes", [])]
 
@@ -117,17 +187,72 @@ class LockedProbeGuard:
         return low <= self.score(text) < self.threshold
 
 
+def refuse_if_leaky(texts: list[str], source: Path, manifest: Path = LOCKED_MANIFEST,
+                    advisory: list[str] | None = None) -> None:
+    """Refuse to TRAIN on an artifact whose ASKS match a sealed probe.
+
+    The build-time screens only clean data as it is generated; a trainer reads
+    whatever file is on disk, and a pre-seal artifact left there keeps its
+    leaks forever. Checking at consume time is what makes the seal binding on
+    the run that actually touches the weights.
+
+    `texts` are the prompt-side strings and they REFUSE, using the same
+    predicate `make_sft_data._held_out` screens with -- so "rebuild the
+    artifact" is advice that actually works.
+
+    `advisory` are answer-side strings (assistant turns, DPO chosen/rejected)
+    and they only WARN. Scanning them as leaks was tried and reverted: an
+    answer shares most of a question's content words by nature ("Jupiter is the
+    largest planet..." scores 0.67 against "What's the largest planet?"), so at
+    this threshold the check cannot separate a leak from topicality. It flagged
+    56 assistant turns in the live SFT mix -- blocking the entire queued
+    training block behind advice that could not clear it, because the builder
+    screens the question side only. Counting them out loud keeps the signal
+    without the deadlock.
+
+    Raises SystemExit naming counts -- never the leaking text, which is sealed
+    content."""
+    guard = LockedProbeGuard.load(manifest)
+    if not len(guard):
+        # No sealed set yet: nothing to enforce, and nothing to leak. SAY SO --
+        # this returned in total silence, so a training log could not tell a
+        # clean run from one where the guard never ran at all (a missing or
+        # emptied manifest reads exactly like success). The build-time screens
+        # already announce their own no-op; this is the same courtesy on the
+        # path that actually touches the weights.
+        print(f"leak guard: INACTIVE for {source} (no sealed probes at {manifest}); "
+              "nothing is being enforced", flush=True)
+        return
+    leaks = sum(1 for t in texts if guard.leaks(t))
+    if leaks:
+        raise SystemExit(
+            f"REFUSING to train: {source} carries {leaks} of {len(texts)} ASKS that match a "
+            f"SEALED locked probe (jaccard >= {guard.threshold}). Training on it would rig the "
+            f"gate. Rebuild the artifact with the current guard, then re-run."
+        )
+    note = ""
+    if advisory:
+        flagged = sum(1 for t in advisory if guard.leaks(t))
+        if flagged:
+            note = (f"; {flagged} of {len(advisory)} answer-side strings sit at or above the "
+                    "threshold -- expected on shared topics, reviewed not blocked")
+    print(f"leak guard: {len(texts)} asks clean against {len(guard)} sealed probes{note}",
+          flush=True)
+
+
 def _cli_seal(src: str) -> int:
     src_path = Path(src)
     if not src_path.exists():
         print(f"ERROR: locked probe file not found: {src_path}")
         return 1
     texts = []
+    cases = []
     for line in src_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         rec = json.loads(line)
+        cases.append(rec)
         q = rec.get("q") or rec.get("question") or ""
         if q:
             texts.append(q)
@@ -139,11 +264,13 @@ def _cli_seal(src: str) -> int:
     for t in texts:
         if not _content_words(t):
             print(f"WARN: probe has no content words (verbatim-match only): {t!r}")
-    manifest = seal(texts)
+    manifest = seal(texts, cases=cases)
     LOCKED_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     LOCKED_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"sealed {len(texts)} locked probe strings -> {LOCKED_MANIFEST.name} "
           f"(jaccard>={manifest['jaccard_threshold']}); manifest carries hashes only")
+    print(f"grading keys sealed too (digest {manifest['grading_digest'][:12]}...): "
+          "want/deny/expect_tool/category are now tamper-evident without the plaintext")
     return 0
 
 

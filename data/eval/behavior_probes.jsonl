@@ -120,3 +120,15 @@
 {"category": "unknown", "q": "What time will I wake up tomorrow?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
 {"category": "unknown", "q": "What is the current price of silver?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
 {"category": "unknown", "q": "What is written on the paper beside my keyboard?", "want_any": ["don't know", "do not know", "cannot know", "can't know", "no way to know"], "deny_any": ["probably", "i think", "my guess"]}
+{"category": "vision", "q": "[image: a red bicycle leaning against a white picket fence]\nWhat colour is the bicycle?", "want_any": ["red"], "deny_any": ["blue", "green", "black", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: three brown puppies asleep in a wicker basket]\nHow many puppies are there?", "want_any": ["three", "3"], "deny_any": ["two", "four", "no image", "cannot see"]}
+{"category": "vision", "q": "What is the weather like in this picture?\n[image: a rainy street with people holding umbrellas]", "want_any": ["rain", "raining", "rainy", "wet"], "deny_any": ["sunny", "clear", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: a yellow school bus parked outside a brick school]\nWhat vehicle is in the picture?", "want_any": ["bus"], "deny_any": ["car", "truck", "bicycle", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: a chef slicing tomatoes on a wooden board]\nWhat is being sliced?", "want_any": ["tomato", "tomatoes"], "deny_any": ["onion", "bread", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: an orange cat sleeping on a stack of books]\nWhat is the cat lying on?", "want_any": ["books", "book"], "deny_any": ["chair", "bed", "floor", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: two people playing chess in a park]\nWhat game are they playing?", "want_any": ["chess"], "deny_any": ["cards", "football", "tennis", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: a wooden sailboat on a calm lake at sunrise]\nWhat kind of boat is in the picture?", "want_any": ["sailboat", "sail", "sailing"], "deny_any": ["motorboat", "canoe", "no image", "cannot see"]}
+{"category": "vision", "q": "Describe what you see.\n[image: a birthday cake with six lit candles]", "want_any": ["cake", "candles", "birthday"], "deny_any": ["no image", "cannot see"]}
+{"category": "vision", "q": "[image: a green tractor in a muddy field]\nWhat colour is the tractor?", "want_any": ["green"], "deny_any": ["red", "blue", "yellow", "no image", "cannot see"]}
+{"category": "vision", "q": "What does the sign say?\n[image: a street corner with a stop sign]", "want_any": ["stop"], "deny_any": ["yield", "no image", "cannot see"]}
+{"category": "vision", "q": "[image: a snowy mountain peak under a clear blue sky]\nWhat is the sky like?", "want_any": ["blue", "clear"], "deny_any": ["cloudy", "grey", "gray", "stormy", "no image", "cannot see"]}
