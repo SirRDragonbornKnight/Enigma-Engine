@@ -1022,9 +1022,16 @@ def _looks_arithmetic(text: str) -> bool:
 # The negation does NOT have to sit against the verb. Requiring adjacency read
 # "Don't ever forget my birthday", "You must not forget the vet" and "We can't
 # forget that mum visits" as DELETION asks -- the same inversion, one adverb
-# further out. Up to ~24 characters of filler are allowed between the negation
-# and the verb, which covers the natural insertions ("ever", "you", "let me",
-# "we") without reaching across a sentence boundary into an unrelated clause.
+# further out.
+#
+# ANY negation earlier in the same sentence disarms, which is deliberately
+# generous. A character budget was tried and fails in both directions at once:
+# at 24 characters "Don't, and I really mean this, forget my anniversary" reads
+# as a DELETE, while widening it makes "I can't remember much, forget my old
+# address" read as a SAVE. The two errors are not equal -- reading a save as a
+# delete destroys a fact, reading a delete as a save leaves one standing and
+# the user simply asks again -- so the tie goes to the non-destructive reading
+# and the sentence, not a byte count, is the boundary.
 #
 # Both gates read THIS spelling. They decide opposite things about the same
 # family, and a cue only one of them recognizes is the worst outcome: the
@@ -1033,7 +1040,7 @@ def _looks_arithmetic(text: str) -> bool:
 _NEGATED_FORGET_SRC = (
     r"(do\s*n'?o?t|does\s*n'?o?t|did\s*n'?o?t|ca\s*n'?o?t|cannot|could\s*n'?o?t|"
     r"wo\s*n'?o?t|would\s*n'?o?t|should\s*n'?o?t|must\s*n'?o?t|never|no need to)"
-    r"[^.?!]{0,24}?\s+forget\b"
+    r"[^.?!]{0,80}?\s+forget\b"
 )
 _FORGET_NEGATED = re.compile(r"\b" + _NEGATED_FORGET_SRC, re.IGNORECASE)
 
@@ -1167,6 +1174,20 @@ def _builtin_tools(user_text: str, client_mode: bool) -> list[dict]:
     return tools
 
 
+def _memory_id(raw) -> int | None:
+    """A memory id from a tool argument, or None if it is not plainly one.
+
+    `int()` is not a validator: it accepts other scripts' digits, underscore
+    separators and surrounding space, so "3_0" quietly became 30 and deleted a
+    different memory than the one meant."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    text = str(raw).strip().lstrip("#").strip()
+    return int(text) if re.fullmatch(r"[0-9]{1,9}", text) else None
+
+
 def _execute_builtin(name: str, arguments: dict) -> str:
     """Run a server-side built-in tool and return its result string. Errors
     come back as text (fed to the model) rather than raising -- an engine that
@@ -1196,28 +1217,26 @@ def _execute_builtin(name: str, arguments: dict) -> str:
     if name == "forget":
         if MEMORY is None:
             return "error: memory disabled (start serve with --memory-dir)"
-        # An id answers the ambiguity the store reports. Without this door a
-        # TooBroad refusal was unanswerable from chat: records with identical
-        # term sets cannot be told apart by restating them, so the refusal
-        # repeated forever however the ask was worded.
+        # An id answers the ambiguity the store reports. It SELECTS among the
+        # records the text already matched -- it is not a second way in. As its
+        # own door it deleted whatever record happened to hold that id,
+        # overriding a perfectly good text, and she has no honest source for an
+        # id outside a refusal she just received, so every other id is invented.
         raw_id = arguments.get("id")
+        mem_id = None
         if raw_id is not None and str(raw_id).strip() != "":
-            try:
-                mem_id = int(str(raw_id).strip().lstrip("#"))
-            except ValueError:
-                return f"error: memory id must be a number, got {raw_id!r}"
-            record = next((r for r in MEMORY.all() if r["id"] == mem_id), None)
-            try:
-                if not MEMORY.delete(mem_id):
-                    return f"error: no memory with id {mem_id}"
-            except OSError as exc:
-                return f"error: could not update the memory file ({exc})"
-            return f"forgot: {record['text']}" if record else f"forgot memory {mem_id}"
-        text = str(arguments.get("text", "")).strip()
+            mem_id = _memory_id(raw_id)
+            if mem_id is None:
+                return f"error: memory id must be a whole number, got {raw_id!r}"
+        text = arguments.get("text")
+        text = text.strip() if isinstance(text, str) else ""
         if not text:
-            return "error: nothing to forget"
+            return ("error: say which memory to forget in words"
+                    if mem_id is None else
+                    "error: give the wording too, not just an id -- an id on its own "
+                    "could name any memory at all")
         try:
-            removed = MEMORY.forget(text)
+            removed = MEMORY.forget(text, only_id=mem_id)
         except MEMORY.TooBroad as exc:
             # Honest refusal beats a silent mass delete: memories have no .bak.
             return f"error: {exc}"
@@ -1227,6 +1246,9 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             # and disk disagreeing until the next boot.
             return f"error: could not update the memory file ({exc})"
         if not removed:
+            if mem_id is not None:
+                return (f"error: memory #{mem_id} is not one of the ones that match "
+                        f"{text!r} -- name it in words instead")
             return f"no matching memory to forget for: {text}"
         return "forgot: " + "; ".join(r["text"] for r in removed)
     if name == "speak":

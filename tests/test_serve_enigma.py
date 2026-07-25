@@ -331,10 +331,42 @@ def test_an_ambiguous_forget_can_be_answered_with_an_id(monkeypatch, tmp_path):
     assert "#1" in refusal and "#2" in refusal, "the refusal must name ids to be answerable"
     assert len(mem.all()) == 2, "an ambiguous ask must not delete"
 
-    assert serve._execute_builtin("forget", {"id": 2}) == "forgot: User likes tea."
+    # The id SELECTS among the records the text already matched.
+    assert serve._execute_builtin(
+        "forget", {"text": "forget that I like tea", "id": 2}
+    ) == "forgot: User likes tea."
     assert [r["id"] for r in mem.all()] == [1]
-    assert serve._execute_builtin("forget", {"id": 99}).startswith("error: no memory with id")
     assert serve._execute_builtin("forget", {"id": "nope"}).startswith("error: memory id must be")
+
+
+def test_an_id_cannot_reach_a_memory_the_wording_never_named(monkeypatch, tmp_path):
+    """As a door of its own the id deleted whatever record happened to hold it,
+    overriding a perfectly good `text`. She has no honest source for an id
+    outside a refusal she just received, so every other id is invented -- and an
+    invented one was destroying real memories."""
+    from enigma_engine.core.memory_store import MemoryStore
+
+    mem = MemoryStore(tmp_path)
+    for text in ("User likes tea.", "User's therapist is named Dr Alvarez.",
+                 "User's dog is named Rex."):
+        mem.add(text)
+    monkeypatch.setattr(serve, "MEMORY", mem)
+
+    # an id that is not among the text's matches deletes nothing
+    out = serve._execute_builtin("forget", {"text": "forget that I like tea", "id": 2})
+    assert out.startswith("error:") and "not one of" in out
+    assert len(mem.all()) == 3
+
+    # an id with no wording at all is refused outright
+    assert serve._execute_builtin("forget", {"id": 3}).startswith("error: give the wording")
+    assert len(mem.all()) == 3
+
+    # int() is not a validator: other scripts' digits and "3_0" are not ids
+    for junk in ("3_0", "٣", "３", " 3.0", "1e3", "0x3"):
+        assert serve._execute_builtin("forget", {"text": "x", "id": junk}).startswith(
+            "error: memory id must be"
+        ), junk
+    assert len(mem.all()) == 3
 
 
 def test_a_failed_memory_write_is_reported_as_text_not_a_500(monkeypatch, tmp_path):

@@ -154,8 +154,7 @@ _FORGET_NOISE = frozenset(_stem(w) for w in (
     "forget", "forgot", "forgetting", "remember", "remembered", "remembering",
     "delete", "deleted", "remove", "removed", "erase", "erased", "scratch",
     "drop", "everything", "anything", "something", "all", "any", "stuff",
-    "thing", "things", "memory", "memories", "fact", "facts", "please",
-    "longer", "anymore", "true", "said", "told",
+    "please", "longer", "anymore", "said", "told",
     # Contraction fragments: the tokenizer splits "don't" into "don" + "t",
     # and a junk term in the query defeats every subset test ("I don't like
     # tea any more, forget it" matched nothing at all).
@@ -171,9 +170,31 @@ _FORGET_NOISE = frozenset(_stem(w) for w in (
     # A scoped wipe ("forget everything about my dog") still keeps its subject
     # and still deletes, which is why this belongs here and not in a blanket
     # "any ask containing everything/all is a wipe" rule.
+    #
+    # Words that can DISCRIMINATE between two records stay OUT of this list,
+    # however filler-ish they sound. Stripping "right" made "forget that my
+    # right knee hurts" reach the LEFT knee; stripping "memory"/"fact"/"thing"
+    # made "forget that my memory is bad" reach "User's mood is bad." Leaving
+    # one in costs a match that deletes nothing; taking one out costs a wrong
+    # delete, and deletes have no .bak.
     "now", "today", "yesterday", "tomorrow", "again", "still", "just",
-    "already", "ok", "okay", "thanks", "thank", "anyway", "right", "yet",
+    "already", "ok", "okay", "thanks", "thank", "anyway", "yet",
 ))
+
+
+def _forget_terms(text: str) -> set[str]:
+    """The content terms a forget match keys on, for an ask OR a record.
+
+    Both sides go through THIS function. Filtering only the ask meant a record
+    holding a noise word could never equal the ask's terms, so quoting that
+    record word for word deleted its shorter sibling instead of itself."""
+    return {t for t in _content_terms(text) if t not in _FORGET_NOISE}
+
+
+# How many matches a refusal names before it summarizes. The refusal is fed
+# back into her context as a tool result, and 21 matches measured 728 tokens of
+# a 1024-token window. (measured 2026-07-25)
+_FORGET_NAMED_MAX = 5
 
 _NAMING_HEAD = re.compile(r"^(?:named|called|known\s+as)\b", re.IGNORECASE)
 _NAME_STEM = _stem("name")  # the attribute spelling of a naming ("name is Sam")
@@ -441,12 +462,13 @@ class MemoryStore:
         with self._lock:
             for rec in self._records:
                 if rec["id"] == mem_id:
-                    self._records.remove(rec)
-                    self._rewrite()
+                    keep = [r for r in self._records if r is not rec]
+                    self._rewrite(keep)   # persist first: an error means nothing changed
+                    self._records = keep
                     return True
             return False
 
-    def forget(self, query: str) -> list[dict]:
+    def forget(self, query: str, only_id: int | None = None) -> list[dict]:
         """Delete the ONE memory the query names; return it as a list.
 
         One rule: a record is a candidate when its content terms and the ask's
@@ -477,50 +499,81 @@ class MemoryStore:
         A query left contentless by the noise filter ("forget everything",
         "forget everything now") matches nothing -- an unbounded wipe belongs to
         clear(), behind its own explicit ask. A SCOPED wipe keeps its subject
-        ("forget everything about my dog" -> {dog}) and still deletes."""
-        query = str(query) if query is not None else ""
+        ("forget everything about my dog" -> {dog}) unless several records share
+        that subject, which is an ambiguity like any other.
+
+        `only_id` restricts the delete to one of the candidates the QUERY
+        already matched. It answers a TooBroad without becoming a second way in:
+        an id that is not among them deletes nothing, so an id she invented --
+        and she has no honest source for one outside a refusal -- cannot reach a
+        record the ask never named."""
+        query = str(query) if isinstance(query, str) or query is None else ""
+        query = query or ""
         if not query.strip():
             return []
-        q_terms = {t for t in _content_terms(query) if t not in _FORGET_NOISE}
+        q_terms = _forget_terms(query)
         if not q_terms:
             return []
         with self._lock:
             candidates, keep = [], []
             for rec in self._records:
-                r_terms = _content_terms(rec["text"])
+                # Both sides through the SAME filter. Filtering only the ask let
+                # a record carrying a noise word ("User's phone is still
+                # broken.") never equal the ask's terms, so quoting that record
+                # word for word deleted its shorter sibling instead.
+                r_terms = _forget_terms(rec["text"])
                 if r_terms and (r_terms <= q_terms or q_terms <= r_terms):
                     candidates.append(rec)
                 else:
                     keep.append(rec)
-            if len(candidates) > 1:
+            if only_id is not None:
+                chosen = [r for r in candidates if r["id"] == only_id]
+                if not chosen:
+                    return []
+                keep = [r for r in self._records if r is not chosen[0]]
+                candidates = chosen
+            elif len(candidates) > 1:
                 named_exactly = [r for r in candidates
-                                 if _content_terms(r["text"]) == q_terms]
+                                 if _forget_terms(r["text"]) == q_terms]
                 if len(named_exactly) == 1:
-                    keep += [r for r in candidates if r is not named_exactly[0]]
+                    # Rebuild from the ORIGINAL order: appending the spared
+                    # candidates to the tail reordered the file, and "the recent
+                    # ones" is read off the tail.
+                    keep = [r for r in self._records if r is not named_exactly[0]]
                     candidates = named_exactly
                 else:
                     # Name the IDS, not just the text. Records with identical
                     # term sets cannot be told apart by restating them, so a
                     # text-only refusal was advice with no way to follow it.
-                    named = "; ".join(f"#{r['id']} {r['text']}" for r in candidates)
+                    # Bounded: this string is fed back into her context as a
+                    # tool result, and 21 matches measured 728 tokens of a
+                    # 1024-token window.
+                    shown = candidates[:_FORGET_NAMED_MAX]
+                    named = "; ".join(f"#{r['id']} {r['text']}" for r in shown)
+                    more = len(candidates) - len(shown)
+                    tail = f" (and {more} more)" if more > 0 else ""
                     raise self.TooBroad(
                         f"{len(candidates)} memories match that -- say the one you mean "
-                        f"word for word, or give its id: {named}"
+                        f"word for word, or give its id: {named}{tail}"
                     )
             if candidates:
+                # Write BEFORE the in-memory swap. Mutating first meant a failed
+                # write reported an error to the user while the record was
+                # already gone from the live store -- and the next successful
+                # write made that loss permanent.
+                self._rewrite(keep)
                 self._records = keep
-                self._rewrite()
         return candidates
 
     def clear(self) -> int:
         """Remove ALL memories; returns how many were dropped."""
         with self._lock:
             n = len(self._records)
+            self._rewrite([])          # persist first: an error means nothing changed
             self._records = []
-            self._rewrite()
             return n
 
-    def _rewrite(self) -> None:
+    def _rewrite(self, records: list[dict] | None = None) -> None:
         """Rewrite the JSONL after a mutation (call with the lock held). At
         hundreds of records this is instant and keeps the file inspectable.
         atomic_write_text adds fsync-before-rename (power loss can't leave a
@@ -528,8 +581,14 @@ class MemoryStore:
         delete/supersede/clear, and a .bak would keep a full pre-delete copy
         on disk -- "clear my memories" must actually clear (privacy
         regression caught by the 2026-07-17 re-audit). Any .bak an earlier
-        build left behind is scrubbed for the same reason."""
-        content = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in self._records)
+        build left behind is scrubbed for the same reason.
+
+        Pass the records to WRITE so a caller can persist before swapping them
+        in: mutating first meant a failed write told the user the delete had
+        failed while the live store had already dropped the record."""
+        if records is None:
+            records = self._records
+        content = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in records)
         atomic_write_text(self.file, content, backup=False)
         self.file.with_suffix(self.file.suffix + ".bak").unlink(missing_ok=True)
 

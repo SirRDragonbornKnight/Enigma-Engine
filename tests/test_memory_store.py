@@ -303,6 +303,67 @@ def test_forget_coerces_a_non_string_query_instead_of_crashing(tmp_path):
     assert len(m) == 1
 
 
+def test_a_failed_write_leaves_the_store_exactly_as_it_was(tmp_path, monkeypatch):
+    """The store mutated `_records` and then rewrote the file, so a failed write
+    reported an error to the user while the live store had ALREADY dropped the
+    record -- and the next successful write made that loss permanent."""
+    from enigma_engine.core import memory_store as ms
+
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+    m.remember("User's car is red.")
+    monkeypatch.setattr(ms, "atomic_write_text",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+
+    with pytest.raises(OSError):
+        m.forget("forget that my dog is named Rex")
+    assert any("Rex" in r["text"] for r in m.all()), "the record vanished despite the error"
+
+    monkeypatch.undo()
+    m.forget("forget that my car is red")
+    assert any("Rex" in r["text"] for r in MemoryStore(tmp_path).all()), \
+        "the next successful write made the phantom delete permanent"
+
+
+def test_the_same_filter_normalizes_both_the_ask_and_the_record(tmp_path):
+    """Filtering only the ask meant a record holding a noise word could never
+    equal the ask's terms, so quoting that record word for word deleted its
+    shorter sibling instead of itself -- and reported near-identical text, which
+    reads as success."""
+    m = MemoryStore(tmp_path)
+    m.add("User's phone is still broken.")
+    m.add("User's phone is broken.")
+    with pytest.raises(MemoryStore.TooBroad):
+        m.forget("User's phone is still broken.")
+    assert len(m.all()) == 2
+
+
+def test_a_word_that_tells_two_records_apart_is_never_filtered(tmp_path):
+    """Stripping "right" sent "forget that my right knee hurts" to the LEFT
+    knee; stripping "memory" sent "forget that my memory is bad" to the mood.
+    Leaving a filler word in costs a match that deletes nothing; taking a
+    content word out costs the wrong delete."""
+    m = MemoryStore(tmp_path)
+    m.remember("User's left knee hurts.")
+    assert m.forget("forget that my right knee hurts") == []
+    m2 = MemoryStore(tmp_path / "b")
+    m2.remember("User's mood is bad.")
+    assert m2.forget("forget that my memory is bad") == []
+
+
+def test_the_refusal_is_bounded(tmp_path):
+    """The refusal is fed back into a 1024-token context as a tool result; 21
+    matches measured 728 tokens of it."""
+    m = MemoryStore(tmp_path)
+    for i in range(21):
+        m.add(f"User's fact {i} is about tea.")
+    with pytest.raises(MemoryStore.TooBroad) as err:
+        m.forget("forget about tea")
+    assert len(str(err.value)) < 400
+    assert "more)" in str(err.value)
+    assert len(m.all()) == 21
+
+
 def test_an_ambiguous_refusal_names_ids(tmp_path):
     # Records with identical term sets cannot be separated by restating them,
     # so a refusal that named only text was advice with no way to follow it.
