@@ -1,9 +1,44 @@
-# Cleanup Tracker — reset 2026-06-11; COMPRESSION PASS 2026-07-18
+# Cleanup Tracker — reset 2026-06-11; COMPRESSION PASS 2026-07-18; ART PASS 2026-07-26
 
 This tracker describes the tree as it stands today; earlier eras (`gui/`,
 `web/`, `services/`, `api/`, the Qwen-era `engine_*`/`inference`/`rag`
 modules, and the Forge training arm removed 2026-07-18) live in git history.
 Current truth:
+
+## 2026-07-26 cleaning pass (four survey agents, every claim verified)
+
+- **v1 lineage training logs PRESERVED first:** all root training logs were
+  untracked AND gitignored, so git was never their archive -- and the three
+  `train_resume.out.*` side-logs held the ONLY record of steps ~41k-51k
+  (measured: `train_large.log` provably lacks that band). The full set now
+  lives at `Enigma Backups\training_logs_v1\` with a SHA256SUMS receipt.
+  `train_large.log` STAYS in the root (live consumers: `training_progress.py`,
+  `tail_training_log.ps1`); the backed-up side-logs, the abandoned 121M
+  `train_base_v2.log`, the SFT receipts and the pre-v1 `_merge.log` (a LoRA
+  merge from the era whose code was deleted 2026-07-18) were removed locally.
+- **Deleted without backup (no value):** the zero-byte `*.err.log` stubs, the
+  4-line `serve_sft.log` banner, the one-line `power_guardian.log`, the 12
+  `logs\forge_*.log` from the deleted trainer, 16 zero-byte run-log stubs
+  inside `models\enigma_sft\`, six stray `*.bak`, all `__pycache__` (two
+  interpreter generations of dead bytecode in `tests\` alone), and 20 empty
+  directories (incl. the 8 `models\probe_*` husks of an aborted 07-21 sweep).
+- **Untracked from git:** the `orchestration-workflow\` + `.claude` weather-*
+  demo scaffold (8 files, 2026-06-24) -- an unrelated demo that was 8 of the
+  repo's 189 tracked files; recoverable from history.
+- **Deps trued up:** PyYAML dropped (core dep, zero imports tree-wide -- the
+  python-dotenv profile); HF `tokenizers` dropped (never imported; the repo
+  ships its own BPE stack); `datasets` DECLARED at last (new `collect` extra +
+  requirements line -- the collectors imported it while nothing installed it,
+  so a clean checkout died at fetch time).
+- **The v1 corpus got its filesystem lock:** `tokens.bin` + `tokens.json` are
+  now attrib +R -- the pretokenize refusal only ever guarded that one script.
+- **Judged ALIVE and now listed below (they were reference-free but are ops
+  tools for the coming training block):** `sweep_lr.py`, `bench_generate.py`,
+  `extend_length.ps1`, `power_guardian.ps1`.
+- Disk-reclaim candidates (~200 GB: `combined.txt` 95 GB, Qwen model dirs
+  33 GB, the extracted wiki dump's source .bz2 25 GB, intermediate
+  `step_*.pth` 19.7 GB, and more) are listed in BACKLOG §"Disk reclaim" --
+  deletions of that class are the user's ruling, not a cleaning pass's.
 
 ## 2026-07-18 compression pass (what changed)
 
@@ -59,7 +94,12 @@ Deleted after a three-agent adversarial audit verified every claim
 - **LIVE — organs (served behind flags):** `tts.py` (--voice), `asr.py`
   (--ears), `eyes.py` (--eyes, native), `imagegen.py` (--image-gen).
 - **LIVE — perception training:** `vision_encoder.py`, `audio_encoder.py`,
-  `training/vision_align.py` (Trainer for align_vision.py).
+  `training/encoder_align.py` (one hardened `_train_encoder` core;
+  `train_vision` + `train_audio` wrappers for align_vision.py /
+  align_audio.py — renamed from `vision_align.py` when audio joined).
+- **LIVE — added since the compression pass:** `core/persona.py` (persona
+  packs; `serve --persona`), `core/barge_in.py` (mic energy VAD),
+  `core/pretokenize.py` (the rust-backed v2 encode path).
 - **KEPT DORMANT BY RULING:** `core/gguf.py` (llama-server export route,
   KNOWN_ISSUES; reachable only via `Enigma.export_to_gguf`). The GGUF SERVING
   pivot was REJECTED 2026-07-24, so the only remaining use for this file is
@@ -76,13 +116,21 @@ Deleted after a three-agent adversarial audit verified every claim
 
 - **Live tools:** `pretrain_enigma.py`, `finetune_enigma.py` (SFT),
   `dpo_enigma.py` (the adopted preference path), `teach_enigma.py`,
-  `eval_behavior.py`, `eval_leak_guard.py`, `make_sft_data.py`,
-  `make_dpo_data.py`, `make_facts_pretrain_data.py`, `serve_enigma.py`,
-  `sample_enigma.py`, `pretokenize_data.py`, `identity_anchors.py`,
-  `identity_paraphrases.py`, `knowledge_corpus.py`, `align_vision.py`,
-  `distill_vision_encoder.py`, `distill_audio_encoder.py`,
+  `eval_behavior.py`, `eval_leak_guard.py`, `validate_probes.py` (probe-file
+  authoring gate), `make_sft_data.py`, `make_dpo_data.py`,
+  `make_facts_pretrain_data.py`, `make_pretrain_curated.py` (the T1 curated
+  shard), `serve_enigma.py`, `sample_enigma.py`, `pretokenize_data.py`,
+  `identity_anchors.py`, `identity_paraphrases.py`, `knowledge_corpus.py`,
+  `align_vision.py`, `align_audio.py`, `distill_vision_encoder.py`,
+  `distill_audio_encoder.py`, `ema_checkpoints.py` (checkpoint lineage tool),
   `training_progress.py`, `enigma_window.py`,
   `_verify_ckpt.py` (standing checkpoint fingerprint — keep).
+- **Ops tools (reference-free by design — their caller is the operator; the
+  2026-07-26 pass judged them by CONTENT, not by grep):** `sweep_lr.py`
+  (T2/T3 LR grid over complete short runs incl. decay tail),
+  `bench_generate.py` (decode ms/token + host-sync counter),
+  `extend_length.ps1` (Phase-4 block-2048 launcher, dormant),
+  `power_guardian.ps1` (UPS watchdog, manually detached).
 - **Corpus provenance (keep):** `collect_pretraining_data.py`,
   `collect_finetuning_data.py`, `collect_distill_data.py`,
   `collect_search_data.py`, `collect_vision_data.py`,
@@ -95,11 +143,11 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **349 passed** (2026-07-18 post-compression: 340 after the
-   deletions, +9 from the new `test_config_compat.py` and
-   `test_cpu_rectangular_decode.py`; was 574 before the pass — the delta is
-   the dormant stack's own test mass, every removed test named in the pass)
-   — any cleanup that drops a test must say so explicitly.
+4. Suite baseline: **788 passed (2026-07-26)** — THE live number; other docs
+   point here. History: 574 before the 2026-07-18 compression pass, 349
+   after it (the delta was the dormant stack's own test mass, every removed
+   test named), then steady growth through the v2-prep and audit arcs. Any
+   cleanup that drops a test must say so explicitly.
 5. **Retired ForgeConfig fields are load-bearing in reverse.** Every
    checkpoint on disk still carries the removed keys (up to 19 per config);
    `from_dict` tolerates them only because it filters against `known`.

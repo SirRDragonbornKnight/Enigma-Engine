@@ -22,6 +22,9 @@ bitsandbytes>=0.43.0
 # HuggingFace Integration (organ backbones + distill teachers)
 transformers>=4.20.0
 huggingface-hub>=0.20.0
+# Corpus collectors stream from the hub; without this they import fine and
+# die at fetch time (a clean checkout could not run them before 2026-07-26)
+datasets>=2.14.0
 
 # === SYSTEM MONITORING ===
 psutil>=5.9.0             # Hardware detection, resource monitoring

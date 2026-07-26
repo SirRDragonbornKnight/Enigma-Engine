@@ -27,10 +27,11 @@ classifiers = [
 ]
 
 # --- Dependencies ---
+# PyYAML was here from the config-file era; zero imports remain tree-wide
+# (same profile as python-dotenv, removed 2026-07-18) -- dropped 2026-07-26.
 dependencies = [
     "numpy>=1.21.0",
     "pydantic>=2.0",
-    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -76,11 +77,18 @@ vision = [
 huggingface = [
     "transformers>=4.20.0",
     "huggingface-hub>=0.20.0",
-    "tokenizers>=0.13.0",
+]
+# The corpus collectors (collect_pretraining_data / collect_vision_data /
+# collect_finetuning_data) stream from the HF hub; without this extra a
+# clean checkout imports them fine and then dies at fetch time.
+collect = [
+    "datasets>=2.14.0",
 ]
 # bitsandbytes backs the guarded INT4 quantization fallback in
-# core/model.py; peft/accelerate left with the retired LoRA stack
-# (2026-07-18 compression pass).
+# core/model.py; peft left with the retired LoRA stack (2026-07-18
+# compression pass) -- the accelerate above is diffusers' runtime dep for
+# imagegen, not the trainer's. HF `tokenizers` was never imported (the repo
+# ships its own BPE stack) -- dropped 2026-07-26.
 training = [
     "bitsandbytes>=0.43.0",
 ]
