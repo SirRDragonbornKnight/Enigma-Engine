@@ -43,6 +43,10 @@ ROOT = Path(__file__).resolve().parent
 SOURCE_BIN = ROOT / "data" / "pretrain" / "tokens.bin"
 OUT_BIN = ROOT / "data" / "pretrain" / "facts_tokens.bin"
 HEADER_SIZE = 256
+# Fallback only: the real eos id follows the replay corpus's sidecar (set in
+# main), never this constant -- a hardcoded 2 was a second source of truth
+# for the ETOK format, unvalidated while pretokenize derives AND checks its
+# own. Kept for the library callers that build docs without a corpus.
 EOS_ID = 2
 
 
@@ -101,12 +105,13 @@ def screen_locked_probes(lines: list[str], guard: "LockedProbeGuard",
     return kept
 
 
-def tokenize_fact_docs(lines: list[str], tokenizer, vocab_size: int) -> list[list[int]]:
+def tokenize_fact_docs(lines: list[str], tokenizer, vocab_size: int,
+                       eos_id: int = EOS_ID) -> list[list[int]]:
     """Each line becomes one document: <bos> content <eos> <eos> (the
     pretokenize_data.py layout). Refuses out-of-vocab ids loudly."""
     docs = []
     for line in lines:
-        ids = list(tokenizer.encode(line)) + [EOS_ID]
+        ids = list(tokenizer.encode(line)) + [eos_id]
         bad = [t for t in ids if not (0 <= t < vocab_size)]
         if bad:
             raise SystemExit(f"fact line tokenized outside vocab {vocab_size}: {line[:60]!r} -> {bad[:5]}")
@@ -176,9 +181,10 @@ def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
     return out[:pos]
 
 
-def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int) -> None:
+def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int,
+               eos_id: int = EOS_ID) -> None:
     bpt = tokens.dtype.itemsize  # must match the array, not a hardcoded width
-    header = struct.pack("<4sIIQII", b"ETOK", 1, bpt, len(tokens), vocab_size, EOS_ID)
+    header = struct.pack("<4sIIQII", b"ETOK", 1, bpt, len(tokens), vocab_size, eos_id)
     tmp = out_bin.with_suffix(".bin.tmp")
     with open(tmp, "wb") as f:
         f.write(header)
@@ -194,7 +200,7 @@ def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int) 
         "total_documents": n_docs,
         "total_files": 1,
         "vocab_size": vocab_size,
-        "eos_token_id": EOS_ID,
+        "eos_token_id": eos_id,
         "tokenizer": "AdvancedBPETokenizer",
         "file_size_gb": round(len(tokens) * tokens.dtype.itemsize / 1024**3, 2),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -210,8 +216,10 @@ def main() -> None:
     ap.add_argument("--fact-frac", type=float, default=0.02, help="fraction of mixed-region tokens that are fact text")
     ap.add_argument("--val-reserve", type=int, default=500_000, help="pure-replay tail for the [val] window")
     ap.add_argument("--chunk", type=int, default=2048, help="replay slice length in tokens")
-    ap.add_argument("--seed", type=int, default=99)
-    ap.add_argument("--out", default=str(OUT_BIN))
+    ap.add_argument("--seed", type=int, default=99,
+                    help="insertion-cadence shuffle seed; the stream is deterministic per seed")
+    ap.add_argument("--out", default=str(OUT_BIN),
+                    help="output .bin (sidecar json lands beside it)")
     ap.add_argument(
         "--source-bin",
         default=str(SOURCE_BIN),
@@ -228,6 +236,14 @@ def main() -> None:
     # replaying v2 tokens through the v1 vocab would emit a corpus whose ids
     # mean nothing to the model that trains on it.
     src_dtype = np.dtype(src_meta.get("dtype", "uint32"))
+    # eos follows the corpus too: the sidecar records what pretokenize derived
+    # and validated, and this writer stamps eos into its own ETOK header.
+    eos_id = int(src_meta.get("eos_token_id", EOS_ID))
+    if not 0 <= eos_id < vocab_size:
+        raise SystemExit(
+            f"sidecar eos_token_id {eos_id} is outside vocab {vocab_size} -- "
+            "stale or foreign sidecar; refusing to write a corpus with it"
+        )
     try:
         vocab_file = vocab_file_for_size(vocab_size)
     except (ValueError, FileNotFoundError) as exc:
@@ -249,7 +265,7 @@ def main() -> None:
             f"tokenizer vocab {getattr(tokenizer, 'vocab_size', '?')} != corpus vocab "
             f"{vocab_size}; refusing to build a facts corpus the model cannot read"
         )
-    fact_docs = tokenize_fact_docs(lines, tokenizer, vocab_size)
+    fact_docs = tokenize_fact_docs(lines, tokenizer, vocab_size, eos_id=eos_id)
     print(f"fact docs: {len(fact_docs)} lines, {sum(len(d) for d in fact_docs):,} tokens")
 
     replay = np.memmap(source_bin, dtype=src_dtype, mode="r", offset=HEADER_SIZE)
@@ -267,7 +283,7 @@ def main() -> None:
     tokens = interleave(fact_docs, replay[:replay_end], target,
                         args.fact_frac, val_reserve, args.chunk, args.seed,
                         dtype=src_dtype)
-    write_etok(tokens, Path(args.out), vocab_size, n_docs=len(fact_docs))
+    write_etok(tokens, Path(args.out), vocab_size, n_docs=len(fact_docs), eos_id=eos_id)
 
 
 if __name__ == "__main__":

@@ -33,12 +33,10 @@ MAIN EXPORT: CONFIG dictionary
 USAGE:
     from enigma_engine.config import CONFIG, get_config, update_config
 
-    # Read a value
     data_dir = CONFIG["data_dir"]
     # OR
     data_dir = get_config("data_dir", default="data")
 
-    # Update values (in memory only)
     update_config({"temperature": 0.9})
 
     # Persist changes to file

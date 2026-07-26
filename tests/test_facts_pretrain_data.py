@@ -127,7 +127,7 @@ def test_the_build_screens_before_it_tokenizes(monkeypatch):
         order.append("screen")
         return list(lines)
 
-    def spy_tokenize(lines, tokenizer, vocab_size):
+    def spy_tokenize(lines, tokenizer, vocab_size, eos_id=2):
         order.append("tokenize")
         raise SystemExit("stop here -- ordering is what this test pins")
 

@@ -1,43 +1,32 @@
 """
 ================================================================================
-🔤 FORGE TOKENIZER - TEXT ↔ NUMBERS CONVERTER
+FORGE TOKENIZER
 ================================================================================
 
-The TRANSLATOR between human text and numbers the AI understands!
-Converts sentences into sequences of integers for the neural network.
+Converts text into sequences of integer token IDs for the neural network,
+and token IDs back into text.
 
-📍 FILE: enigma_engine/core/tokenizer.py
-🏷️ TYPE: Text Tokenization
-🎯 MAIN FUNCTION: get_tokenizer()
-🎯 MAIN CLASSES: SimpleTokenizer, TiktokenWrapper, AdvancedBPETokenizer
+Main function: get_tokenizer()
+Main classes: SimpleTokenizer, TiktokenWrapper, AdvancedBPETokenizer
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  TOKENIZATION FLOW:                                                         │
-│                                                                             │
-│  "Hello world!" → [Tokenizer] → [15496, 995, 0]                            │
-│                                                                             │
-│  [15496, 995, 0] → [Tokenizer] → "Hello world!"                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-📊 TOKENIZER HIERARCHY (best to worst):
+Tokenizer hierarchy (best to worst):
     1. AdvancedBPETokenizer - Byte-level BPE, handles any input, learns from data
-    2. SimpleTokenizer     - Basic character + common words (NO dependencies!)
+    2. SimpleTokenizer      - Basic character + common words (no dependencies)
 
-🏷️ SPECIAL TOKENS:
-    • <pad>    - Padding (ID: 0)
-    • <s>      - Start of sequence (ID: 1)
-    • </s>     - End of sequence (ID: 2)
-    • <unk>    - Unknown token (ID: 3)
-    • <think>  - Start of reasoning block (ID: 10)
-    • </think> - End of reasoning block (ID: 11)
+Special tokens:
+    <pad>    - Padding (ID: 0)
+    <s>      - Start of sequence (ID: 1)
+    </s>     - End of sequence (ID: 2)
+    <unk>    - Unknown token (ID: 3)
+    <think>  - Start of reasoning block (ID 4 in default vocabs; a trained
+               BPETokenizer vocab can place it elsewhere, e.g. 10)
+    </think> - End of reasoning block (ID 5 default; e.g. 11 when trained)
 
-🔗 CONNECTED FILES:
-    → USES:      enigma_engine/vocab_model/ (vocabulary files)
-    ← USED BY:   enigma_engine/core/model.py (needs vocab_size)
-    ← USED BY:   enigma_engine/core/inference.py (encode/decode text)
-    ← USED BY:   enigma_engine/core/training.py (prepare training data)
+Uses enigma_engine/vocab_model/ (vocabulary files). Used by model.py (needs
+vocab_size), inference.py (encode/decode text), and training.py (prepare
+training data).
 
-📖 USAGE:
+Usage:
     from enigma_engine.core.tokenizer import get_tokenizer
 
     # Auto-select best available
@@ -51,11 +40,10 @@ Converts sentences into sequences of integers for the neural network.
     ids = tokenizer.encode("Hello world")
     text = tokenizer.decode(ids)
 
-📁 VOCAB LOCATION: enigma_engine/vocab_model/
+Vocab location: enigma_engine/vocab_model/
 
-📖 SEE ALSO:
-    • enigma_engine/core/bpe_tokenizer.py      - BPE implementation
-    • enigma_engine/core/advanced_tokenizer.py - Advanced tokenizer
+See also: enigma_engine/core/bpe_tokenizer.py (BPE implementation) and
+enigma_engine/core/advanced_tokenizer.py (advanced tokenizer).
 """
 
 import json
@@ -71,7 +59,7 @@ VOCAB_DIR = Path(__file__).resolve().parent.parent / "vocab_model"
 
 
 # =============================================================================
-# 📋 TOKENIZER PROTOCOL - Type-Safe Interface
+# TOKENIZER PROTOCOL
 # =============================================================================
 # This protocol defines the contract that ALL tokenizers must follow.
 # Using Protocol enables static type checking without requiring inheritance.
@@ -82,12 +70,11 @@ class TokenizerProtocol(Protocol):
     """
     Protocol defining the interface all tokenizers must implement.
 
-    📖 WHY THIS EXISTS:
-    - Enables type checking across the codebase
-    - Allows any tokenizer (custom, HuggingFace, tiktoken) to be used
-    - runtime_checkable allows isinstance() checks at runtime
+    Enables static type checking without requiring inheritance, so any
+    tokenizer (custom, HuggingFace, tiktoken) can be passed where this type
+    is expected; runtime_checkable allows isinstance() checks at runtime.
 
-    📐 USAGE:
+    Usage:
         def process_text(tokenizer: TokenizerProtocol, text: str) -> List[int]:
             return tokenizer.encode(text)
     """
@@ -107,7 +94,7 @@ class TokenizerProtocol(Protocol):
 
 
 # =============================================================================
-# 🛠️ TOKENIZER UTILITIES - Helper Functions
+# TOKENIZER UTILITIES
 # =============================================================================
 # These functions provide a unified interface for tokenizer operations,
 # handling the differences between tokenizer implementations.
@@ -119,7 +106,7 @@ def encode_text(
     """
     Encode text using any tokenizer with a unified interface.
 
-    📖 HANDLES:
+    Handles:
     - Enigma AI Engine tokenizers (SimpleTokenizer, AdvancedBPETokenizer)
     - HuggingFace tokenizers (transformers AutoTokenizer)
     - tiktoken tokenizers
@@ -249,7 +236,7 @@ def get_special_token_ids(tokenizer: Any) -> dict[str, int]:
 
 
 # =============================================================================
-# 🔤 SIMPLE TOKENIZER - Always Works, No Dependencies!
+# SIMPLE TOKENIZER
 # =============================================================================
 # This is the FALLBACK tokenizer that works without any external libraries.
 # It's simple but reliable - perfect for bootstrapping or when tiktoken fails.
@@ -259,28 +246,19 @@ class SimpleTokenizer:
     """
     Lightweight character-level tokenizer.
 
-    📖 WHAT THIS DOES:
-    Converts text to numbers and back. Simple and reliable!
+    A hybrid word+character scheme: encode() splits the text into words,
+    matches whole words against the vocabulary where it can, and falls back
+    to individual characters (then <unk>) for anything not in it; decode()
+    reverses the lookup and joins the tokens.
 
-    📐 HOW IT WORKS:
-    1. Has a vocabulary: {"a": 0, "b": 1, "the": 50, ...}
-    2. encode(): Split text into tokens, look up their IDs
-    3. decode(): Look up IDs to get tokens, join them together
-
-    💡 TOKENIZATION STRATEGY:
-    - First tries to match whole WORDS (like "the", "hello")
-    - Falls back to individual CHARACTERS if word not in vocab
-    - This is a hybrid word+char approach
-
-    📐 EXAMPLE:
+    Example:
         >>> tok = SimpleTokenizer()
         >>> tok.encode("hello world")
         [1, 145, 32, 119, 111, 114, 108, 100, 2]
-        #  ↑ <s>  "hello"  space + characters   ↑ </s>
+        # <s>, "hello" as one token, then space + characters, </s>
 
-    🔗 CONNECTS TO:
-      ← Used by get_tokenizer() as fallback
-      ← Used when no trained tokenizer is available
+    Used by get_tokenizer() as the fallback when no trained tokenizer is
+    available.
     """
 
     def __init__(self, vocab_file: Optional[Path] = None):
@@ -337,10 +315,11 @@ class SimpleTokenizer:
         """
         Create a basic character + common word vocabulary.
 
-        📖 VOCABULARY STRUCTURE:
-        IDs 0-3: Special tokens (<pad>, <s>, </s>, <unk>)
-        IDs 4-98: Printable ASCII characters (space, a-z, A-Z, 0-9, etc.)
-        IDs 99+: Common English words for efficiency
+        Vocabulary structure:
+        IDs 0-7: Special tokens (<pad>, <s>, </s>, <unk>, <think>, </think>,
+                 <search>, </search>)
+        IDs 8-102: Printable ASCII characters (space through ~, codes 32-126)
+        IDs 103+: Common English words for efficiency
         """
         # Start with special tokens
         self.token_to_id = dict(self.special_tokens)
@@ -518,12 +497,11 @@ class SimpleTokenizer:
         """
         Encode text to token IDs.
 
-        📖 ENCODING PROCESS:
+        Encoding process:
         1. Add <s> (start token) if requested
         2. Split text into words
-        3. For each word:
-           - If word in vocab → use word token
-           - Else → use character tokens
+        3. Words found in the vocab become single tokens; anything else
+           falls back to character tokens
         4. Add spaces between words
         5. Add </s> (end token) if requested
 
@@ -579,7 +557,7 @@ class SimpleTokenizer:
         """
         Decode token IDs to text.
 
-        📖 DECODING PROCESS:
+        Decoding process:
         1. Look up each ID in id_to_token dictionary
         2. Skip special tokens if requested
         3. Join tokens intelligently (handle spaces)
@@ -632,10 +610,9 @@ class SimpleTokenizer:
         """
         Tokenize text (HuggingFace-compatible interface).
 
-        📖 WHAT THIS DOES:
-        Same as encode(), but returns a dictionary and optionally
-        handles padding, truncation, and tensor conversion.
-        This makes the tokenizer work like HuggingFace tokenizers!
+        Same as encode(), but returns a dictionary and optionally handles
+        padding, truncation, and tensor conversion, so the tokenizer can be
+        used like a HuggingFace tokenizer.
 
         Args:
             text: Input text to tokenize

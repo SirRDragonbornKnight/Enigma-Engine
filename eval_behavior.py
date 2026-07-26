@@ -36,7 +36,6 @@ a 182M honesty bar, raise as she grows). See THRESHOLDS for the live values.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import time
@@ -393,14 +392,14 @@ def _git_state() -> tuple[str, bool]:
 
 
 def _probe_digest(probes: Path) -> str:
-    """Digest of the probe CONTENT, line-endings normalized.
+    """The gate's identity digest -- eval_leak_guard.file_digest, by name.
 
-    Hashing raw bytes made the receipt CRLF-sensitive: this repo normalizes on
-    checkout, so the same sealed blob hashes differently on two clones and a
-    legitimate re-measure looks like it scored a different set.
-    """
-    raw = probes.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    return hashlib.sha256(raw).hexdigest()
+    This used to be a byte-for-byte reimplementation, which silently coupled
+    the two: seal() writes probe_file_sha256 with file_digest, and the check
+    below compares THIS function's output against it, so if either copy's
+    normalization ever changed alone the gate would stop matching its own
+    seal. One owner ends that."""
+    return eval_leak_guard.file_digest(probes)
 
 
 def _refuse_unsealing_path(transcript: Path) -> None:
@@ -714,7 +713,16 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     if transcript is not None:
         # Fail here, not after a full suite has run against a live server.
         _refuse_unsealing_path(transcript)
-    cases = [json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # Skip "#" comment lines the way the sealer does (eval_leak_guard._cli_seal):
+    # the two readers disagreeing meant a commented DEV file sealed fine and
+    # then crashed this run at json.loads. The GATE file still cannot carry
+    # comments -- its identity is the file's bytes, so a commented holdout
+    # never matches its seal in the first place.
+    cases = [
+        json.loads(line)
+        for line in probes.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
     if not cases:
         print(f"FAIL: probe file has no cases: {probes}")
         return 2
@@ -851,9 +859,11 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--base-url", default="http://127.0.0.1:8123")
+    ap.add_argument("--base-url", default="http://127.0.0.1:8123",
+                    help="target server; the default is the SCRATCH port on purpose -- this run clears the target's memory store, so it must never default to the live 8000")
     ap.add_argument("--temperature", type=float, default=0.0, help="true greedy for reproducible scores (0.01 still flips a borderline token)")
-    ap.add_argument("--max-tokens", type=int, default=60)
+    ap.add_argument("--max-tokens", type=int, default=60,
+                    help="per-answer budget; graders read the first sentence-or-two, and a longer leash mostly buys rambling past the scored span")
     ap.add_argument("--probes", default=str(PROBES), help="probe file; point at data/eval/locked_probes.jsonl for the sealed-holdout re-measure (EVAL_REDESIGN)")
     ap.add_argument("--transcript", default=None, help="write every full answer + the run conditions (probe sha, git sha, decode config) to this JSONL; required for the locked baseline receipt and for any second-grader pass")
     ap.add_argument("--allow-live-server", action="store_true", help="permit a target outside the scratch ports; the run CLEARS that server's memory store first, so only pass this for a disposable one")

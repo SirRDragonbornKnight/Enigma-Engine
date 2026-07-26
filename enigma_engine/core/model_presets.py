@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# ⚙️ CONFIGURATION - Model Settings
+# CONFIGURATION
 # =============================================================================
 # ForgeConfig holds ALL the settings that define a model's architecture.
 # Think of it as a blueprint - same settings = same model structure.
@@ -31,9 +31,9 @@ class ForgeConfig:
     """
     Model configuration with sensible defaults.
 
-    📖 WHAT EACH SETTING DOES:
+    What each setting does:
 
-    CORE ARCHITECTURE:
+    Core architecture:
     ┌────────────────────────────────────────────────────────────────────────┐
     │ vocab_size  │ How many unique tokens the model knows (like vocabulary)│
     │ dim         │ Hidden dimension - the "width" of neural pathways       │
@@ -311,7 +311,7 @@ class ForgeConfig:
 
 
 # =============================================================================
-# ⚡ QUANTIZATION CONFIG - Memory-Efficient Model Deployment
+# QUANTIZATION CONFIG
 # =============================================================================
 
 
@@ -320,10 +320,9 @@ class QuantizationConfig:
     """
     Configuration for model quantization.
 
-    📖 WHAT THIS DOES:
     Quantization reduces model precision to save memory and speed up inference.
 
-    📐 QUANTIZATION TYPES:
+    Quantization types:
     ┌────────────┬────────────────────────────────────────────────────────────┐
     │ Type       │ Description                                                │
     ├────────────┼────────────────────────────────────────────────────────────┤
@@ -333,13 +332,13 @@ class QuantizationConfig:
     │ int4       │ 4-bit quantization (smallest, some quality loss)          │
     └────────────┴────────────────────────────────────────────────────────────┘
 
-    ⚡ MEMORY SAVINGS:
+    Memory savings:
     - FP32: 4 bytes/param (baseline)
     - FP16: 2 bytes/param (50% savings)
     - INT8: 1 byte/param (75% savings)
     - INT4: 0.5 bytes/param (87.5% savings)
 
-    🍓 PI RECOMMENDATIONS:
+    Raspberry Pi recommendations:
     - Pi Zero: int4 quantization (fits in 512MB RAM)
     - Pi 4 (4GB): int8 quantization
     - Pi 5 (8GB): dynamic quantization
@@ -368,7 +367,7 @@ class QuantizationConfig:
 
 
 # =============================================================================
-# 📊 MODEL PRESETS - From Raspberry Pi to Server Farm!
+# MODEL PRESETS
 # =============================================================================
 # These presets make it easy to create models of different sizes.
 # Just pick a preset name and the config is ready to go!

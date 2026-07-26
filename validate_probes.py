@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from eval_behavior import INFORMATIONAL_CATEGORIES, THRESHOLDS, _grade_identity, _grade_text  # noqa: E402
+from eval_behavior import INFORMATIONAL_CATEGORIES, THRESHOLDS, _grade_identity  # noqa: E402
 from eval_leak_guard import LockedProbeGuard, seal as _seal_texts  # noqa: E402
 from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
 
@@ -143,7 +143,10 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if not stripped:
             continue
         if stripped.startswith("#"):
-            errors.append(f"line {lineno}: comment line -- seals fine, then crashes the eval run")
+            # The sealer and the eval BOTH skip these now, but the gate's
+            # identity is the file's BYTES -- a commented holdout can never
+            # match its seal, so refusing at authoring time is the honest gate.
+            errors.append(f"line {lineno}: comment line -- a commented file can never match its byte seal")
             continue
         try:
             rec = json.loads(stripped)

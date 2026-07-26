@@ -415,7 +415,10 @@ def main() -> None:
                 f"refusing to silently start a fresh run"
             )
         try:
-            ck = torch.load(rp, map_location=device)
+            # weights_only explicit: these checkpoints carry optimizer state
+            # and the schedule dict, and a torch default flip would break
+            # every resume (the sibling loaders in finetune/dpo already pin it).
+            ck = torch.load(rp, map_location=device, weights_only=False)
         except Exception as exc:
             prev = rp.parent / "prev.pth"
             if rp.name == "latest.pth" and prev.exists():
@@ -423,9 +426,17 @@ def main() -> None:
                 # fall back to the rotated previous generation
                 print(f"load: {rp} unreadable ({exc}) -> falling back to {prev}", flush=True)
                 rp = prev
-                ck = torch.load(rp, map_location=device)
+                ck = torch.load(rp, map_location=device, weights_only=False)
             else:
                 raise
+        # This was the ONE loader in the pipeline without a shape guard: the
+        # six siblings all refuse a wrong-format .pth with a curated message,
+        # while a foreign file here surfaced as a bare KeyError hundreds of
+        # lines later at ck["model_state_dict"].
+        if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
+            raise SystemExit(
+                f"{rp} is not an Enigma checkpoint (need model_state_dict + config)"
+            )
         # Warm-start keeps the CLI schedule (fresh warmup at the new block);
         # only exact resume restores the checkpoint's recorded schedule.
         saved_sched = ck.get("schedule") if not warm_start else None

@@ -130,10 +130,10 @@ class Enigma(nn.Module):
     """
     Enigma - Modern Transformer Language Model
 
-    📖 THIS IS THE COMPLETE MODEL!
-    Stacks together all the components: embeddings, transformer blocks, output.
+    The complete model: embeddings, transformer blocks, and the output head
+    stacked together.
 
-    📐 FULL ARCHITECTURE:
+    Full architecture:
     ┌────────────────────────────────────────────────────────────────────────┐
     │  Input Token IDs [batch, seq_len]                                       │
     │          ↓                                                              │
@@ -162,17 +162,15 @@ class Enigma(nn.Module):
     │  Output Logits [batch, seq_len, vocab_size]                            │
     └────────────────────────────────────────────────────────────────────────┘
 
-    ⚡ FEATURES:
+    Features:
     - RoPE positional embeddings (knows word order)
     - RMSNorm (fast and stable)
     - SwiGLU activation (better learning)
     - GQA attention (memory efficient)
     - KV cache (fast generation)
 
-    🔗 CONNECTS TO:
-      → Uses all the components defined above
-      ← Used by EnigmaEngine for inference
-      ← Used by Trainer for training
+    Uses the components defined above; used by EnigmaEngine for inference and
+    by Trainer for training.
     """
 
     def __init__(self, config: ForgeConfig, **kwargs):
@@ -531,7 +529,6 @@ class Enigma(nn.Module):
         """
         Forward pass with multi-modal inputs.
 
-        📖 WHAT THIS DOES:
         Processes text, vision, and/or audio inputs together. Vision and audio
         features are projected to the text embedding space and concatenated.
 
@@ -830,29 +827,9 @@ class Enigma(nn.Module):
         """
         Streaming token generation - yields tokens as they're generated.
 
-        📖 WHAT THIS DOES:
-        Instead of waiting for all tokens to be generated, this yields each
-        token as soon as it's produced. Essential for real-time chat UX!
-
-        📐 STREAMING FLOW:
-        ┌────────────────────────────────────────────────────────────────────┐
-        │  User: "Tell me a story"                                           │
-        │                                                                    │
-        │  [Model starts generating]                                         │
-        │       ↓                                                            │
-        │  yield "Once"    ← User sees this immediately                      │
-        │       ↓                                                            │
-        │  yield " upon"   ← And this...                                     │
-        │       ↓                                                            │
-        │  yield " a"      ← And this...                                     │
-        │       ↓                                                            │
-        │  yield " time"   ← Progressive display!                            │
-        └────────────────────────────────────────────────────────────────────┘
-
-        💡 ADVANTAGES:
-        - Better user experience (see output immediately)
-        - Can cancel generation early
-        - Works great with chat interfaces
+        Instead of waiting for the full completion, this yields each token as
+        soon as it is produced, so chat interfaces can display output
+        progressively and callers can cancel generation early.
 
         Args:
             input_ids: Input token IDs [batch, seq_len]
@@ -943,11 +920,10 @@ class Enigma(nn.Module):
         """
         Create an optimally-configured model for the current hardware.
 
-        📖 WHAT THIS DOES:
-        Detects your hardware (GPU, RAM, Pi model) and automatically creates
-        a model with the best configuration for your system.
+        Detects the hardware (GPU, RAM, Pi model) and creates a model with the
+        best configuration for it.
 
-        📐 DETECTION FLOW:
+        Detection flow:
         ┌─────────────────────────────────────────────────────────────────────┐
         │  1. Detect hardware (RAM, GPU, is_raspberry_pi)                     │
         │  2. Recommend model size (pi_zero, pi_4, pi_5, small, medium, etc.) │
@@ -993,11 +969,10 @@ class Enigma(nn.Module):
         """
         Apply quantization to reduce model memory footprint.
 
-        📖 WHAT THIS DOES:
         Converts model weights to lower precision to save memory and
         potentially speed up inference on CPU.
 
-        📐 QUANTIZATION MODES:
+        Quantization modes:
         ┌────────────────────────────────────────────────────────────────────┐
         │ Mode     │ Memory │ Speed  │ Quality │ Best For                   │
         ├──────────┼────────┼────────┼─────────┼────────────────────────────┤
@@ -1007,7 +982,7 @@ class Enigma(nn.Module):
         │ int4     │ ~12%   │ Slower │ Fair    │ Pi Zero, extreme limits    │
         └────────────────────────────────────────────────────────────────────┘
 
-        ⚠️ NOTES:
+        Notes:
         - Quantization is irreversible (on the current model instance)
         - GPU acceleration may not work after quantization
         - Quality degradation is usually minor for dynamic/int8
@@ -1134,7 +1109,6 @@ class Enigma(nn.Module):
         """
         Load a model from Safetensors format.
 
-        📖 WHAT THIS DOES:
         Loads model weights from Safetensors format, which is faster and
         safer than pickle-based formats (no arbitrary code execution).
 
@@ -1210,7 +1184,6 @@ class Enigma(nn.Module):
         """
         Export model to Safetensors format.
 
-        📖 WHAT THIS DOES:
         Saves the model weights in Safetensors format, which is:
         - Faster to load than pickle-based formats
         - Safer (no arbitrary code execution)
@@ -1255,13 +1228,12 @@ class Enigma(nn.Module):
         """
         Export model to ONNX format for deployment.
 
-        📖 WHAT THIS DOES:
         Exports the model to ONNX format, enabling:
         - Cross-platform deployment (C++, mobile, web)
         - Hardware-specific optimizations (TensorRT, OpenVINO)
         - Framework-agnostic inference
 
-        ⚠️ NOTES:
+        Notes:
         - KV-cache based generation is not directly supported in ONNX
         - Export captures the model at a fixed sequence length
         - Dynamic axes allow variable batch/sequence sizes
@@ -1312,7 +1284,6 @@ class Enigma(nn.Module):
         """
         Export model to standard PyTorch format (.pth).
 
-        📖 WHAT THIS DOES:
         Saves model weights and config in native PyTorch format.
         This is the default format used by Enigma AI Engine.
 

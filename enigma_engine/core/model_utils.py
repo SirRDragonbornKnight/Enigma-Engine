@@ -66,7 +66,7 @@ def get_model(name: str) -> Optional[Enigma]:
 
 
 # =============================================================================
-# 🔄 REPETITION PENALTY HELPER - Efficient penalty application
+# REPETITION PENALTY HELPER
 # =============================================================================
 
 
@@ -213,7 +213,7 @@ def sample_next_token(
 
 
 # =============================================================================
-# 🔧 HARDWARE DETECTION HELPERS
+# HARDWARE DETECTION HELPERS
 # =============================================================================
 
 

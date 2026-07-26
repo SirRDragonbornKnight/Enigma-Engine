@@ -452,12 +452,14 @@ def refuse_if_leaky(texts: list[str], source: Path, manifest: Path = LOCKED_MANI
     _write_verdict(source, manifest, guard, len(texts), advisory or [], flagged_texts)
 
 
-def last_verdict(source: Path, manifest: Path = LOCKED_MANIFEST) -> dict | None:
+def last_verdict(source: Path) -> dict | None:
     """The recorded verdict for `source`, or None if the guard never ran on it.
 
     Trainers read this to stamp the guard's result into the checkpoint, so a
     finished model carries evidence the screen ran rather than leaving it in a
-    console scrollback that redirection can lose."""
+    console scrollback that redirection can lose. (It once took a `manifest`
+    parameter in signature-mimicry of refuse_if_leaky; the verdict lives
+    beside the SOURCE and no caller ever passed one.)"""
     path = _verdict_path(source)
     if not path.exists():
         return None

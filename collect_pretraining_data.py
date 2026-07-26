@@ -478,66 +478,54 @@ def _clean_wikitext(wikitext: str) -> str:
     """
     text = wikitext
 
-    # Remove nested templates {{ ... }} — iterate since they nest
-    # Limit iterations to avoid pathological cases
+    # Strips the wiki markup families -- templates (iterated because they
+    # nest, bounded at 8 passes), tables, refs and HTML, category/file
+    # embeds, links (keeping display text), formatting, headers, magic
+    # words, leftover braces -- with the specific families handled before
+    # the generic link and brace sweeps so their text cannot leak into the
+    # plaintext output.
     for _ in range(8):
         result = re.sub(r"\{\{[^{}]*\}\}", "", text)
         if result == text:
             break
         text = result
 
-    # Remove leftover unclosed templates (greedy but bounded)
     text = re.sub(r"\{\{[^}]{0,500}$", "", text, flags=re.MULTILINE)
 
-    # Remove tables {| ... |}
     text = re.sub(r"\{\|.*?\|\}", "", text, flags=re.DOTALL)
 
-    # Remove <ref>...</ref> and <ref ... /> (citations)
     text = re.sub(r"<ref[^>]*>.*?</ref>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<ref[^>]*/>", "", text, flags=re.IGNORECASE)
 
-    # Remove HTML comments
     text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
 
-    # Remove all remaining HTML tags
     text = re.sub(r"<[^>]+>", "", text)
 
-    # Remove categories [[Category:...]]
     text = re.sub(r"\[\[Category:[^\]]*\]\]", "", text, flags=re.IGNORECASE)
 
-    # Remove file/image embeds [[File:...]] [[Image:...]]
     text = re.sub(r"\[\[(?:File|Image):[^\]]*\]\]", "", text, flags=re.IGNORECASE)
 
-    # Convert wiki links [[target|display]] → display, [[target]] → target
     text = re.sub(r"\[\[[^|\]]*\|([^\]]+)\]\]", r"\1", text)
     text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
 
-    # Remove external links [http://... display] → display, [http://...] → ""
     text = re.sub(r"\[https?://\S+\s+([^\]]+)\]", r"\1", text)
     text = re.sub(r"\[https?://\S+\]", "", text)
     text = re.sub(r"https?://\S+", "", text)
 
-    # Remove bold/italic markers
     text = re.sub(r"'{2,5}", "", text)
 
-    # Remove section headers == Header == → Header (keep text)
     text = re.sub(r"^=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.MULTILINE)
 
-    # Remove magic words and behavior switches
     text = re.sub(r"__[A-Z]+__", "", text)
 
-    # Remove reference markers [1], [2], etc.
     text = re.sub(r"\[\d+\]", "", text)
     text = re.sub(r"\[citation needed\]", "", text, flags=re.IGNORECASE)
 
-    # Remove leftover braces/brackets
     text = re.sub(r"\{[^}]*\}", "", text)
 
-    # Collapse whitespace
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
 
-    # Clean up lines
     lines = text.split("\n")
     cleaned = []
     for line in lines:
@@ -615,11 +603,9 @@ def process_wiki_dump(progress: dict) -> int:
         ...
       </mediawiki>
     """
-    # Step 1: Download the dump if not present
     if not _download_wiki_dump(resume=True):
         return 0
 
-    # Step 2: Process the dump
     WIKI_DUMP_DIR.mkdir(parents=True, exist_ok=True)
 
     # Track what we've already processed for resume support
@@ -3332,7 +3318,6 @@ def combine_all_sources() -> None:
                             if len(text.strip()) < MIN_PARAGRAPH_LENGTH:
                                 continue
 
-                            # Paragraph-level dedup
                             paragraphs = text.split("\n\n")
                             unique_paras = []
                             for para in paragraphs:
@@ -3340,8 +3325,8 @@ def combine_all_sources() -> None:
                                 if len(para) < MIN_PARAGRAPH_LENGTH:
                                     unique_paras.append(para)
                                     continue
-                                # S789: Use raw digest (8 bytes, ~41B/entry)
-                                # instead of hexdigest (16 chars, ~65B/entry)
+                                # Raw digest (8 bytes, ~41B/entry) instead of
+                                # hexdigest (16 chars, ~65B/entry)
                                 h = hashlib.sha256(para.encode("utf-8")).digest()[:8]
                                 if h in seen_hashes:
                                     dupes_skipped += 1

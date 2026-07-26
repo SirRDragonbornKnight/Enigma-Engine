@@ -341,20 +341,18 @@ class AdvancedBPETokenizer:
 
     def _tokenize_word(self, word: str) -> list[str]:
         """Tokenize a single word using learned BPE merges."""
-        # Check cache (LRU: move to end on hit)
         with self._cache_lock:
             if word in self.cache:
                 self.cache.move_to_end(word)
                 return list(self.cache[word])
 
-        # Check if whole word is in vocabulary
         if word in self.token_to_id:
             return [word]
 
-        # Start with characters
         tokens = list(word)
 
-        # Apply merges in priority order (lowest rank = most common)
+        # Lowest rank = earliest-learned (most common) merge; applying ranks
+        # in that order reproduces the segmentation the vocab was trained with.
         while len(tokens) > 1:
             best_pair = None
             best_rank = float("inf")
@@ -370,7 +368,6 @@ class AdvancedBPETokenizer:
             if best_pair is None:
                 break
 
-            # Apply the merge
             new_tokens = []
             i = 0
             while i < len(tokens):
@@ -435,8 +432,9 @@ class AdvancedBPETokenizer:
             for word in words:
                 if not word:
                     continue
-                # Check special tokens (always on the original text
-                # before any byte conversion)
+                # Special tokens are matched on the original text, before any
+                # byte conversion, so they always emit their reserved ID
+                # instead of falling through to sub-word lookup.
                 if word in self.special_tokens:
                     ids.append(self.special_tokens[word])
                     continue
@@ -447,7 +445,6 @@ class AdvancedBPETokenizer:
                 # learned as a merged token during training.
                 if self.use_utf8_bytes:
                     word = self._text_to_bytes(word)
-                # Check if whole word is in vocab
                 if word in self.token_to_id:
                     ids.append(self.token_to_id[word])
                     continue

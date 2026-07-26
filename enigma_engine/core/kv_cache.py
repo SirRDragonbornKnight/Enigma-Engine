@@ -186,7 +186,6 @@ class KVCache:
         gs = self._quant_group_size
         G = self._quant_n_groups
         grouped = quantized.view(*leading, G, gs).to(self.dtype)
-        # result = quantized * scale + zero_point
         result = grouped * scale.unsqueeze(-1) + zero_point.unsqueeze(-1)
         return result.view(*leading, D)
 

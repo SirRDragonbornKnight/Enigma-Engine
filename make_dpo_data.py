@@ -60,16 +60,23 @@ R_SYCO_COMPANY = [
 ]
 
 
-def gen_dpo_pairs(seed: int = 11) -> list[dict]:
+def gen_dpo_pairs(seed: int = 11, eval_qs: set | None = None,
+                  locked: "LockedProbeGuard | None" = None) -> list[dict]:
     rng = random.Random(seed)
-    eval_qs = _eval_probe_questions()
-    locked = LockedProbeGuard.load()  # fuzzy holdout of the sealed locked set
+    # Loaded once by main() and shared with load_teach_pairs -- each function
+    # used to re-read and re-parse both artifacts per run.
+    eval_qs = _eval_probe_questions() if eval_qs is None else eval_qs
+    locked = LockedProbeGuard.load() if locked is None else locked
     pairs: list[dict] = []
 
     def add(q: str, chosen: str, rejected: str) -> None:
         ql = q.strip().lower()
+        # Held out, same rule as SFT (exact dev + fuzzy locked). SFT screens
+        # every prompt-side TURN because its records carry system blocks; a
+        # DPO record's whole prompt side IS this one string, so the single
+        # check here is the same rule, not a weaker one.
         if ql in eval_qs or locked.leaks(ql):
-            return  # held out, same rule as SFT (exact dev + fuzzy locked)
+            return
         pairs.append({"prompt": q, "chosen": chosen, "rejected": rejected})
 
     # Identity intents: every question x (its right answers) vs foreign +
@@ -112,7 +119,9 @@ def gen_dpo_pairs(seed: int = 11) -> list[dict]:
 TEACH_REPEAT = 3  # user corrections are few and personally important
 
 
-def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = TEACH_REPEAT) -> list[dict]:
+def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = TEACH_REPEAT,
+                     eval_qs: set | None = None,
+                     locked: "LockedProbeGuard | None" = None) -> list[dict]:
     """User /fix corrections from teach_enigma.py -- her own wrong answer vs
     the user's correction. Few and personally important, so they ride x{repeat}
     (the TEACHINGS_REPEAT logic). Same probe holdout + exact-triple dedup as
@@ -120,8 +129,8 @@ def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = TEAC
     non-string field values -- a crash here would block the whole build)."""
     if not path.exists():
         return []
-    eval_qs = _eval_probe_questions()
-    locked = LockedProbeGuard.load()
+    eval_qs = _eval_probe_questions() if eval_qs is None else eval_qs
+    locked = LockedProbeGuard.load() if locked is None else locked
     seen, uniq = set(), []
     for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
@@ -145,8 +154,10 @@ def load_teach_pairs(path: Path = ROOT / "teach_pairs.jsonl", repeat: int = TEAC
 
 
 def main() -> None:
-    pairs = gen_dpo_pairs()
-    taught = load_teach_pairs()
+    eval_qs = _eval_probe_questions()
+    locked = LockedProbeGuard.load()
+    pairs = gen_dpo_pairs(eval_qs=eval_qs, locked=locked)
+    taught = load_teach_pairs(eval_qs=eval_qs, locked=locked)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs + taught) + "\n", encoding="utf-8")
     n_user = len(taught) // TEACH_REPEAT if taught else 0

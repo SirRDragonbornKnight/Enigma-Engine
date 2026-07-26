@@ -187,7 +187,11 @@ def main() -> None:
     persona = Persona.load(Path(args.persona) if args.persona else None)
     guard = LockedProbeGuard.load()
     if not len(guard):
-        print("WARN: no sealed probe manifest -- the curated shard is UNSCREENED", flush=True)
+        # Same first line every builder prints for this condition, so a log
+        # grep finds them all -- plus the consequence unique to THIS path:
+        # pretokenize has no screen of its own, so nothing downstream rechecks.
+        print("locked-probe fuzzy guard inactive (no data/eval/locked_probes.manifest.json yet)", flush=True)
+        print("WARN: the curated shard would be UNSCREENED -- the pretrain path has no consume-time guard", flush=True)
 
     groups = build(persona, args.conversation)
     kept, dropped = screen(groups, guard)

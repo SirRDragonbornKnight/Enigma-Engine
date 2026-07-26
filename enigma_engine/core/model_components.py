@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 🧱 MODEL COMPONENTS - The Building Blocks
+# MODEL COMPONENTS
 # =============================================================================
 # These are the LEGO pieces that build the full transformer.
 # Each class is a specific neural network layer with a special purpose.
@@ -27,24 +27,14 @@ logger = logging.getLogger(__name__)
 
 class RMSNorm(nn.Module):
     """
-    Root Mean Square Layer Normalization - faster than LayerNorm!
+    Root Mean Square Layer Normalization.
 
-    📖 WHAT THIS DOES:
-    Normalizes the input to have consistent scale. Like adjusting volume
-    on speakers so nothing is too loud or too quiet.
+    Normalizes the input to a consistent scale: divide x by its RMS
+    (sqrt(mean(x^2))), then multiply by a learned per-dimension weight.
+    Unlike LayerNorm it skips the mean subtraction, so only one statistic
+    is computed instead of two; quality is the same and it is ~10% faster.
 
-    📐 THE MATH (simplified):
-    1. Calculate RMS: sqrt(mean(x²))
-    2. Divide x by RMS (now values are normalized)
-    3. Multiply by learned weight (model learns optimal scale)
-
-    💡 WHY RMSNorm INSTEAD OF LAYERNORM?
-    LayerNorm: Subtracts mean, divides by std (2 stats to compute)
-    RMSNorm: Just divides by RMS (1 stat to compute)
-    Result: Same quality, ~10% faster!
-
-    🔗 USED BY:
-      ← TransformerBlock uses this before attention and FFN
+    Used by TransformerBlock before attention and the FFN.
     """
 
     def __init__(self, dim: int, eps: float = 1e-6) -> None:
@@ -96,7 +86,7 @@ class DropPath(nn.Module):
 
 
 # =============================================================================
-# 🌀 ROTARY POSITION EMBEDDINGS (RoPE) - How the model knows word order
+# ROTARY POSITION EMBEDDINGS (RoPE)
 # =============================================================================
 # Without position info, "dog bites man" = "man bites dog" to the model!
 # RoPE encodes position by ROTATING the vectors - elegant and effective.
@@ -108,25 +98,15 @@ def precompute_rope_frequencies(
     """
     Precompute RoPE frequencies for all positions with optional scaling.
 
-    📖 WHAT THIS DOES:
-    Creates a table of rotation angles for each position and dimension.
-    These rotations encode "position 0", "position 1", etc.
-    With scaling, extends context length beyond training length.
+    Creates a table of rotation angles for each position and dimension pair:
+    for dimension pair i, frequency = 1 / (theta^(2i/dim)); for position p,
+    angle = p * frequency. Each dimension pair rotates at its own speed,
+    which is what lets the model read position back out of the rotations.
 
-    📐 THE MATH:
-    For dimension pair i, frequency = 1 / (theta^(2i/dim))
-    For position p, angle = p * frequency
-
-    🎯 ROPE SCALING:
+    Scaling modes (extend context beyond the training length):
     - linear: freqs = freqs / scaling_factor (simple compression)
     - dynamic: Adaptive NTK-aware scaling (better quality)
     - yarn: Yet another RoPE extension (best for very long contexts)
-
-    💡 WHY THIS WORKS:
-    - Different dimensions get different rotation speeds
-    - Position 5 at dim 0 rotates differently than position 5 at dim 10
-    - Model can learn to "read" these rotations to understand order
-    - Scaling lets model handle longer contexts than it was trained on
 
     Args:
         dim: Dimension per head (must be even)
@@ -205,14 +185,9 @@ def apply_rotary_embedding(x: torch.Tensor, freqs_cis: torch.Tensor, start_pos: 
     """
     Apply rotary embeddings to Q and K tensors.
 
-    📖 WHAT THIS DOES:
-    Rotates the query/key vectors based on their position.
-    This lets the model know "this word is at position 5" vs "position 10".
-
-    📐 HOW IT WORKS:
-    1. Treat pairs of dimensions as complex numbers
-    2. Multiply by rotation (complex multiplication = rotation!)
-    3. Convert back to real numbers
+    Rotates the query/key vectors by their position: pairs of dimensions are
+    treated as complex numbers, multiplied by the precomputed rotation, and
+    converted back to real numbers.
 
     Args:
         x: Input tensor [batch, seq, heads, dim]
@@ -256,31 +231,19 @@ class Attention(nn.Module):
     """
     Multi-Head Attention with Grouped Query Attention (GQA).
 
-    📖 WHAT THIS DOES:
-    Attention is how the model "looks at" different parts of the input.
-    "The cat sat on the mat" - when processing "sat", attention lets
-    the model look back at "cat" to know WHO sat.
+    Computes scaled dot-product attention: project the input to Q, K, V;
+    scores = Q @ K.T / sqrt(dim); softmax the scores; output = scores @ V.
 
-    📐 THE MATH (simplified):
-    1. Create Query (Q), Key (K), Value (V) from input
-    2. Attention scores = Q @ K.T / sqrt(dim)  (which words to look at?)
-    3. Softmax → probabilities (normalize scores)
-    4. Output = scores @ V  (weighted combination of values)
+    GQA lets multiple query heads share one K/V head (8 Q heads with 2 KV
+    heads means 4 Q heads per KV head), saving 2-4x KV memory versus one
+    K/V pair per head.
 
-    ⚡ GROUPED QUERY ATTENTION (GQA):
-    Normal: Each head has its own K and V (memory hungry!)
-    GQA: Multiple Q heads share the same K,V (saves 2-4x memory!)
+    During generation only one new token arrives at a time, so K and V for
+    previous tokens are cached instead of recomputed - O(n) per token
+    instead of O(n^2).
 
-    Example: 8 Q heads, 2 KV heads → 4 Q heads share each KV head
-
-    💾 KV-CACHE:
-    During generation, we only add ONE new token at a time.
-    Instead of recomputing K,V for all previous tokens, we cache them!
-    This makes generation O(n) instead of O(n²) - HUGE speedup!
-
-    🔗 CONNECTS TO:
-      → Uses RoPE (apply_rotary_embedding) for position encoding
-      ← Used by TransformerBlock
+    Uses RoPE (apply_rotary_embedding) for position encoding; used by
+    TransformerBlock.
     """
 
     # Maximum KV-cache size (sliding window for memory efficiency)
@@ -476,10 +439,8 @@ class Attention(nn.Module):
             # ─────────────────────────────────────────────────────────────────
             # STANDARD ATTENTION PATH: Works everywhere (CPU, MPS, any dtype)
             # ─────────────────────────────────────────────────────────────────
-            # Transpose for batched matrix multiply: [batch, heads, seq, dim]
             q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
-            # scores = Q @ K.T / sqrt(head_dim) - scaled dot-product attention
             scores = torch.matmul(q, k.transpose(-2, -1)) * self._scale
             if mask is not None:
                 scores = scores + mask  # Mask is -inf for blocked positions
@@ -532,21 +493,13 @@ class FeedForward(nn.Module):
     """
     SwiGLU Feed-Forward Network.
 
-    📖 WHAT THIS DOES:
-    After attention decides WHAT to look at, the FFN decides
-    WHAT TO DO with that information. It's the "thinking" part!
-
-    📐 SWIGLU FORMULA:
     Standard FFN: output = W2(ReLU(W1(x)))
     SwiGLU:       output = W2(Swish(W1(x)) * W3(x))
 
-    💡 WHY SWIGLU IS BETTER:
-    - Swish activation is smoother than ReLU (no hard corners)
-    - Gating mechanism (the W3 multiplication) helps information flow
-    - Empirically shown to train faster and achieve lower loss
+    Swish is smoother than ReLU and the W3 gating helps information flow;
+    SwiGLU is empirically shown to train faster and reach lower loss.
 
-    🔗 CONNECTS TO:
-      ← Used by TransformerBlock after attention
+    Used by TransformerBlock after attention.
     """
 
     def __init__(self, config: ForgeConfig) -> None:
@@ -580,13 +533,11 @@ class FeedForward(nn.Module):
         """
         Forward pass through feed-forward network.
 
-        📐 SwiGLU computation:
-        1. gate = swish(W1 @ x)  ← Smooth activation
-        2. value = W3 @ x        ← Unactivated projection
-        3. hidden = gate * value ← Gated combination
-        4. output = W2 @ hidden  ← Project back
-
-        The "gating" (multiplication) is what makes SwiGLU special!
+        SwiGLU computation:
+        1. gate = swish(W1 @ x)
+        2. value = W3 @ x
+        3. hidden = gate * value
+        4. output = W2 @ hidden
         """
         if self.use_swiglu:
             # SwiGLU: swish(W1(x)) * W3(x), then W2
@@ -600,28 +551,22 @@ class TransformerBlock(nn.Module):
     """
     Single Transformer block with pre-norm architecture.
 
-    📖 WHAT THIS DOES:
-    One "layer" of the transformer - stack N of these for the full model.
+    One layer of the transformer - stack N of these for the full model.
 
-    📐 PRE-NORM ARCHITECTURE (better than original post-norm!):
+    Pre-norm architecture:
     x → [Norm] → [Attention] → + → [Norm] → [FFN] → + → output
          │                     ↑         │           ↑
          └─────────────────────┘         └───────────┘
               (residual skip)           (residual skip)
 
-    💡 WHY PRE-NORM?
-    Original transformers: Attention → Norm (post-norm)
-    Modern transformers: Norm → Attention (pre-norm)
-    Pre-norm is more stable during training, especially for deep models!
+    Pre-norm (norm before attention, the modern convention) trains more
+    stably than the original post-norm ordering, especially in deep models.
+    The residual skips (the + signs) let gradients flow directly through
+    the network; without them deep networks are nearly impossible to train.
 
-    ⚡ RESIDUAL CONNECTIONS (the + signs):
-    Skip connections let gradients flow directly through the network.
-    Without them, deep networks are nearly impossible to train.
-
-    ⚡ GRADIENT CHECKPOINTING:
-    When enabled, recomputes activations during backward pass instead of
-    storing them. Trades ~30% compute for ~50% memory savings - essential
-    for training large models on limited hardware.
+    Gradient checkpointing, when enabled, recomputes activations during the
+    backward pass instead of storing them - trades ~30% compute for ~50%
+    memory savings, essential for training large models on limited hardware.
     """
 
     def __init__(self, config: ForgeConfig, layer_id: int) -> None:
