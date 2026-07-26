@@ -539,6 +539,20 @@ Prerequisites (not training):
 - P2. v5/v8 locked re-measure (`--port 8123`, throwaway `--memory-dir`,
   `--transcript` OUTSIDE the repo) = the baseline v2 must beat. Runs before
   any vocab adoption.
+    - **DONE 2026-07-26, under the floor-2 seal (manifest ff070561, first
+      live SEALED GATE RUNs on it) and the `tools_run` grader, greedy:**
+      both checkpoints 47/96 OVERALL (v5 up 1 from the recorded 46 -- the
+      old restraint column was the flagged upper bound). Category-resolved:
+      v8 = identity 5, adversarial 2, factual 8, math 7, tool 12, restraint
+      10, memory 3, unknown 0 (of 12 each); v5 = identity 7, adversarial 1,
+      factual 7, math 9, tool 12, restraint 7, memory 4, unknown 0. THE
+      BASELINE IS 47/96; v8 keeps adoption on restraint (10 vs 7). Color
+      worth keeping: both models leak the taught memory names into unknown
+      answers ("the person next to me" -> "Elena."/"Marcus."), and unknown
+      is 0/24 across both -- epistemics are the v2 recipe's biggest win
+      condition. NOTE: if the teach-content reseal (proposal in the user's
+      Documents, 2026-07-26) is approved, re-run both memory columns for
+      continuity.
     - The harness CLEARS the target server's memory store before probing and
       then writes probe facts into it, so it refuses any target off the
       scratch port unless `--allow-live-server` is passed. Never point it at
