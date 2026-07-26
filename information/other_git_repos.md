@@ -302,7 +302,7 @@ Gaps discovered by reading actual Enigma source code, not just repo comparisons:
 
 ---
 
-**Cross-reference:** The consolidated backlog of all actionable findings from these reviews is in `SUGGESTIONS.md` (Open Backlog section, including the new "Realistic Priority Assessment" section). This file is the per-repo detail reference.
+**Cross-reference:** The consolidated backlog of all actionable findings from these reviews is in `BACKLOG.md` (the `SUGGESTIONS.md` "Open Backlog" section this line used to point at was consolidated there). This file is the per-repo detail reference.
 
 ---
 

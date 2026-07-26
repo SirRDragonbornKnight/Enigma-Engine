@@ -1,19 +1,16 @@
 # Tokenizer v2 redo — spec + cost (2026-07-16, MEASURED 2026-07-19)
 
-> Status: **CPU PREFIX BUILT AND MEASURED 2026-07-19** — the pre-tokenizer,
-> vocab versioning, and both encode paths are implemented and test-pinned
-> (`enigma_engine/core/pretokenize.py`, `tests/test_tokenizer_v2.py`), and a
-> real 16k vocab was trained on a stratified corpus sample to replace this
-> doc's estimates with measurements (below). NOT yet done: the production
-> vocab train on a larger slice, the full corpus retokenize (~5 CPU-hours),
-> and the pretrain itself. Do NOT start GPU work until the eval is
-> trustworthy (see `EVAL_REDESIGN.md`) -- without it you can't tell a better
-> base from a differently-overfit one.
+> Status: **VOCAB + CORPUS DONE 2026-07-20** -- the production v2 vocab
+> (16,366 rows) is trained and the full corpus is retokenized to
+> `data/pretrain/tokens_v2.bin` (receipts in the sections below, ending at
+> "CORPUS LANDED"). Only the pretrain itself remains, queued as
+> `BACKLOG.md` T2/T3 inside the training block. The eval-trustworthiness
+> precondition this doc named is MET: the locked gate is sealed and the
+> 47/96 v5/v8 baseline is measured (see `EVAL_REDESIGN.md`).
 >
 > **2026-07-20: all 9 audit findings FIXED** (see the BLOCKERS section, now a
-> resolution ledger). Suite 475 green; the 9 new/changed contracts are each
-> mutation-verified. The path forward is production vocab -> retokenize ->
-> the user's GPU go/no-go.
+> resolution ledger). Suite 475 green at the time; the 9 new/changed
+> contracts are each mutation-verified.
 >
 > **v1 is untouched** — verified directly: the live vocab's git blob oid is
 > identical from session start to HEAD and no commit touches it. But see
@@ -398,6 +395,9 @@ DONE (committed, test-pinned, v1 provably untouched):
 - 53 tests in `tests/test_tokenizer_v2.py`, including a ~13k-codepoint
   losslessness sweep that caught a real hole in the first pattern draft
   (underscores were being silently dropped by `re.findall`).
+
+**SUPERSEDED -- everything below landed 2026-07-20; kept for the requirement
+list; receipts in "CORPUS LANDED" just after this section.**
 
 NEXT, in order:
 1. Train the PRODUCTION v2 vocab on a larger slice (the measured vocab used

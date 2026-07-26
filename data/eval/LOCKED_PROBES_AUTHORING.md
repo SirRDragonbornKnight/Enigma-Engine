@@ -7,7 +7,7 @@ is already landed. See EVAL_REDESIGN.md for the full design.
 
 ## Why blind, in one paragraph
 
-The dev set (134 probes today) guided data authoring, so parts of it measure
+The dev set (count owned by EVAL_REDESIGN.md; 152 as of 2026-07-26) guided data authoring, so parts of it measure
 memorized twins, not capability. The locked set is the number you never train
 toward: author it once from what Enigma SHOULD be able to do, seal it to a
 hash manifest, and judge every future adoption on it. If it was written while

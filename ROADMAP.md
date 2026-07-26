@@ -6,14 +6,10 @@
 > trusting any number that matters.
 
 > **EXECUTION ORDER LIVES IN `BACKLOG.md` §7.95, NOT HERE (ruled 2026-07-24).**
-> This file is the phase MAP — what each phase is and why it exists. The order
-> work actually happens in is the training block: P1 seal (done 2026-07-24),
-> P2 v5/v8 locked baseline, then T1 corpus prep → T2 probe pretrain → T3 full
-> v2 pretrain → T4 SFT regen → T5 DPO → T6 adoption gate → T7 organ training.
-> A phase below that reads like "next up" is describing itself, not claiming a
-> queue position: every phase that TRAINS sits inside T3–T7. Non-training work
-> (organ evals, chat-page mic + image render, the Stage-7 persona pack) runs
-> alongside and is listed at the end of §7.95.
+> This file is the phase MAP — what each phase is and why it exists. A phase
+> below that reads like "next up" is describing itself, not claiming a queue
+> position: every phase that TRAINS sits inside that training block, and
+> non-training work runs alongside, listed at the block's end.
 
 ## North star
 
@@ -57,13 +53,10 @@ Muppet.
 **Methods-audit verdicts (2026-07-15):**
 - KEEP (validated): restart-from-pretrain each SFT cycle; oversample weights;
   regex tool gates; clarity sampling defaults (one min_p-only A/B queued).
-  **The "regex tool gates" verdict was OVERTURNED — ruled 2026-07-24.** The
-  gates were measured defective in both directions (false-miss "Draw me a
-  dragon" / word-number math; false-fire "Do not draw anything"), and a miss
-  means no offer, no gradient, and nothing the eval can see. At the v2 regen
-  the gates retire in favor of a fixed always-offered built-in block, with
-  restraint trained in-weights; the v8 lineage keeps its gates (it was
-  trained under them).
+  **The "regex tool gates" verdict was OVERTURNED — ruled 2026-07-24:** the
+  gates retire at the v2 regen in favor of a fixed always-offered built-in
+  block (the v8 lineage keeps its gates -- it was trained under them);
+  measured defects + execution live in `BACKLOG.md` T4.
 - FIX instruments: SFT val split is contaminated by oversample duplicates
   (dedup before split — FIXED `47f557ae`); DPO "100% val" is 8
   template-sharing pairs (group val by prompt — FIXED `fd2776d1`); 29 eval
@@ -92,12 +85,9 @@ Muppet.
   cannot install it (the Jupiter/Saturn phrasing-brittleness receipt).
   ALL LANDED same evening: diet `8104e09c` (105,203 pairs), facts pretrain
   `701434be`+`3b553038` -> `models/enigma_pretrain_facts` (factual 13/20 ->
-  19/20 on v6). Retrain candidates measured on the 90-probe gate: v6 76/90,
-  v7 72/90 (memory/identity dilution — see make_sft_data's measured
-  comments), v8 (coverage-widened) 79/90 — the FIRST to pass all seven
-  categories. **v8 ADOPTED 2026-07-16** (`models/enigma_dpo/model.pth`, SHA
-  receipt `Enigma Backups\enigma_dpo_v8_adopted\`); the v5 backup
-  (`enigma_dpo_v5_adopted`) stays as the revert target.
+  19/20 on v6). **v8 ADOPTED 2026-07-16** on the 90-probe gate -- the full
+  candidate lineage (v6/v7/v8) and receipt live in `BACKLOG.md` section 3,
+  the v8 adoption entry.
 - TEACH LOOP: auto-augment corrections (paraphrases + statement twin, ~x4 —
   DONE 2026-07-16, `teach_enigma.py` augment_teaching + confirm-before-bake
   review; TEACHINGS_REPEAT 8->4); merge `teach_pairs.jsonl` into DPO behind the
@@ -271,9 +261,8 @@ render_training masks). At lr 2e-6 x2 epochs DPO OVER-OPTIMIZED and damaged
 her (identity 83->50%, factual 50->0%) — at 182M DPO is a nudge or a wrecking
 ball. At lr 5e-7 x1 epoch: preference accuracy 100% with margin AND the full
 scorecard held (26/29, all gates PASS) — ADOPTED then, as v1. Superseded:
-**v8 is the adopted DPO since 2026-07-16** (79/90 on the 90-probe gate, first
-to pass all seven categories; `models/enigma_dpo` holds v8, receipted backup
-`Enigma Backups\enigma_dpo_v8_adopted\`; revert targets = v5/v1 backups or
+**v8 is the adopted DPO since 2026-07-16** (receipt in `BACKLOG.md` section
+3, the v8 adoption entry; revert targets = the v5/v1 backups or
 `models/enigma_sft`).
 
 ### Candidate next lever: ON-POLICY DISTILLATION (research 2026-07-18, not started)
@@ -326,8 +315,9 @@ the next GPU spend, ahead of Phases 4/5.
 - HRM stays a PARKED experiment (heed the ARC Prize critique).
 - **Gate: a written list of things Phase 2-5 Enigma provably cannot do —
   that list lives in `PHASE7_GATE.md` (started 2026-07-06, receipts included).
-  What actually gates the v2 pretrain now is the locked-probe baseline
-  (`data/eval/LOCKED_PROBES_AUTHORING.md`) and the size call — not Phases 4/5.**
+  The locked-probe baseline is MEASURED (47/96 for both v5 and v8,
+  2026-07-26 -- see `EVAL_REDESIGN.md`); what still gates the v2 pretrain is
+  T1 corpus prep and the size call — not Phases 4/5.**
 
 ---
 

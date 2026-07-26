@@ -1,4 +1,4 @@
-# Known Issues — current as of 2026-07-13
+# Known Issues — current as of 2026-07-25
 
 _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (bugs),
 `CLEANUP_TRACKER.md` (file state)._
@@ -79,12 +79,13 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    checkpoint.
 5. **base_v2 (122M @ step 2,000) is pipeline-validation quality only** —
    barely trained. Don't judge her by it; probe the large 51k checkpoint.
-6. **Vendored weight:** `enigma_engine/bin/llama-server/` is 1.07 GB (1,066,991,160 bytes) of CUDA
-   DLLs for the GGUF route. Intentional while the GGUF serving pivot was open;
-   that pivot was **REJECTED 2026-07-24** — serving stays from-scratch — so
-   this directory is dead weight pending a deletion decision, and nothing in
-   the repo launches it (no script, launcher, or module references the path).
-   If it is ever run by hand, tree-kill `llama-server.exe` on teardown.
+6. **Vendored weight -- CLOSED 2026-07-25.** `enigma_engine/bin/llama-server/`
+   was 1.07 GB (1,066,991,160 bytes) of CUDA DLLs for the GGUF route,
+   intentional while the GGUF serving pivot was open. That pivot was
+   **REJECTED 2026-07-24** (serving stays from-scratch) and the binary was
+   **DELETED 2026-07-25** -- the directory was gitignored and never committed,
+   so this checkout has nothing left to delete (~1 GB freed). `core/gguf.py`
+   stays dormant by ruling.
 7. **Environment quirks (this dev box):** MCP servers load ONLY from the
    project `.mcp.json`; Claude Desktop is MSIX-sandboxed so `%LOCALAPPDATA%`
    writes are virtualized; no Windows admin without explicit user grant.
@@ -93,25 +94,24 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** (385 tests as of 2026-07-19 — 349 after the
-   2026-07-18 compression pass removed the dormant stack along with its own tests, +36
-   regression tests from the 2026-07-19 checkpoint-safety, pre-align, cleanup, and
-   audio-rebuild arcs). The
+9. **The python suite is engine-only** -- the live suite count lives in
+   `CLEANUP_TRACKER.md` (788 passed as of 2026-07-26). The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
 10. **Model capacity ceilings are measured, not guessed.** `PHASE7_GATE.md`
     holds the receipts: long conversation (block 1024), broad-fact recall
     (~50%), raw arithmetic (bypassed via the server-side `calculate` tool).
-    Current SFT data state lives in `ROADMAP.md` (Phase 1 DONE, Phase 2
-    exit criteria met 26/29).
+    Current SFT data state lives in `BACKLOG.md` 7.95 P2 -- the sealed-gate
+    baseline is 47/96 for both v5 and v8 (measured 2026-07-26).
 11. **Modkit-refactor module deletions RESTORED 2026-07-13 (audit).** The
     refactor (`0bd9167e`) deleted modules while their callers survived; an
     import-integrity sweep found SIX dangling imports. Restored verbatim from
     `0bd9167e^`: `core/vision_encoder.py` (935 lines, ViT + screen/camera
     capture), `core/audio_encoder.py` (673 lines, Conformer + from-scratch
     mel pipeline), `core/gguf.py` (1,487 lines — `Enigma.export_to_gguf()`
-    was a hard crash; the vendored llama-server route in #6 depends on it),
+    was a hard crash; the vendored llama-server route in #6 depended on it
+    at the time -- that route is closed and gguf.py stays dormant by ruling),
     `core/reasoning.py` (397 lines — SFT data carrying a "thinking" field
     crashed training; the surrounding try only caught JSONDecodeError).
     Verified: imports clean, ruff clean, full suite green, smoke forward ran
@@ -127,26 +127,18 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     AND writing a new caller. (`core/inference.py`, deleted in the pivot `0eab02a3`,
     was dropped from the allowlist 2026-07-13: its only consumer was the Modkit-era
     `mods/codegen`, removed with the rest of modkit — nothing imports it now.)
-    STILL ABSENT (honest gap): inference-side multimodal wiring — no
-    image/audio placeholder in `chat_format.py`, no image/audio input in
-    `serve_enigma.py`, `generate()`/KV-cache never calls
-    `forward_multimodal`. The projections are untrained: `vision_hidden_size`
+    STILL ABSENT (honest gap): inference-side multimodal wiring at the
+    token/tensor level -- no image/audio placeholder token in
+    `chat_format.py`, and `generate()`/KV-cache never calls
+    `forward_multimodal`. (Image input DOES reach `serve_enigma.py` as TEXT:
+    `flatten_image_content` captions OpenAI `image_url` content into the
+    `[image: ...]` marker under `--eyes` -- the caption path, not projector
+    wiring.) The projections are untrained: `vision_hidden_size`
     / `audio_hidden_size` remain `None` in every shipped checkpoint; stage-1
     projector training (see `collect_vision_data.py`) is the next step.
-    Vision has a data collector; audio has NONE (`collect_audio_data.py`
-    does not exist) — gap to fill before the audio mode is trainable.
-    UPDATE 2026-07-19: `collect_audio_data.py` exists now (28,539 LibriSpeech
-    pairs collected + `distill_audio_encoder.py` ready), and the audio ALIGN
-    trainer was REBUILT the same day — `vision_align.py` generalized into
-    `enigma_engine/training/encoder_align.py` (shared `_train_encoder` core;
-    `train_audio` + `align_audio.py`). UPDATE 2026-07-23: audio batches at
-    `--batch-size 8` through a padding-mask collate (the mask-aware encoder
-    landed; the old batch_size=1 note is retired), and the training-last
-    ruling was LIFTED 2026-07-20. The remaining gap is NOT GPU-bound first:
-    the distill is blocked on DOWNLOADING the `openai/whisper-base` teacher
-    (the cached Systran/faster-whisper-base is the ASR organ, not the
-    teacher). After that download it is GPU work -- distill, align, serve
-    wiring -- queued behind the v2 pretrain.
+    Audio pipeline status (collector, distill, align, the whisper-base
+    teacher download) lives in `BACKLOG.md` section 4, step 6 -- this entry
+    stays about the restored modules only.
 
 12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
     the checkpoint-safety subset AND the pre-align fix batch were FIXED same

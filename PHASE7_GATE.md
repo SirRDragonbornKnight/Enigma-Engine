@@ -1,53 +1,22 @@
-# Phase 7 Gate — what this Enigma provably cannot do
+# Phase 7 Gate — measured ceilings and the remake charter
 
-The ROADMAP's Phase 7 (next-generation model) opens "only when the current
-lineage hits a measured ceiling," gated on "a written list of things Phase
-2-5 Enigma provably cannot do." This is that list. Every entry carries its
-receipt — a measurement, not a vibe. Update it as ceilings are hit or
-bypassed; the day the un-bypassable entries outweigh what Phases 4-6 can
-still buy, Phase 7 starts.
+**Gate status: OPEN — v2 is IN PROGRESS.** Superseded as a decision
+2026-07-20 by ROADMAP's Phase 7 section: the v2 prefix landed and the v2
+pretrain is the next GPU spend, ahead of Phases 4/5. The baseline it needed
+is measured (47/96 for BOTH v5 and v8 on the sealed locked set, 2026-07-26 —
+table and receipts in `EVAL_REDESIGN.md`, which owns all scorecard numbers);
+what remains before launch is T1 corpus prep and the size call
+(`BACKLOG.md` §7.95).
+
+What stays live in this file: the measured-ceilings ledger (the written list
+of things Phase 2-5 Enigma provably cannot do, each with its receipt — the
+evidence the gate opened on) and the remake charter the v2 lineage inherits.
+The gate's scorecard narration moved to
+`_archive/PHASE7_GATE_SCORECARD_2026-07.md` when EVAL_REDESIGN became the one
+owner of eval numbers.
 
 Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
 (pretrain DONE 2026-07-03, 287,882 steps / 56.6B tokens).
-
-Behavior scorecard: **the honest baseline is now measured. On the SEALED
-locked set (2026-07-25): v5 46/96 = 48%, v8 47/96 = 49%, both FAIL the gate**
-— v8 leads v5 by a single probe, so the DPO delta does not survive a set the
-lineage was never iterated toward. Receipts and the per-category table are in
-`EVAL_REDESIGN.md` ("P2 BASELINE MEASURED"). The old dev figure of 79/90
-(2026-07-16) is retired: it was a ceiling measured on probes the training data
-had been iterated toward, and it is NOT reproducible today — `data/eval/behavior_probes.jsonl` is now
-**134 probes across nine categories** (identity 18, factual 20, adversarial
-15, math 15, memory 15, restraint 15, tool 15, unknown 9, plus 12 ungated
-vision probes added 2026-07-25), so a run returns a number that cannot be compared to it.
-**v8 on the current dev file: 104/134, FAIL** (2026-07-25, greedy, git `a9d387e`; identity
-15/18, factual 19/20, adversarial 11/15, math 13/15, memory 10/15, restraint 12/15, tool
-15/15, unknown 0/9, vision 9/12 ungated; transcript
-`Enigma Backups\dev_eval_v8_2026-07-25.jsonl`). All eight categories gate; `unknown` is
-the thin one at 9 probes (its category was empty until the 07-24 harvest
-filled it); the 12 vision probes are ungated by design. The earlier "26/29", "79/90" and "first to pass all seven
-categories" lines were retired here.
-
-The scorecard that will actually gate v2 is the LOCKED set — the probe file
-`data/eval/locked_probes.jsonl` (authoring guide:
-`data/eval/LOCKED_PROBES_AUTHORING.md`), **SEALED 2026-07-24**: 108 strings
-(96 questions + 12 teach lines) under `locked_probes.manifest.json`, so every
-leak guard in the pipeline is live, both trainers refuse an artifact whose
-PROMPT side carries a sealed probe (generated-side hits are counted and
-reported, never blocked — see `CLAUDE.md` for why), and `eval_behavior.py`
-re-seals the file at run start
-instead of trusting its name, and the manifest seals the GRADING KEYS as well
-as the question text (re-sealed 2026-07-25 after an audit found a file with its
-wants and denies emptied re-sealed perfectly; re-sealed AGAIN the same day when
-teach lines proved mutable through the normalizer; re-sealed a THIRD time when
-the seal proved whitespace-blind — **identity is now the probe file's own
-sha256, so a gate run must be byte-identical, not merely equivalent** —
-manifest `971f23c3`, grading digest `784499b7`, plaintext unchanged at
-`f22d9389`). Every run prints `SEALED GATE RUN` or `NOT THE SEALED HOLDOUT`
-beside its result, and the transcript records which it was.
-P2 has now run against it — see
-the baseline above; `unknown` scored 0/12 on BOTH lineages and is the clearest
-single target for the v2 SFT regen.
 
 ## Measured ceilings (cannot fix with more SFT data at 182M)
 
@@ -120,19 +89,12 @@ single target for the v2 SFT regen.
 - Paraphrase diversity is a data rule, not a fix (repetition memorizes;
   17% -> 83%).
 - Tools-over-weights decided upfront: the model ROUTES what it cannot hold
-  (math, memory, lookup) and HOLDS voice/values/judgment. Every built-in
-  gets its own intent gate (ride-along offering stole tool calls); every
-  serve-side injection format gets a matching SFT slice (she ignored
-  "Things you remember:" until trained on it).
-  **OVERTURNED — RULED 2026-07-24: the intent gates retire at the v2 regen.**
-  The per-built-in gate was measured defective in both directions (missed
-  asks get no offer, so no gradient and no eval signal; false fires happen on
-  negated asks), and the eyes flatten images to text before the gates read
-  them, so her own caption can fire the painter. Replacement: a fixed
-  always-offered built-in block trained into the v2 SFT regen, with restraint
-  learned in-weights instead of regexed at serve. The gates stay untouched on
-  the v8 lineage (v8 was trained under gate-mediated offers; always-offering
-  to it is untrained input).
+  (math, memory, lookup) and HOLDS voice/values/judgment. Every serve-side
+  injection format gets a matching SFT slice (she ignored "Things you
+  remember:" until trained on it). The per-built-in intent gates were
+  OVERTURNED 2026-07-24 — they retire at the v2 regen in favor of the
+  always-offered built-in block (verdict in ROADMAP; execution owned by
+  `BACKLOG.md` §7.95 T4).
 - Run-stamped checkpoint directories with SHA256 receipts — rounds
   overwrote model.pth all week; the peaks survived by manual backup only.
 - QA gates from day 0: foreign-identity purge, boilerplate filter,
@@ -144,12 +106,3 @@ From-scratch ethos (own architecture, tokenizer, weights — provably nobody's
 fine-tune). One chat renderer shared by train and serve. Evals as code,
 gating every run. The finished lineage stays immutable; new runs get new
 directories. Small-model-plus-tools as the shape of the thing.
-
-## Gate status: OPEN — v2 is IN PROGRESS
-
-Superseded 2026-07-20 by ROADMAP's Phase 7 section: the v2 prefix landed and
-the v2 pretrain is the next GPU spend, ahead of Phases 4/5. This section used
-to say the gate opened only after Phase 4 (length) and Phase 5 (daily use)
-were done; Phase 4 is obsolete under v2, and Phase 5 does not block a
-pretrain. What actually gates the launch now is the locked-probe baseline
-(seal + v5/v8 re-measure) and the size call.

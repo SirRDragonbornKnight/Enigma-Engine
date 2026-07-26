@@ -266,10 +266,9 @@
   entry point added; 6 audio contract tests re-lock the encoder
   persistence twin. Batched audio LANDED 2026-07-20: the mask-aware
   AudioEncoder makes padded-batch == unbatched at 3.6e-7, so
-  `align_audio.py --batch-size 8` is the supported path. REMAINING (GPU):
-  the distill is blocked on downloading the `openai/whisper-base` teacher
-  (the cached Systran/faster-whisper-base is the ASR organ, NOT the
-  teacher); then run the align, serve wiring + retire whisper.
+  `align_audio.py --batch-size 8` is the supported path. The remaining
+  steps (teacher download, distill, align, serve wiring, retire whisper)
+  are ROADMAP.md Phase 4.5 step 6's -- see there.
 - [ ] 7. Her voice: train a small TTS on a chosen voice (later).
 - [ ] 8. Her imagination: own image generator (much later; SD stays the tool she wields).
 
@@ -537,8 +536,8 @@ Prerequisites (not training):
   receipts in EVAL_REDESIGN, durable copy in `Enigma Backups`. eval_behavior
   now re-seals the file at run start and refuses a holdout that was edited.
 - P2. v5/v8 locked re-measure (`--port 8123`, throwaway `--memory-dir`,
-  `--transcript` OUTSIDE the repo) = the baseline v2 must beat. Runs before
-  any vocab adoption.
+  `--transcript` OUTSIDE the repo) = the baseline v2 must beat. Ran before
+  any vocab adoption, as required.
     - **DONE 2026-07-26, under the floor-2 seal (manifest ff070561, first
       live SEALED GATE RUNs on it) and the `tools_run` grader, greedy:**
       both checkpoints 47/96 OVERALL (v5 up 1 from the recorded 46 -- the
@@ -568,6 +567,10 @@ The block, in execution order:
   last lineage), 5-10 paraphrase variants of every must-know fact IN the
   corpus, decay-tail annealing set (~2-3B best tokens); then the rust
   retokenize (~42 min). Decide doc-boundary attention masking here.
+    - **Curated shard BUILT 2026-07-25** (11 files, `data/pretrain/curated/`).
+      `tokens_v2.bin` PREDATES it (tokenized 2026-07-20), so T1 must
+      re-tokenize with `pretokenize_data.py --repeat-sources curated=N`
+      before T2 -- the existing bin contains none of the shard.
     - ~~**The anneal needs a MECHANISM, not just a token set.**~~ **BUILT
       2026-07-25.** `get_batch` drew uniformly over `[0, train_end)`, so
       position in the corpus meant nothing and a "best tokens at the end" file
@@ -702,8 +705,8 @@ Recorded because it existed only in conversation:
   `/v1/audio/transcriptions`, and generated images render inline via
   `GET /v1/images/file/{name}` (bare name, strict pattern, resolved-parent
   re-check). Both appear only when `GET /v1/capabilities` says the organ
-  booted. Still absent: image UPLOAD from the page (eyes are reachable only by
-  an API client sending a data: URL).
+  booted. Image UPLOAD from the page shipped in `0a2e0fc`, so eyes are
+  reachable from the page as well as from an API client -- the item is CLOSED.
 - Stage 7 persona pack + `--name` spawn scaffold. **Foundation landed
   2026-07-25**: `enigma_engine/core/persona.py` holds identity as DATA, and
   `Persona.load()` with no pack IS Enigma -- every value verified byte-identical
@@ -725,11 +728,11 @@ Recorded because it existed only in conversation:
   still the vestigial hook it always was.
 
 Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
-REJECTED -- her serving path is our own code. Consequence: the vendored
-`enigma_engine/bin/llama-server/` binary (+~1 GB DLLs) is dead weight,
-pending a deletion decision; the deferred eager-path optimizations
-(enable_gqa, fused RMSNorm, CUDA graphs) are back on the table as
-future serving work.
+REJECTED -- her serving path is our own code. Consequence executed: the
+vendored `enigma_engine/bin/llama-server/` binary (+~1 GB DLLs) was DELETED
+2026-07-25 (it was gitignored and never committed, so no history carries it;
+~1 GB freed). The deferred eager-path optimizations (enable_gqa, fused
+RMSNorm, CUDA graphs) are back on the table as future serving work.
 
 ## 8. Long-term (Phase 7 / embodiment; weeks of GPU)
 
@@ -770,3 +773,33 @@ Consequences, binding on the training block and organ work:
   corpus at scale** (diffuse, weak defaults), never from hand-authored
   oversampled teachings. "A dropped glass breaks" is reasoning; "the glass on
   my desk is broken" is an observation she must look for.
+
+
+---
+
+## 9. Disk reclaim — pending the user's ruling (surveyed 2026-07-26)
+
+> ~200 GB of verified orphans. Deletions of this class are the user's call,
+> never a cleaning pass's: each line below is expensive or impossible to
+> recreate casually, even though nothing in the live pipeline reads it.
+> Receipts: the 2026-07-26 artifact survey (four-agent cleaning pass,
+> CLEANUP_TRACKER). SACRED and untouchable regardless: tokens.bin (+R since
+> 07-26), tokens_v2.bin, Enigma Backups\, the SOURCE_DIRS corpora, llava/,
+> LibriSpeech/, and the adopted/backed-up checkpoints.
+
+| Candidate | Size | Why it is an orphan |
+|---|---|---|
+| `data\pretrain\combined.txt` | 95.1 GB | Forge-era combined stream; pretokenize reads SOURCE_DIRS instead ("doesn't touch combined.txt" is in its docstring); the Forge arm is deleted. Rebuildable by `collect_pretraining_data.py --combine`. |
+| `models\qwen3-30b-a3b\` + `models\qwen3-8b\` | 33.3 GB | Qwen-era local weights, zero references; the distill teacher runs over Ollama, not these dirs. |
+| `data\pretrain\enwiki-latest-pages-articles.xml.bz2` | 25.1 GB | Source archive already fully extracted into `wikipedia_dump\` (a live source dir); re-downloadable. |
+| `models\enigma_pretrain_large\step_*.pth` (9 files) | 19.7 GB | Intermediate v1 checkpoints; the lineage-final latest/model/prev are backed up with receipts. Deleting trades mid-run archaeology for the space. |
+| `models\enigma_sft_v8\` | 6.25 GB | Superseded by the `enigma_sft_phase2_pass` backup. |
+| `data\audio\train-clean-100.tar.gz` | 6.4 GB | Extracted to `LibriSpeech\` already; re-downloadable. |
+| `models\enigma_pretrain_probe\` + `probe_tput_v2_deep_186m\` | 5.6 GB | Probe runs, July; their numbers are recorded in BACKLOG/TOKENIZER_V2_SPEC. |
+| `models\enigma_pretrain_base\` + `enigma_pretrain_base_v2\` | 4.2 GB | Abandoned 121M side-runs (base_v2 died at step 2010/5086); historical prose mentions only. |
+| `models\checkpoints\` | 3.4 GB | Forge-era best/final/vision .pt + a May run; nothing loads them. |
+| `models\enigma_sft\model_v2_diluted.pth` | 2.19 GB | A 4th weight copy beside model/latest/prev in a dir whose receipts are already in Backups. |
+| Loose: `enigma_small.pth`, `smoke.pth`, `enigma_pi_zero.pth` | 0.35 GB | Zero references. |
+| `data\curriculum\`, `data\conversations\`, `data\model_contexts\`, 9 loose `data\` files | ~4 MB | Forge/GUI-era outputs, zero readers. Small, but they are noise in every directory listing. |
+
+Say which rows die and they die; the rest stays.

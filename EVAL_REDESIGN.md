@@ -2,10 +2,14 @@
 
 > Status: DESIGN + in-progress implementation. The behavior gate
 > (`eval_behavior.py`, `data/eval/behavior_probes.jsonl`, **90 probes as of
-> 2026-07-16; 134 across nine categories today**) is partly measuring itself.
-> This doc is the plan to make the scorecard trustworthy. Grounded in a code
-> audit 2026-07-16 (receipts inline). **Every "90" below is that snapshot** —
-> the dated sections later in this file carry the current numbers.
+> 2026-07-16; 152 across eleven categories as of 2026-07-26** -- adversarial 15,
+> factual 20, identity 18, imagery 9, math 15, memory 15, restraint 15,
+> speech 9, tool 15, unknown 9, vision 12; eight gated, vision/speech/imagery
+> informational. THIS file owns the dev-set count; other docs point here) is
+> partly measuring itself. This doc is the plan to make the scorecard
+> trustworthy. Grounded in a code audit 2026-07-16 (receipts inline).
+> **Every "90" below is that snapshot** — the dated sections later in this
+> file carry the current numbers.
 
 ## The problem (verified in code)
 
@@ -31,7 +35,7 @@ contaminated and should be treated as soft until this lands.
 ## Design
 
 ### A. Two-tier probes (breaks the closed loop)
-- **Dev set** = `behavior_probes.jsonl` (90 at design time, 134 today). Visible; iterate freely.
+- **Dev set** = `behavior_probes.jsonl` (90 at design time, 152 today -- breakdown in the status block). Visible; iterate freely.
 - **Locked holdout** = ~60-90 fresh probes authored ONCE from the capability
   spec, then SEALED: the repo stores only `sha256(normalized_text)` per probe in
   a manifest (`data/eval/locked_probes.manifest.json`), plus the sealed probe
@@ -206,7 +210,7 @@ These are the regex-NLI wall the original design named. The designed escape
 is section C's OPTIONAL second-grader agreement pass (still open); revisit
 it if the locked-set re-measure shows the residuals moving real scores.
 
-## P2 BASELINE MEASURED 2026-07-25 — the first honest scorecard on the sealed gate
+## P2 BASELINE -- measured 2026-07-25, re-measured 2026-07-26 -- the first honest scorecard on the sealed gate
 
 Both checkpoints served from their receipted backups (`Enigma Backups\
 enigma_dpo_v{5,8}_adopted\model.pth`) on port 8123 with a throwaway
@@ -222,17 +226,25 @@ OUTSIDE the repo to `Enigma Backups\locked_baseline_v{5,8}_final.jsonl`.
 | factual     | 0.50      | 7/12 58%| 8/12 67%|
 | math        | 0.75      | 9/12 75%| 7/12 58%|
 | tool        | 0.80      | 12/12 100% | 12/12 100% |
-| restraint   | 0.80      | 6/12 50%| 10/12 83%|
+| restraint   | 0.80      | 7/12 58%| 10/12 83%|
 | memory      | 0.75      | 4/12 33%| 3/12 25%|
 | unknown     | 0.50      | 0/12  0%| 0/12  0%|
-| **OVERALL** |           | **46/96 48%** | **47/96 49%** |
+| **OVERALL** |           | **47/96 49%** | **47/96 49%** |
+
+The table carries the CORRECTED numbers, re-measured 2026-07-26 under manifest
+`ff070561` (the floor-2 seal, first live SEALED GATE RUNs on it) with the
+`tools_run` grader: v5 moved up ONE from the 07-24/25 record, 46 -> 47
+(restraint 6 -> 7/12), because executed built-ins were invisible to the old
+grader -- a looped server-side call left no `tool_calls` in the surfaced
+reply, so the old restraint column was an upper bound. THIS table is the
+owner; the same category-resolved receipt lives in `BACKLOG.md` 7.95 P2.
 
 Both FAIL the gate, which is the point of an honest holdout: the dev-set
 figures (79/90 on the old file) were a ceiling measured on probes the training
-data had been iterated toward. v8 leads v5 by ONE probe overall — the v5->v8
-DPO delta does not survive a set she was never trained against. Read the
-per-category rows, not the aggregate: v8 trades identity and math for
-restraint.
+data had been iterated toward. v8 and v5 TIE at 47/96 -- the v5->v8 DPO delta
+does not survive a set she was never trained against. Read the per-category
+rows, not the aggregate: v8 trades identity and math for restraint (10/12 vs
+7/12), which is what keeps it adopted.
 
 **This baseline is only meaningful because a serving bug was fixed first.**
 The same run on 2026-07-24 scored v8 at 28/96 with tool 0/12, math 0/12 and
@@ -254,7 +266,7 @@ organs were invisible to every scorecard and any regression in them showed up
 as a GREEN suite. The first of the four is now covered.
 
 **12 `vision` probes** in the dev set (`data/eval/behavior_probes.jsonl`, now
-134 probes / 9 categories). They carry the trained `[image: ...]` marker
+152 probes / 11 categories -- breakdown in the status block). They carry the trained `[image: ...]` marker
 inline -- the exact shape `flatten_image_content` hands the model after eyes
 captioning -- so they exercise the whole TEXT side of vision with **no GPU and
 no `--eyes`**: can she use a caption that is already in her context, and does
@@ -264,22 +276,25 @@ detail from its caption, so an answer that ignores the marker cannot pass.
 **Measured v8 (2026-07-25, port 8123, temperature 0.0, max_tokens 60):
 `vision 9/12 = 75%`** — full dev scorecard the same run: identity 15/18,
 adversarial 11/15, tool 15/15, restraint 12/15, math 13/15, memory 10/15,
-factual 19/20, unknown 0/9, OVERALL 104/134 = 78%. Transcript:
-`Enigma Backups\dev_eval_v8_2026-07-25.jsonl`.
+factual 19/20, unknown 0/9, OVERALL 104/134 = 78% (the file held 134 probes /
+9 categories at that run; the speech + imagery probes landed after it).
+Transcript: `Enigma Backups\dev_eval_v8_2026-07-25.jsonl`.
 
 `vision` is deliberately UNGATED (see `INFORMATIONAL_CATEGORIES`): there was no
 baseline until this run, and the SEALED set is fixed at the eight gated
 categories, so gating vision would fail the honest gate on a category it
 cannot contain. Promote it once the v2 lineage has its own receipt.
 
-**Still uncovered (the other three organs), with the reason:** `imagine` and
-`speak` are executed SERVER-side and looped, so the surfaced reply carries no
-`tool_calls` and a probe cannot see the call -- the same blindness the router
-audit named for built-in overcalls. Covering them needs either an
-execution-trace field in the response or a serve-side counter, not more
-probes. `ears` needs an audio fixture and a loaded organ. Note also a sealed
-teach line is normalization-identical to one in the open dev set (1 of 108) --
-harmless to scoring, but it means that single string is public.
+**Still uncovered: `ears` only (updated 2026-07-26).** `imagine` and `speak`
+WERE blind for exactly the reason the router audit named: both are executed
+SERVER-side and looped, so the surfaced reply carried no `tool_calls` and a
+probe could not see the call. That blocker is CLOSED -- serve reports the
+execution trace as `resp["enigma"].tools_run`, the eval grades on it, and the
+dev set now carries 9 `speech` + 9 `imagery` routing probes (6 positive, 3
+restraint each; informational like vision). `ears` still needs an audio
+fixture and a loaded organ. Note also a sealed teach line is
+normalization-identical to one in the open dev set (1 of 108) -- harmless to
+scoring, but it means that single string is public.
 
 ## ROUND-3 AUDIT 2026-07-25: the seal now covers the GRADING KEYS, not just the questions
 
@@ -453,7 +468,10 @@ series was missing: identity is the file's bytes, quotation is a run, and
 similarity stays jaccard. A ratio dilutes when the quote is padded; a set with
 no order fires on any long document reusing the words (a 1407-word record
 matched a 6-word probe); a run does neither, at any probe length, with no floor
-to tune. `_CONTAINMENT_MIN_WORDS` is gone.
+to tune. `_CONTAINMENT_MIN_WORDS` is gone. Sealing the runs into the manifest
+was itself a re-seal -- `971f23c3` -> `f7d7a902`, probe hashes, grading digest
+and plaintext unchanged -- the hop between the round-6 receipt above and the
+floor-2 receipt below.
 
 Run length was chosen by measurement, not preference -- sealed strings covered
 vs ask-side hits on the live corpora:

@@ -1,65 +1,12 @@
-# Strategy — current as of 2026-06-11
+# Landscape research + principles — current as of 2026-07-26
 
-> Supersedes the 2026-05-26 "Strategy Reset" (Qwen3 fine-tune + Gradio UI). That
-> plan was rejected 2026-06-02 — *"actually train Enigma... do not just put
-> another ai in it like it is a Muppet"* — and replaced by the Modkit refocus.
-> The old document lives in git history.
-
-## The shape
-
-- **Odysseus** (separate repo, `C:\Users\SirKn\odysseus`) = the app/UI: chat,
-  MCP client, image gen + editor, TTS/STT, OCR, browser, 40+ agent tools,
-  model serving, deep research. We do not build UI in this repo.
-- **This repo** = the from-scratch LLM: model forging (pretrain/SFT/DPO) + serving.
-  (SUPERSEDED 2026-07-13: the old "Modkit" capability-backend framing — `mods/`, MCP
-  `modkit_mcp.py`, in-repo codegen/see_screen/voice — was REMOVED. Capabilities now
-  return as organ/hub services exposed to Enigma as tools, not in-repo mods. The pip
-  distribution is `enigma-engine`.)
-- **Enigma** (the heart) = the from-scratch transformer
-  (`enigma_engine/core/model.py`, 182M `large` preset), pretrained on the
-  own-built 56.6B-token corpus via `pretrain_enigma.py`.
-  **DONE 2026-07-03: full 287,882 steps / 56.6B tokens, val ppl 3.5**
-  (`models/enigma_pretrain_large/model.pth`; SHA256-receipted backup at
-  `C:\Users\SirKn\Enigma Backups\enigma_pretrain_large_final\`). The finished
-  lineage is IMMUTABLE — any continuation gets a new run directory. The full
-  phase-by-phase forward plan now lives in `ROADMAP.md`.
-
-## Roadmap (mouth & hands)
-
-1. **Pretraining — DONE 2026-07-03 at the full 287,882 steps (56.6B tokens,
-   val ppl 3.5).** `models/enigma_pretrain_large/model.pth`, backed up with
-   SHA256 receipts. The bottleneck is no longer code or compute — it is SFT
-   data. See `ROADMAP.md` Phase 1 (fatten the tool corpus, chat-shaped general
-   data, values/identity authorship) for what comes next.
-2. **Mouth — DONE 2026-06-11.** `serve_enigma.py` serves the from-scratch
-   model: OpenAI-compatible `/v1`, KV-cache streaming, plain-transcript chat
-   bridge until the instruct pass. First live words from the 51k checkpoint
-   verified.
-3. **Hands — infrastructure BUILT 2026-06-11; the pass itself runs after
-   pretraining completes.** `enigma_engine/core/chat_format.py` owns the
-   format: chat tokens 4718–4723 in the padded free rows (+ the tokenizer's
-   native `<think>`=10/11), ONE ChatML-shaped template shared by training and
-   serving, ID-level tool-call parsing. `finetune_enigma.py` is the bespoke
-   SFT trainer (assistant-only loss masking, chat-row re-init, shares the
-   pretrain arsenal — Muon/WSD work here too). `make_sft_data.py` builds the
-   data. `serve_enigma.py` auto-detects instruct checkpoints
-   (`meta.chat_format`): real template, OpenAI `tool_calls`, streaming.
-   Proven end-to-end on a throwaway nano — it learned to emit
-   `<|tool_call|>{…}<|/tool_call|>` unprompted. Before the REAL pass: fatten
-   the tool corpus (29 seed examples) and curate the values data.
-4. **Memory/skills — v1 BUILT 2026-06-11.** `memory_store.py`: stdlib BM25
-   over inspectable JSONL. `serve_enigma.py --memory-dir` injects top hits
-   into her system context (128-id budget; silence when nothing matches),
-   plus `/v1/memory` GET/POST. She trains at block 1024 — injected context
-   stays compact until a length-extension anneal.
-5. **Values/identity corpus.** Constitutive alignment: hand-curated examples,
-   scaling the proven identity-lock approach. The seed exists
-   (`data/sft/identity.jsonl`: 360 from-scratch-true anchors; the old
-   Qwen-era claims are false for this model). The curation pass is the user's
-   authorship. The WHY lives in the vision memory (Jarvis-class companion
-   that provably won't turn evil).
-6. **Avatar embodiment.** The avatar is its own repo now (`C:\Users\SirKn\Enigma Avatar\`); its `TODO.md` is AUTHORITATIVE for that
-   backlog — read it before any avatar task.
+> What survives of the 2026-06-11 strategy doc. Its "Roadmap (mouth & hands)"
+> section was superseded by `ROADMAP.md` (which says so in its own header) and
+> its "shape" section duplicated the repo identity that `README.md` and
+> `CLAUDE.md` own — both were cut 2026-07-26; git history keeps them. What
+> remains is the piece other docs still cite: the 2026 landscape verdicts
+> (BACKLOG's block-size and optimizer decisions lean on them) and the
+> principles.
 
 ## 2026 landscape check (researched 2026-06-11)
 
@@ -104,7 +51,8 @@ for FUTURE decisions — none justify touching the paused run mid-schedule:
   29.5% on the 2026-07-16 English-sample re-measure)
   remains our real inefficiency — a next-generation tokenizer should merge
   leading spaces GPT-2-style before any re-pretrain. Not fixable for this
-  lineage: retokenizing means a new run.
+  lineage: retokenizing means a new run. (The v2 vocab that does exactly this
+  landed 2026-07-20 — `TOKENIZER_V2_SPEC.md`.)
 
 ## Principles
 
