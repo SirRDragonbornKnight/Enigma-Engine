@@ -578,6 +578,35 @@ def test_an_empty_probe_file_is_an_error_before_the_store_is_touched(tmp_path, m
     assert cleared == []
 
 
+def test_malformed_probe_records_refuse_before_the_server_is_touched(tmp_path, monkeypatch, capsys):
+    """The scorer reads c["q"] and c["category"] unconditionally and runs only
+    after the target's memory store has been cleared -- a record missing either
+    used to crash mid-suite with the store already gone. The refusal must fire
+    before ANY server contact."""
+    p = tmp_path / "probes.jsonl"
+    p.write_text(
+        json.dumps({"category": "factual", "q": "Largest planet?", "want_any": ["jupiter"]})
+        + "\n"
+        + json.dumps({"question": "Alias spelling, no q at all", "category": "factual"})
+        + "\n"
+        + json.dumps({"q": "No category on this one", "want_any": ["x"]})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def touched(*a, **k):
+        raise AssertionError("server contacted despite malformed probe records")
+
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", touched)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", touched)
+    monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
+
+    assert eval_behavior.run(URL, TEMP, MAXTOK, p, None) == 2
+    out = capsys.readouterr().out
+    assert "missing a non-empty 'q' or 'category'" in out
+    assert "[2, 3]" in out  # both offending records named, 1-indexed
+
+
 def test_tool_arguments_reach_the_transcript(tmp_path, monkeypatch):
     """Grading reads the first call's NAME only, so a right tool with wrong
     arguments scores identically. The evidence has to survive the run."""
@@ -597,6 +626,226 @@ def test_tool_arguments_reach_the_transcript(tmp_path, monkeypatch):
     assert tool["tool_calls_full"] == [{"name": "get_weather", "arguments": '{"city": "Sydney"}'}]
 
 
+def test_transcript_records_which_weights_answered(tmp_path, monkeypatch, capsys):
+    """The seal proves which questions were asked; model_checkpoint is the only
+    record of what answered them. A server that reports identity gets it into
+    the conditions row and the banner; one that cannot gets an empty dict and
+    a loud WARN -- never a silent omission."""
+    probes = _probe_file(tmp_path)
+    out = tmp_path / "transcript.jsonl"
+    _fake_server(monkeypatch, LONG_ANSWER)
+    identity = {"path": "C:/models/enigma_dpo/model.pth", "sha256": "ab" * 32, "step": 51000}
+    monkeypatch.setattr(eval_behavior, "_model_identity", lambda base_url: identity)
+
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+
+    conditions = _rows(out)[0]
+    assert conditions["model_checkpoint"] == identity
+    assert "model under test: sha256 abababababababab" in capsys.readouterr().out
+
+    # Pre-identity server: {} recorded, WARN printed.
+    monkeypatch.setattr(eval_behavior, "_model_identity", lambda base_url: {})
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+    assert _rows(out)[0]["model_checkpoint"] == {}
+    assert "cannot prove which weights answered" in capsys.readouterr().out
+
+
+def _baseline_file(tmp_path, probes, by_category, model_sha=None, name="baseline.jsonl"):
+    hits = sum(c["hits"] for c in by_category.values())
+    n = sum(c["n"] for c in by_category.values())
+    conditions = {
+        "record": "run_conditions",
+        "probe_sha256": eval_behavior._probe_digest(probes),
+        "temperature": TEMP,
+        "max_tokens": MAXTOK,
+        "model_checkpoint": {"sha256": model_sha} if model_sha else {},
+    }
+    card = {
+        "record": "scorecard",
+        "by_category": by_category,
+        "overall_hits": hits,
+        "overall_n": n,
+        "sealed_gate_run": False,
+    }
+    p = tmp_path / name
+    p.write_text(json.dumps(conditions) + "\n" + json.dumps(card) + "\n", encoding="utf-8")
+    return p
+
+
+def test_baseline_comparator_speaks_the_adoption_rule(tmp_path, monkeypatch, capsys):
+    """BACKLOG T6 as code: beat the aggregate with no category floor regression
+    = ADOPT; anything else = the user's call. Comparing by eye at n=12 per
+    category is where a one-cell slip decides adoption."""
+    probes = _probe_file(tmp_path)  # factual 1 + tool 1; fake server scores 2/2
+    out = tmp_path / "transcript.jsonl"
+    _fake_server(monkeypatch, "Jupiter is the largest planet.")
+
+    # Current 2/2 vs baseline 1/2, no regression -> ADOPT.
+    base = _baseline_file(tmp_path, probes,
+                          {"factual": {"hits": 0, "n": 1}, "tool": {"hits": 1, "n": 1}})
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out, baseline=base)
+    out_text = capsys.readouterr().out
+    assert "VERDICT: ADOPT" in out_text
+    assert "category regressions: none" in out_text
+    comparison = next(r for r in _rows(out) if r["record"] == "baseline_comparison")
+    assert comparison["verdict"].startswith("ADOPT")
+    assert comparison["regressions"] == []
+
+    # A tie does not adopt.
+    base = _baseline_file(tmp_path, probes,
+                          {"factual": {"hits": 1, "n": 1}, "tool": {"hits": 1, "n": 1}})
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out, baseline=base)
+    assert "VERDICT: USER'S CALL (aggregate not beaten)" in capsys.readouterr().out
+
+
+def test_baseline_comparator_names_regressions_and_refusals(tmp_path, monkeypatch, capsys):
+    probes = _probe_file(tmp_path)
+    _fake_server(monkeypatch, "It is Saturn, I think.")  # factual MISSES, tool still hits
+
+    # Baseline 2/2 vs current 1/2: the factual regression must be NAMED.
+    base = _baseline_file(tmp_path, probes,
+                          {"factual": {"hits": 1, "n": 1}, "tool": {"hits": 1, "n": 1}})
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base)
+    out_text = capsys.readouterr().out
+    assert "USER'S CALL" in out_text
+    assert "factual 1/1 -> 0/1" in out_text
+
+    # A baseline for a DIFFERENT probe set refuses to compare at all.
+    other = tmp_path / "other.jsonl"
+    other.write_text(json.dumps({"category": "factual", "q": "Deepest ocean?", "want_any": ["pacific"]}) + "\n",
+                     encoding="utf-8")
+    base = _baseline_file(tmp_path, other, {"factual": {"hits": 1, "n": 1}}, name="other_base.jsonl")
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base)
+    assert "comparison refused" in capsys.readouterr().out
+
+    # Same checkpoint sha on both sides = someone forgot a restart. Say so.
+    sha = "cd" * 32
+    monkeypatch.setattr(eval_behavior, "_model_identity",
+                        lambda base_url: {"sha256": sha, "step": 1, "path": "x"})
+    base = _baseline_file(tmp_path, probes,
+                          {"factual": {"hits": 0, "n": 1}, "tool": {"hits": 1, "n": 1}},
+                          model_sha=sha)
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base)
+    assert "compares a model against itself" in capsys.readouterr().out
+
+    # A missing baseline file fails before any server is touched.
+    def touched(*a, **k):
+        raise AssertionError("server contacted despite missing baseline")
+
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", touched)
+    assert eval_behavior.run(URL, TEMP, MAXTOK, probes, None,
+                             baseline=tmp_path / "nope.jsonl") == 2
+
+
+def test_malformed_baseline_refuses_before_the_run_not_after(tmp_path, monkeypatch, capsys):
+    """The baseline used to be parsed at the very END -- after 96 sealed
+    answers were collected and before the transcript was written -- so a
+    hand-made or truncated file destroyed a completed gate run's receipt.
+    Every malformed shape must now refuse up front, with no server contact."""
+    probes = _probe_file(tmp_path)
+
+    def touched(*a, **k):
+        raise AssertionError("server contacted despite malformed baseline")
+
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", touched)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", touched)
+    monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
+
+    shapes = {
+        "cell not a dict": {"record": "scorecard", "by_category": {"factual": 1},
+                            "overall_hits": 1, "overall_n": 2},
+        "cell missing hits": {"record": "scorecard", "by_category": {"factual": {"n": 1}},
+                              "overall_hits": 1, "overall_n": 2},
+        "by_category a list": {"record": "scorecard", "by_category": [1, 2],
+                               "overall_hits": 1, "overall_n": 2},
+        "overall null": {"record": "scorecard", "by_category": {},
+                         "overall_hits": None, "overall_n": 2},
+    }
+    for name, card in shapes.items():
+        base = tmp_path / "bad_base.jsonl"
+        base.write_text(json.dumps({"record": "run_conditions"}) + "\n" + json.dumps(card) + "\n",
+                        encoding="utf-8")
+        assert eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base) == 2, name
+        assert "malformed" in capsys.readouterr().out, name
+
+    # rows that are not objects are skipped, not crashed on
+    base = tmp_path / "junk_rows.jsonl"
+    base.write_text("[1, 2]\nnot json\n" + json.dumps({"record": "scorecard"}) + "\n",
+                    encoding="utf-8")
+    assert eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base) == 2
+
+    # a non-UTF-8 baseline refuses cleanly
+    base = tmp_path / "binary.jsonl"
+    base.write_bytes(b"\xff\xfe\x00garbage")
+    assert eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base) == 2
+    assert "unreadable" in capsys.readouterr().out
+
+    # a null teach in a probe record also refuses before the server
+    p = tmp_path / "null_teach.jsonl"
+    p.write_text(json.dumps({"category": "memory", "teach": None,
+                             "q": "What is my cat called?", "want_any": ["mochi"]}) + "\n",
+                 encoding="utf-8")
+    assert eval_behavior.run(URL, TEMP, MAXTOK, p, None) == 2
+    assert "malformed 'teach'" in capsys.readouterr().out
+
+
+def test_comparator_floors_are_gated_categories_only(capsys):
+    """'Category floor regression' is defined over the gated categories: an
+    informational organ column (vision/speech/imagery) has no floor, and an
+    eyes-on vs eyes-off server pair would otherwise veto adoption with a
+    regression no model caused. The capabilities drift IS said out loud."""
+    from pathlib import Path as _P
+
+    by_cat = {"factual": [True], "vision": [False]}
+    base_cond = {"probe_sha256": "X", "temperature": TEMP, "max_tokens": MAXTOK,
+                 "capabilities": {"eyes": True}}
+    base_card = {"by_category": {"factual": {"hits": 0, "n": 1},
+                                 "vision": {"hits": 1, "n": 1}},
+                 "overall_hits": 1, "overall_n": 2, "sealed_gate_run": False}
+    conditions = {"probe_sha256": "X", "temperature": TEMP, "max_tokens": MAXTOK,
+                  "capabilities": {"eyes": False}, "model_checkpoint": {}}
+    rec = eval_behavior._compare_to_baseline(_P("base.jsonl"), base_cond, base_card,
+                                             conditions, by_cat, 2, 2, False)
+    out = capsys.readouterr().out
+    assert rec["regressions"] == []  # the vision drop names no regression
+    assert "capabilities differ" in out
+
+
+def test_model_identity_tolerates_foreign_bodies(monkeypatch):
+    """Pointing --base-url at a non-Enigma OpenAI-ish endpoint must yield {}
+    ('target could not say'), never a crash after the store was cleared."""
+    import io
+
+    for body in (["gpt-4"], "ok", None, {"data": "x"}, {"data": []},
+                 {"data": [{"id": "m"}]}, {"data": [{"checkpoint": "str"}]}):
+        payload = json.dumps(body).encode()
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(eval_behavior.urllib.request, "urlopen",
+                            lambda req, timeout=10, _p=payload: _Resp(_p))
+        assert eval_behavior._model_identity("http://h") == {}, body
+
+    # a non-UTF-8 body is a byte shape, not a JSON shape -- it must also
+    # yield {} (UnicodeDecodeError is a ValueError, not a JSONDecodeError)
+    class _Bin(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(eval_behavior.urllib.request, "urlopen",
+                        lambda req, timeout=10: _Bin(b"\xff\xfe\x00garbage"))
+    assert eval_behavior._model_identity("http://h") == {}
+    assert eval_behavior._capabilities("http://h") == {}
+
+
 def test_main_wires_the_transcript_flag(monkeypatch):
     """run() being correct is worthless if the CLI never passes the flag."""
     import inspect
@@ -605,12 +854,15 @@ def test_main_wires_the_transcript_flag(monkeypatch):
     # in the parameter name would otherwise slip past this test.
     assert "transcript" in inspect.signature(eval_behavior.run).parameters
     assert "allow_live_server" in inspect.signature(eval_behavior.run).parameters
+    assert "baseline" in inspect.signature(eval_behavior.run).parameters
 
     seen = {}
 
-    def fake_run(base_url, temperature, max_tokens, probes, transcript, allow_live_server=False):
+    def fake_run(base_url, temperature, max_tokens, probes, transcript,
+                 allow_live_server=False, baseline=None):
         seen["transcript"] = transcript
         seen["allow_live_server"] = allow_live_server
+        seen["baseline"] = baseline
         return 0
 
     monkeypatch.setattr(eval_behavior, "run", fake_run)
@@ -622,8 +874,11 @@ def test_main_wires_the_transcript_flag(monkeypatch):
     assert seen["transcript"] is not None
     assert seen["transcript"].name == "t.jsonl"
     assert seen["allow_live_server"] is False  # the guard is on unless asked for
+    assert seen["baseline"] is None
 
-    monkeypatch.setattr("sys.argv", ["eval_behavior.py", "--allow-live-server"])
+    monkeypatch.setattr("sys.argv", ["eval_behavior.py", "--allow-live-server",
+                                     "--baseline", "out/base.jsonl"])
     with pytest.raises(SystemExit):
         eval_behavior.main()
     assert seen["allow_live_server"] is True
+    assert seen["baseline"] is not None and seen["baseline"].name == "base.jsonl"

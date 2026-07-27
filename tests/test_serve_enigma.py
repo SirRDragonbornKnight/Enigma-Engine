@@ -1136,7 +1136,7 @@ def test_load_eyes_guards_and_happy_path(tmp_path):
 _RUNTIME_GLOBALS = [
     "ARGS", "CONFIG", "model", "tokenizer", "DEVICE", "_BF16_GEN", "STEP", "META",
     "INSTRUCT", "MEMORY", "SPEAKER", "MUTED", "EARS", "EYES", "PAINTER", "EOS_ID", "BOS_ID",
-    "_BOOTED",
+    "_BOOTED", "MODEL_PATH", "MODEL_SHA256",
 ]
 
 
@@ -1185,6 +1185,15 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
         assert serve.DEVICE == "cpu"
         assert serve.INSTRUCT is True  # meta.chat_format detected
         assert serve.STEP == 7
+        # /v1/models must say WHICH weights: two same-arch checkpoints have
+        # identical keys, shapes, and steps -- only the file hash separates
+        # them, and the eval transcript records it from here.
+        import hashlib as _hashlib
+        assert serve.MODEL_SHA256 == _hashlib.sha256(ckpt.read_bytes()).hexdigest()
+        assert serve.MODEL_PATH == str(ckpt.resolve())
+        _entry = serve.list_models()["data"][0]
+        assert _entry["checkpoint"]["sha256"] == serve.MODEL_SHA256
+        assert _entry["checkpoint"]["step"] == 7
         # oversize budget clamps to the model's real cache capacity
         assert serve.ARGS.max_context == 256
         assert os.environ["HF_HUB_OFFLINE"] == "0"  # the flag won, out loud

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import math
 import os
@@ -169,6 +170,12 @@ tokenizer = None
 DEVICE = "cpu"
 _BF16_GEN = False
 STEP = None
+# Which weights answered, as bytes: two same-architecture checkpoints (v5 vs
+# v8) have identical key sets, shapes, and often the same step field -- only
+# the file hash distinguishes them, and the eval gate records it from
+# /v1/models so a locked transcript proves WHAT was measured.
+MODEL_PATH: str | None = None
+MODEL_SHA256: str | None = None
 META: dict = {}
 INSTRUCT = False
 MEMORY = None
@@ -350,7 +357,7 @@ def boot(argv: list[str] | None = None) -> None:
     this; tests call it with an explicit argv (or skip it and set globals
     directly). argv=None reads sys.argv -- byte-identical behavior to the
     old import-time startup."""
-    global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META
+    global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META, MODEL_PATH, MODEL_SHA256
     global INSTRUCT, MEMORY, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, EOS_ID, BOS_ID
     global _BOOTED, PERSONA, _VOICE_STATE, IMAGES_DIR, _STOP_TEXTS
 
@@ -423,6 +430,13 @@ def boot(argv: list[str] | None = None) -> None:
             "Pass --model <path to an Enigma .pth checkpoint> (the default only "
             "exists inside a repo checkout with trained models)"
         )
+    MODEL_PATH = str(Path(ARGS.model).resolve())
+    _h = hashlib.sha256()
+    with open(ARGS.model, "rb") as _f:
+        for _chunk in iter(lambda: _f.read(1 << 22), b""):
+            _h.update(_chunk)
+    MODEL_SHA256 = _h.hexdigest()
+    print(f"  checkpoint sha256 {MODEL_SHA256[:16]}...", flush=True)
     _ck = torch.load(ARGS.model, map_location="cpu", weights_only=True)  # our own checkpoint
     if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
         raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
@@ -2102,7 +2116,13 @@ def chat_page():
 
 @app.get("/v1/models")
 def list_models():
-    return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "enigma"}]}
+    # The static id string cannot distinguish two same-arch checkpoints; the
+    # checkpoint block is what lets an eval transcript prove WHICH weights it
+    # measured. Absent only when tests set the model globals directly.
+    entry: dict = {"id": MODEL_ID, "object": "model", "owned_by": "enigma"}
+    if MODEL_SHA256:
+        entry["checkpoint"] = {"path": MODEL_PATH, "sha256": MODEL_SHA256, "step": STEP}
+    return {"object": "list", "data": [entry]}
 
 
 @app.post("/v1/chat/completions")

@@ -129,7 +129,36 @@ def _capabilities(base_url: str) -> dict:
         with urllib.request.urlopen(req, timeout=10) as r:
             got = json.loads(r.read().decode())
         return got if isinstance(got, dict) else {}
-    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+    except (urllib.error.URLError, OSError, ValueError):
+        # ValueError covers JSONDecodeError AND UnicodeDecodeError: a
+        # non-UTF-8 body must mean "target could not say", never a crash
+        # after the store was cleared.
+        return {}
+
+
+def _model_identity(base_url: str) -> dict:
+    """Which WEIGHTS the target is serving (path + sha256 + step from
+    /v1/models), or {} from a server too old to say.
+
+    The seal proves which questions were asked; this is the only record of
+    what answered them. Without it, two back-to-back baseline runs against a
+    server someone forgot to restart produce two perfect sealed receipts for
+    one model."""
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/v1/models")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got = json.loads(r.read().decode())
+        if not isinstance(got, dict):
+            return {}
+        data = got.get("data")
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            return {}
+        ck = data[0].get("checkpoint")
+        return ck if isinstance(ck, dict) else {}
+    except (urllib.error.URLError, OSError, ValueError):
+        # ValueError covers JSONDecodeError AND UnicodeDecodeError. Never let
+        # a strange /v1/models body kill a run the store was cleared for --
+        # {} means "target could not say", same as _capabilities.
         return {}
 
 
@@ -462,6 +491,9 @@ def _run_conditions(probes: Path, base_url: str, temperature: float, max_tokens:
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "capabilities": _capabilities(base_url),
+        # {} from a pre-identity server: recorded as-is so the transcript says
+        # "unattributed" rather than silently omitting the field.
+        "model_checkpoint": _model_identity(base_url),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -679,7 +711,7 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     # the plaintext, so it recomputes everything the manifest claims.
     texts = []
     for c in cases:
-        q = c.get("q") or c.get("question") or ""
+        q = c.get("q") or ""
         if q:
             texts.append(q)
         texts.extend(c.get("teach", []) or [])
@@ -701,8 +733,122 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     return None
 
 
+def _load_baseline(path: Path) -> tuple[dict, dict]:
+    """(run_conditions, scorecard) of a prior transcript, {} for whichever is absent."""
+    conditions: dict = {}
+    scorecard: dict = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("record") == "run_conditions":
+            conditions = rec
+        elif rec.get("record") == "scorecard":
+            scorecard = rec
+    return conditions, scorecard
+
+
+def _valid_scorecard(card: dict) -> bool:
+    """Shape-check a baseline scorecard BEFORE the run spends 96 answers on a
+    comparison that would crash against it."""
+    by_cat = card.get("by_category")
+    if not isinstance(by_cat, dict):
+        return False
+    for cell in by_cat.values():
+        if not (isinstance(cell, dict)
+                and isinstance(cell.get("hits"), int) and not isinstance(cell.get("hits"), bool)
+                and isinstance(cell.get("n"), int) and not isinstance(cell.get("n"), bool)):
+            return False
+    return (isinstance(card.get("overall_hits"), int)
+            and not isinstance(card.get("overall_hits"), bool)
+            and isinstance(card.get("overall_n"), int)
+            and not isinstance(card.get("overall_n"), bool))
+
+
+def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
+                         conditions: dict, by_cat: dict[str, list[bool]],
+                         overall_hits: int, overall_n: int,
+                         is_gate_run: bool) -> dict:
+    """The adoption rule as code: beat the baseline aggregate with no category
+    floor regression = ADOPT; anything else = the user's call. Advisory only --
+    the absolute thresholds still decide this run's exit code. Doing this
+    comparison by eye at n=12/category is where a one-cell slip decides
+    adoption. The baseline arrives parsed and shape-checked (run() refuses a
+    malformed one before any server is touched)."""
+    print(f"baseline comparison: {baseline}")
+    record: dict = {"record": "baseline_comparison", "baseline_file": str(baseline)}
+    if base_cond.get("probe_sha256") != conditions.get("probe_sha256"):
+        print("  FAIL: baseline measured a DIFFERENT probe file (sha mismatch) -- comparison refused")
+        record["verdict"] = "INCOMPARABLE (different probe set)"
+        return record
+    if not (is_gate_run and base_card.get("sealed_gate_run")):
+        print("  WARN: not a sealed-vs-sealed comparison; this verdict decides nothing")
+    for knob in ("temperature", "max_tokens"):
+        if base_cond.get(knob) != conditions.get(knob):
+            print(f"  WARN: {knob} differs from baseline "
+                  f"({base_cond.get(knob)!r} vs {conditions.get(knob)!r}) -- columns not comparable")
+    base_caps = base_cond.get("capabilities") or {}
+    this_caps = conditions.get("capabilities") or {}
+    if base_caps and this_caps and base_caps != this_caps:
+        drifted = sorted(str(k) for k in set(base_caps) | set(this_caps)
+                         if base_caps.get(k) != this_caps.get(k))
+        print(f"  WARN: server capabilities differ from baseline ({', '.join(drifted)}) "
+              "-- organ probes measured different servers, not different models")
+    base_id = (base_cond.get("model_checkpoint") or {}).get("sha256")
+    this_id = (conditions.get("model_checkpoint") or {}).get("sha256")
+    if base_id and this_id and base_id == this_id:
+        print("  WARN: BOTH runs report the SAME checkpoint sha256 -- someone forgot a "
+              "restart; this compares a model against itself")
+    base_hits = int(base_card.get("overall_hits", 0))
+    base_n = int(base_card.get("overall_n", 0)) or 1
+    delta = overall_hits / max(overall_n, 1) - base_hits / base_n
+    beats = delta > 0
+    print(f"  aggregate {base_hits}/{base_n} -> {overall_hits}/{overall_n} ({delta:+.1%})")
+    regressions = []
+    base_by_cat = base_card.get("by_category") or {}
+    for cat, results in sorted(by_cat.items()):
+        if cat not in THRESHOLDS:
+            # "Category FLOOR regression" is defined over the gated
+            # categories: informational/organ columns have no floor, and an
+            # eyes-on vs eyes-off pair would otherwise veto adoption with a
+            # regression no model caused.
+            continue
+        base_cell = base_by_cat.get(cat)
+        if not base_cell or not base_cell.get("n"):
+            continue
+        base_rate = base_cell["hits"] / base_cell["n"]
+        rate = sum(results) / len(results)
+        if rate < base_rate:
+            regressions.append(f"{cat} {base_cell['hits']}/{base_cell['n']} -> {sum(results)}/{len(results)}")
+    print("  category regressions:", "; ".join(regressions) if regressions else "none")
+    if beats and not regressions:
+        verdict = "ADOPT (beats aggregate, no category regression)"
+    else:
+        why = []
+        if not beats:
+            why.append("aggregate not beaten")
+        if regressions:
+            why.append(f"{len(regressions)} category regression(s)")
+        verdict = f"USER'S CALL ({', '.join(why)})"
+    print(f"  VERDICT: {verdict}")
+    record.update({
+        "verdict": verdict,
+        "aggregate_delta": round(delta, 4),
+        "regressions": regressions,
+        "baseline_model_sha256": base_id,
+        "this_model_sha256": this_id,
+    })
+    return record
+
+
 def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES,
-        transcript: Path | None = None, allow_live_server: bool = False) -> int:
+        transcript: Path | None = None, allow_live_server: bool = False,
+        baseline: Path | None = None) -> int:
     # Load probes and name the run's conditions BEFORE touching the server
     # (EVAL_REDESIGN section D + audit 2026-07-20: a missing probe file used
     # to clear the memory store and then die with a raw traceback, and a down
@@ -710,6 +856,26 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     if not probes.exists():
         print(f"FAIL: probe file not found: {probes}")
         return 2
+    # The baseline is parsed and shape-checked HERE, not after the run: a
+    # malformed file discovered at comparison time would cost the 96 answers
+    # a completed gate run just collected.
+    base_pair: tuple[dict, dict] | None = None
+    if baseline is not None:
+        if not baseline.exists():
+            print(f"FAIL: baseline transcript not found: {baseline}")
+            return 2
+        try:
+            base_cond, base_card = _load_baseline(baseline)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"FAIL: baseline transcript unreadable ({exc})")
+            return 2
+        if not base_card:
+            print(f"FAIL: baseline transcript has no scorecard record: {baseline}")
+            return 2
+        if not _valid_scorecard(base_card):
+            print(f"FAIL: baseline scorecard is malformed: {baseline}")
+            return 2
+        base_pair = (base_cond, base_card)
     if transcript is not None:
         # Fail here, not after a full suite has run against a live server.
         _refuse_unsealing_path(transcript)
@@ -725,6 +891,32 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     ]
     if not cases:
         print(f"FAIL: probe file has no cases: {probes}")
+        return 2
+    # Every record must be well-shaped NOW, not at scoring time: the scorer
+    # reads q/category unconditionally and iterates teach, and it runs only
+    # after this function has cleared the target server's memory store -- a
+    # malformed record found mid-suite would crash with the store already
+    # gone.
+    def _malformed(c) -> bool:
+        if not isinstance(c, dict):
+            return True
+        if not (isinstance(c.get("q"), str) and c["q"].strip()):
+            return True
+        if not (isinstance(c.get("category"), str) and c["category"].strip()):
+            return True
+        if "teach" not in c:
+            return False
+        teach = c["teach"]
+        # present-but-null is the crash shape: c.get("teach", []) returns
+        # None when the key exists, and the scorer iterates it.
+        return not (isinstance(teach, list) and all(isinstance(t, str) for t in teach))
+
+    bad = [i for i, c in enumerate(cases, start=1) if _malformed(c)]
+    if bad:
+        print(f"FAIL: {len(bad)} probe record(s) missing a non-empty 'q' or 'category' "
+              f"(or carrying a malformed 'teach' / non-object row; record numbers "
+              f"{bad[:10]}{'...' if len(bad) > 10 else ''}) -- "
+              "fix the file before any server is touched")
         return 2
     print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
 
@@ -762,6 +954,15 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     # leaves nothing to re-grade, nothing to hand a second grader, and no way
     # to argue with a verdict after the server is gone (EVAL_REDESIGN).
     rows: list[dict] = [_run_conditions(probes, base_url, temperature, max_tokens, len(cases))]
+    _mc = rows[0].get("model_checkpoint") or {}
+    if _mc.get("sha256"):
+        print(f"model under test: sha256 {_mc['sha256'][:16]}... "
+              f"step {_mc.get('step')} ({_mc.get('path')})")
+    else:
+        # A perfect seal receipt on the wrong weights is indistinguishable from
+        # an honest run without this field -- say loudly that it is missing.
+        print("WARN: server reports no checkpoint identity -- this transcript "
+              "cannot prove which weights answered")
 
     try:
         _score_cases(base_url, cases, temperature, max_tokens, rows, by_cat)
@@ -841,6 +1042,16 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     else:
         print("       NOT THE SEALED HOLDOUT -- this result does not decide adoption")
 
+    if baseline is not None and base_pair is not None:
+        try:
+            rows.append(_compare_to_baseline(baseline, base_pair[0], base_pair[1],
+                                             rows[0], by_cat, overall_hits,
+                                             overall_n, is_gate_run))
+        except Exception as exc:
+            # The transcript is the expensive artifact -- a comparison failure
+            # must never cost the answers already collected.
+            print(f"WARN: baseline comparison failed ({exc}); the transcript is still written")
+
     if transcript is not None:
         rows.append({
             "record": "scorecard",
@@ -867,10 +1078,13 @@ def main() -> None:
     ap.add_argument("--probes", default=str(PROBES), help="probe file; point at data/eval/locked_probes.jsonl for the sealed-holdout re-measure (EVAL_REDESIGN)")
     ap.add_argument("--transcript", default=None, help="write every full answer + the run conditions (probe sha, git sha, decode config) to this JSONL; required for the locked baseline receipt and for any second-grader pass")
     ap.add_argument("--allow-live-server", action="store_true", help="permit a target outside the scratch ports; the run CLEARS that server's memory store first, so only pass this for a disposable one")
+    ap.add_argument("--baseline", default=None,
+                    help="prior transcript to compare against: prints the adoption verdict (beat the aggregate with no category floor regression = ADOPT, anything else = the user's call) and refuses to compare across different probe sets")
     args = ap.parse_args()
     raise SystemExit(run(args.base_url, args.temperature, args.max_tokens, Path(args.probes),
                          Path(args.transcript) if args.transcript else None,
-                         allow_live_server=args.allow_live_server))
+                         allow_live_server=args.allow_live_server,
+                         baseline=Path(args.baseline) if args.baseline else None))
 
 
 if __name__ == "__main__":
