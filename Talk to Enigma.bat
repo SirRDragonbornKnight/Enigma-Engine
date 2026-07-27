@@ -2,14 +2,15 @@
 REM Talk to Enigma -- starts her server if it isn't running, then opens the
 REM chat in HER OWN WINDOW (enigma_window.py, WebView2 -- no browser, no
 REM tabs). The window opens on a boot page and switches to her chat the
-REM moment the server answers, however long the cold start takes. VOICE ON
-REM (Kokoro, her Cortana voice) as of 2026-07-23 -- lifts the 2026-07-16
-REM voiceless ruling. First-ever launch is SILENT: talk-mode starts OFF, so she
-REM narrates nothing until you flip "Talk" on in her window (she only speaks on
-REM an explicit "say it out loud" ask). The Talk setting PERSISTS across
-REM launches (data\talk_mode.json). Drop -Voice below to go fully mute.
-REM Gaming-friendly on purpose: 182M model (~750MB
-REM VRAM, ms-scale replies); eyes/image-gen stay OFF here.
+REM moment the server answers, however long the cold start takes.
+REM She boots COMPLETE (2026-07-27 ruling): every launch carries voice, eyes,
+REM ears, and image-gen -- the -Voice switch below is an accepted no-op kept
+REM so old shortcuts still run, and there is no launcher way to boot her
+REM partial. First launch is SILENT: talk-mode starts OFF, so she narrates
+REM nothing until you flip "Talk" on in her window (she only speaks on an
+REM explicit "say it out loud" ask). The Talk setting PERSISTS across
+REM launches (data\talk_mode.json). To mute her sound, use "Enigma Quiet"
+REM or the tray's Mute -- those are the real switches.
 
 set "PYDIR=C:\Users\SirKn\AppData\Local\Programs\Python\Python312"
 

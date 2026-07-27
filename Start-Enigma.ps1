@@ -52,10 +52,13 @@ if ($up) {
                 } else {
                     $why = "is already running but her voice organ is in an error state"
                 }
-                Write-Output "WARN: Enigma $why -- organs cannot be added to a live server. Run Stop-Enigma.ps1, then start her again to hear her."
+                # "off" cannot distinguish an older voiceless launch from a
+                # voice organ that FAILED at boot -- a restart fixes the first
+                # and repeats the second, so the advice must cover both.
+                Write-Output "WARN: Enigma $why -- organs cannot be added to a live server. Run Stop-Enigma.ps1 and start her again; if this warning returns, the voice organ is failing at boot (check the server console for its WARN line)."
                 Add-Type -AssemblyName System.Windows.Forms
                 [System.Windows.Forms.MessageBox]::Show(
-                    "Enigma $why, and organs cannot be added to a server that is already up. Her window will still open and she can chat in text -- she just will not speak. To hear her: run Stop-Enigma.ps1, then start her again from 'Talk to Enigma'.",
+                    "Enigma $why, and organs cannot be added to a server that is already up. Her window will still open and she can chat in text -- she just will not speak. To hear her: run Stop-Enigma.ps1, then start her again from 'Talk to Enigma'. If this warning comes back after a restart, the voice organ itself is failing at boot -- check the server console for its WARN line.",
                     "Enigma") | Out-Null
             }
         }
