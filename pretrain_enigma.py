@@ -434,10 +434,8 @@ def main() -> None:
                 ck = torch.load(rp, map_location=device, weights_only=True)
             else:
                 raise
-        # This was the ONE loader in the pipeline without a shape guard: the
-        # six siblings all refuse a wrong-format .pth with a curated message,
-        # while a foreign file here surfaced as a bare KeyError hundreds of
-        # lines later at ck["model_state_dict"].
+        # A foreign .pth must refuse HERE with a curated message, not surface
+        # as a bare KeyError hundreds of lines later at ck["model_state_dict"].
         if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
             raise SystemExit(
                 f"{rp} is not an Enigma checkpoint (need model_state_dict + config)"

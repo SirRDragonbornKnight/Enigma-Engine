@@ -46,6 +46,8 @@ def main() -> None:
     # this script was already running with. False would be a downgrade to
     # executing whatever pickle a foreign .pth carries.
     ck = torch.load(args.ckpt, map_location=device, weights_only=True)
+    if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
+        raise SystemExit(f"{args.ckpt} is not an Enigma checkpoint (need model_state_dict + config)")
     config = ForgeConfig.from_dict(ck["config"])
     model = Enigma(config)
     model.load_state_dict(ck["model_state_dict"], strict=False)

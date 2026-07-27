@@ -74,6 +74,37 @@ def test_eos_from_sidecar_refuses_laundered_types():
         eos_from_sidecar({"eos_token_id": 4718}, 4718)
 
 
+def test_sidecar_vocab_and_dtype_refuse_hand_edits(monkeypatch, tmp_path):
+    """eos got the plain-in-range-or-refuse treatment while vocab_size and
+    dtype -- read from the SAME hand-editable sidecar -- kept bare trust: a
+    "dtype": "float64" edit re-interpreted the whole replay corpus silently,
+    and a wrong vocab_size died late as a KeyError or a mis-picked tokenizer.
+    All three sidecar keys refuse the same way now."""
+    import json as _json
+    import sys as _sys
+
+    import pytest
+
+    import make_facts_pretrain_data as mf
+
+    bin_path = tmp_path / "replay.bin"
+    bin_path.write_bytes(b"\x00" * 64)
+
+    def run_with(meta):
+        (tmp_path / "replay.json").write_text(_json.dumps(meta), encoding="utf-8")
+        monkeypatch.setattr(_sys, "argv",
+                            ["make_facts_pretrain_data.py", "--source-bin", str(bin_path)])
+        mf.main()
+
+    for bad_vocab in (None, "16366", 16366.0, True, 0, -5):
+        with pytest.raises(SystemExit, match="vocab_size is not a positive integer"):
+            run_with({"vocab_size": bad_vocab, "dtype": "uint16", "eos_token_id": 2})
+
+    for bad_dtype in ("float64", "int64", "uint8", 16, None):
+        with pytest.raises(SystemExit, match="not a token dtype"):
+            run_with({"vocab_size": 16366, "dtype": bad_dtype, "eos_token_id": 2})
+
+
 def test_screen_is_a_noop_before_any_seal():
     lines = [LEAKY_QA, LEAKY_DECLARATIVE, UNRELATED]
     assert screen_locked_probes(lines, LockedProbeGuard(None)) == lines

@@ -253,11 +253,26 @@ def main() -> None:
     if not source_bin.exists():
         raise SystemExit(f"missing replay source: {source_bin}")
     src_meta = json.loads(source_bin.with_suffix(".json").read_text(encoding="utf-8"))
-    vocab_size = src_meta["vocab_size"]
+    # Every sidecar key this writer trusts gets the eos treatment: a plain
+    # in-range value or a refusal. A hand-edited vocab_size or dtype would
+    # otherwise reinterpret the replay corpus silently.
+    vocab_size = src_meta.get("vocab_size")
+    if isinstance(vocab_size, bool) or not isinstance(vocab_size, int) or vocab_size <= 0:
+        raise SystemExit(
+            f"sidecar vocab_size is not a positive integer ({vocab_size!r}) -- stale "
+            "or hand-edited sidecar; refusing to build a facts corpus with it"
+        )
     # dtype and tokenizer both follow the CORPUS, never a hardcoded default:
     # replaying v2 tokens through the v1 vocab would emit a corpus whose ids
     # mean nothing to the model that trains on it.
-    src_dtype = np.dtype(src_meta.get("dtype", "uint32"))
+    raw_dtype = src_meta.get("dtype", "uint32")
+    if raw_dtype not in ("uint16", "uint32"):
+        raise SystemExit(
+            f"sidecar dtype {raw_dtype!r} is not a token dtype (uint16/uint32) -- "
+            "stale or hand-edited sidecar; refusing to reinterpret the replay "
+            "corpus with it"
+        )
+    src_dtype = np.dtype(raw_dtype)
     # eos follows the corpus too: the sidecar records what pretokenize derived
     # and validated, and this writer stamps eos into its own ETOK header.
     eos_id = eos_from_sidecar(src_meta, vocab_size)

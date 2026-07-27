@@ -207,6 +207,14 @@ def main() -> None:
     best_val = float("inf")
     if args.resume:
         ck = torch.load(args.resume, map_location="cpu", weights_only=True)
+        needed = ("vision_encoder_state_dict", "proj_state_dict",
+                  "optimizer_state_dict", "scheduler_state_dict")
+        missing = [k for k in needed if not isinstance(ck, dict) or k not in ck]
+        if missing:
+            raise SystemExit(
+                f"{args.resume} is not a resumable vision-distill checkpoint "
+                f"(missing {missing})"
+            )
         student.load_state_dict(ck["vision_encoder_state_dict"])
         proj.load_state_dict(ck["proj_state_dict"])
         opt.load_state_dict(ck["optimizer_state_dict"])
