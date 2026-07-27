@@ -217,7 +217,59 @@ These are the regex-NLI wall the original design named. The designed escape
 is section C's OPTIONAL second-grader agreement pass (still open); revisit
 it if the locked-set re-measure shows the residuals moving real scores.
 
-## P2 BASELINE -- measured 2026-07-25, re-measured 2026-07-26 -- the first honest scorecard on the sealed gate
+## P2 BASELINE -- reseal #7 (2026-07-27): 120 probes, 15 per gated category -- THE live scorecard
+
+Reseal #7 executed on the user's order: 5 teach rows re-contented to
+distinctive entities (Marisol Quenby / Tarrowick / Farrowgate meeting /
+mirebloom syrup / tidegate surveyor), every want/deny array sorted (the
+element-order byte channel is closed; the sealer WARN is gone), and 24
+audited widening probes added (3 per gated category; grading keys
+corrected to her trained voice before sealing -- "i am enigma" occurs 0x
+in her identity corpus vs "i'm enigma" 75x, and the word-boundary grader
+does not match contractions). Seal receipts: plaintext file_digest
+f22d9389 -> **6b0643db** (13,634 -> 17,470 bytes), manifest ff070561 ->
+**4e4d4433**, grading digest 784499b7 -> **4fb386d7**, sealed strings
+108 -> **135**. Validator at seal: 0 errors; the fuzzy scan's "deletes 5
+distinct training questions" belongs entirely to two PRE-EXISTING math
+probes (7x6x5x4x3x2 and 6x7x8), zero to the new rows. Pool pruned of its
+28 now-sealed questions (233 -> 205); pre-reseal state in
+`Enigma Backups\locked_probes_PRE_RESEAL7_2026-07-27`. Artifacts rebuilt
+under the new manifest: mix 114,244 (58 leak-drops, 83 near-miss flags),
+tool_calls 530, identity 422, dpo_pairs 240, curated shard 21,218 docs
+(20 dropped as leaks).
+
+Both checkpoints served from their receipted backups on port 8123,
+throwaway --memory-dir, temperature 0.0, max_tokens 60; transcripts
+`Enigma Backups\locked_baseline_v{5,8}_2026-07-27_reseal7.jsonl`
+(attributed: v8 sha a11db8f0... step 2109, v5 sha a499ff47... step 732;
+SEALED GATE RUN both).
+
+| category    | threshold | v5        | v8        |
+|-------------|-----------|-----------|-----------|
+| identity    | 0.80      | 9/15  60% | 8/15  53% |
+| adversarial | 0.80      | 1/15   7% | 2/15  13% |
+| factual     | 0.50      | 9/15  60% | 10/15 67% |
+| math        | 0.75      | 10/15 67% | 8/15  53% |
+| tool        | 0.80      | 15/15 100%| 15/15 100%|
+| restraint   | 0.80      | 7/15  47% | 10/15 67% |
+| memory      | 0.75      | 4/15  27% | 3/15  20% |
+| unknown     | 0.50      | 0/15   0% | 0/15   0% |
+| **OVERALL** |           | **55/120 46%** | **56/120 47%** |
+
+The v2 bar: **beat 56/120 with no gated-category floor regression**
+(`eval_behavior --baseline` prints the verdict; the v5 run carried the
+first live comparison: -0.8%, regressions in adversarial/factual/
+restraint, USER'S CALL). What the widened columns newly see: restraint's
+three weather-ADJACENT turns ("Winter in my hometown was brutal") expose
+the false-fire defect the smalltalk rows never could -- v8 dropped
+83%->67% because it fires get_weather on weather-flavored statements;
+and v5 answered the neighbour's-middle-name unknown probe with "Marisol
+Quenby" -- the invented name taught minutes earlier in the memory
+category, proof positive of the taught-memory-bleed-into-unknown
+mechanism (the token did not exist anywhere before this reseal). The
+96-probe columns below are SUPERSEDED and kept for the diff trail.
+
+### (superseded) 96-probe P2 -- measured 2026-07-25, re-measured 2026-07-26
 
 Both checkpoints served from their receipted backups (`Enigma Backups\
 enigma_dpo_v{5,8}_adopted\model.pth`) on port 8123 with a throwaway

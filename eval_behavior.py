@@ -634,11 +634,12 @@ _LOCKED_CONTENT_SHARE = 0.9
 # _probe_hashes, never posted, never graded, invisible in the scorecard.
 #
 # An ABSOLUTE floor cannot be diluted, because padding only ever adds strings.
-# Measured exact-hash overlap against the sealed 108 (2026-07-25):
-# behavior_probes 1, locked_probes_pool 4, benchmark_extra 0,
-# benchmark_future_capabilities 0. Twelve clears the pool by 3x and sits far
-# under the 108 a real copy carries, so no honest file trips it and no rigged
-# one escapes it by padding.
+# Measured exact-hash overlap against the sealed 135 (2026-07-27, reseal #7,
+# pool pruned of its 28 sealed questions in the same pass): behavior_probes 0,
+# locked_probes_pool 0, benchmark_extra 0, benchmark_future_capabilities 0.
+# Twelve sits far under the 135 a real copy carries and no honest file
+# reaches it at all now, so nothing trips it and no rigged copy escapes it
+# by padding.
 _LOCKED_CONTENT_MIN = 12
 
 

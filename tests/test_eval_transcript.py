@@ -503,9 +503,12 @@ def test_gutted_grading_keys_are_caught_even_though_the_questions_match(tmp_path
 
 def test_the_dev_set_is_not_mistaken_for_the_locked_set():
     """Content-based gate detection has to tell a COPY of the sealed set from a
-    file that merely shares a string with it. The dev set shares exactly one (a
-    memory teach line), and keying on 'any sealed string present' read it as a
-    tampered holdout and refused to run the dev eval at all."""
+    file that merely shares a string with it. Since reseal #7 (2026-07-27) the
+    dev and sealed sets share NOTHING (the one shared teach line was
+    re-contented on purpose -- no sealed string is public), so the
+    shares-a-string case is constructed: dev plus one sealed record must still
+    read as an ordinary file (1 hit is far under the content floor), while any
+    trimmed copy of the holdout reads as locked."""
     real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
     if not real.exists() or not eval_behavior.LOCKED_MANIFEST.exists():
         pytest.skip("no sealed locked set in this checkout")
@@ -516,13 +519,16 @@ def test_the_dev_set_is_not_mistaken_for_the_locked_set():
     dev = cases(eval_behavior.PROBES)
     locked = cases(real)
     assert not eval_behavior._touches_sealed_probes(dev), "the dev set reads as the locked set"
-    assert eval_behavior._touches_sealed_probes(locked)
-    # a TRIMMED copy is still locked content -- that was the PASS-on-12-probes hole
-    assert eval_behavior._touches_sealed_probes(locked[:12])
-    # ...and the overlap really is nonzero, or this test would pass vacuously
+    # the real overlap is ZERO now -- pin that, it is a seal property
     sealed = set(eval_behavior._sealed_hashes())
-    shared = sum(h in sealed for h in eval_behavior._probe_hashes(dev))
-    assert shared >= 1, "fixture assumption gone: dev and sealed no longer overlap at all"
+    assert sum(h in sealed for h in eval_behavior._probe_hashes(dev)) == 0, (
+        "a sealed string is in the open dev set -- it is public; re-content one side"
+    )
+    # a file that SHARES one sealed record is still not the holdout...
+    assert not eval_behavior._touches_sealed_probes(dev + locked[:1])
+    assert eval_behavior._touches_sealed_probes(locked)
+    # ...but a TRIMMED copy is still locked content -- the PASS-on-12-probes hole
+    assert eval_behavior._touches_sealed_probes(locked[:12])
 
 
 def test_renaming_the_locked_set_does_not_dodge_the_seal_check(tmp_path, monkeypatch, capsys):

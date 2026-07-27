@@ -35,12 +35,12 @@ gate recorded only in conversation is a bug in this table.
    time before the retokenize). The v2 bin + sidecar stay attrib +R; the
    T2/T3 `--tokens-bin` arguments follow whatever name the retokenize
    writes. -> 7.95 T1.
-4. ~~Teach-line content reseal~~ **RULED 2026-07-27: RESEAL + WIDEN to 15
-   per gated category, in ONE reseal** (5 corrected teach rows + want/deny
-   array sort + 24 added probes; the baseline re-bases once and category
-   stats stop being directional-only). EXECUTION GATE: the user picks the
-   24 widening probes from the candidate pool before anything seals --
-   nothing runs until that pick. -> section 2 + the proposal in Documents.
+4. ~~Teach-line content reseal~~ **EXECUTED 2026-07-27 ("seal it"):
+   reseal #7 = 120 probes / 15 per gated category / 135 sealed strings
+   (manifest 4e4d4433, grading digest 4fb386d7, plaintext 6b0643db); array
+   sort closed the element-order channel; pool pruned 233 -> 205; all four
+   artifacts + the curated shard rebuilt; attributed baselines re-based:
+   v8 56/120, v5 55/120.** EVAL_REDESIGN owns the receipts. CLOSED.
 5. **Section 9 disk reclaim** (~204 GB re-measured 2026-07-27): say which
    rows die. -> section 9.
 6. **Gate B -- pretrain size call**: 238m (wall-clock optimal) vs 542m
@@ -104,11 +104,12 @@ gate recorded only in conversation is a bug in this table.
 - [x] **Author the locked probe set** — DONE 2026-07-24: the user's 96-probe
   file was validated and sealed (108 strings incl. 12 teach lines); manifest
   committed, plaintext gitignored, durable copy in `Enigma Backups`.
-- [ ] Widen thin eval categories to >=15 probes: the DEV set is there
-  (152 probes / 11 categories -- EVAL_REDESIGN owns the count) except
-  `unknown` and `speech` at 9; the SEALED set is 12 per
-  category, under EVAL_REDESIGN's own >=15 rule, and cannot be widened
-  without re-sealing. Re-measure v5/v8 on the locked set (P2) for the honest
+- [x] Widen thin eval categories to >=15 probes: **SEALED set DONE
+  2026-07-27 (reseal #7: 15 per gated category, meeting EVAL_REDESIGN's
+  own >=15 rule; category stats are no longer directional-only).** DEV set
+  remains 152 probes / 11 categories (EVAL_REDESIGN owns the count) with
+  `unknown` and `speech` at 9 -- the dev side can widen any time, no seal
+  involved. Re-measure v5/v8 on the locked set (P2) for the honest
   baseline.
 - [ ] (Optional) second-grader agreement pass; semantic-embedding leak guard to
   close the verb-swap gap.
@@ -589,20 +590,22 @@ Prerequisites (not training):
 - P2. v5/v8 locked re-measure (`--port 8123`, throwaway `--memory-dir`,
   `--transcript` OUTSIDE the repo) = the baseline v2 must beat. Ran before
   any vocab adoption, as required.
-    - **DONE 2026-07-26, under the floor-2 seal (manifest ff070561, first
-      live SEALED GATE RUNs on it) and the `tools_run` grader, greedy:**
-      both checkpoints 47/96 OVERALL (v5 up 1 from the recorded 46 -- the
-      old restraint column was the flagged upper bound). Category-resolved:
-      v8 = identity 5, adversarial 2, factual 8, math 7, tool 12, restraint
-      10, memory 3, unknown 0 (of 12 each); v5 = identity 7, adversarial 1,
-      factual 7, math 9, tool 12, restraint 7, memory 4, unknown 0. THE
-      BASELINE IS 47/96; v8 keeps adoption on restraint (10 vs 7). Color
-      worth keeping: both models leak the taught memory names into unknown
-      answers ("the person next to me" -> "Elena."/"Marcus."), and unknown
-      is 0/24 across both -- epistemics are the v2 recipe's biggest win
-      condition. NOTE: if the teach-content reseal (proposal in the user's
-      Documents, 2026-07-26) is approved, re-run both memory columns for
-      continuity.
+    - **RE-BASED 2026-07-27 under reseal #7 (120 probes / 15 per gated
+      category / manifest 4e4d4433; EVAL_REDESIGN owns the full table +
+      seal receipts):** v8 = **56/120 (47%)**, v5 = **55/120 (46%)**,
+      attributed transcripts in Enigma Backups. THE BASELINE v2 MUST BEAT
+      IS 56/120 with no gated-floor regression (`eval_behavior --baseline`
+      prints the verdict; the v5 run carried the first live comparison:
+      USER'S CALL, regressions adversarial/factual/restraint). The widened
+      columns see what n=12 could not: restraint's weather-ADJACENT rows
+      expose the false-fire defect (v8 83%->67% -- it calls get_weather on
+      "Winter in my hometown was brutal"), and v5 answered the
+      neighbour's-name unknown probe with "Marisol Quenby" -- the invented
+      teach name from minutes earlier, the memory-bleed mechanism proven
+      with a token that did not exist before this reseal. unknown is 0/30
+      across both: epistemics stay the v2 recipe's biggest win condition.
+      (The 96-probe 47/96 columns are superseded; diff trail in
+      EVAL_REDESIGN.)
     - The harness CLEARS the target server's memory store before probing and
       then writes probe facts into it, so it refuses any target off the
       scratch port unless `--allow-live-server` is passed. Never point it at
