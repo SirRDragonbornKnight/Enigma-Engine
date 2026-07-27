@@ -538,8 +538,18 @@ def _cli_seal(src: str) -> int:
     cases = []
     for line in src_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
+        if not line:
             continue
+        if line.startswith("#"):
+            # REFUSE, never skip: a skipped comment enters the file's BYTE
+            # identity (probe_file_sha256) without entering any sealed hash,
+            # so a commented file could seal and gate-run while carrying
+            # editable text the seal does not cover -- and the docs' claim
+            # that "a commented holdout can never match its seal" was only
+            # true if this refusal exists (2026-07-26 audit).
+            print("ERROR: comment line in the locked probe file -- author pure JSONL "
+                  "(comments would ride inside the byte seal uncovered by any hash)")
+            return 1
         rec = json.loads(line)
         cases.append(rec)
         q = rec.get("q") or rec.get("question") or ""

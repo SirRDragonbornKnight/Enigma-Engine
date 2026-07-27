@@ -655,7 +655,17 @@ The block, in execution order:
   2026-07-24; the block is part of the STANDARD recipe -- any new AI the
   trainer molds inherits it, ruled same day; the block is now FIVE built-ins
   -- calculate, remember, forget, speak, imagine -- forget added
-  2026-07-24), the client-system "Available tools:" shape, image turns
+  2026-07-24). The MEASURED defects behind the retirement, since this entry
+  is their one owner (2026-07-26 audit restored them after a doc trim
+  orphaned the receipts): the per-built-in gates failed BOTH directions --
+  missed asks ("Draw me a dragon" never offered `imagine`; word-number math
+  like "seven times eight" misses `calculate`'s digit shape), and a missed
+  ask means no offer, so no gradient at training time and no eval signal at
+  gate time; false fires on negated asks ("Do not draw anything" armed the
+  painter); and the eyes flatten images to `[image: ...]` TEXT before the
+  gates read the turn, so her own caption can fire the painter -- a hazard
+  that is LIVE today on the gate-mediated v8, not just v2 history. Also in
+  the regen: the client-system "Available tools:" shape, image turns
   carrying system/tools/memory blocks, URL-bearing records now kept,
   trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
   passed explicitly, finetune `--block` raised.
@@ -790,10 +800,10 @@ Consequences, binding on the training block and organ work:
 | Candidate | Size | Why it is an orphan |
 |---|---|---|
 | `data\pretrain\combined.txt` | 95.1 GB | Forge-era combined stream; pretokenize reads SOURCE_DIRS instead ("doesn't touch combined.txt" is in its docstring); the Forge arm is deleted. Rebuildable by `collect_pretraining_data.py --combine`. |
-| `models\qwen3-30b-a3b\` + `models\qwen3-8b\` | 33.3 GB | Qwen-era local weights, zero references; the distill teacher runs over Ollama, not these dirs. |
+| `models\qwen3-30b-a3b\` + `models\qwen3-8b\` | 34.95 GB | Qwen-era local weights, zero references; the distill teacher runs over Ollama, not these dirs. |
 | `data\pretrain\enwiki-latest-pages-articles.xml.bz2` | 25.1 GB | Source archive already fully extracted into `wikipedia_dump\` (a live source dir); re-downloadable. |
 | `models\enigma_pretrain_large\step_*.pth` (9 files) | 19.7 GB | Intermediate v1 checkpoints; the lineage-final latest/model/prev are backed up with receipts. Deleting trades mid-run archaeology for the space. |
-| `models\enigma_sft_v8\` | 6.25 GB | Superseded by the `enigma_sft_phase2_pass` backup. |
+| `models\enigma_sft_v8\` | 6.56 GB | Superseded by the `enigma_sft_phase2_pass` backup. |
 | `data\audio\train-clean-100.tar.gz` | 6.4 GB | Extracted to `LibriSpeech\` already; re-downloadable. |
 | `models\enigma_pretrain_probe\` + `probe_tput_v2_deep_186m\` | 5.6 GB | Probe runs, July; their numbers are recorded in BACKLOG/TOKENIZER_V2_SPEC. |
 | `models\enigma_pretrain_base\` + `enigma_pretrain_base_v2\` | 4.2 GB | Abandoned 121M side-runs (base_v2 died at step 2010/5086); historical prose mentions only. |

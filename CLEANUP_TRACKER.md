@@ -13,10 +13,13 @@ Current truth:
   (measured: `train_large.log` provably lacks that band). The full set now
   lives at `Enigma Backups\training_logs_v1\` with a SHA256SUMS receipt.
   `train_large.log` STAYS in the root (live consumers: `training_progress.py`,
-  `tail_training_log.ps1`); the backed-up side-logs, the abandoned 121M
-  `train_base_v2.log`, the SFT receipts and the pre-v1 `_merge.log` (a LoRA
-  merge from the era whose code was deleted 2026-07-18) were removed locally.
-- **Deleted without backup (no value):** the zero-byte `*.err.log` stubs, the
+  `tail_training_log.ps1`); the four backed-up `train_resume.out*` side-logs,
+  the abandoned 121M `train_base_v2.log`, the SFT receipts and the pre-v1
+  `_merge.log` (a LoRA merge from the era whose code was deleted 2026-07-18)
+  were removed locally.
+- **Deleted without backup (no value):** the zero-byte `*.err.log` stubs
+  (EXCEPT `serve_enigma.err.log`, which stays -- it is Start-Enigma.ps1's
+  live -RedirectStandardError sink and empty is its healthy state), the
   4-line `serve_sft.log` banner, the one-line `power_guardian.log`, the 12
   `logs\forge_*.log` from the deleted trainer, 16 zero-byte run-log stubs
   inside `models\enigma_sft\`, six stray `*.bak`, all `__pycache__` (two

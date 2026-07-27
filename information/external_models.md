@@ -33,10 +33,11 @@ reads GGUF back in.
 RULED 2026-07-24: serving Enigma THROUGH llama.cpp was considered and
 REJECTED -- her serving path stays from-scratch, our own code. Export
 remains available for taking a checkpoint elsewhere, but it is not a
-serving option here, and the vendored `enigma_engine/bin/llama-server/`
-(1.07 GB) is dead weight awaiting a deletion decision. Note also that
-the qwen3 auto-flip in gguf.py is math-wrong for the v1 architecture
-(norms before rope, missing NEOX permute).
+serving option here. The vendored `enigma_engine/bin/llama-server/`
+binary (~1 GB) was DELETED 2026-07-25 (it was gitignored and never
+committed; nothing to recover). Note also that the qwen3 auto-flip in
+gguf.py is math-wrong for the v1 architecture (norms before rope,
+missing NEOX permute).
 
 ---
 

@@ -1,7 +1,7 @@
-# Known Issues — current as of 2026-07-25
+# Known Issues — current as of 2026-07-26
 
-_Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (bugs),
-`CLEANUP_TRACKER.md` (file state)._
+_Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
+`_archive/CODE_REVIEW.md` (bugs), `CLEANUP_TRACKER.md` (file state)._
 
 0. **`encode()` misses a chat special that directly follows `}`.** Measured
    2026-07-25: `encode('<|/tool_call|>')` is `[4721]` and
@@ -139,6 +139,15 @@ _Navigation layer over `SUGGESTIONS.md` (strategy), `_archive/CODE_REVIEW.md` (b
     Audio pipeline status (collector, distill, align, the whisper-base
     teacher download) lives in `BACKLOG.md` section 4, step 6 -- this entry
     stays about the restored modules only.
+
+11.5. **`torch.load(weights_only=False)` pins in the finetune/dpo/serve/
+    align/bench/distill loaders are pre-torch-2.6 legacy.** Measured
+    2026-07-26: the real checkpoints load fine under `weights_only=True`
+    (pretrain + sample now pin True, after an audit caught a False pin being
+    added there as "sibling alignment" -- a live security downgrade on torch
+    2.10, where True is the default those paths were already running under).
+    Migrating the remaining six loaders to True is a small hardening item;
+    each needs its own load-under-True receipt first.
 
 12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
     the checkpoint-safety subset AND the pre-align fix batch were FIXED same

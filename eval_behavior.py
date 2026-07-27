@@ -713,11 +713,11 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     if transcript is not None:
         # Fail here, not after a full suite has run against a live server.
         _refuse_unsealing_path(transcript)
-    # Skip "#" comment lines the way the sealer does (eval_leak_guard._cli_seal):
-    # the two readers disagreeing meant a commented DEV file sealed fine and
-    # then crashed this run at json.loads. The GATE file still cannot carry
-    # comments -- its identity is the file's bytes, so a commented holdout
-    # never matches its seal in the first place.
+    # Skip "#" comment lines so a commented DEV file no longer crashes this
+    # run at json.loads. The GATE file still cannot carry comments: the
+    # sealer REFUSES them outright (a skipped comment would ride inside the
+    # byte seal uncovered by any hash), so no commented holdout ever has a
+    # manifest to match.
     cases = [
         json.loads(line)
         for line in probes.read_text(encoding="utf-8").splitlines()

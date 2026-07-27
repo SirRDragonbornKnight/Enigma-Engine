@@ -415,10 +415,14 @@ def main() -> None:
                 f"refusing to silently start a fresh run"
             )
         try:
-            # weights_only explicit: these checkpoints carry optimizer state
-            # and the schedule dict, and a torch default flip would break
-            # every resume (the sibling loaders in finetune/dpo already pin it).
-            ck = torch.load(rp, map_location=device, weights_only=False)
+            # weights_only=True, explicit and MEASURED (2026-07-26 audit): on
+            # torch 2.10 it is the default and the real lineage checkpoints
+            # (config + model_state_dict + optimizer + step + schedule) load
+            # under it -- this path was already running refuse-foreign-pickle
+            # mode and working. Pinning False here "to match the siblings"
+            # was a live security downgrade; the siblings' False pins are the
+            # pre-2.6 legacy, not the target.
+            ck = torch.load(rp, map_location=device, weights_only=True)
         except Exception as exc:
             prev = rp.parent / "prev.pth"
             if rp.name == "latest.pth" and prev.exists():
@@ -426,7 +430,7 @@ def main() -> None:
                 # fall back to the rotated previous generation
                 print(f"load: {rp} unreadable ({exc}) -> falling back to {prev}", flush=True)
                 rp = prev
-                ck = torch.load(rp, map_location=device, weights_only=False)
+                ck = torch.load(rp, map_location=device, weights_only=True)
             else:
                 raise
         # This was the ONE loader in the pipeline without a shape guard: the

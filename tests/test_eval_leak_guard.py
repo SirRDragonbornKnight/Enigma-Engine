@@ -506,3 +506,22 @@ def test_seal_warns_on_stopword_only_probe(tmp_path, monkeypatch, capsys):
     assert "no content words" in out
     assert "Is it you?" in out
     assert out.count("WARN") == 1  # the France probe is fine
+
+
+def test_the_sealer_refuses_a_commented_file(tmp_path, monkeypatch, capsys):
+    """A skipped comment enters the file's BYTE identity (probe_file_sha256)
+    without entering any sealed hash -- so a commented file could seal and
+    then gate-run while carrying editable text no hash covers (2026-07-26
+    audit; the docs' "a commented holdout can never match its seal" was only
+    true if this refusal exists)."""
+    import eval_leak_guard as elg
+
+    src = tmp_path / "locked.jsonl"
+    src.write_text(
+        '# a stray authoring note\n{"q": "What is the capital of France?"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "manifest.json")
+    assert elg._cli_seal(str(src)) == 1
+    assert "comment line" in capsys.readouterr().out
+    assert not (tmp_path / "manifest.json").exists(), "refusal must not write a seal"

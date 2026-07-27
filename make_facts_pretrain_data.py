@@ -238,7 +238,14 @@ def main() -> None:
     src_dtype = np.dtype(src_meta.get("dtype", "uint32"))
     # eos follows the corpus too: the sidecar records what pretokenize derived
     # and validated, and this writer stamps eos into its own ETOK header.
-    eos_id = int(src_meta.get("eos_token_id", EOS_ID))
+    try:
+        eos_id = int(src_meta.get("eos_token_id", EOS_ID))
+    except (TypeError, ValueError):
+        raise SystemExit(
+            f"sidecar eos_token_id is not a number "
+            f"({src_meta.get('eos_token_id')!r}) -- stale or hand-edited "
+            "sidecar; refusing to write a corpus with it"
+        ) from None
     if not 0 <= eos_id < vocab_size:
         raise SystemExit(
             f"sidecar eos_token_id {eos_id} is outside vocab {vocab_size} -- "

@@ -41,9 +41,11 @@ def main() -> None:
     eos = getattr(tok, "eos_token_id", 2)
     bos = getattr(tok, "bos_token_id", 1)
 
-    # weights_only explicit, matching every other loader in the pipeline: a
-    # torch default flip would otherwise change what this script can open.
-    ck = torch.load(args.ckpt, map_location=device, weights_only=False)
+    # weights_only=True, explicit and measured (2026-07-26 audit): the real
+    # checkpoints load under it on torch 2.10, where it is also the default
+    # this script was already running with. False would be a downgrade to
+    # executing whatever pickle a foreign .pth carries.
+    ck = torch.load(args.ckpt, map_location=device, weights_only=True)
     config = ForgeConfig.from_dict(ck["config"])
     model = Enigma(config)
     model.load_state_dict(ck["model_state_dict"], strict=False)
