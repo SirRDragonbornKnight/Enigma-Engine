@@ -12,7 +12,7 @@ import hashlib
 import torch
 from enigma_engine.core.model import Enigma, ForgeConfig
 
-ck = torch.load("models/enigma_pretrain_large/latest.pth", map_location="cpu", weights_only=False)
+ck = torch.load("models/enigma_pretrain_large/latest.pth", map_location="cpu", weights_only=True)
 cfg = ForgeConfig.from_dict(ck["config"])
 m = Enigma(cfg)
 res = m.load_state_dict(ck["model_state_dict"], strict=False)

@@ -241,7 +241,7 @@ def main() -> None:
                 f"pretrained checkpoint (her run is user-gated)"
             )
     try:
-        ck = torch.load(src, map_location=device, weights_only=False)
+        ck = torch.load(src, map_location=device, weights_only=True)
     except Exception as exc:
         prev = src.parent / "prev.pth"
         if resuming and src.name == "latest.pth" and prev.exists():
@@ -249,7 +249,7 @@ def main() -> None:
             # back to the rotated previous generation instead of stranding
             print(f"resume: {src} unreadable ({exc}) -> falling back to {prev}", flush=True)
             src = prev
-            ck = torch.load(src, map_location=device, weights_only=False)
+            ck = torch.load(src, map_location=device, weights_only=True)
         else:
             raise
     if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):

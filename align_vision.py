@@ -69,12 +69,12 @@ def main() -> None:
         torch.backends.cudnn.allow_tf32 = True
 
     # -- her brain, frozen, with the vision projection port added --------
-    ck = torch.load(args.model, map_location="cpu", weights_only=False)
+    ck = torch.load(args.model, map_location="cpu", weights_only=True)
     if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
         raise SystemExit(f"{args.model} is not an Enigma checkpoint")
 
     # -- her eyes, distilled -------------------------------------------
-    eck = torch.load(args.encoder, map_location="cpu", weights_only=False)
+    eck = torch.load(args.encoder, map_location="cpu", weights_only=True)
     if "vision_encoder_state_dict" not in eck:
         raise SystemExit(f"{args.encoder} carries no vision_encoder_state_dict (run distill_vision_encoder.py)")
     if "vision_encoder_config" not in eck:

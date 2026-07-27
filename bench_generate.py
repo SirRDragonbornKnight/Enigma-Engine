@@ -34,7 +34,7 @@ def build_model(args):
         cfg = get_preset("tiny", vocab_size=512)
         cfg.dropout = 0.0
         return Enigma(cfg).to(args.device).eval(), cfg
-    ckpt = torch.load(args.model, map_location="cpu", weights_only=False)
+    ckpt = torch.load(args.model, map_location="cpu", weights_only=True)
     if not (isinstance(ckpt, dict) and "model_state_dict" in ckpt and "config" in ckpt):
         raise SystemExit(f"{args.model} is not an Enigma checkpoint")
     cfg = ForgeConfig.from_dict(ckpt["config"])

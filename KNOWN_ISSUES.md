@@ -140,14 +140,20 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
     teacher download) lives in `BACKLOG.md` section 4, step 6 -- this entry
     stays about the restored modules only.
 
-11.5. **`torch.load(weights_only=False)` pins in the finetune/dpo/serve/
-    align/bench/distill loaders are pre-torch-2.6 legacy.** Measured
-    2026-07-26: the real checkpoints load fine under `weights_only=True`
-    (pretrain + sample now pin True, after an audit caught a False pin being
-    added there as "sibling alignment" -- a live security downgrade on torch
-    2.10, where True is the default those paths were already running under).
-    Migrating the remaining six loaders to True is a small hardening item;
-    each needs its own load-under-True receipt first.
+11.5. **CLOSED 2026-07-26 -- every `torch.load` in the pipeline now pins
+    `weights_only=True`.** The False pins in finetune/dpo/serve/align/bench/
+    distill/_verify_ckpt were pre-torch-2.6 legacy (an audit first caught a
+    False pin being ADDED to pretrain as "sibling alignment" -- a live
+    security downgrade on torch 2.10, where True is the default those paths
+    already ran under). Receipt before the flip: every artifact class loaded
+    under True on the real files -- enigma_dpo/model.pth (with meta),
+    enigma_pretrain_large/latest.pth (with optimizer state; the
+    _verify_ckpt target), enigma_sft/model.pth, and all three
+    enigma_vision_align checkpoints (with optimizer+scheduler state). The
+    distill --resume class had no file on disk to receipt; its checkpoints
+    are written by the same tensors-only torch.save pattern, and a failure
+    there is a loud UnpicklingError, not silence. Suite 789 green after the
+    flip -- the fake-checkpoint fixtures ride the same loaders.
 
 12. **Open findings from the 2026-07-19 compression-pass review** (25 verified;
     the checkpoint-safety subset AND the pre-align fix batch were FIXED same

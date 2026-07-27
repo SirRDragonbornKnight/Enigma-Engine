@@ -283,7 +283,7 @@ def _load_eyes(ckpt_path: Path, preset: str):
     # raises EOFError/UnpicklingError, neither of which boot's degrade catch
     # covers, so an unreadable eye would take text serving down with it.
     try:
-        eck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        eck = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     except Exception as exc:
         raise EyesError(
             f"{ckpt_path} could not be read as a checkpoint "
@@ -423,7 +423,7 @@ def boot(argv: list[str] | None = None) -> None:
             "Pass --model <path to an Enigma .pth checkpoint> (the default only "
             "exists inside a repo checkout with trained models)"
         )
-    _ck = torch.load(ARGS.model, map_location="cpu", weights_only=False)  # our own checkpoint
+    _ck = torch.load(ARGS.model, map_location="cpu", weights_only=True)  # our own checkpoint
     if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
         raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
     CONFIG = ForgeConfig.from_dict(_ck["config"])

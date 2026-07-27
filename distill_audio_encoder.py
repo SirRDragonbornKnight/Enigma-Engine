@@ -215,7 +215,7 @@ def main() -> None:
     start_epoch = 0
     best_val = float("inf")
     if args.resume:
-        ck = torch.load(args.resume, map_location="cpu", weights_only=False)
+        ck = torch.load(args.resume, map_location="cpu", weights_only=True)
         student.load_state_dict(ck["audio_encoder_state_dict"])
         proj.load_state_dict(ck["proj_state_dict"])
         opt.load_state_dict(ck["optimizer_state_dict"])

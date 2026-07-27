@@ -143,7 +143,7 @@ def main() -> None:
     src = Path(args.init)
     if not src.exists():
         raise SystemExit(f"--init {src} not found")
-    ck = torch.load(src, map_location=device, weights_only=False)
+    ck = torch.load(src, map_location=device, weights_only=True)
     if not (isinstance(ck, dict) and "model_state_dict" in ck and "config" in ck):
         raise SystemExit(f"{src} is not an Enigma checkpoint")
     meta = dict(ck.get("meta") or {})
