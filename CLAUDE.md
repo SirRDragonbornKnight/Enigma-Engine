@@ -39,9 +39,12 @@ The Modkit-era `mods/`+`plugins/` subsystem and its registry were REMOVED 2026-0
 loaded by serve; pip name is `enigma-engine` 2.0.0). Capabilities that are genuinely separate
 models (image gen, TTS, ASR, search) return as organ/tool services below, NOT in-repo mods.
 
-**Organs (live 2026-07-14):** capabilities as local services behind serve flags; each is a
-`core/` primitive with an injectable factory (tests never download models or touch hardware),
-loaded eagerly at startup (a broken organ WARNs and text serving continues).
+**Organs (live 2026-07-14; COMPLETE-BY-DEFAULT ruled 2026-07-27):** capabilities as local
+services behind serve flags; each is a `core/` primitive with an injectable factory (tests
+never download models or touch hardware), loaded eagerly at startup (a broken organ WARNs
+and text serving continues). The user-facing launcher boots ALL of them — "the old way of
+having the tools separate was to save space; add them in so she is complete" (user, verbatim).
+Flags still exist for scratch/eval servers, which stay lean on purpose.
 - `--voice` → `core/tts.py` (**Kokoro-82M**): intent-gated `speak` built-in + the
   `/v1/audio/*` endpoints; voices are style tensors that BLEND by weighted sum; the active
   recipe persists to `~/.enigma_engine/voice.json`. **The server must run under the repo

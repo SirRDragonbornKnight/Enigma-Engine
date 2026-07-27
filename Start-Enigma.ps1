@@ -6,7 +6,11 @@
 # (data\memory -- the remember tool writes here).
 # ASCII-only output (Windows cp1252 console).
 param(
-    [switch]$Voice,  # enable the voice organ (speak tool + /v1/audio/speech)
+    # RETIRED 2026-07-27 (user ruling: "add them in so she is complete") --
+    # every launch now boots ALL organs, so -Voice is accepted for the old
+    # callers but changes nothing. Voice loaded does not mean voice talking:
+    # speak is intent-gated and talk-mode persists separately.
+    [switch]$Voice,
     # Optional single-preset override. EMPTY (default) = her saved Kokoro voice
     # recipe -- the Cortana blend in ~/.enigma_engine/voice.json. Only pass a
     # name to force one preset, e.g. -VoiceName af_bella (see /v1/audio/voices).
@@ -29,10 +33,10 @@ if ($up) {
     $procName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
     if ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai")) {
         Write-Output "Enigma already serving on port $port (pid $ownerId)."
-        # A live server keeps the ORGANS it booted with -- -Voice cannot reach
-        # it. Odysseus.bat starts her voiceless, so without this check a later
-        # "Talk to Enigma" attaches to a mute server and reports success.
-        if ($Voice) {
+        # A live server keeps the ORGANS it booted with -- flags cannot reach
+        # it. Every launch is complete since 2026-07-27, so any live server
+        # WITHOUT voice predates the ruling; warn unconditionally.
+        if ($true) {
             $voiceState = "unknown"
             try {
                 $s = Invoke-RestMethod -Uri "http://127.0.0.1:$port/v1/audio/status" -TimeoutSec 3
@@ -70,7 +74,7 @@ if (-not (Test-Path $python)) {
     # Often launched hidden (tray/bat) -- a popup is the only failure anyone sees.
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show(
-        "Enigma's serving environment was not found at $python -- recreate it with: python -m venv venv; venv\Scripts\pip install -e `".[voice,server]`" (from the Enigma Engine folder).",
+        "Enigma's serving environment was not found at $python -- recreate it with: python -m venv venv; venv\Scripts\pip install -e `".[server,voice,ears,eyes,imagegen]`" (from the Enigma Engine folder).",
         "Enigma") | Out-Null
     exit 1
 }
@@ -78,14 +82,14 @@ if (-not (Test-Path $python)) {
 # Hidden window: a visible console gets closed by accident (see CLAUDE.md
 # training-ops gotcha). Logs go to serve_enigma.log in the repo.
 $log = Join-Path $engineDir "serve_enigma.log"
-# --eyes = HER OWN vision encoder + projection + this same model (~19M extra,
-# no external captioner, no downloads); serve degrades to text-only with a
-# WARN if the align checkpoint is missing, so passing it is always safe.
-$serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth", "--memory-dir", "data\memory", "--eyes")
-if ($Voice) {
-    $serveArgs += "--voice"
-    if ($VoiceName) { $serveArgs += @("--voice-name", $VoiceName) }
-}
+# COMPLETE by ruling (2026-07-27): every organ, every launch -- the old
+# organs-as-options split was a space saver that stopped earning its keep.
+# Each organ WARNs and text serving continues if its backend is missing, so
+# the flags are always safe; voice loaded stays SILENT until asked (speak is
+# intent-gated; talk-mode persists separately in data\talk_mode.json).
+$serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth",
+               "--memory-dir", "data\memory", "--eyes", "--ears", "--voice", "--image-gen")
+if ($VoiceName) { $serveArgs += @("--voice-name", $VoiceName) }
 Start-Process -FilePath $python `
     -ArgumentList $serveArgs `
     -WorkingDirectory $engineDir `
