@@ -16,7 +16,7 @@ Sources:
   - C4 (--c4 N) - cleaned Common Crawl text (requires `datasets`)
   - DCLM-Baseline (--dclm N) - model-filtered web text, beats FineWeb-Edu on MMLU (requires `datasets`)
   - FineMath (--finemath N) - step-by-step math from CommonCrawl, finemath-4+ + infiwebmath-3+ (requires `datasets`)
-  - The Stack v2 (--code N) - source code, 16 languages, permissive licenses (requires `datasets` + HF auth)
+  - The Stack v1 (--code N) - source code, 16 languages, permissive licenses (requires `datasets` + HF auth)
 
 Usage:
   python collect_pretraining_data.py --wiki-dump            # Download full Wikipedia dump (RECOMMENDED)
@@ -31,7 +31,7 @@ Usage:
   python collect_pretraining_data.py --c4 20                # 20 GB of C4 cleaned Common Crawl
   python collect_pretraining_data.py --dclm 15              # 15 GB of DCLM model-filtered web text
   python collect_pretraining_data.py --finemath 10          # 10 GB of FineMath step-by-step math
-  python collect_pretraining_data.py --code 10              # 10 GB of The Stack v2 code (needs HF auth)
+  python collect_pretraining_data.py --code 10              # 10 GB of The Stack v1 code (needs HF auth)
   python collect_pretraining_data.py --all-sources          # Everything: wiki, books, fineweb, SE, wayback, fandom, owt, c4
   python collect_pretraining_data.py --books-only           # Download only Gutenberg books
   python collect_pretraining_data.py --resume               # Resume interrupted download
@@ -2762,6 +2762,47 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
 # Generic HuggingFace streaming fetcher
 # ---------------------------------------------------------------------------
 
+# The tokenizer carves multi-char special-token literals out of PLAIN TEXT: a
+# source file containing "List<A>" or "text <s>struck</s>" would write real
+# control ids (turn markers, BOS, EOS mid-document) into the corpus. Web text
+# is nearly clean; source code is full of "<A>" generics and literal tags, so
+# every saved text is scrubbed. Must list every multi-char special the live
+# vocabs reserve (ids 0-13 in v2); test-pinned against the vocab file.
+_SPECIAL_TOKEN_LITERALS = (
+    "<pad>", "<s>", "</s>", "<unk>", "<sep>", "<mask>", "<Q>", "<A>",
+    "<USER>", "<BOT>", "<think>", "</think>", "<search>", "</search>",
+)
+
+
+def _sanitize_special_literals(text: str) -> tuple[str, int]:
+    """Space-break exact special-token literals ("<A>" -> "< A>") so the
+    tokenizer cannot carve them into control ids. Returns (text, hits)."""
+    hits = 0
+    for lit in _SPECIAL_TOKEN_LITERALS:
+        if lit in text:
+            hits += text.count(lit)
+            text = text.replace(lit, lit[0] + " " + lit[1:])
+    return text, hits
+
+
+def _locked_probe_guard(label: str):
+    """The sealed-probe screen for collected text. The pretrain path has no
+    consume-time guard (pretokenize reads whatever is on disk), so the screen
+    lives here, at collection time. None when no seal exists to screen against
+    -- said out loud, never silently."""
+    try:
+        from eval_leak_guard import LockedProbeGuard
+    except ImportError:
+        print(f"  [{label}] WARN: eval_leak_guard not importable -- collected "
+              "text is NOT screened against the sealed probes")
+        return None
+    guard = LockedProbeGuard.load()
+    if not guard:
+        print(f"  [{label}] NOTE: no sealed probe manifest on this checkout -- "
+              "collected text is not screened")
+        return None
+    return guard
+
 
 def _fetch_hf_streaming(
     dataset_name: str,
@@ -2804,8 +2845,12 @@ def _fetch_hf_streaming(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resume support — count existing files
-    existing_files = list(output_dir.glob("*.txt"))
+    # Resume support -- count THIS config's files only, by filename prefix.
+    # Two configs sharing one directory (the finemath 50/50 pair) otherwise
+    # count each other's bytes: the second config sees the first's files,
+    # reads its own target as already met, and delivers nothing.
+    prefix = label.lower().replace(" ", "_").replace("-", "_")
+    existing_files = list(output_dir.glob(f"{prefix}_*.txt"))
     existing_bytes = sum(f.stat().st_size for f in existing_files)
     saved = len(existing_files)
     target_bytes = int(target_gb * 1024 * 1024 * 1024)
@@ -2850,9 +2895,11 @@ def _fetch_hf_streaming(
     batch_size = 0
     file_target = 5 * 1024 * 1024  # 5 MB per file
     ai_rejected = 0
+    leak_rejected = 0
+    literals_sanitized = 0
+    locked_guard = _locked_probe_guard(label)
     start_time = time.monotonic()
     last_print = start_time
-    prefix = label.lower().replace(" ", "_").replace("-", "_")
 
     try:
         for record in ds:
@@ -2867,6 +2914,13 @@ def _fetch_hf_streaming(
             if filter_ai and detect_ai_content(text):
                 ai_rejected += 1
                 continue
+
+            text, _hits = _sanitize_special_literals(text)
+            if locked_guard is not None and locked_guard.leaks(text):
+                leak_rejected += 1
+                continue
+            # count AFTER the screen: only hits that reached disk
+            literals_sanitized += _hits
 
             text_bytes = len(text.encode("utf-8"))
             batch_text.append(text)
@@ -2940,6 +2994,10 @@ def _fetch_hf_streaming(
     print(f"\n  [{label}] Done: {saved} files saved ({total_bytes / 1e9:.2f} GB) in {elapsed_min:.0f} min.")
     if ai_rejected:
         print(f"  [{label}] {ai_rejected} records rejected by AI content filter")
+    if literals_sanitized:
+        print(f"  [{label}] {literals_sanitized} special-token literal(s) space-broken in saved text")
+    if leak_rejected:
+        print(f"  [{label}] {leak_rejected} records dropped by the sealed-probe screen")
 
     progress[progress_key] = {
         "files_saved": saved,
@@ -3097,8 +3155,9 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
     Code data teaches structured reasoning, pattern completion, and precise
     instruction following.
 
-    IMPORTANT: This dataset requires accepting the license on HuggingFace and
-    logging in with `huggingface-cli login` before running.
+    IMPORTANT: This dataset requires accepting the license on HuggingFace
+    (huggingface.co/datasets/bigcode/the-stack -- v1, NOT -v2) and logging in
+    with `hf auth login` before running.
 
     Args:
         target_gb: Total GB to download across all languages.
@@ -3127,6 +3186,9 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
         return total_saved
 
     file_target = 5 * 1024 * 1024  # 5 MB per file
+    literals_sanitized = 0
+    leak_rejected = 0
+    locked_guard = _locked_probe_guard("The Stack")
     start_time = time.monotonic()
 
     for lang in _STACK_LANGUAGES:
@@ -3152,9 +3214,9 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
             err = str(e)
             if "gated" in err.lower() or "401" in err or "403" in err or "access" in err.lower():
                 print(f"  [The Stack] Access denied for '{lang}'.")
-                print("  [The Stack] This dataset is gated. Run: huggingface-cli login")
+                print("  [The Stack] This dataset is gated. Run: hf auth login")
                 print("  [The Stack] Then accept the license at:")
-                print("  [The Stack]   https://huggingface.co/datasets/bigcode/the-stack-v2")
+                print("  [The Stack]   https://huggingface.co/datasets/bigcode/the-stack")
                 break  # auth issue — stop all languages, not just this one
             print(f"  [The Stack] Could not load '{lang}': {e} -- skipping")
             continue
@@ -3178,6 +3240,15 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
                 text = record.get("content", "")
                 if not text or len(text) < MIN_ARTICLE_LENGTH:
                     continue
+
+                # Code is where the literals actually live: "List<A>" carves
+                # to the real <A> id, a literal "</s>" writes EOS mid-file.
+                text, _hits = _sanitize_special_literals(text)
+                if locked_guard is not None and locked_guard.leaks(text):
+                    leak_rejected += 1
+                    continue
+                # count AFTER the screen: only hits that reached disk
+                literals_sanitized += _hits
 
                 text_bytes = len(text.encode("utf-8"))
                 batch_text.append(text)
@@ -3239,6 +3310,10 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
 
     elapsed_min = (time.monotonic() - start_time) / 60
     print(f"\n  [The Stack] Done: {total_saved} files saved ({total_bytes / 1e9:.2f} GB) in {elapsed_min:.0f} min.")
+    if literals_sanitized:
+        print(f"  [The Stack] {literals_sanitized} special-token literal(s) space-broken in saved code")
+    if leak_rejected:
+        print(f"  [The Stack] {leak_rejected} records dropped by the sealed-probe screen")
     return total_saved
 
 
@@ -3572,7 +3647,7 @@ Examples:
         "--code",
         type=float,
         default=0,
-        help="Download N GB of code from The Stack v2 (requires `pip install datasets` + HuggingFace auth)",
+        help="Download N GB of code from The Stack v1 (requires `pip install datasets` + HuggingFace auth)",
     )
 
     args = parser.parse_args()
