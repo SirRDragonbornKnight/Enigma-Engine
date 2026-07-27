@@ -19,9 +19,15 @@ Learns language from raw text. Runs on the pre-tokenized corpus at
 
 ```
 python collect_pretraining_data.py --all-sources   # gather raw text
-python pretokenize_data.py                         # -> data/pretrain/tokens.bin
+python pretokenize_data.py --vocab <full path> --output-bin <full path> --dtype uint16
 python pretrain_enigma.py                          # the long run
 ```
+
+NOTE: the bare `pretokenize_data.py` invocation refuses on this checkout --
+its default output is the write-protected v1 lineage `tokens.bin`, and a
+wrong `--vocab` path refuses rather than silently falling back to an
+untrained tokenizer. Pass both paths in full; the recorded v2 invocation
+lives in BACKLOG 7.95 T1.
 
 Useful flags: `--size` (architecture preset, see
 [trainer/model_sizes.md](trainer/model_sizes.md)), `--tokens` (target

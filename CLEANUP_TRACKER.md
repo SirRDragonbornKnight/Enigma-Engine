@@ -38,10 +38,10 @@ Current truth:
 - **Judged ALIVE and now listed below (they were reference-free but are ops
   tools for the coming training block):** `sweep_lr.py`, `bench_generate.py`,
   `extend_length.ps1`, `power_guardian.ps1`.
-- Disk-reclaim candidates (~200 GB: `combined.txt` 95 GB, Qwen model dirs
-  33 GB, the extracted wiki dump's source .bz2 25 GB, intermediate
-  `step_*.pth` 19.7 GB, and more) are listed in BACKLOG §"Disk reclaim" --
-  deletions of that class are the user's ruling, not a cleaning pass's.
+- Disk-reclaim candidates (~204 GB re-measured 2026-07-27; BACKLOG section 9
+  owns every per-row size, not restated here) are listed in BACKLOG
+  §"Disk reclaim" -- deletions of that class are the user's ruling, not a
+  cleaning pass's.
 
 ## 2026-07-18 compression pass (what changed)
 
@@ -146,11 +146,14 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **788 passed (2026-07-26)** — THE live number; other docs
-   point here. History: 574 before the 2026-07-18 compression pass, 349
-   after it (the delta was the dormant stack's own test mass, every removed
-   test named), then steady growth through the v2-prep and audit arcs. Any
-   cleanup that drops a test must say so explicitly.
+4. Suite baseline: **806 passed (2026-07-27)** — THE live number; other docs
+   point here, and the commit that changes the count updates this line IN
+   THE SAME COMMIT (this rule went stale by 2 within a day of being written;
+   a manual step nothing enforces will drift again without the pairing).
+   History: 574 before the 2026-07-18 compression pass, 349 after it (the
+   delta was the dormant stack's own test mass, every removed test named),
+   then steady growth through the v2-prep and audit arcs. Any cleanup that
+   drops a test must say so explicitly.
 5. **Retired ForgeConfig fields are load-bearing in reverse.** Every
    checkpoint on disk still carries the removed keys (up to 19 per config);
    `from_dict` tolerates them only because it filters against `known`.

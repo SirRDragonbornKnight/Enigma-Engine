@@ -10,6 +10,56 @@
 
 ---
 
+## Open user decisions — the standing ledger
+
+Every gate that waits on the user, in ONE place (2026-07-27 audit finding:
+two gates existed only in session memory). Detail lives at each pointer; a
+gate recorded only in conversation is a bug in this table.
+
+1. ~~Collector GB targets + DCLM's role~~ **RULED 2026-07-27: SWAP.** DCLM
+   replaces C4+OpenWebText (both removed from `SOURCE_DIRS`; their 32.4 GB
+   stays on disk pending section 9); collector targets = the defaults
+   15/10/10 GB (DCLM/FineMath/Stack). Quality up at roughly constant corpus
+   size; the 7.9 grid stays near its measured 8.8/19.2 d/epoch and gets
+   re-derived from the new sidecar regardless. -> 7.95 T1.
+2. ~~Image begin/end row mechanics~~ **RULED 2026-07-27: the 18-row
+   RESERVE** (zero vocab surgery, the 16,384 geometry and test pins
+   survive; v1's own chat-token pattern). At allocation the new literals go
+   into the vocab's `special_tokens` table AND `_SPECIAL_TOKEN_LITERALS`
+   in `collect_pretraining_data.py` in the same change -- an
+   `<image>`-shaped tag occurs verbatim in HTML corpora, and the sanitizer
+   pin (`test_collect_pretraining_data.py`) is derived from the vocab's
+   specials so it fails until both move together. -> 7.95 T1.
+3. **tokens_v2 output naming — DEFAULT taken 2026-07-27: VERSIONED** (a new
+   bin name beside the old; fail-safe and deletable later; overrule any
+   time before the retokenize). The v2 bin + sidecar stay attrib +R; the
+   T2/T3 `--tokens-bin` arguments follow whatever name the retokenize
+   writes. -> 7.95 T1.
+4. ~~Teach-line content reseal~~ **RULED 2026-07-27: RESEAL + WIDEN to 15
+   per gated category, in ONE reseal** (5 corrected teach rows + want/deny
+   array sort + 24 added probes; the baseline re-bases once and category
+   stats stop being directional-only). EXECUTION GATE: the user picks the
+   24 widening probes from the candidate pool before anything seals --
+   nothing runs until that pick. -> section 2 + the proposal in Documents.
+5. **Section 9 disk reclaim** (~204 GB re-measured 2026-07-27): say which
+   rows die. -> section 9.
+6. **Gate B -- pretrain size call**: 238m (wall-clock optimal) vs 542m
+   (largest sane); decided AFTER T1 re-derives the grid from the new corpus.
+   Weigh the layer-count decode-latency caveat. -> 7.95 T3.
+7. **Gate D -- adoption ratification**: T6's rule (beat the P2 aggregate
+   with no category floor regression = adopt; anything else = user's call)
+   is now code -- `eval_behavior --baseline <transcript>` prints the
+   verdict. Swap mechanics at T6. -> 7.95 T6.
+8. **Voice live-listen**: the Cortana blend was chosen by documented
+   character on 2026-07-23 and has never been HEARD (the user had no audio);
+   candidates A-D at `Desktop\Enigma Voice Audition`. Listen, tune or bless.
+   Also open from that arc: the Quiet toggle gives no feedback popup.
+9. **Vision training domain**: her eyes train on WHAT imagery ("different
+   imagery, not everyday photos" -- domain never picked). ->
+   VISION_QUALITY_SPEC section 4.
+
+---
+
 ## 0. Instrument arc (2026-07-15) — landed in full
 
 - [x] **SFT val-split dedup** (`finetune_enigma.py`) — val fills only from
@@ -54,8 +104,9 @@
 - [x] **Author the locked probe set** — DONE 2026-07-24: the user's 96-probe
   file was validated and sealed (108 strings incl. 12 teach lines); manifest
   committed, plaintext gitignored, durable copy in `Enigma Backups`.
-- [ ] Widen thin eval categories to >=15 probes: the DEV set is there (134
-  probes, 9 categories incl. 12 ungated vision) except `unknown` at 9; the SEALED set is 12 per
+- [ ] Widen thin eval categories to >=15 probes: the DEV set is there
+  (152 probes / 11 categories -- EVAL_REDESIGN owns the count) except
+  `unknown` and `speech` at 9; the SEALED set is 12 per
   category, under EVAL_REDESIGN's own >=15 rule, and cannot be widened
   without re-sealing. Re-measure v5/v8 on the locked set (P2) for the honest
   baseline.
@@ -584,11 +635,16 @@ The block, in execution order:
   run), add short conversational register (chat was left entirely to SFT
   last lineage), 5-10 paraphrase variants of every must-know fact IN the
   corpus, decay-tail annealing set (~2-3B best tokens); then the rust
-  retokenize (~42 min). Decide doc-boundary attention masking here.
-    - **Curated shard BUILT 2026-07-25** (11 files, `data/pretrain/curated/`).
-      `tokens_v2.bin` PREDATES it (tokenized 2026-07-20), so T1 must
-      re-tokenize with `pretokenize_data.py --repeat-sources curated=N`
-      before T2 -- the existing bin contains none of the shard.
+  retokenize (~42 min). Doc-boundary masking: RULED 2026-07-27, skipped for
+  v2 (required at the length-extension anneal -- ruling 2 above).
+    - **Curated shard BUILT 2026-07-25 -- and it must be REBUILT before the
+      retokenize**: the shard was screened under the floor-3 manifest
+      (built 14:03, floor-2 reseal f9814b8f landed 19:46 the same day), so
+      its screening predates the seal it must satisfy. `make_pretrain_curated.py`
+      reads the LIVE manifest at load, so a plain re-run is the fix.
+      `tokens_v2.bin` PREDATES the shard entirely (tokenized 2026-07-20), so
+      T1 must re-tokenize with `--repeat-sources curated=N` before T2 -- the
+      existing bin contains none of the shard.
     - ~~**The anneal needs a MECHANISM, not just a token set.**~~ **BUILT
       2026-07-25.** `get_batch` drew uniformly over `[0, train_end)`, so
       position in the corpus meant nothing and a "best tokens at the end" file
@@ -626,25 +682,43 @@ The block, in execution order:
       dying at the decay boundary days in. The anneal mechanism itself stays built+OFF, waiting for a
       deliberately PLACED region (e.g. a length-extension anneal), not the
       T1 shard.
-    - **Paraphrases of must-know facts enter through `pretokenize_data.py`,
-      which has no leak screen** (the guard is wired into make_sft_data,
-      make_facts_pretrain_data and make_dpo_data). Screen that text against
-      the sealed manifest before it is tokenized, or the corpus teaches the
-      gate's answers.
+    - **The pretrain-path screen lives at COLLECTION time (landed
+      2026-07-27)**: `pretokenize_data.py` itself has no leak screen by
+      design (it reads whatever is on disk), so the collectors screen every
+      saved record against the sealed manifest (`_locked_probe_guard` in
+      `collect_pretraining_data.py`, drop counts printed per source) and
+      space-break exact special-token literals so code text cannot carve
+      real control ids (`_sanitize_special_literals`; "List<A>" carved id 7,
+      a literal "</s>" wrote EOS mid-document -- measured). Text collected
+      BEFORE that date (wiki/fineweb/c4/owt/books) was never screened.
     - Adding sources means editing the hardcoded `SOURCE_DIRS` in
       `pretokenize_data.py`; the v2 retokenize invocation is
-      `--vocab bpe_vocab_v2_16k.json --output-bin tokens_v2.bin
-      --dtype uint16 --workers 10` (nothing else records it).
+
+          python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json \
+            --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10 \
+            --repeat-sources curated=5
+
+      PATHS IN FULL, always: a bare `--vocab bpe_vocab_v2_16k.json` from the
+      repo root named a nonexistent file, and get_tokenizer fell back to an
+      untrained char-level tokenizer whose ids all pass the bounds guard --
+      the run would have COMPLETED and written a garbage corpus (measured
+      2026-07-27; pretokenize now refuses a missing vocab path and a
+      merges-free tokenizer outright). Note `tokens_v2.bin` + sidecar are
+      attrib +R until the output-naming ruling: overwrite-in-place would
+      destroy the 7.9 grid's substrate and its receipt.
     - **T1 changes the corpus size, so the 7.9 grid moves with it**: the
       8.4/8.8/19.2 days-per-epoch figures and the `--tokens` budget are
       derived from 23.69B tokens. Re-derive both before the size call, or
       Gate B is decided on stale arithmetic.
-    - Decide `<search>`/`</search>` (v2 vocab rows 12/13) here: the last
-      window is this retokenize. VERDICT unless overruled: KEEP the rows
-      (two embedding rows are nothing) and delete the 31 SFT records that
-      teach a tag no runtime parses — training a tag with no owner is the
-      part that costs. Same window for the image begin/end delimiters, which
-      no step currently allocates.
+    - `<search>`/`</search>` (v2 vocab rows 12/13): RULED 2026-07-27
+      (ruling 4 above) -- KEEP the rows, delete the 31 tag-teaching SFT
+      records at T4, and ALLOCATE the image begin/end delimiters in this
+      same retokenize window. HOW to allocate the image rows is still open
+      (see OPEN USER DECISIONS): a naive append to 16,368 breaks the
+      16,384 = table+reserve geometry (TOKENIZER_V2_SPEC) and the
+      test_vocab_selection pins; the candidates are the 18-row reserve
+      (zero surgery, v1's own chat-token pattern) or trimming the 2 lowest
+      merges (table stays 16,366; clean only while no v2 checkpoint exists).
 - T2. 10k-step probe pretrain (hours): first val-loss receipt for the v2
   lineage + live shakeout of archive cadence. The only v2 runs on disk are
   throughput probes. Same flags as T3 at the chosen size, with the budget cut
@@ -686,14 +760,26 @@ The block, in execution order:
   the regen: the client-system "Available tools:" shape, image turns
   carrying system/tools/memory blocks, URL-bearing records now kept,
   trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
-  passed explicitly, finetune `--block` raised.
+  passed explicitly, finetune `--block` raised. Also here per VISION.md
+  destination 4: the deep-research organ's data shapes ride THIS regen if
+  the organ lands by then -- the 31 orphan `<search>` tag records deleted at
+  T4 (T1 ruling 4) get replaced by records whose tags have a runtime owner,
+  or research waits for the next regen; no tag trains unowned either way.
 - T5. DPO/polish pass (safe recipe: lr 5e-7 x 1 epoch). Regenerate
   `dpo_pairs.jsonl` as part of this: both trainers now refuse an artifact
   carrying a sealed probe, so a stale file stops the run rather than rigging
   the gate.
 - T6. Gate: locked eval vs the P2 baseline -> beat aggregate with no
-  category floor regression = adopt; ambiguous = user's call. Adoption is
-  more than a verdict, and none of it was written down:
+  category floor regression = adopt; ambiguous = user's call (Gate D in the
+  decisions ledger). The rule is CODE now, not an eyeball pass:
+  `python eval_behavior.py --probes data/eval/locked_probes.jsonl
+  --transcript <new> --baseline <P2 transcript>` prints the verdict, names
+  every category regression, refuses a baseline from a different probe set,
+  and warns when both transcripts report the SAME checkpoint sha (the
+  forgot-to-restart shape). Transcripts record which WEIGHTS answered
+  (serve exposes path/sha256/step via /v1/models since 2026-07-27) -- an
+  unattributed transcript says so out loud. Adoption is more than a verdict,
+  and the rest of it is below:
     - There is **no "vocab default" to flip** — serve and finetune both pick
       the vocab from the checkpoint's `vocab_size`
       (`serve_enigma.py` / `finetune_enigma.py`), which is exactly why v1 and
@@ -827,7 +913,7 @@ Consequences, binding on the training block and organ work:
 | `models\enigma_pretrain_base\` + `enigma_pretrain_base_v2\` | 4.2 GB | Abandoned 121M side-runs (base_v2 died at step 2010/5086); historical prose mentions only. |
 | `models\checkpoints\` | 3.4 GB | Forge-era best/final/vision .pt + a May run; nothing loads them. |
 | `models\enigma_sft\model_v2_diluted.pth` | 2.19 GB | A 4th weight copy beside model/latest/prev in a dir whose receipts are already in Backups. |
-| Loose: `enigma_small.pth`, `smoke.pth`, `enigma_pi_zero.pth` | 0.35 GB | Zero references. |
-| `data\curriculum\`, `data\conversations\`, `data\model_contexts\`, 9 loose `data\` files | ~4 MB | Forge/GUI-era outputs, zero readers. Small, but they are noise in every directory listing. |
+| Loose: `enigma_small.pth`, `smoke.pth`, `enigma_pi_zero.pth` | 0.35 GB | Zero code references. NOTE before ruling: VISION.md destination 5 cites `enigma_pi_zero.pth` as the Pi-class heritage artifact -- deleting it orphans that citation. |
+| `data\curriculum\`, `data\conversations\`, `data\model_contexts\` + 14 dead loose `data\` files: `.gui_lock`, `anchor_examples.jsonl`, `curated_dataset.jsonl`, `distilled_smoke.txt`, `enigma_gui_training.txt`, `enigma_voice.md`, `gui_settings.json`, `instructions.txt`, `personality_corpus.jsonl`, `prompts.json`, `route_assignments.json`, `training.txt`, `training_brief.json`, `training_history.json` | ~4 MB | Forge/GUI-era outputs, zero code references (census 2026-07-27). NOT in this row: `mute_state.json` (live serve runtime state) and `smoke_test_basic.txt`/`smoke_test_dpo.jsonl` (regenerable outputs of `create_smoke_test_data.py`). |
 
 Say which rows die and they die; the rest stays.

@@ -56,10 +56,11 @@ missing NEOX permute).
 Some **organs** use external pretrained models as local backends -- that
 is separate from the LLM itself:
 
-| Organ | External model |
-|-------|----------------|
-| Eyes (`--eyes`) | BLIP (captioning) |
+| Organ | Backend |
+|-------|---------|
+| Eyes (`--eyes`) | **her own distilled ViT** (~19M, distilled from DINOv2-S -- no external model at runtime) |
 | Ears (`--ears`) | faster-whisper (ASR) |
+| Voice (`--voice`) | Kokoro-82M (TTS) |
 | Imagination (`--image-gen`) | Stable Diffusion sd-turbo |
 
 These are services behind serve flags; the language model in the loop

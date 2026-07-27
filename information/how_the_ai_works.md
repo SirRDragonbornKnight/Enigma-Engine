@@ -80,6 +80,7 @@ looks like it needs it, so tool prompts do not degrade normal chat):
 |------|-------|-------------|
 | `calculate` | (always available for arithmetic-looking asks) | Evaluate arithmetic |
 | `remember` | `--memory-dir` | Save a fact to the memory store |
+| `forget` | `--memory-dir` | Delete a stored fact on request (exactly one match, or she asks which) |
 | `speak` | `--voice` | Say text through the speakers |
 | `imagine` | `--image-gen` | Generate a PNG (saved to `~/.enigma_engine/images/`) |
 
@@ -104,6 +105,10 @@ context. Facts get in two ways:
 1. **She saves them** -- the `remember` tool (the ChatGPT bio-tool pattern).
 2. **The API** -- `POST` / `GET` / `DELETE` on `/v1/memory`.
 
+Facts leave two ways as well: the `forget` tool from chat ("forget that I
+like tea" -- she deletes only when exactly one memory matches, and asks
+which one otherwise), or the API.
+
 ---
 
 ## Organs
@@ -127,4 +132,7 @@ saved atomically). There are no import loaders: `Enigma.from_huggingface`,
 `from_gguf`, and `from_onnx` raise `NotImplementedError` -- honestly.
 
 One-way **GGUF export** exists (`enigma_engine/core/gguf.py`,
-`export_to_gguf`) so a checkpoint can run under llama-server.
+`export_to_gguf`), but serving through llama.cpp was REJECTED by ruling
+(2026-07-24, reconfirmed 2026-07-27): she serves on her own engine, and
+the vendored llama-server binary was deleted. The export remains a data
+escape hatch only -- see `external_models.md` for the ruling's receipts.

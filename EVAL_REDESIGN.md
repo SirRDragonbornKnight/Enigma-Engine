@@ -8,6 +8,13 @@
 > informational. THIS file owns the dev-set count; other docs point here) is
 > partly measuring itself. This doc is the plan to make the scorecard
 > trustworthy. Grounded in a code audit 2026-07-16 (receipts inline).
+> Also owned here: the 2026-07-24 benchmark harvest sidecars --
+> `data/eval/benchmark_extra.jsonl` (242 probes triaged from the user's 6
+> benchmark files, measured 2026-07-27: 200 math, 20 tool, 10 restraint,
+> 9 factual, 2 memory, 1 reasoning; ungraded reserve, nothing reads them
+> at gate time) and `data/eval/benchmark_future_capabilities.jsonl` (65
+> coding/formatting/planning/creative/safety probes no grader can score
+> today -- the v2+ aspiration set).
 > **Every "90" below is that snapshot** — the dated sections later in this
 > file carry the current numbers.
 
@@ -216,8 +223,21 @@ Both checkpoints served from their receipted backups (`Enigma Backups\
 enigma_dpo_v{5,8}_adopted\model.pth`) on port 8123 with a throwaway
 `--memory-dir`; probes `data/eval/locked_probes.jsonl` (sha
 `f22d9389…`, 96 questions + 12 teach lines, seal + grading keys verified at
-run start); decode temperature 0.0, max_tokens 60; transcripts written
-OUTSIDE the repo to `Enigma Backups\locked_baseline_v{5,8}_final.jsonl`.
+run start); decode temperature 0.0, max_tokens 60.
+
+**Authoritative transcripts: `Enigma Backups\locked_baseline_v{5,8}_
+2026-07-27.jsonl`** -- re-run 2026-07-27 under the model-identity eval and
+category-for-category IDENTICAL to the 07-26 table below (the gate is
+bit-deterministic; the 07-26 run's transcripts did not survive, a gap this
+re-run closes). These are the first fully-ATTRIBUTED receipts: each records
+which weights answered (v8 checkpoint sha256 `a11db8f0…` step 2109, v5
+`a499ff47…` step 732, matching the backups' .sha256 sidecars), eval git sha
+cb7ea1b6+fix-arc (dirty -- the arc was uncommitted at run time), and
+`SEALED GATE RUN`. The v5 transcript also carries the first live
+`--baseline` comparison (vs v8: aggregate tie 47/96, v5 regresses
+adversarial/factual/restraint, verdict USER'S CALL). Older transcripts
+(`locked_baseline_v{5,8}_final.jsonl`, 07-25, git sha `a9d387e6` dirty)
+predate the tools_run grader correction and are superseded.
 
 | category    | threshold | v5      | v8      |
 |-------------|-----------|---------|---------|
@@ -295,6 +315,13 @@ restraint each; informational like vision). `ears` still needs an audio
 fixture and a loaded organ. Note also a sealed teach line is
 normalization-identical to one in the open dev set (1 of 108) -- harmless to
 scoring, but it means that single string is public.
+
+STATED LIMIT on promoting organ probes into the SEALED set (2026-07-27):
+the sealer's whitespace rule refuses any string with embedded newlines, and
+the 12 dev vision probes carry `\n[image: ...]` markers by design -- so
+multi-line organ probes cannot seal as written. Sealing them means either a
+single-line marker convention or a deliberate widening of the canonical
+form, decided at that promotion, not silently.
 
 ## ROUND-3 AUDIT 2026-07-25: the seal now covers the GRADING KEYS, not just the questions
 
@@ -405,7 +432,9 @@ WRONG on measurement (see the correction at the end).
 - **HIGH -- tool-call ARGUMENTS reached no screen at all.** `content` is `""` on
   a tool-calling assistant turn, so the guard saw an empty string and printed
   "asks clean" while the payload -- inside the trainable mask, scoring **0.875**
-  against a sealed probe -- trained normally. `tool_calls.jsonl` (534 records)
+  against a sealed probe -- trained normally. `tool_calls.jsonl` (534 records
+  at that round's build; 526 after the floor-2 rebuild -- CLAUDE.md owns the
+  live count)
   is built ENTIRELY of that shape, so the one corpus that teaches tool use was
   the one the guard could not read. Arguments now ride the advisory stream (an
   argument echoes its ask by nature, same as an answer). SYSTEM turns moved to

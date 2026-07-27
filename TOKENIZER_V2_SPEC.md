@@ -437,7 +437,8 @@ NEXT, in order:
 ### CORPUS LANDED 2026-07-20: tokens_v2.bin
 
 23,694,200,666 tokens (projection 23.66B -> 0.14% off), 5,688,823 docs,
-1,382,216 dupe paragraphs skipped, 44.13 GB uint16, 41.9 min wall.
+1,382,216 dupe paragraphs skipped, 44.13 GiB (47.39 GB decimal) uint16,
+41.9 min wall.
 Validated: ETOK header == sidecar == file-size arithmetic; ids bounded
 by vocab 16,366; random windows at start/middle/end decode clean.
 Run history is a lesson in where walls really are: run 1 (pure python,

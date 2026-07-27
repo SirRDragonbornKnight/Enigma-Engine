@@ -33,6 +33,9 @@ Parameter counts are approximate and depend on vocab size.
 | medium | ~85M | Mid-range GPU -- needs ~2.5 GB VRAM |
 | base | ~120M | Mid-range GPU -- needs ~3 GB VRAM |
 | large | ~182M (the production Enigma) | Good GPU -- needs ~6 GB VRAM |
+| v2_deep_186m | ~186M (28L x 768d) | The v2 deep-thin lineage; 5090-class for pretrain |
+| v2_deep_238m | ~238M (20L x 1024d) | v2 candidate, wall-clock-optimal on the 5090 |
+| v2_deep_542m | ~542M (30L x 1280d) | v2 candidate, largest the 5090 sanely trains (needs grad-ckpt) |
 | xl | ~600M | RTX 4090 / 16 GB+ GPU -- needs ~12 GB VRAM |
 | xxl | ~1.5B | RTX 4090 / 32 GB+ GPU -- needs ~34 GB VRAM |
 | huge | ~3B | Multi-GPU / 48 GB+ -- needs ~50 GB VRAM |

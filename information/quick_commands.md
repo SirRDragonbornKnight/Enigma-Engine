@@ -63,7 +63,7 @@ Serve the candidate on its own port with an isolated memory dir, then run the ha
 | `python collect_distill_data.py --model <teacher>` | Collect responses from an external OpenAI-compatible teacher as a fine-tune corpus (`--model` is required) |
 | `python collect_search_data.py` | Emit the synthetic `<search>` tag training corpus |
 | `python collect_vision_data.py --llava-pretrain 100000 --images-dir <extracted images.zip>` | Download image-caption pairs for vision SFT (bare invocation just prints help) |
-| `python pretokenize_data.py` | Tokenize `data/pretrain/` sources into `data/pretrain/tokens.bin` |
+| `python pretokenize_data.py --vocab <full path> --output-bin <full path> --dtype uint16` | Tokenize `data/pretrain/` sources into a corpus bin. The BARE invocation refuses on purpose: the default output is the write-protected v1 lineage `tokens.bin`, and paths must be passed in full (a wrong `--vocab` path used to fall back silently to an untrained tokenizer). See BACKLOG 7.95 T1 for the recorded v2 invocation. |
 
 Each script documents its sources and flags in its docstring (`--help`).
 
