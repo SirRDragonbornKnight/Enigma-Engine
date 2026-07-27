@@ -17,7 +17,11 @@ finished 2026-07-03, and since the Curated source joined SOURCE_DIRS
 corpus names its own --output-bin; the v2 retokenize (TOKENIZER_V2_SPEC):
 
     python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json ^
-        --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10
+        --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10 ^
+        --repeat-sources curated=5
+
+(curated=5 is a standing ruling -- BACKLOG 7.95 T1; omitting the flag runs
+with NO curated oversample and nothing refuses, so copy the line whole.)
 
 Parallel layout: the PARENT does the walk + paragraph dedup + filters --
 that state is inherently sequential (shared seen_hashes) -- with file
@@ -42,6 +46,8 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
+
+from collect_pretraining_data import _sanitize_special_literals
 
 # ---------------------------------------------------------------------------
 # Config — mirrors collect_pretraining_data.py
@@ -69,8 +75,11 @@ SOURCE_DIRS = [
     ("Simple Wiki", BASE_DIR / "simple_wiki"),
     ("Gutenberg", BASE_DIR / "gutenberg"),
     ("FineWeb-Edu", BASE_DIR / "fineweb_edu"),
-    ("OpenWebText", BASE_DIR / "openwebtext"),
-    ("C4", BASE_DIR / "c4"),
+    # C4 and OpenWebText are OUT by ruling (2026-07-27): DCLM replaces them
+    # -- the model-filtered stream beats both on the research receipts, so
+    # the swap raises corpus quality at roughly constant size and keeps the
+    # 7.9 grid near its measured 8.8/19.2 d/epoch. Their dirs stay on disk
+    # (section 9 rules deletions); this list is what the corpus walks.
     ("Wayback", BASE_DIR / "wayback"),
     ("Fandom", BASE_DIR / "fandom"),
     ("DCLM", BASE_DIR / "dclm"),
@@ -149,9 +158,10 @@ def parse_repeat_sources(spec: str, source_dirs: list[tuple[str, Path]]) -> dict
 # The repeat cache holds a source's whole cleaned pass-1 text in RAM. That is
 # the point (byte-identical passes on the far side of the dedup) and it is
 # only sane for the curated-shard class: someone aiming the flag at a web
-# source (fineweb_edu is ~95 GB of text on this box) would OOM the parent
-# hours into the walk, and the BaseException handler would then delete the
-# whole .tmp. Refuse early instead, at a bound generous for any honest shard.
+# source (fineweb_edu is 43 GB of text on this box, measured 2026-07-27)
+# would OOM the parent hours into the walk, and the BaseException handler
+# would then delete the whole .tmp. Refuse early instead, at a bound generous
+# for any honest shard.
 REPEAT_CACHE_MAX_BYTES = 2 * 1024**3
 
 
@@ -415,7 +425,26 @@ def main():
     # silently write a cl100k corpus incompatible with the bpe pipeline.
     # ------------------------------------------------------------------
     print("\nLoading tokenizer...")
+    if args.vocab and not Path(args.vocab).exists():
+        # get_tokenizer does NOT raise for a missing vocab: it falls back to an
+        # untrained 264-row char-level tokenizer with one console line, every
+        # id stays inside the bounds guard, and the run completes -- writing a
+        # garbage corpus. A wrong path must die here, not 40 minutes later.
+        raise SystemExit(
+            f"vocab file not found: {Path(args.vocab).resolve()}\n"
+            "get_tokenizer would silently fall back to an untrained char-level "
+            "tokenizer and this run would write a garbage corpus. Pass the full "
+            "path (e.g. enigma_engine/vocab_model/bpe_vocab_v2_16k.json)."
+        )
     tokenizer = get_tokenizer("bpe", vocab_path=args.vocab) if args.vocab else get_tokenizer("bpe")
+    if not getattr(tokenizer, "merges", None):
+        # Same failure through the other door: a vocab file that exists but
+        # parses to nothing trained (or a default install with no live vocab).
+        raise SystemExit(
+            f"tokenizer loaded from {args.vocab or 'the default vocab'} has no "
+            "BPE merges (untrained char-level fallback) -- refusing to write a "
+            "corpus with it"
+        )
     vocab_size = getattr(tokenizer, "vocab_size", 0)
     eos_id = getattr(tokenizer, "eos_token_id", 2)
     tok_name = type(tokenizer).__name__
@@ -457,9 +486,24 @@ def main():
     start_time = time.monotonic()
     tmp_file = out_bin.with_suffix(".bin.tmp")
 
+    sanitized_hits = [0]
+
+    def _sanitized(stream):
+        # Consume-time scrub: the collectors sanitize what they fetch NOW,
+        # but ~96 GB collected before 2026-07-27 was never scrubbed and a
+        # sampled scan found real literals in it ("List<A>" carves the actual
+        # <A> id, a literal "</s>" writes EOS mid-document). This choke point
+        # covers every source, past and future, before any id is written.
+        # Runs BEFORE with_repeats so a cached curated pass is scrubbed once
+        # and repeats stay byte-identical.
+        for label, cleaned in stream:
+            cleaned, hits = _sanitize_special_literals(cleaned)
+            sanitized_hits[0] += hits
+            yield label, cleaned
+
     def result_stream():
         """(label, packed, n) triples in deterministic walk order."""
-        docs = iter_cleaned_docs(source_dirs)
+        docs = _sanitized(iter_cleaned_docs(source_dirs))
         if repeats:
             docs = with_repeats(docs, repeats)
         if args.workers <= 1:
@@ -576,6 +620,8 @@ def main():
 
     for label, (n_docs, n_tok) in per_label.items():
         print(f"  [{label}] {n_docs:,} docs -> {n_tok:,} tokens")
+    if sanitized_hits[0]:
+        print(f"  {sanitized_hits[0]:,} special-token literal(s) space-broken before encoding")
 
     elapsed = time.monotonic() - start_time
     file_gb = (total_tokens * bpt) / (1024**3)
@@ -598,6 +644,7 @@ def main():
         "repeated_sources": repeats,
         "source_token_extents": extents,
         "dupes_skipped": dupes_skipped,
+        "special_literals_sanitized": sanitized_hits[0],
         "file_size_gb": round(file_gb, 2),
         "elapsed_seconds": round(elapsed, 1),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),

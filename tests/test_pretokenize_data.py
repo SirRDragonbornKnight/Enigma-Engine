@@ -228,6 +228,70 @@ def test_refuses_any_write_at_the_lineage_path(monkeypatch, corpus, tmp_path):
     assert not lineage.exists() and not (lineage.parent / "tokens.json").exists()
 
 
+def test_special_literals_are_scrubbed_at_consume_time(monkeypatch, corpus, tmp_path):
+    """~96 GB of source text predates the collectors' fetch-time sanitizer and
+    a sampled scan found real literals in it ("List<A>" carves the actual <A>
+    id under the v2 vocab). The pretokenize choke point must scrub every doc
+    -- past or future source alike -- before any id is written, and the
+    sidecar must carry the count as the receipt."""
+    root, sources, vocab = corpus
+    poisoned = sources[0][1] / "doc_900_literals.txt"
+    poisoned.write_text(
+        "A code sample follows here with plenty of body text to survive the "
+        "cleaner and the five token floor of the encoder. "
+        "public <A> List<A> map(Function<A> f) plus a literal </s> tag and "
+        "one <USER> marker inside otherwise ordinary prose that keeps going "
+        "long enough to be kept as its own paragraph.",
+        encoding="utf-8",
+    )
+    try:
+        out, meta_path = _run(monkeypatch, sources, tmp_path / "scrub.bin", vocab=vocab,
+                              dtype="uint16", workers=1)
+        meta = json.loads(meta_path.read_text())
+        assert meta["special_literals_sanitized"] == 5  # three <A>, one </s>, one <USER>
+        # The receipt alone is not the property: a wrapper that COUNTS but
+        # yields the original text produces the same sidecar. Decode the bin
+        # and assert on the artifact. (</s> frames every doc in the decode,
+        # so the assertion uses the literals that only the poisoned doc
+        # carries.)
+        import numpy as np
+
+        from enigma_engine.core.tokenizer import get_tokenizer
+        ids = np.memmap(out, dtype=np.uint16, mode="r", offset=pd.HEADER_SIZE)
+        decoded = get_tokenizer("bpe", vocab_path=str(vocab)).decode([int(i) for i in ids])
+        assert "<A>" not in decoded and "<USER>" not in decoded, "literal reached the corpus"
+        assert "< A>" in decoded and "< USER>" in decoded, "scrubbed form missing from the corpus"
+    finally:
+        poisoned.unlink()  # module-scoped fixture; later tests expect the base corpus
+
+
+def test_missing_or_untrained_vocab_refuses_before_writing(monkeypatch, corpus, tmp_path):
+    """get_tokenizer does not raise on a missing vocab path: it falls back to
+    an untrained 264-row char-level tokenizer whose ids all pass the bounds
+    guard, so a bare --vocab filename run from the wrong directory would have
+    COMPLETED and written a garbage corpus with one console line as witness.
+    Both doors refuse now: the missing path, and a loaded tokenizer with no
+    BPE merges."""
+    root, sources, vocab = corpus
+    out = tmp_path / "guard.bin"
+    with pytest.raises(SystemExit) as err:
+        _run(monkeypatch, sources, out, vocab=root / "missing_vocab.json", dtype="uint16", workers=1)
+    assert "garbage corpus" in str(err.value)
+    assert not out.exists(), "refusal must not leave an output bin"
+
+    class _Untrained:
+        vocab_size = 264
+        eos_token_id = 2
+        merges: list = []
+        pretokenizer_version = "v1"
+
+    monkeypatch.setattr("enigma_engine.core.tokenizer.get_tokenizer", lambda *a, **k: _Untrained())
+    with pytest.raises(SystemExit) as err:
+        _run(monkeypatch, sources, out, vocab=vocab, dtype="uint16", workers=1)
+    assert "no BPE merges" in str(err.value)
+    assert not out.exists()
+
+
 def test_uint16_refuses_an_oversized_vocab(monkeypatch, corpus, tmp_path):
     """uint16 with vocab > 65,536 would wrap ids silently."""
     root, sources, vocab = corpus
@@ -236,6 +300,9 @@ def test_uint16_refuses_an_oversized_vocab(monkeypatch, corpus, tmp_path):
         vocab_size = 70000
         eos_token_id = 2
         pretokenizer_version = "v2"
+        # trained (merges present) -- the refusal under test is the uint16
+        # bound, not the untrained-fallback guard
+        merges = [("a", "b")]
 
     monkeypatch.setattr(pd, "SOURCE_DIRS", sources)
     monkeypatch.setattr(pd, "SE_DIR", tmp_path / "_no_stackexchange")
