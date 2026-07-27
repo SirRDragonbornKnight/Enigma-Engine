@@ -170,6 +170,8 @@ From here the ONLY coupling is the WebSocket bus (`ws://127.0.0.1:8765`).
   than they fixed — the pattern has held in every arc since.
 
 ## Project state docs — the complete index
+- `VISION.md` — the destination (all-purpose companion, own runtime, research mode,
+  devices) and the order it lands in; written from the user's own words 2026-07-27.
 - `BACKLOG.md` — consolidated worklist; §7.95 owns the training-block execution order.
 - `ROADMAP.md` — phase plan; Phase 4.5 organ steps; Phase 7 verdicts.
 - `EVAL_REDESIGN.md` — eval design, seal history, and ALL scorecard/probe numbers.
