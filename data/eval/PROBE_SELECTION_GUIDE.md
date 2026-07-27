@@ -106,16 +106,17 @@ blacklist: if the phrase appears anywhere in her reply, she fails. So a deny of
 same words. Anchor deny phrases to the wrong answer's own voice instead:
 `yes, i am a wrapper`. Leaving `deny_any` empty is fine.
 
-## Four things that will bite you
+## Five things that will bite you
 
 These are real -- each one was found by testing the tooling against a file that
 made the mistake.
 
-1. **No comment lines.** A line starting with `#` passes the seal step happily,
-   then crashes the test run later with an unreadable error. If you want notes,
-   keep them in a separate file. (If one does slip through: deleting a comment
-   line afterwards is safe, it does not break the seal -- only the questions
-   themselves are fingerprinted.)
+1. **No comment lines -- the sealer refuses them outright.** A `#` line would
+   ride inside the file's byte fingerprint without being covered by any hash,
+   so sealing stops with an error until it is removed. If you want notes, keep
+   them in a separate file. And once sealed, do NOT edit the file at all:
+   the seal fingerprints the file's BYTES, so deleting or changing any line
+   (even a stray one) breaks the gate until a re-seal.
 
 2. **Category names must be spelled exactly.** The eight are `identity`,
    `adversarial`, `factual`, `math`, `tool`, `restraint`, `memory`, `unknown`.
@@ -130,6 +131,16 @@ made the mistake.
 4. **Save as plain UTF-8, not "UTF-8 with BOM".** Notepad's plain UTF-8 is fine.
    The BOM version fails immediately with a confusing message. (This one is loud
    and happens before sealing, so it cannot do quiet damage.)
+
+5. **Do not hand-format the JSON.** The sealer accepts exactly one spelling of
+   each line -- what Python's `json.dumps` writes: keys in the order
+   `category, teach, q, want_any, deny_any, expect_tool`, single spaces after
+   `:` and `,`, no doubled spaces inside the text, no blank lines, a final
+   newline. An ordinary editor habit (re-indenting, aligning columns, a
+   trailing space) makes the sealer refuse with a "canonical" error. Editing
+   an existing line's TEXT is fine; changing its formatting is not. The
+   step-4 checker (`validate_probes.py`) reports every such refusal before
+   you seal.
 
 ## How many questions?
 

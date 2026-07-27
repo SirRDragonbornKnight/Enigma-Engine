@@ -497,8 +497,10 @@ def test_seal_warns_on_stopword_only_probe(tmp_path, monkeypatch, capsys):
 
     src = tmp_path / "locked.jsonl"
     src.write_text(
-        '{"q": "Is it you?"}\n{"q": "What is the capital of France?"}\n',
+        '{"category": "identity", "q": "Is it you?"}\n'
+        '{"category": "factual", "q": "What is the capital of France?"}\n',
         encoding="utf-8",
+        newline="",
     )
     monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "manifest.json")
     assert elg._cli_seal(str(src)) == 0
@@ -544,3 +546,110 @@ def test_the_sealer_refuses_a_commented_file(tmp_path, monkeypatch, capsys):
     assert elg._cli_seal(str(smuggled)) == 1
     assert "unknown probe field" in capsys.readouterr().out
     assert not (tmp_path / "manifest.json").exists()
+
+
+def test_the_sealer_accepts_exactly_one_byte_form(tmp_path, monkeypatch, capsys):
+    """Every annotation channel left after the comment/BOM/unknown-field
+    refusals is a NON-CANONICAL spelling of the same records: a duplicate key
+    (json.loads keeps the last value, the first enters no hash), a second
+    accepted key name, \\uXXXX escape respellings, extra spacing, blank lines,
+    a trailing space, a missing final newline. All parse to identical records
+    with identical sealed hashes while probe_file_sha256 differs -- content
+    riding inside the byte seal that no hash covers. The sealer accepts one
+    byte form up to line endings (file_digest, the sealed identity, already
+    normalizes those -- a CRLF spelling cannot carry anything the gate
+    honors)."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "manifest.json")
+    rec = {"category": "factual", "q": "What is the capital of France?"}
+    line = json.dumps(rec)
+    clean = tmp_path / "clean.jsonl"
+    clean.write_text(line + "\n", encoding="utf-8", newline="")
+    assert elg._cli_seal(str(clean)) == 0
+    capsys.readouterr()
+
+    # CRLF is the one tolerated respelling: same normalized identity.
+    p = tmp_path / "crlf.jsonl"
+    p.write_text(line + "\r\n", encoding="utf-8", newline="")
+    assert elg._cli_seal(str(p)) == 0
+    capsys.readouterr()
+
+    forgeries = {
+        "duplicate key": '{"category": "SMUGGLED", ' + line[1:] + "\n",
+        "escape respelling": line.replace('"q"', '"\\u0071"', 1) + "\n",
+        "extra spacing": line.replace('": "', '":  "', 1) + "\n",
+        "blank line": line + "\n\n",
+        "trailing space": line + " \n",
+        "missing final newline": line,
+    }
+    for name, content in forgeries.items():
+        p = tmp_path / "forged.jsonl"
+        p.write_text(content, encoding="utf-8", newline="")
+        assert elg._cli_seal(str(p)) == 1, f"{name} must refuse"
+        assert "canonical" in capsys.readouterr().out, name
+
+    # The alias key is no longer accepted at all: its value entered no sealed
+    # hash and not the grading digest while riding the byte seal.
+    alias = dict(rec)
+    alias["question"] = "SMUGGLED"
+    p = tmp_path / "alias.jsonl"
+    p.write_text(json.dumps(alias) + "\n", encoding="utf-8", newline="")
+    assert elg._cli_seal(str(p)) == 1
+    assert "unknown probe field" in capsys.readouterr().out
+
+    # And a record the gate run would crash on -- q or category absent --
+    # refuses at seal time, not after the target's memory store is gone.
+    for missing in ("q", "category"):
+        gutted = {k: v for k, v in rec.items() if k != missing}
+        p = tmp_path / "gutted.jsonl"
+        p.write_text(json.dumps(gutted) + "\n", encoding="utf-8", newline="")
+        assert elg._cli_seal(str(p)) == 1, f"missing {missing} must refuse"
+        assert "non-empty string 'q' and 'category'" in capsys.readouterr().out
+
+
+def test_the_sealer_refuses_type_punning_and_reordering(tmp_path, monkeypatch, capsys):
+    """Canonical bytes are necessary, not sufficient: a DICT where a list
+    belongs is perfectly canonical and iterates keys-only through every hash
+    and every grader, so its VALUES are unbounded uncovered text inside the
+    byte seal. Key order and interior whitespace are the same class -- hash-
+    invisible byte patterns. Each refuses with a curated message, never a
+    traceback."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "manifest.json")
+
+    def seal_of(rec_line: str) -> int:
+        p = tmp_path / "punned.jsonl"
+        p.write_text(rec_line + "\n", encoding="utf-8", newline="")
+        return elg._cli_seal(str(p))
+
+    assert seal_of('{"category": "factual", "q": "Capital of France?", '
+                   '"want_any": {"paris": "SMUGGLED ANNOTATION"}}') == 1
+    assert "list of strings" in capsys.readouterr().out
+
+    assert seal_of('{"category": "memory", "teach": {"My cat is Mochi.": "hidden"}, '
+                   '"q": "What is my cat called?", "want_any": ["mochi"]}') == 1
+    assert "list of strings" in capsys.readouterr().out
+
+    assert seal_of('{"category": "memory", "teach": null, '
+                   '"q": "What is my cat called?", "want_any": ["mochi"]}') == 1
+    assert "null" in capsys.readouterr().out
+
+    assert seal_of('{"q": "Capital of France?", "category": "factual"}') == 1
+    assert "canonical order" in capsys.readouterr().out
+
+    assert seal_of('{"category": "factual", "q": "What  is the capital?"}') == 1
+    assert "whitespace" in capsys.readouterr().out
+
+    # Malformed lines get curated errors, not tracebacks.
+    assert seal_of("[1, 2, 3]") == 1
+    assert "one JSON object" in capsys.readouterr().out
+    assert seal_of("not json at all {") == 1
+    assert "not valid JSON" in capsys.readouterr().out
+
+    # Unsorted want/deny arrays are a WARNED open channel (sorting the live
+    # file = a content reseal = the user's gate), never a refusal today.
+    assert seal_of('{"category": "factual", "q": "Capital of France?", '
+                   '"want_any": ["paris", "answer"]}') == 0
+    assert "unsorted want/deny" in capsys.readouterr().out

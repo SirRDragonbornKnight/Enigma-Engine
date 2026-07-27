@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from eval_behavior import INFORMATIONAL_CATEGORIES, THRESHOLDS, _grade_identity  # noqa: E402
+from eval_leak_guard import _KEY_ORDER as _SEAL_KEY_ORDER  # noqa: E402
+from eval_leak_guard import _content_words as _seal_content_words  # noqa: E402
 from eval_leak_guard import LockedProbeGuard, seal as _seal_texts  # noqa: E402
 from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
 
@@ -36,7 +38,9 @@ from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
 # nothing, which is not what an author writing a probe intends.
 CATEGORIES = set(THRESHOLDS) | set(INFORMATIONAL_CATEGORIES)
 TOOL_CATEGORIES = {"tool", "restraint"}
-KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool", "note"}
+# Exactly the sealer's _PROBE_KEYS: a key the validator blesses but the
+# sealer refuses (or vice versa) turns "Safe to seal" into a false promise.
+KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool"}
 # The one client tool the eval injects for tool/restraint probes.
 VALID_EXPECT_TOOLS = {None, "get_weather"}
 # Organ probes call the server's OWN built-ins instead: no client tool is
@@ -115,7 +119,17 @@ def _fuzzy_leak_counts(questions: list[str], training_raw: list[str]) -> tuple[d
     keys on that distinction (audit r3). The total is a set union, so a record
     two probes both match is not double-counted (audit r3)."""
     guard = LockedProbeGuard(_seal_texts(questions))
-    single = [LockedProbeGuard(_seal_texts([q])) for q in questions]
+    # A stopword-only question ("Is it you?") seals to empty shingle/run
+    # arrays, and a SINGLE-probe manifest of it trips the guard's
+    # all-stripped refusal (Weakened) -- the combined manifest above is fine
+    # because the other probes carry content. Such a probe can only ever
+    # match verbatim, which the exact-dup check already covers, so its
+    # per-probe counter is honestly zero rather than a crash.
+    single = [
+        LockedProbeGuard(_seal_texts([q])) if _seal_content_words(q)
+        else LockedProbeGuard(None)
+        for q in questions
+    ]
     per_probe: dict[int, set[str]] = {}
     deleted: set[str] = set()
     for text in training_raw:
@@ -143,9 +157,10 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if not stripped:
             continue
         if stripped.startswith("#"):
-            # The sealer and the eval BOTH skip these now, but the gate's
-            # identity is the file's BYTES -- a commented holdout can never
-            # match its seal, so refusing at authoring time is the honest gate.
+            # The sealer REFUSES comment lines (the eval merely skips them in
+            # dev files); the gate's identity is the file's BYTES, so a
+            # commented holdout can never match its seal -- erroring at
+            # authoring time is the honest gate.
             errors.append(f"line {lineno}: comment line -- a commented file can never match its byte seal")
             continue
         try:
@@ -156,7 +171,33 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
         if not isinstance(rec, dict):
             errors.append(f"line {lineno}: expected one JSON object per line")
             continue
+        if json.dumps(rec) != stripped:
+            # The sealer refuses any line whose bytes are not the canonical
+            # dump of its own parse (duplicate keys, \uXXXX respellings,
+            # spacing) -- predict that refusal here.
+            errors.append(
+                f"line {lineno}: not canonical JSON -- the sealer requires each "
+                "line to equal json.dumps of its own parse (duplicate keys, "
+                "escape respellings, and extra spacing all ride inside the "
+                "byte seal uncovered by any hash)"
+            )
+            continue
         records.append((lineno, rec))
+
+    if records and not errors:
+        # Mirror the sealer's whole-file backstop: blank lines, line
+        # whitespace, and a missing final newline all change the bytes the
+        # seal covers without changing any record. Line endings are exempt
+        # in BOTH tools -- file_digest (the sealed identity) normalizes them,
+        # so tracked CRLF checkouts stay valid.
+        canonical = ("\n".join(json.dumps(rec) for _, rec in records) + "\n").encode("utf-8")
+        normalized = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if canonical != normalized:
+            errors.append(
+                "file bytes are not the canonical serialization the sealer "
+                "requires (json.dumps per record, final newline, no blank "
+                "lines) -- the sealer will refuse this file"
+            )
 
     counts: dict[str, int] = {}
     seen_questions: dict[str, int] = {}
@@ -189,14 +230,43 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
                 f"{where}: unknown key(s) {sorted(unknown)} -- a misspelled 'want_any' "
                 "leaves the want list empty, which passes on any output"
             )
-        if not question:
-            errors.append(f"{where}: no 'q'")
+        if not isinstance(question, str) or not question.strip():
+            # `or ""` above turns a missing q into "", but a whitespace-only
+            # or non-string q is truthy and used to sail through to a crash
+            # (or to the sealer's refusal after "Safe to seal" had printed).
+            errors.append(f"{where}: 'q' must be a non-empty string")
             continue
-        if rec.get("teach") is not None and (
-            not isinstance(rec["teach"], list) or not all(isinstance(t, str) for t in rec["teach"])
-        ):
-            errors.append(f"{where}: 'teach' must be a list of strings")
+        shape_ok = True
+        if "expect_tool" in rec and rec["expect_tool"] is not None and not isinstance(rec["expect_tool"], str):
+            errors.append(f"{where}: 'expect_tool' must be a string or null")
+            shape_ok = False
+        for field in ("want_any", "deny_any", "teach"):
+            if field in rec and rec[field] is None:
+                errors.append(f"{where}: {field!r} is null -- omit the key or give "
+                              "a list of strings (the sealer refuses null)")
+                shape_ok = False
+            elif rec.get(field) is not None and (
+                not isinstance(rec[field], list)
+                or not all(isinstance(t, str) for t in rec[field])
+            ):
+                errors.append(f"{where}: {field!r} must be a list of strings -- any "
+                              "other shape iterates keys-only through every hash "
+                              "while its values ride the byte seal uncovered")
+                shape_ok = False
+        if not shape_ok:
             continue
+        known_order = [k for k in rec if k in _SEAL_KEY_ORDER]
+        positions = [_SEAL_KEY_ORDER.index(k) for k in known_order]
+        if positions != sorted(positions):
+            errors.append(f"{where}: keys out of the sealer's canonical order "
+                          f"{list(rec)} -- write keys as {list(_SEAL_KEY_ORDER)}")
+        for s in [question] + [x for f in ("want_any", "deny_any", "teach")
+                               for x in (rec.get(f) or [])]:
+            if s != " ".join(s.split()):
+                errors.append(f"{where}: non-normalized whitespace inside a string "
+                              f"({s[:40]!r}) -- the sealer refuses it (a spacing "
+                              "pattern is hash-invisible byte content)")
+                break
         # want/deny are the fields the grader MATCHES on -- a curly quote there
         # is the deadliest place for one (audit 2026-07-22: the earlier check
         # covered only q/teach).

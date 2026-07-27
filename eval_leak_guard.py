@@ -142,7 +142,10 @@ def _text_ngrams(text: str) -> set[str]:
     58 of 108 sealed strings below four content words actually needed -- and
     reproducing a probe's own word ORDER is something unrelated documents do
     not do by accident."""
-    words = _content_words(text)
+    return _ngrams_from_words(_content_words(text))
+
+
+def _ngrams_from_words(words: list[str]) -> set[str]:
     out: set[str] = set()
     for n in range(NGRAM_MIN, NGRAM_N + 1):
         if len(words) >= n:
@@ -384,7 +387,24 @@ class LockedProbeGuard:
         return bool(_text_ngrams(text) & self.ngrams)
 
     def leaks(self, text: str) -> bool:
-        return self.score(text) >= self.threshold or self.contains_probe(text)
+        # One pass over the content words: score() and contains_probe() each
+        # recomputed them. Semantics identical to
+        # score() >= threshold or contains_probe() (differentially verified);
+        # the saving is the duplicate word pass only -- measured +3% on
+        # content-heavy text, +22% on stopword-heavy (2026-07-27); the
+        # per-word sha1 sweep dominates and is untouched.
+        if not self.shingles and not self.ngrams:
+            return False
+        words = _content_words(text)
+        if self.shingles:
+            if _h(_norm(text)) in self.exact:
+                return True
+            q = {_hw(w) for w in words}
+            if max((_jaccard(q, s) for s in self.shingles), default=0.0) >= self.threshold:
+                return True
+        if self.ngrams:
+            return bool(_ngrams_from_words(words) & self.ngrams)
+        return False
 
     def is_near_miss(self, text: str, low: float = 0.5) -> bool:
         """In the review band [low, threshold): worth a human glance, not dropped."""
@@ -535,8 +555,12 @@ def _write_verdict(source: Path, manifest: Path, guard: "LockedProbeGuard",
 # digest -- the same uncovered-annotation hazard as a comment line, wearing
 # JSON (convergence audit, 2026-07-26).
 _PROBE_KEYS = frozenset(
-    {"q", "question", "category", "want_any", "deny_any", "expect_tool", "teach"}
+    {"q", "category", "want_any", "deny_any", "expect_tool", "teach"}
 )
+# The one canonical relative key order (every live record is a subsequence of
+# this; measured 2026-07-27). Canonical bytes preserve authoring order, so a
+# permitted reordering would be bits riding inside probe_file_sha256.
+_KEY_ORDER = ("category", "teach", "q", "want_any", "deny_any", "expect_tool")
 
 
 def _cli_seal(src: str) -> int:
@@ -554,7 +578,13 @@ def _cli_seal(src: str) -> int:
         return 1
     texts = []
     cases = []
-    for line in raw.decode("utf-8").splitlines():
+    unsorted_records = 0
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        print(f"ERROR: file is not valid UTF-8 ({exc}) -- fix the encoding before sealing")
+        return 1
+    for line in decoded.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -568,19 +598,103 @@ def _cli_seal(src: str) -> int:
             print("ERROR: comment line in the locked probe file -- author pure JSONL "
                   "(comments would ride inside the byte seal uncovered by any hash)")
             return 1
-        rec = json.loads(line)
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: line is not valid JSON ({exc.msg}) -- fix it before sealing")
+            return 1
+        if not isinstance(rec, dict):
+            print("ERROR: every line must be one JSON object")
+            return 1
         unknown = set(rec) - _PROBE_KEYS
         if unknown:
             print(f"ERROR: unknown probe field(s) {sorted(unknown)} -- they would "
                   "ride inside the byte seal uncovered by any hash; remove them "
                   "(or seal them by extending grading_digest first)")
             return 1
+        # Keys must follow ONE relative order. Canonical bytes preserve the
+        # order the author wrote, so a reordering carries bits inside
+        # probe_file_sha256 while every hash (which reads by NAME) stays
+        # identical.
+        positions = [_KEY_ORDER.index(k) for k in rec]
+        if positions != sorted(positions):
+            print(f"ERROR: probe keys out of canonical order {list(rec)} -- key "
+                  f"order rides inside the byte seal uncovered by any hash; "
+                  f"write keys in the order {list(_KEY_ORDER)}")
+            return 1
+        q = rec.get("q")
+        cat = rec.get("category")
+        if not (isinstance(q, str) and q.strip()) or not (isinstance(cat, str) and cat.strip()):
+            # The gate run reads q and category unconditionally, AFTER it has
+            # cleared the target server's memory store -- a sealed record
+            # missing either crashes mid-run with the store already gone.
+            print("ERROR: probe record needs non-empty string 'q' and 'category' -- "
+                  "the gate run reads both unconditionally after clearing the "
+                  "target's memory store")
+            return 1
+        # Value TYPES are part of the sealed shape. A dict where a list
+        # belongs iterates identically (keys only) through every hash and
+        # every grader, so its VALUES are arbitrary uncovered text riding
+        # inside the byte seal -- the unknown-field hazard wearing a legal
+        # key name.
+        expect = rec.get("expect_tool")
+        if expect is not None and not isinstance(expect, str):
+            print("ERROR: expect_tool must be a string or null")
+            return 1
+        for key in ("want_any", "deny_any", "teach"):
+            val = rec.get(key)
+            if val is None and key in rec:
+                print(f"ERROR: {key} is null -- omit the key or give a list of strings")
+                return 1
+            if val is not None and not (isinstance(val, list)
+                                        and all(isinstance(x, str) for x in val)):
+                print(f"ERROR: {key} must be a list of strings -- any other shape "
+                      "iterates as keys-only through every hash while its values "
+                      "ride inside the byte seal uncovered")
+                return 1
+        # Interior whitespace is invisible to every hash (they normalize with
+        # split()) but changes the file's bytes -- a spacing pattern inside a
+        # string is an annotation channel.
+        strings = [q, cat] + ([expect] if isinstance(expect, str) else [])
+        for key in ("want_any", "deny_any", "teach"):
+            strings.extend(rec.get(key) or [])
+        for s in strings:
+            if s != " ".join(s.split()):
+                print(f"ERROR: string value carries non-normalized whitespace "
+                      f"({s[:40]!r}...) -- every hash normalizes whitespace, so "
+                      "the spacing pattern rides inside the byte seal uncovered")
+                return 1
+        if any((rec.get(key) or []) != sorted(rec.get(key) or [])
+               for key in ("want_any", "deny_any")):
+            unsorted_records += 1  # summary WARN below; sorting = a content reseal
         cases.append(rec)
-        q = rec.get("q") or rec.get("question") or ""
-        if q:
-            texts.append(q)
+        texts.append(q)
         for fact in rec.get("teach", []):  # memory-probe teach messages count too
             texts.append(fact)
+    # The file's bytes must BE the canonical dump of its own parse, up to line
+    # endings. Anything else -- duplicate keys (json.loads keeps the last),
+    # \uXXXX respellings, extra spacing, blank lines, a missing final newline
+    # -- parses to the same records while changing probe_file_sha256, i.e.
+    # content riding inside the byte seal that no sealed hash covers. Line
+    # endings are exempt because file_digest (the sealed identity) normalizes
+    # them -- a CRLF spelling cannot carry anything the gate would honor. The
+    # per-condition refusals above give better messages; this check is the
+    # backstop that closes the class.
+    canonical = ("\n".join(json.dumps(rec) for rec in cases) + "\n").encode("utf-8")
+    normalized = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    if canonical != normalized:
+        print("ERROR: file bytes are not the canonical serialization of their "
+              "own parse (json.dumps per record, final newline) -- "
+              "non-canonical bytes would ride inside the byte "
+              "seal uncovered by any hash; re-emit the file with json.dumps")
+        return 1
+    if unsorted_records:
+        # Refusing would demand a plaintext edit = a content reseal, which is
+        # the user's gate; until then element order is a KNOWN open channel
+        # (grading_digest sorts these arrays, so reordering is hash-invisible).
+        print(f"WARN: {unsorted_records} record(s) carry unsorted want/deny arrays -- "
+              "element order rides the byte seal uncovered; sort them at the "
+              "next content reseal")
     # A probe whose content words are ALL stopwords ("Is it you?") produces an
     # empty shingle set: it can only ever match VERBATIM, so paraphrases of it
     # pass the guard silently. Say so at seal time (audit 2026-07-16).
