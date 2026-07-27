@@ -529,14 +529,32 @@ def _write_verdict(source: Path, manifest: Path, guard: "LockedProbeGuard",
         print(f"WARN: could not write the leak-guard verdict beside {source} ({exc})", flush=True)
 
 
+# Every top-level key a locked probe record may carry. Anything else is
+# refused at seal time: an unknown field ("#": "note", "comment": ...) rides
+# inside probe_file_sha256 while entering NO sealed hash and NOT the grading
+# digest -- the same uncovered-annotation hazard as a comment line, wearing
+# JSON (convergence audit, 2026-07-26).
+_PROBE_KEYS = frozenset(
+    {"q", "question", "category", "want_any", "deny_any", "expect_tool", "teach"}
+)
+
+
 def _cli_seal(src: str) -> int:
     src_path = Path(src)
     if not src_path.exists():
         print(f"ERROR: locked probe file not found: {src_path}")
         return 1
+    raw = src_path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        # A BOM survives strip(), dodges the '#' check below, and would ride
+        # inside the byte seal covered by no hash -- the Windows-editor way
+        # into the same annotation hazard (convergence audit, 2026-07-26).
+        print("ERROR: file starts with a UTF-8 BOM -- re-save it plain "
+              "(the BOM would ride inside the byte seal uncovered by any hash)")
+        return 1
     texts = []
     cases = []
-    for line in src_path.read_text(encoding="utf-8").splitlines():
+    for line in raw.decode("utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -551,6 +569,12 @@ def _cli_seal(src: str) -> int:
                   "(comments would ride inside the byte seal uncovered by any hash)")
             return 1
         rec = json.loads(line)
+        unknown = set(rec) - _PROBE_KEYS
+        if unknown:
+            print(f"ERROR: unknown probe field(s) {sorted(unknown)} -- they would "
+                  "ride inside the byte seal uncovered by any hash; remove them "
+                  "(or seal them by extending grading_digest first)")
+            return 1
         cases.append(rec)
         q = rec.get("q") or rec.get("question") or ""
         if q:

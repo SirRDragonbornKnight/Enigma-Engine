@@ -149,9 +149,12 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
     under True on the real files -- enigma_dpo/model.pth (with meta),
     enigma_pretrain_large/latest.pth (with optimizer state; the
     _verify_ckpt target), enigma_sft/model.pth, and all three
-    enigma_vision_align checkpoints (with optimizer+scheduler state). The
-    distill --resume class had no file on disk to receipt; its checkpoints
-    are written by the same tensors-only torch.save pattern, and a failure
+    enigma_vision_align checkpoints (with optimizer+scheduler state), and
+    the vision distill --resume class too (the convergence audit found
+    models/enigma_vision_distill/latest.pth on disk and loaded it clean
+    under True -- the first receipt list wrongly claimed the class had no
+    file). Only the AUDIO distill class has no file to receipt; it is
+    written by the same tensors-only torch.save pattern, and a failure
     there is a loud UnpicklingError, not silence. Suite 789 green after the
     flip -- the fake-checkpoint fixtures ride the same loaders.
 

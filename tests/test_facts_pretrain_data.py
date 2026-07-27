@@ -57,6 +57,23 @@ LEAKY_DECLARATIVE = "The largest planet in our solar system is Jupiter."
 UNRELATED = "The Nile is the longest river in Africa."
 
 
+def test_eos_from_sidecar_refuses_laundered_types():
+    """int() as the guard laundered hand-edit damage: a JSON float 2.7
+    truncated to 2 and `true` became 1, both silently -- the exact shapes
+    the refusal message claimed to catch (convergence audit, 2026-07-26)."""
+    import pytest
+
+    from make_facts_pretrain_data import eos_from_sidecar
+
+    assert eos_from_sidecar({"eos_token_id": 2}, 4718) == 2
+    assert eos_from_sidecar({}, 4718) == 2  # missing key keeps the legacy default
+    for bad in (2.7, True, False, "2", None, [2]):
+        with pytest.raises(SystemExit, match="plain integer"):
+            eos_from_sidecar({"eos_token_id": bad}, 4718)
+    with pytest.raises(SystemExit, match="outside vocab"):
+        eos_from_sidecar({"eos_token_id": 4718}, 4718)
+
+
 def test_screen_is_a_noop_before_any_seal():
     lines = [LEAKY_QA, LEAKY_DECLARATIVE, UNRELATED]
     assert screen_locked_probes(lines, LockedProbeGuard(None)) == lines

@@ -50,6 +50,28 @@ HEADER_SIZE = 256
 EOS_ID = 2
 
 
+def eos_from_sidecar(meta: dict, vocab_size: int) -> int:
+    """The corpus's eos id, refused unless it is a PLAIN in-range int.
+
+    int() was the first guard here and it laundered hand-edit damage: a JSON
+    float 2.7 truncated to 2 and `true` became 1, both silently -- the exact
+    "stale or hand-edited sidecar" shapes the refusal message claimed to
+    catch (convergence audit, 2026-07-26). A missing key keeps the legacy
+    default; a present-but-wrong one refuses."""
+    raw = meta.get("eos_token_id", EOS_ID)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise SystemExit(
+            f"sidecar eos_token_id is not a plain integer ({raw!r}) -- stale or "
+            "hand-edited sidecar; refusing to write a corpus with it"
+        )
+    if not 0 <= raw < vocab_size:
+        raise SystemExit(
+            f"sidecar eos_token_id {raw} is outside vocab {vocab_size} -- "
+            "stale or foreign sidecar; refusing to write a corpus with it"
+        )
+    return raw
+
+
 REVIEW_DIR = ROOT / "data" / "pretrain"
 
 
@@ -238,19 +260,7 @@ def main() -> None:
     src_dtype = np.dtype(src_meta.get("dtype", "uint32"))
     # eos follows the corpus too: the sidecar records what pretokenize derived
     # and validated, and this writer stamps eos into its own ETOK header.
-    try:
-        eos_id = int(src_meta.get("eos_token_id", EOS_ID))
-    except (TypeError, ValueError):
-        raise SystemExit(
-            f"sidecar eos_token_id is not a number "
-            f"({src_meta.get('eos_token_id')!r}) -- stale or hand-edited "
-            "sidecar; refusing to write a corpus with it"
-        ) from None
-    if not 0 <= eos_id < vocab_size:
-        raise SystemExit(
-            f"sidecar eos_token_id {eos_id} is outside vocab {vocab_size} -- "
-            "stale or foreign sidecar; refusing to write a corpus with it"
-        )
+    eos_id = eos_from_sidecar(src_meta, vocab_size)
     try:
         vocab_file = vocab_file_for_size(vocab_size)
     except (ValueError, FileNotFoundError) as exc:

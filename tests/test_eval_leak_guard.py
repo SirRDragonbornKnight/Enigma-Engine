@@ -525,3 +525,22 @@ def test_the_sealer_refuses_a_commented_file(tmp_path, monkeypatch, capsys):
     assert elg._cli_seal(str(src)) == 1
     assert "comment line" in capsys.readouterr().out
     assert not (tmp_path / "manifest.json").exists(), "refusal must not write a seal"
+
+    # the same annotation hazard wearing other coats (convergence audit,
+    # 2026-07-26): a UTF-8 BOM survives strip() and dodged the '#' check
+    # (dying as a raw JSONDecodeError), and an unknown JSON field
+    # ('#': 'note') sealed successfully while riding the byte seal covered
+    # by no hash. Both refuse with curated messages now.
+    bommed = tmp_path / "bommed.jsonl"
+    bommed.write_bytes(b'\xef\xbb\xbf{"q": "What is the capital of France?"}\n')
+    assert elg._cli_seal(str(bommed)) == 1
+    assert "BOM" in capsys.readouterr().out
+
+    smuggled = tmp_path / "smuggled.jsonl"
+    smuggled.write_text(
+        '{"q": "What is the capital of France?", "#": "smuggled note"}\n',
+        encoding="utf-8",
+    )
+    assert elg._cli_seal(str(smuggled)) == 1
+    assert "unknown probe field" in capsys.readouterr().out
+    assert not (tmp_path / "manifest.json").exists()

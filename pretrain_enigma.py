@@ -420,8 +420,9 @@ def main() -> None:
             # (config + model_state_dict + optimizer + step + schedule) load
             # under it -- this path was already running refuse-foreign-pickle
             # mode and working. Pinning False here "to match the siblings"
-            # was a live security downgrade; the siblings' False pins are the
-            # pre-2.6 legacy, not the target.
+            # was a live security downgrade; the siblings' False pins were
+            # pre-2.6 legacy and every loader now pins True (KNOWN_ISSUES
+            # 11.5, closed with per-artifact receipts).
             ck = torch.load(rp, map_location=device, weights_only=True)
         except Exception as exc:
             prev = rp.parent / "prev.pth"
