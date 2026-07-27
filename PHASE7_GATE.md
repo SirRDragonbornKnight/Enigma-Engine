@@ -74,8 +74,11 @@ Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
   tokens.bin).
 - **350-700M params, deeper-thinner.** Ceilings #2-#4 are capacity walls;
   the 5090 (32GB) carries this size. HRM stays parked (ARC Prize critique).
-- **Native block 2048-4096** from step 0, with intra-document attention
-  masking and document packing from the start.
+- **Native block 2048-4096** from step 0. Intra-document attention masking
+  was part of this line as written; RULED 2026-07-27: skipped for the v2
+  run (negligible at this block by Meta's own measurement, and not worth
+  new hot-path mask plumbing before a days-long run) and REQUIRED at the
+  future length-extension anneal, where it genuinely matters.
 - **Muon + WSD from step 0** (flags already exist). WSD so a good run can be
   extended without cosine's pre-committed horizon.
 - **Pretraining data: include worked arithmetic** (the FineMath collector

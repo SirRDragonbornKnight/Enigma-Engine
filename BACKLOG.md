@@ -561,7 +561,25 @@ Prerequisites (not training):
       `models/`, so the live checkpoint is never in play.
 
 The block, in execution order:
-- T1. Corpus prep (~1 day, mostly CPU): quality-score the raw third
+> **T1 RULINGS (user, 2026-07-27, all four made in session):**
+> 1. **Corpus = FULL SPEC.** All three absent sources come in: FineMath
+>    (worked math -- the remake charter's named gap), The Stack (code), and
+>    the DCLM quality swap. The collectors must RUN (multi-day downloads);
+>    training waits for the corpus, not the reverse. The user chose the
+>    thorough road over the fast one, explicitly.
+> 2. **Doc-boundary attention masking: SKIPPED for v2.** Meta's own measure
+>    says negligible at short blocks; not worth new hot-path mask plumbing
+>    in front of the measured 31,311 tok/s right before a days-long run.
+>    REQUIRED at the future length-extension anneal (charter amended).
+> 3. **Curated repeat: x5** (--repeat-sources curated=5). The proven facts
+>    multiplier; ~8.6M tokens; boot guards verify placement + pass size.
+> 4. **Vocab window CONFIRMED, all three:** keep <search>/</search> rows;
+>    delete the 31 tag-teaching SFT records at T4; ALLOCATE the image
+>    begin/end delimiter rows in this retokenize so the vision path never
+>    needs vocab surgery. This is the last vocab window -- after this,
+>    rows are set for the lineage.
+- T1. Corpus prep (~1 day of tokenize work AFTER the collector downloads;
+  rulings above): quality-score the raw third
   (edu-classifier or DCLM swap), add code+math (FineMath collector was never
   run), add short conversational register (chat was left entirely to SFT
   last lineage), 5-10 paraphrase variants of every must-know fact IN the
