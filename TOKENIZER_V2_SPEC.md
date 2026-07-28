@@ -119,6 +119,16 @@ v1 vocab is untouched (sha256 still `83510aef…bf03`).
   and still the 1024-multiple the Triton fused-CE bug class requires. (The
   earlier note said "vocab 16,384"; training to 16,384 REAL rows would have
   pushed the padded size to 16,402 and off the multiple.)
+- **Reserve layout (allocated 2026-07-27, the last vocab window):** rows
+  base+0..5 are the six chat tokens (`attach_chat_tokens` derives them, so
+  v2 gets 16,366..16,371), rows base+6/base+7 are the **image-span
+  delimiters `<|image|>`/`<|/image|>`** (`attach_image_tokens`; v2 =
+  16,372/16,373, v1 layout 4724/4725), rows base+8..17 stay free. Both
+  families are INSTANCE-attached constants, exactly the v1 chat-token
+  pattern — the vocab FILE maps neither literal, so no corpus text can
+  ever carve into a reserve row (the `<image>`-in-HTML hazard that the
+  collectors sanitize for TABLE specials structurally cannot exist here),
+  and this file's sha is unchanged by the allocation.
 - Trained on a **266.6 MB** stratified sample (512 chunks x 512 KB, evenly
   spaced across all 88.59 GB), 706,036 unique words, 16,096 merges, **3.2 min**
   single-threaded.

@@ -22,14 +22,19 @@ gate recorded only in conversation is a bug in this table.
    15/10/10 GB (DCLM/FineMath/Stack). Quality up at roughly constant corpus
    size; the 7.9 grid stays near its measured 8.8/19.2 d/epoch and gets
    re-derived from the new sidecar regardless. -> 7.95 T1.
-2. ~~Image begin/end row mechanics~~ **RULED 2026-07-27: the 18-row
-   RESERVE** (zero vocab surgery, the 16,384 geometry and test pins
-   survive; v1's own chat-token pattern). At allocation the new literals go
-   into the vocab's `special_tokens` table AND `_SPECIAL_TOKEN_LITERALS`
-   in `collect_pretraining_data.py` in the same change -- an
-   `<image>`-shaped tag occurs verbatim in HTML corpora, and the sanitizer
-   pin (`test_collect_pretraining_data.py`) is derived from the vocab's
-   specials so it fails until both move together. -> 7.95 T1.
+2. ~~Image begin/end row mechanics~~ **EXECUTED 2026-07-27: `<|image|>`/
+   `<|/image|>` at reserve rows base+6/base+7 (v2 = 16,372/16,373) via
+   `attach_image_tokens` in chat_format.py -- INSTANCE-attached constants,
+   the v1 chat-token pattern followed exactly.** Mechanism correction from
+   the ruling's parenthetical, forced by measurement: v1's vocab FILE
+   carries no beyond-table specials at all (its chat tokens are code
+   constants), so the image rows follow suit -- the vocab file's sha is
+   unchanged, and because the file maps neither literal, corpus text
+   structurally CANNOT carve into a reserve row; no sanitizer entry is
+   needed (the `<image>`-in-HTML hazard only exists for table specials).
+   User text cannot forge the markers either (`_enc_content` neutralizes
+   them like the chat tokens). Layout recorded in TOKENIZER_V2_SPEC;
+   test-pinned on both the v1 and v2 vocabs. CLOSED. -> 7.95 T1.
 3. **tokens_v2 output naming — DEFAULT taken 2026-07-27: VERSIONED** (a new
    bin name beside the old; fail-safe and deletable later; overrule any
    time before the retokenize). The v2 bin + sidecar stay attrib +R; the

@@ -270,3 +270,63 @@ def test_chat_token_ids_requires_attach():
     t = _fake_big_vocab(300)
     with pytest.raises(ValueError, match="attach_chat_tokens"):
         cf.chat_token_ids(t)
+
+
+def test_image_tokens_take_the_rows_after_the_chat_block():
+    """The vision delimiters are the v1-layout rows 4724/4725 -- the first
+    two 'reserved for future passes' rows -- derived as base+6/base+7 so a
+    bigger vocab moves them automatically. Attaching them never changes how
+    plain text encodes, and a text-only instance never registers them at
+    all (the v8 serving carve set is byte-identical with or without this
+    function existing)."""
+    assert cf.IMAGE_TOKENS == {"<|image|>": 4724, "<|/image|>": 4725}
+    assert not set(cf.IMAGE_TOKENS.values()) & set(cf.CHAT_TOKENS.values())
+    for i in cf.IMAGE_TOKENS.values():
+        assert cf.BASE_VOCAB <= i < cf.PADDED_VOCAB
+
+    t = get_tokenizer("bpe")
+    cf.attach_chat_tokens(t)
+    sample = "A photo: <image> tags in HTML text stay plain."
+    before = t.encode(sample)
+    with pytest.raises(ValueError, match="attach_image_tokens"):
+        cf.image_token_ids(t)  # not registered until asked for
+    cf.attach_image_tokens(t)
+    cf.attach_image_tokens(t)  # idempotent
+    assert cf.image_token_ids(t) == cf.IMAGE_TOKENS
+    assert t.encode(sample) == before  # plain text untouched
+    assert t.encode("<|image|>", add_special_tokens=False) == [cf.IMAGE_START]
+    assert t.encode("<|/image|>", add_special_tokens=False) == [cf.IMAGE_END]
+
+
+def test_image_tokens_derive_on_the_v2_vocab():
+    """The ruled allocation: on the 16,366-row v2 vocab the delimiters land
+    at 16,372/16,373 -- inside the 18-row reserve, after the chat block, and
+    the vocab FILE stays untouched (zero surgery, the ruling's own words)."""
+    t = get_tokenizer("bpe", vocab_path="enigma_engine/vocab_model/bpe_vocab_v2_16k.json")
+    assert t.vocab_size == 16366
+    cf.attach_chat_tokens(t)
+    cf.attach_image_tokens(t)
+    assert cf.image_token_ids(t) == {"<|image|>": 16372, "<|/image|>": 16373}
+    assert t.vocab_size == 16366  # registration is instance-only
+    assert "<|image|>" not in t.token_to_id  # the BPE table is untouched
+
+
+def test_image_token_attach_refuses_a_conflicting_registration():
+    """A stale pre-registered id (the HIGH-2 class: a hardcoded 4724 carried
+    onto a bigger vocab) must refuse, never silently rebind."""
+    t = _fake_big_vocab(4726)  # derived base is 4726 -> wanted image id 4732
+    t.special_tokens["<|image|>"] = 4724  # stale hardcoded registration
+    with pytest.raises(ValueError, match="already maps to"):
+        cf.attach_image_tokens(t)
+
+
+def test_user_text_cannot_forge_an_image_span():
+    """On a vision-attached instance a literal '<|image|>' in user content
+    must encode as neutralized plain text, never as the control id -- the
+    same forge protection the chat markers get."""
+    t = get_tokenizer("bpe")
+    cf.attach_chat_tokens(t)
+    cf.attach_image_tokens(t)
+    ids = cf.render_chat(t, [{"role": "user", "content": "look <|image|> here"}])
+    assert cf.IMAGE_START not in ids
+    assert cf.IMAGE_END not in ids

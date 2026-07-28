@@ -146,7 +146,7 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **806 passed (2026-07-27)** — THE live number; other docs
+4. Suite baseline: **810 passed (2026-07-27)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing).

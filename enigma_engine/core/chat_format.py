@@ -10,7 +10,8 @@ pretraining never targets. Chat tokens live there:
     4718 <|im_start|>     4719 <|im_end|>
     4720 <|tool_call|>    4721 <|/tool_call|>
     4722 <|tool_result|>  4723 <|/tool_result|>
-    4724..4735 reserved for future passes.
+    4724 <|image|>        4725 <|/image|>      (vision spans; attach_image_tokens)
+    4726..4735 reserved for future passes.
 
 Those numbers are the LIVE v1 layout, kept as constants for the shipped
 checkpoints. ``attach_chat_tokens`` DERIVES the base per tokenizer (first
@@ -64,6 +65,22 @@ CHAT_TOKENS = {
     "<|/tool_call|>": TOOL_CALL_END,
     "<|tool_result|>": TOOL_RESULT,
     "<|/tool_result|>": TOOL_RESULT_END,
+}
+
+# Image-span delimiters: the NEXT two reserve rows after the chat block
+# (v1 layout 4724/4725; derived as base+6/base+7 on any vocab, so the v2
+# 16,366-row vocab gets 16,372/16,373). Deliberately NOT in CHAT_TOKENS:
+# the chat template never renders them, and keeping them out of
+# attach_chat_tokens means the v8 serving path's registered id set is
+# byte-identical with or without vision. Like the chat tokens they are
+# INSTANCE-attached only -- the vocab file never maps the literals, so no
+# corpus text can carve into these rows (the <image>-in-HTML hazard the
+# collectors sanitize for table specials cannot exist for these).
+IMAGE_START = 4724
+IMAGE_END = 4725
+IMAGE_TOKENS = {
+    "<|image|>": IMAGE_START,
+    "<|/image|>": IMAGE_END,
 }
 
 CHAT_FORMAT_NAME = "enigma-chat-v1"  # stamped into SFT checkpoints' meta
@@ -197,6 +214,54 @@ def attach_chat_tokens(tokenizer):
     return tokenizer
 
 
+def attach_image_tokens(tokenizer):
+    """Register the image-span delimiters on a tokenizer INSTANCE (idempotent).
+
+    Same contract as attach_chat_tokens: ids are DERIVED (base + 6/7, the
+    rows after the chat block), a vocab that bakes the literals in as real
+    rows is adopted verbatim, aliasing a real learned token refuses, and the
+    BPE tables stay untouched so plain text encodes byte-for-byte as during
+    pretraining. Only the vision path calls this -- a text-only boot never
+    registers the ids, so its carve set is unchanged."""
+    baked = [s for s in IMAGE_TOKENS if s in tokenizer.token_to_id]
+    if baked and len(baked) != len(IMAGE_TOKENS):
+        raise ValueError(
+            f"vocab bakes {len(baked)}/{len(IMAGE_TOKENS)} image tokens ({baked}); need all or none"
+        )
+    if baked:
+        ids = {s: tokenizer.token_to_id[s] for s in IMAGE_TOKENS}
+    else:
+        base = real_vocab_rows(tokenizer)
+        ids = {s: base + len(CHAT_TOKENS) + offset for offset, s in enumerate(IMAGE_TOKENS)}
+    for s, i in ids.items():
+        have = tokenizer.special_tokens.get(s)
+        if have is not None and have != i:
+            raise ValueError(f"special token {s!r} already maps to {have}, wanted {i}")
+        existing = tokenizer.id_to_token.get(i)
+        if existing is not None and existing != s:
+            raise ValueError(
+                f"image token {s!r} at id {i} would overwrite {existing!r} -- refusing to alias a real token"
+            )
+    tokenizer.special_tokens.update(ids)
+    for s, i in ids.items():
+        tokenizer.id_to_token[i] = s
+    # Same stale-snapshot hazard as attach_chat_tokens: the Rust fast path
+    # snapshots the carve set at load and must not miss the new tags.
+    if getattr(tokenizer, "_rust_backend", None) is not None:
+        tokenizer._rust_backend = None
+    return tokenizer
+
+
+def image_token_ids(tokenizer) -> dict[str, int]:
+    """The image-delimiter id map registered on THIS instance by
+    attach_image_tokens; raises until it has been called, mirroring
+    chat_token_ids."""
+    try:
+        return {s: tokenizer.special_tokens[s] for s in IMAGE_TOKENS}
+    except (AttributeError, KeyError) as exc:
+        raise ValueError("tokenizer has no image tokens attached; call attach_image_tokens(tokenizer) first") from exc
+
+
 def chat_token_ids(tokenizer) -> dict[str, int]:
     """The chat-token id map registered on THIS instance by attach_chat_tokens.
 
@@ -239,7 +304,11 @@ def _enc_content(tokenizer, text: str, allow_think: bool) -> list[int]:
     """
     if not text:
         return []
-    forbidden = list(CHAT_TOKENS)
+    # IMAGE_TOKENS are forbidden unconditionally: on a vision-attached
+    # instance a literal "<|image|>" in user text would forge an image-span
+    # boundary; on a text-only instance the split halves encode as the same
+    # plain text either way.
+    forbidden = list(CHAT_TOKENS) + list(IMAGE_TOKENS)
     if not allow_think:
         forbidden += ["<think>", "</think>"]
     out: list[int] = []
