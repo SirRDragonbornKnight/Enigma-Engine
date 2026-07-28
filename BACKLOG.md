@@ -35,11 +35,12 @@ gate recorded only in conversation is a bug in this table.
    User text cannot forge the markers either (`_enc_content` neutralizes
    them like the chat tokens). Layout recorded in TOKENIZER_V2_SPEC;
    test-pinned on both the v1 and v2 vocabs. CLOSED. -> 7.95 T1.
-3. **tokens_v2 output naming — DEFAULT taken 2026-07-27: VERSIONED** (a new
-   bin name beside the old; fail-safe and deletable later; overrule any
-   time before the retokenize). The v2 bin + sidecar stay attrib +R; the
-   T2/T3 `--tokens-bin` arguments follow whatever name the retokenize
-   writes. -> 7.95 T1.
+3. ~~tokens_v2 output naming~~ **EXECUTED 2026-07-28: `tokens_v2b.bin`**
+   (28,261,718,460 tokens, 52.64 GB uint16, 65.8 min tokenize; sidecar
+   verified -- curated x5 walked first, extents recorded, 660 literals
+   scrubbed at consume time; bin + sidecar attrib +R). The old
+   `tokens_v2.bin` stays on disk as the receipted rollback; every T2/T3
+   command now names v2b. CLOSED. -> 7.9.
 4. ~~Teach-line content reseal~~ **EXECUTED 2026-07-27 ("seal it"):
    reseal #7 = 120 probes / 15 per gated category / 135 sealed strings
    (manifest 4e4d4433, grading digest 4fb386d7, plaintext 6b0643db); array
@@ -547,30 +548,37 @@ and 542m's micro-batch is 16, not 6. Copying one size's line to the other
 produces a run roughly 40x slower with nothing in the output to say so. Flag
 surface verified against `pretrain_enigma.py --help` 2026-07-23.
 
-238m -- wall-clock optimal (8.8 days/epoch):
+THE LIVE CORPUS IS `tokens_v2b.bin` since 2026-07-28 (T1 executed:
+28,261,718,460 tokens, 52.64 GB uint16, curated x5 walked FIRST, DCLM/
+FineMath/Stack in, C4+OWT out; sidecar `tokens_v2b.json` carries the
+per-source extents and the scrub count; both files attrib +R, and the old
+`tokens_v2.bin` stays on disk as the receipted rollback). The tok/s rates
+below are per-step measurements and carry over; days/epoch are re-derived
+at 28.26B tokens: **186m 10.0 / 238m 10.5 / 542m 22.9**.
+
+238m -- wall-clock optimal (10.5 days/epoch on v2b):
 
     python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
-      --block 2048 --micro-batch 6 --tokens 23.7e9 \
-      --tokens-bin data/pretrain/tokens_v2.bin \
+      --block 2048 --micro-batch 6 --tokens 28.3e9 \
+      --tokens-bin data/pretrain/tokens_v2b.bin \
       --out models/enigma_v2_238m --seed <N> --archive-every <N>
 
-542m -- largest the 5090 sanely trains (19.2 days/epoch). Note BOTH changes:
-drop `--no-grad-ckpt` (checkpointing is mandatory here) and raise the
-micro-batch to 16:
+542m -- largest the 5090 sanely trains (22.9 days/epoch on v2b). Note BOTH
+changes: drop `--no-grad-ckpt` (checkpointing is mandatory here) and raise
+the micro-batch to 16:
 
     python pretrain_enigma.py --size v2_deep_542m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn \
-      --block 2048 --micro-batch 16 --tokens 23.7e9 \
-      --tokens-bin data/pretrain/tokens_v2.bin \
+      --block 2048 --micro-batch 16 --tokens 28.3e9 \
+      --tokens-bin data/pretrain/tokens_v2b.bin \
       --out models/enigma_v2_542m --seed <N> --archive-every <N>
 
-- `--tokens` defaults to **2e9** — one twelfth of the corpus. Omitting it
-  trains 8.4% of an epoch (~17 h at the measured 238m rate) and, because
-  `total_steps` is derived from it, places the WSD decay tail there too: the
-  run ends, looks finished, and is nowhere near the 8.8 days/epoch this
-  section quotes. Pass the token budget EXPLICITLY, and re-derive it if T1
-  changes the corpus size.
+- `--tokens` defaults to **2e9** — one fourteenth of the v2b corpus.
+  Omitting it trains 7.1% of an epoch (~17.7 h at the measured 238m rate)
+  and, because `total_steps` is derived from it, places the WSD decay tail
+  there too: the run ends, looks finished, and is nowhere near the 10.5
+  days/epoch this section quotes. Pass the token budget EXPLICITLY.
 - `--tokens-bin` defaults to the v1 `tokens.bin`: pass the v2 corpus
   EXPLICITLY or the run trains the new architecture on the old tokenization.
 - Size `--archive-every` so the decay tail leaves ~10 archives; post-hoc EMA
@@ -735,7 +743,7 @@ The block, in execution order:
         python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
           --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
           --block 2048 --micro-batch 6 --tokens 2e9 \
-          --tokens-bin data/pretrain/tokens_v2.bin \
+          --tokens-bin data/pretrain/tokens_v2b.bin \
           --out models/enigma_v2_probe --seed 1 --archive-every 1000
 
   ~2B tokens at the measured 31,311 tok/s is **~17 h**, not "a few hours".
@@ -744,8 +752,9 @@ The block, in execution order:
   the same token count. It is NOT comparable to v1's final val ppl 3.5 (a
   different vocab means a different unit). A flat or rising curve stops the
   launch and sends the corpus back to T1.
-- T3. Full v2 pretrain (5090; size = user's call at launch -- 238m 8.8
-  d/epoch or 542m 19.2 d/epoch; commands above, flags BRANCH on size).
+- T3. Full v2 pretrain (5090; size = user's call at launch -- on the v2b
+  corpus 238m 10.5 d/epoch or 542m 22.9 d/epoch; commands above, flags
+  BRANCH on size).
 - T4. SFT regen riding the bake (data work, minutes-hours of GPU):
   multi-turn, <think> reasoning, math re-enabled (per-digit vocab kills the
   old disable reason), widened knowledge, DPO pairs beyond identity, the

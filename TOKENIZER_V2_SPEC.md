@@ -444,7 +444,25 @@ NEXT, in order:
    ~0.7 h at 12 (idle box).
 3. Then, and only then, the GPU decision per the framing above.
 
-### CORPUS LANDED 2026-07-20: tokens_v2.bin
+### CORPUS v2b LANDED 2026-07-28: tokens_v2b.bin — THE LIVE TRAINING CORPUS
+
+The T1-ruled diet, tokenized in 65.8 min (10 workers, python path):
+**28,261,718,460 tokens**, 5,689,882 docs, 1,436,089 dupe paragraphs
+skipped, 52.64 GB uint16. Sidecar-verified: **curated shard walks FIRST at
+x5** (extent [0, 8,483,455], `repeated_sources {'Curated': 5}`), zero
+absent sources, ETOK header == sidecar == file-size arithmetic. New
+sources: DCLM 4.094B tokens / FineMath 3.483B / The Stack 4.875B = 12.45B
+(44%) of the corpus is the new model-filtered web + math + code diet;
+C4 and OpenWebText are out by ruling (their text stays on disk, unwalked).
+Collector-side screening receipts (2026-07-27 run): 52,618 records dropped
+against the sealed probes across the three fetches, 11,463 special-token
+literals space-broken at fetch + **660 more at the pretokenize choke point**
+(the pre-scrubber sources' residue -- recorded in the sidecar as
+`special_literals_sanitized`). Bin + sidecar attrib +R; `tokens_v2.bin`
+below remains on disk as the receipted rollback. Grid at the measured
+rates: 186m 10.0 / 238m 10.5 / 542m 22.9 days/epoch.
+
+### (superseded as the training corpus) CORPUS LANDED 2026-07-20: tokens_v2.bin
 
 23,694,200,666 tokens (projection 23.66B -> 0.14% off), 5,688,823 docs,
 1,382,216 dupe paragraphs skipped, 44.13 GiB (47.39 GB decimal) uint16,

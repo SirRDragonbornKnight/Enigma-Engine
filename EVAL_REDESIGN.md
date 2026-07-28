@@ -256,6 +256,20 @@ SEALED GATE RUN both).
 | unknown     | 0.50      | 0/15   0% | 0/15   0% |
 | **OVERALL** |           | **55/120 46%** | **56/120 47%** |
 
+**Screening asymmetry, stated for the record (2026-07-27, T1 collector
+run):** the new v2 sources were screened against the sealed probes AT
+COLLECTION (DCLM dropped 16,571 records, FineMath 15,424 + 11,759, The
+Stack 8,864 -- ~0.5-1.5% of each stream, mostly QA-shaped web text that
+naturally contains common-knowledge questions near the sealed factual/math
+probes), and every doc is scrubbed again at pretokenize. v5/v8 pretrained
+on UNSCREENED v1 text. The asymmetry therefore makes the sealed gate
+marginally HARDER for v2, never easier -- the trustworthy direction. The
+knowledge itself still arrives through non-question-shaped prose; only
+probe-quoting/paraphrasing docs are removed. Sanitizer receipts from the
+same run: 1,024 + 535 + 1,181 + 8,723 special-token literals space-broken
+across the four streams -- the code source alone carried 8.7k would-be
+control ids, the measured carve hazard at production scale.
+
 The v2 bar: **beat 56/120 with no gated-category floor regression**
 (`eval_behavior --baseline` prints the verdict; the v5 run carried the
 first live comparison: -0.8%, regressions in adversarial/factual/
