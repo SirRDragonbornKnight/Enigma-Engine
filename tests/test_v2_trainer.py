@@ -174,9 +174,10 @@ def test_the_anneal_is_off_by_default_and_is_run_math_when_on():
     diet than it started."""
     import inspect
 
-    src = inspect.getsource(pretrain_enigma.main)
-    assert '"anneal_tokens",' in src and '"anneal_frac",' in src, \
+    assert "anneal_tokens" in pretrain_enigma.SCHEDULE_KEYS \
+        and "anneal_frac" in pretrain_enigma.SCHEDULE_KEYS, \
         "the anneal must be recorded in the schedule, not treated as a CLI knob"
+    src = inspect.getsource(pretrain_enigma.main)
     assert "--anneal-tokens" in src
     # default 0 is what keeps the live lineage's data order untouched
     after = src.split('"--anneal-tokens"', 1)[1][:300]
@@ -247,6 +248,113 @@ def test_source_placement_that_defeats_training_is_refused():
     # a corpus whose metadata predates the extents record is untouched
     refuse({}, train_end=10)
     refuse({"repeated_sources": {"Curated": 5}}, train_end=10)
+
+
+def test_resume_restores_the_grad_checkpoint_flag():
+    """--no-grad-ckpt DISABLES a config default that is on, and costs 30-40%
+    throughput. Unrecorded in the schedule, a bare --resume reverts it to the
+    argparse default and the rest of a multi-day run finishes at two thirds
+    speed. The restore is a blind setattr over the recorded dict, so the whole
+    fix is membership -- and the negative half is what pins it: a schedule
+    MISSING the key leaves the CLI default standing."""
+    assert "no_grad_ckpt" in pretrain_enigma.SCHEDULE_KEYS
+    # --seed must NOT be restored: re-seeding replays the sampler from step 0.
+    assert "seed" not in pretrain_enigma.SCHEDULE_KEYS
+    # the archive cadence is sized against the launch's decay tail, so a resume
+    # that re-imposed a caller's value would lose it
+    assert "archive_every" in pretrain_enigma.SCHEDULE_KEYS
+
+    # The restore is a blind setattr over the recorded dict, so membership is
+    # the whole fix -- PROVIDED the restore runs before the flag is read. That
+    # ordering is the part a dict test cannot see, and it is what makes the
+    # difference between a restored flag and a decorative one.
+    import inspect
+
+    src = inspect.getsource(pretrain_enigma.main)
+    restore = src.index("setattr(args, k, v)")
+    applied = src.index("if not args.no_grad_ckpt:")
+    assert restore < applied, \
+        "the schedule restore must run BEFORE --no-grad-ckpt is read, or the " \
+        "recorded value never reaches the model"
+
+    # ...and a checkpoint predating the key falls back to the CLI default,
+    # which is the pre-fix behaviour. Every lineage on disk today is in that
+    # state, so the gap must be computable and reported rather than assumed
+    # away. (The boot message itself is verified by running a real legacy
+    # checkpoint, not here -- a string match on source would pass with the
+    # message deleted from the branch that prints it.)
+    legacy = {"lr": 3e-3, "block": 2048}
+    missing = [k for k in pretrain_enigma.SCHEDULE_KEYS if k not in legacy]
+    assert "no_grad_ckpt" in missing
+    # ...which is exactly why a checkpoint predating the key must SAY so. Every
+    # lineage on disk today was written without it, so this is the common path,
+    # not the edge case.
+    legacy = {"lr": 3e-3, "block": 2048}
+    missing = [k for k in pretrain_enigma.SCHEDULE_KEYS if k not in legacy]
+    assert "no_grad_ckpt" in missing
+
+
+def test_val_source_split_is_reported_and_a_single_domain_warns(capsys):
+    """val is the last val_n tokens, so its domain is whatever the walk placed
+    last. On v2b that is one StackExchange site, and every [val] number the run
+    prints is that site's loss under the name "val". The warning must fire on
+    the dominated split and STAY SILENT on a mixed one, or it is noise."""
+    report = pretrain_enigma.report_val_sources
+    # one source owns the whole tail -> named, and warned about
+    solo = {"source_token_extents": {"Web": [0, 900], "SE/worldbuilding": [900, 1000]}}
+    share = report(solo, train_end=900, n=1000)
+    out = capsys.readouterr().out
+    assert share == [("SE/worldbuilding", 100)]
+    assert "WARNING" in out and "SE/worldbuilding" in out
+
+    # an evenly mixed tail is reported but NOT warned about
+    mixed = {"source_token_extents": {"Web": [0, 950], "SE/x": [950, 1000]}}
+    share = report(mixed, train_end=900, n=1000)
+    out = capsys.readouterr().out
+    assert sorted(share) == [("SE/x", 50), ("Web", 50)]
+    assert "val sources (2)" in out
+    assert "WARNING" not in out
+
+    # with a [val-gen] window covering it, the split is stated but NOT warned
+    # about -- the recommended launch line must not cry wolf on every boot
+    report(solo, train_end=900, n=1000, have_general_window=True)
+    out = capsys.readouterr().out
+    assert "SE/worldbuilding" in out and "val-gen" in out
+    assert "WARNING" not in out
+
+    # a corpus predating the extents record cannot be checked -- and must SAY
+    # so. Silence here reads as "val is fine", which is the one thing it does
+    # not establish.
+    assert report({}, train_end=900, n=1000) == []
+    out = capsys.readouterr().out
+    assert "not recorded" in out and "unknown" in out
+    assert "WARNING" not in out, "an uncheckable corpus is not a finding"
+
+
+def test_the_general_window_is_measured_not_just_pointed_at(capsys):
+    """[val-gen] is contiguous too, so it lands inside ONE source as easily as
+    the tail does. Telling the operator to read [val-gen] while never checking
+    what [val-gen] contains moves the mislabel instead of fixing it -- on the
+    real v2b corpus the recommended --val-general-end yields a window that is
+    100% FineWeb-Edu, and nothing said so."""
+    report = pretrain_enigma.report_val_sources
+    # tail is one site AND the general window is one source: the tail note is
+    # fine, but the window the operator is sent to must raise its own alarm.
+    meta = {"source_token_extents": {
+        "Web": [0, 500], "Edu": [500, 900], "SE/worldbuilding": [900, 1000]}}
+    report(meta, train_end=900, n=1000, have_general_window=True, val_gen=(800, 900))
+    out = capsys.readouterr().out
+    assert "val-gen sources (1)" in out and "Edu" in out
+    assert "WARNING" in out and "[val-gen]" in out, (
+        "a single-source general window must warn -- this is the case that shipped silent"
+    )
+
+    # a general window spanning several sources is reported and NOT warned
+    # about, so the warning stays worth reading.
+    report(meta, train_end=900, n=1000, have_general_window=True, val_gen=(300, 700))
+    out = capsys.readouterr().out
+    assert "val-gen sources (2)" in out
+    assert "WARNING" not in out, "a mixed general window is the goal, not a finding"
 
 
 def _stamp(path, meta):

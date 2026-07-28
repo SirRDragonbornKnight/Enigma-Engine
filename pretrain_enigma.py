@@ -50,6 +50,51 @@ ROOT = Path(__file__).resolve().parent
 TOKENS_BIN = ROOT / "data" / "pretrain" / "tokens.bin"
 TOKENS_META = ROOT / "data" / "pretrain" / "tokens.json"
 HEADER_BYTES = 256  # ETOK reserved header (see pretokenize_data.py)
+# Throughput-watch thresholds. The floor sits well under normal step-to-step
+# jitter so eval and checkpoint windows do not trip it; the grad-checkpoint tax
+# (30-40%) and a VRAM spill (an order of magnitude) both land far below it.
+_TPS_FLOOR = 0.70
+_TPS_REF_AFTER = 50  # steps of warmup excluded from the reference rate
+
+# Everything a resume must restore to continue the SAME run, recorded into
+# every checkpoint. Operational knobs that do not change the run's cost or math
+# (--save-every/--eval-every/--compile/--throttle-ms/...) stay CLI-controlled.
+# --seed is deliberately absent: restoring it would re-seed the sampler and
+# replay the windows the run already trained on.
+SCHEDULE_KEYS = (
+    "tokens",
+    "lr",
+    "warmup",
+    "micro_batch",
+    "grad_accum",
+    "block",
+    "dropout",
+    "val_tokens",
+    "weight_decay",
+    "grad_clip",
+    "val_general_end",
+    "optimizer",
+    "schedule",
+    "wsd_decay_frac",
+    "tokens_bin",
+    "sdpa_backend",
+    # The anneal changes WHAT the model sees in the decay phase, so it is run
+    # math, not an operational knob: a resume that dropped it would finish the
+    # tail on a different diet than it started.
+    "anneal_tokens",
+    "anneal_frac",
+    # Checkpointing is mathematically transparent but costs 30-40% throughput,
+    # and the flag DISABLES a config default that is on. Unrecorded, a bare
+    # --resume silently re-enables it and the rest of a multi-day run finishes
+    # at two thirds speed, announced only by ckpt= in the banner.
+    "no_grad_ckpt",
+    # The archive cadence decides what post-hoc EMA has to average and how much
+    # disk the run costs, and it is sized against the DECAY TAIL of the launch's
+    # step count. Unrecorded, every resume re-imposes whatever the caller
+    # happens to pass, so a launch tuned to put ~10 archives in the tail loses
+    # that the first time it is restarted.
+    "archive_every",
+)
 
 
 def anneal_first_step(total_steps: int, decay_frac: float) -> int:
@@ -159,6 +204,109 @@ def refuse_repeated_source_in_val(meta: dict, train_end: int, block: int = 0,
                 f"window -- the copies co-occupy windows and teach verbatim repetition; "
                 f"lower the repeat count or grow the shard"
             )
+
+
+def report_val_sources(meta: dict, train_end: int, n: int,
+                       have_general_window: bool = False,
+                       val_gen: tuple[int, int] | None = None) -> list[tuple[str, int]]:
+    """Name the sources the val tail actually samples, loudest first.
+
+    Pass `val_gen=(lo, hi)` to ALSO measure the --val-general-end window. Without
+    it this reports only the tail, which is how a single-source [val-gen] hid: the
+    note below tells the operator to read [val-gen] while nothing ever checked
+    what [val-gen] contains.
+
+    val is the last `n - train_end` tokens, so its domain is whatever the walk
+    happened to place last, not a cross-section of the corpus. A val slice
+    drawn from one source reports that source's loss under the name "val", and
+    every LR, early-stop and go/no-go decision inherits the mislabel. This
+    reports the split and warns when one source owns most of it; the fix is
+    --val-general-end (a second window inside a chosen source) or a --val-tokens
+    wide enough to span several, so the engine states the split rather than
+    guessing which domain was intended.
+
+    Returns [(label, tokens_in_val)] descending, empty when the corpus predates
+    the extents record."""
+    extents = meta.get("source_token_extents") or {}
+    val_n = n - train_end
+    if not extents or val_n <= 0:
+        # Saying nothing reads as "val is fine". Say the check could not run.
+        print("val sources: not recorded in this corpus -- the val tail's domain "
+              "is unknown; [val] may be a single source", flush=True)
+        return []
+    share = []
+    for label, ext in extents.items():
+        # Reporting must never be the thing that kills a launch: a malformed or
+        # truncated extent is skipped, not indexed blind.
+        if not (isinstance(ext, (list, tuple)) and len(ext) >= 2
+                and all(isinstance(v, int) and not isinstance(v, bool) for v in ext[:2])):
+            continue
+        overlap = min(ext[1], n) - max(ext[0], train_end)
+        if overlap > 0:
+            share.append((label, overlap))
+    share.sort(key=lambda kv: -kv[1])
+    if not share:
+        return []
+    top, top_tok = share[0]
+    print(
+        f"val sources ({len(share)}): "
+        + ", ".join(f"{lab} {tok / val_n:.0%}" for lab, tok in share[:5])
+        + ("" if len(share) <= 5 else f", +{len(share) - 5} more"),
+        flush=True,
+    )
+    # The [val-gen] window is contiguous too -- it is [end - val_n, end), so it
+    # lands inside whichever single source spans that offset. Directing the
+    # operator to [val-gen] without stating what [val-gen] is MADE OF moves the
+    # mislabel instead of fixing it, so the second window is measured and warned
+    # about on the same terms as the first.
+    gen_share: list[tuple[str, int]] = []
+    gen_width = 0
+    if val_gen is not None:
+        gen_lo, gen_hi = val_gen
+        gen_width = gen_hi - gen_lo
+        if gen_width > 0:
+            gen_share = [
+                (lab, min(ext[1], gen_hi) - max(ext[0], gen_lo))
+                for lab, ext in extents.items()
+                if isinstance(ext, (list, tuple)) and len(ext) >= 2
+                and all(isinstance(v, int) and not isinstance(v, bool) for v in ext[:2])
+                and min(ext[1], gen_hi) - max(ext[0], gen_lo) > 0
+            ]
+            gen_share.sort(key=lambda kv: -kv[1])
+            if gen_share:
+                print(
+                    f"val-gen sources ({len(gen_share)}): "
+                    + ", ".join(f"{lab} {tok / gen_width:.0%}" for lab, tok in gen_share[:5])
+                    + ("" if len(gen_share) <= 5 else f", +{len(gen_share) - 5} more"),
+                    flush=True,
+                )
+
+    if top_tok / val_n >= 0.9:
+        if have_general_window or gen_share:
+            # A second window exists, so a narrow tail is expected and says
+            # nothing new; the alarm belongs on whichever window is READ.
+            print(f"  note: [val] is {top_tok / val_n:.0%} '{top}' -- read [val-gen] "
+                  f"for the general-domain signal", flush=True)
+        else:
+            print(
+                f"WARNING: {top_tok / val_n:.0%} of val is '{top}' -- every [val] number "
+                f"this run prints is that domain's loss, not the corpus's. Pass "
+                f"--val-general-end <token offset inside a representative source> for a "
+                f"second window, or raise --val-tokens past this source's span.",
+                flush=True,
+            )
+
+    if gen_share:
+        gen_top, gen_top_tok = gen_share[0]
+        if gen_top_tok / gen_width >= 0.9:
+            print(
+                f"WARNING: {gen_top_tok / gen_width:.0%} of [val-gen] is '{gen_top}' -- the "
+                f"second window is single-source too, so [val-gen] is that domain's loss and "
+                f"not the corpus's. A contiguous window cannot span the diet: move "
+                f"--val-general-end onto a source boundary or widen --val-tokens.",
+                flush=True,
+            )
+    return share
 
 
 def apply_seed(seed: int | None) -> bool:
@@ -465,6 +613,24 @@ def main() -> None:
                     setattr(args, k, v)
                 for k, (ck_v, cli_v) in diffs.items():
                     print(f"resume: schedule[{k}] = {ck_v} from checkpoint (CLI {cli_v} ignored)", flush=True)
+            # Keys the checkpoint predates take the CLI value, which for a bare
+            # --resume is the argparse default. no_grad_ckpt is the expensive
+            # one: its default re-enables checkpointing and the run finishes at
+            # two thirds speed. Name every unrecorded key rather than let the
+            # gap pass as a restore.
+            missing = [k for k in SCHEDULE_KEYS if k not in saved_sched]
+            if missing:
+                # Show each unrecorded key WITH the value it is taking. A fixed
+                # example in the text reported `no_grad_ckpt` even when that key
+                # had been restored from the checkpoint and a different one was
+                # missing.
+                print(
+                    "resume: this checkpoint predates "
+                    + ", ".join(f"{k}={getattr(args, k)!r}" for k in missing)
+                    + " -- each takes the CLI/default value shown. Re-pass any "
+                      "the original run set.",
+                    flush=True,
+                )
         elif not warm_start:
             print(
                 "resume: checkpoint predates schedule recording -- trusting CLI args (this run will record them)",
@@ -510,9 +676,36 @@ def main() -> None:
     if itemsize == 2 and vocab_meta > 65536:
         raise SystemExit(f"uint16 corpus with vocab {vocab_meta} > 65536 -- corrupt metadata")
     print(
-        f"corpus: {meta['total_tokens']:,} tokens, vocab {vocab_meta}, {meta['file_size_gb']} GB ({meta['tokenizer']})",
+        f"corpus: {meta['total_tokens']:,} tokens, vocab {vocab_meta}, "
+        f"{meta.get('file_size_gib', meta.get('file_size_gb'))} GiB ({meta['tokenizer']})",
         flush=True,
     )
+    if meta.get("dedup_capped"):
+        print(f"corpus: paragraph dedup hit its {meta.get('dedup_cap', '?'):,}-entry cap "
+              f"during the walk -- sources after that point were not deduped against "
+              f"each other", flush=True)
+    if meta.get("tokenizer_backend"):
+        # Which encoder produced these ids. The rust and python paths are meant
+        # to agree; unrecorded and unread, a corpus built by one and extended by
+        # the other is indistinguishable from a consistent one.
+        print(f"corpus: tokenized by the {meta['tokenizer_backend']} backend", flush=True)
+    # vocab_size alone cannot tell two different 16,366-row tables apart, and a
+    # corpus tokenized by the other one decodes to nothing. Compare the recorded
+    # hash when the file is still where the sidecar says.
+    _vsha = meta.get("vocab_sha256")
+    if _vsha and meta.get("vocab_file"):
+        _vpath = ROOT / meta["vocab_file"]
+        if _vpath.exists():
+            import hashlib
+            _live = hashlib.sha256(_vpath.read_bytes()).hexdigest()
+            if _live != _vsha:
+                raise SystemExit(
+                    f"vocab MISMATCH: {meta['vocab_file']} hashes {_live[:12]} but the "
+                    f"corpus was tokenized against {_vsha[:12]}. Same row count is not "
+                    f"the same table -- training on these ids would learn a vocabulary "
+                    f"this file cannot decode. Restore the vocab that built the corpus, "
+                    f"or retokenize."
+                )
 
     # Vocab is authoritative from the corpus metadata: the model trains on the
     # raw token IDs, so it doesn't need the tokenizer at all. We still try to
@@ -620,6 +813,8 @@ def main() -> None:
         meta, train_end, block=block,
         fenced=((vg_lo, vg_end),) if use_val_gen else (),
     )
+    report_val_sources(meta, train_end, n, have_general_window=use_val_gen,
+                       val_gen=(vg_lo, vg_end) if use_val_gen else None)
 
     # Decay-tail anneal: during the WSD decay phase, oversample a curated
     # region of the corpus instead of continuing to draw uniformly.
@@ -707,6 +902,21 @@ def main() -> None:
     # from numpy. Unseeded (None) leaves both streams as the live lineage ran them.
     if apply_seed(args.seed):
         print(f"seed: {args.seed} (weight init + batch sampling)", flush=True)
+        # Reaching here already means a seed was supplied: --seed defaults to
+        # None and is deliberately absent from SCHEDULE_KEYS, so a resume never
+        # restores one.
+        if args.resume and not warm_start:
+            # The sampler draws windows from numpy, so re-seeding an exact
+            # resume restarts that draw sequence: the resumed segment re-reads
+            # the windows the first segment already trained on. Weight init is
+            # irrelevant here (the weights come from the checkpoint), so the
+            # seed buys nothing on a resume and costs unique-token coverage.
+            print(
+                "WARNING: --seed on an exact resume replays the batch windows "
+                "from step 0 -- the resumed segment re-reads what it already "
+                "trained on. Omit --seed when resuming.",
+                flush=True,
+            )
     model = Enigma(config)
     if not args.no_grad_ckpt:
         model.gradient_checkpointing_enable()
@@ -737,35 +947,9 @@ def main() -> None:
     tokens_per_step = args.micro_batch * args.grad_accum * block
     total_steps = max(1, int(args.tokens / tokens_per_step))
 
-    # Everything that defines the run's MATH, recorded into every checkpoint so a
-    # resume restores it exactly (see the resume block above). Operational knobs
-    # (--save-every/--eval-every/--compile/--throttle-ms/...) stay CLI-controlled.
-    schedule = {
-        k: getattr(args, k)
-        for k in (
-            "tokens",
-            "lr",
-            "warmup",
-            "micro_batch",
-            "grad_accum",
-            "block",
-            "dropout",
-            "val_tokens",
-            "weight_decay",
-            "grad_clip",
-            "val_general_end",
-            "optimizer",
-            "schedule",
-            "wsd_decay_frac",
-            "tokens_bin",
-            "sdpa_backend",
-            # The anneal changes WHAT the model sees in the decay phase, so it
-            # is run math, not an operational knob: a resume that dropped it
-            # would finish the tail on a different diet than it started.
-            "anneal_tokens",
-            "anneal_frac",
-        )
-    }
+    # Recorded into every checkpoint so a resume restores it exactly (see the
+    # resume block above); the contract lives at SCHEDULE_KEYS.
+    schedule = {k: getattr(args, k) for k in SCHEDULE_KEYS}
 
     if anneal_lo is not None:
         first = int(total_steps * (1.0 - args.wsd_decay_frac))
@@ -902,6 +1086,13 @@ def main() -> None:
             # Record-only (never restored): a resumed segment is not
             # bit-reproducible, so re-seeding on resume would replay step-0 data.
             "seed": args.seed,
+            # The best windowed rate this segment reached. The throughput watch
+            # otherwise compares a run only against ITSELF, so a segment that is
+            # slow from step 0 -- a resume that lost --no-grad-ckpt, a config
+            # spilling to host memory at launch -- sets a low reference and
+            # never warns. Carrying it forward gives the next segment an
+            # absolute number to fall short of.
+            "tok_s_ref": ref_tps,
                 "optimizer": optim.state_dict(),
                 "schedule": schedule,
             },
@@ -954,6 +1145,20 @@ def main() -> None:
     # a finished run's model.pth) passes the final-save guard instead of raising
     # NameError on an undefined loss_acc.
     loss_acc = 0.0
+    # Windowed throughput + peak VRAM. The cumulative rate above averages over
+    # the whole run, so a slowdown that starts on day five barely moves it: a
+    # drop from 31k to 12k tok/s after five good days still reads 28k. A config
+    # sitting on the VRAM ceiling spills to host memory over PCIe and crawls
+    # with nothing raised, so the peak is printed beside the rate and a
+    # sustained fall below `_TPS_FLOOR` of the best window says so out loud.
+    # Seeded from the previous segment when resuming, so the first slow window
+    # of a resume is measured against how fast this lineage ACTUALLY ran rather
+    # than against nothing.
+    ref_tps = float((ck or {}).get("tok_s_ref") or 0.0) if not warm_start else 0.0
+    if ref_tps:
+        print(f"throughput reference from the previous segment: {ref_tps:,.0f} tok/s "
+              f"(a sustained fall below {_TPS_FLOOR:.0%} of it will say so)", flush=True)
+    win_t0, win_base, tps_warned = t0, seen, False
     for step in range(start_step, total_steps):
         lr = get_lr(step, args.warmup, total_steps, args.lr, schedule=args.schedule, decay_frac=args.wsd_decay_frac)
         for g in optim.param_groups:
@@ -977,12 +1182,44 @@ def main() -> None:
         seen += tokens_per_step
 
         if step % 10 == 0:
-            dt = max(1e-9, time.time() - t0)
+            now = time.time()
+            dt = max(1e-9, now - t0)
             tps = (seen - base_tokens) / dt
+            wtps = (seen - win_base) / max(1e-9, now - win_t0)
+            win_t0, win_base = now, seen
+            mem = ""
+            if device == "cuda":
+                # RESERVED, not allocated: the caching allocator's reservation is
+                # what actually occupies the card, and it is the number that
+                # approaches the ceiling. Allocated understates it (measured
+                # 0.68 vs 1.18 GiB on the same step) and would read as headroom
+                # that is not there.
+                peak = torch.cuda.max_memory_reserved() / 1e9
+                torch.cuda.reset_peak_memory_stats()
+                mem = f" peak {peak:.1f}GB"
             print(
-                f"step {step}/{total_steps} loss {loss_acc:.4f} lr {lr:.2e} {tps:,.0f} tok/s {seen / 1e9:.3f}B",
+                f"step {step}/{total_steps} loss {loss_acc:.4f} lr {lr:.2e} "
+                f"{wtps:,.0f} tok/s (avg {tps:,.0f}){mem} {seen / 1e9:.3f}B",
                 flush=True,
             )
+            # Skip the first windows: compile, autotune and cache warmup all
+            # land there and would set an unreachable reference.
+            if step >= start_step + _TPS_REF_AFTER:
+                if wtps > ref_tps:
+                    ref_tps = wtps
+                if ref_tps and wtps < _TPS_FLOOR * ref_tps:
+                    if not tps_warned:
+                        print(
+                            f"WARNING: throughput {wtps:,.0f} tok/s is below "
+                            f"{_TPS_FLOOR:.0%} of this lineage's best {ref_tps:,.0f} -- "
+                            f"check peak VRAM against the card (a config on the "
+                            f"ceiling spills to host memory and never errors) and "
+                            f"whether --no-grad-ckpt survived a resume.",
+                            flush=True,
+                        )
+                        tps_warned = True
+                elif tps_warned and wtps > 0.85 * ref_tps:
+                    tps_warned = False
 
         if step > start_step and step % args.eval_every == 0:
             vl = estimate_val("val")
