@@ -27,7 +27,16 @@ PRETRAIN = ROOT / "pretrain_enigma.py"
 
 # pretrain prints: "[final] val loss 3.1234 ppl 22.72 bits/token 4.5123"
 FINAL_VAL = re.compile(r"\[final\] val loss ([0-9.]+) ppl ([0-9.]+) bits/token ([0-9.]+)")
-THROUGHPUT = re.compile(r"([0-9,]+) tok/s")
+# [val] is the corpus TAIL, whatever the walk placed last -- on the v2b corpus
+# that is one StackExchange site. Ranking learning rates on it ranks them on
+# that site. When the run carries a fenced general-domain window
+# (--val-general-end), that is the honest signal and it decides the ranking;
+# [val] is still recorded so both are visible.
+FINAL_VALGEN = re.compile(r"\[final\] val-gen loss ([0-9.]+) ppl ([0-9.]+)")
+# Anchored to the STEP line. A bare "N tok/s" also appears in the throughput
+# WARNING, and findall()[-1] would then record a degraded window as the point's
+# throughput -- for exactly the points that slowed down.
+THROUGHPUT = re.compile(r"^step \d+/\d+ .*?([0-9,]+) tok/s", re.MULTILINE)
 
 
 def run_point(args, lr: float, seed: int, out_dir: Path) -> dict:
@@ -79,6 +88,10 @@ def run_point(args, lr: float, seed: int, out_dir: Path) -> dict:
             "lr": lr, "seed": seed, "out": str(out_dir),
             "seconds": round(time.time() - started, 1), "returncode": None,
             "val_loss": None, "ppl": None, "bits_per_token": None, "tok_per_s": None,
+            # Same key set as a completed point: a row missing rank_loss or
+            # ranked_on makes sweep_results.json heterogeneous, and every
+            # reader then has to guess whether the key is absent or null.
+            "rank_loss": None, "ranked_on": None,
             "error": f"timed out after {args.point_timeout}s and was killed; "
                      f"last output: {partial[-300:]}",
         }
@@ -100,18 +113,37 @@ def run_point(args, lr: float, seed: int, out_dir: Path) -> dict:
     else:
         # a point with no final val is a FAILED point, never a silent zero
         point["error"] = "no [final] val line in output"
+    # val_loss/ppl/bits_per_token keep meaning exactly one thing: the [val]
+    # tail. The general-domain window is recorded separately, and `rank_loss`
+    # names which of the two the ranking compares -- overwriting val_loss in
+    # place left ppl and bits/token describing a different number than the loss
+    # beside them.
+    vg = FINAL_VALGEN.search(proc.stdout or "")
+    if vg:
+        point["val_gen_loss"] = float(vg.group(1))
+        point["val_gen_ppl"] = float(vg.group(2))
+    point["ranked_on"] = "val_gen" if vg else "val"
+    point["rank_loss"] = point.get("val_gen_loss") if vg else point["val_loss"]
+    # A point that failed to produce its tail val is a FAILED point even when
+    # the general window parsed -- otherwise it keeps a rankable score, enters
+    # the results table, and the FAILED loop (which keys on a null rank_loss)
+    # never prints its error.
+    if point["error"]:
+        point["rank_loss"] = None
     rates = THROUGHPUT.findall(proc.stdout or "")
     if rates:
         point["tok_per_s"] = int(rates[-1].replace(",", ""))
     if proc.returncode != 0:
         # A point that printed [final] and THEN crashed is still a failed point:
-        # drop the parsed score so it can never be ranked as a good result.
+        # drop EVERY parsed score so none of them can be ranked as a good
+        # result -- including the general-domain one, which is what ranks.
         point["error"] = f"exit {proc.returncode}: {tail[-600:]}"
-        point["val_loss"] = None
-        point["ppl"] = None
-        point["bits_per_token"] = None
+        for key in ("val_loss", "ppl", "bits_per_token",
+                    "val_gen_loss", "val_gen_ppl", "rank_loss"):
+            point[key] = None
     print(
-        f"    val {point['val_loss']} ppl {point['ppl']} "
+        f"    {point['ranked_on']} {point['rank_loss']} "
+        f"(tail val {point['val_loss']} ppl {point['ppl']}) "
         f"({point['seconds']}s){' FAILED: ' + point['error'] if point['error'] else ''}",
         flush=True,
     )
@@ -169,21 +201,37 @@ def main() -> None:
                 json.dumps(results, indent=2), encoding="utf-8"
             )  # rewritten after every point so a killed sweep keeps its receipts
 
-    ok = [r for r in results if r["val_loss"] is not None]
+    ok = [r for r in results if r.get("rank_loss") is not None]
+    ranked_on = {r.get("ranked_on") for r in ok} or {"val"}
     print("\n======== SWEEP RESULTS (best first) ========", flush=True)
-    print(f"{'lr':>10} {'seed':>5} {'val':>9} {'ppl':>9} {'bits/tok':>9} {'tok/s':>10}")
-    for r in sorted(ok, key=lambda r: r["val_loss"]):
+    if ranked_on == {"val"}:
+        print("ranked on [val] -- the corpus TAIL, which is one source. Pass "
+              "--extra \"--val-general-end <offset>\" to rank on a general-domain "
+              "window instead.", flush=True)
+    elif "val" in ranked_on:
+        print("WARNING: points were ranked on DIFFERENT signals (val-gen and val) "
+              "-- they are not comparable; re-run the val-only points with "
+              "--val-general-end.", flush=True)
+    else:
+        print("ranked on [val-gen] -- the fenced general-domain window.", flush=True)
+    print(f"{'lr':>10} {'seed':>5} {'rank':>9} {'tailval':>9} {'ppl':>9} "
+          f"{'bits/tok':>9} {'tok/s':>10}")
+    for r in sorted(ok, key=lambda r: r["rank_loss"]):
         rate = f"{r['tok_per_s']:,}" if r["tok_per_s"] else "-"
-        print(f"{r['lr']:>10g} {r['seed']:>5} {r['val_loss']:>9.4f} {r['ppl']:>9.2f} "
-              f"{r['bits_per_token']:>9.4f} {rate:>10}")
+        # tail val can be absent when only the general window printed
+        tail_val = f"{r['val_loss']:>9.4f}" if r["val_loss"] is not None else f"{'-':>9}"
+        ppl = f"{r['ppl']:>9.2f}" if r["ppl"] is not None else f"{'-':>9}"
+        bpt = f"{r['bits_per_token']:>9.4f}" if r["bits_per_token"] is not None else f"{'-':>9}"
+        print(f"{r['lr']:>10g} {r['seed']:>5} {r['rank_loss']:>9.4f} {tail_val} {ppl} "
+              f"{bpt} {rate:>10}")
     for r in results:
-        if r["val_loss"] is None:
+        if r.get("rank_loss") is None:
             print(f"  FAILED lr={r['lr']:g} seed={r['seed']}: {r['error']}")
 
     if len({r["seed"] for r in ok}) > 1:
         by_lr = {}
         for r in ok:
-            by_lr.setdefault(r["lr"], []).append(r["val_loss"])
+            by_lr.setdefault(r["lr"], []).append(r["rank_loss"])
         spreads = [max(v) - min(v) for v in by_lr.values() if len(v) > 1]
         if spreads:
             print(f"\nseed spread (same lr): max {max(spreads):.4f} -- treat lr gaps "
