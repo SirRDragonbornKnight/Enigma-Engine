@@ -3,10 +3,10 @@
 **Gate status: OPEN — v2 is IN PROGRESS.** Superseded as a decision
 2026-07-20 by ROADMAP's Phase 7 section: the v2 prefix landed and the v2
 pretrain is the next GPU spend, ahead of Phases 4/5. The baseline it needed
-is measured (47/96 for BOTH v5 and v8 on the sealed locked set, 2026-07-26 —
+is measured (56/120 v8, 55/120 v5 on the sealed locked set, 2026-07-27 —
 table and receipts in `EVAL_REDESIGN.md`, which owns all scorecard numbers);
-what remains before launch is T1 corpus prep and the size call
-(`BACKLOG.md` §7.95).
+T1 corpus prep is DONE (tokens_v2b.bin, 2026-07-28); what remains before
+launch is the T2 probe and the size call (`BACKLOG.md` §7.95).
 
 What stays live in this file: the measured-ceilings ledger (the written list
 of things Phase 2-5 Enigma provably cannot do, each with its receipt — the

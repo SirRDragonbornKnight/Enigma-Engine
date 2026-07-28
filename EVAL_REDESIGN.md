@@ -366,6 +366,16 @@ factual 19/20, unknown 0/9, OVERALL 104/134 = 78% (the file held 134 probes /
 9 categories at that run; the speech + imagery probes landed after it).
 Transcript: `Enigma Backups\dev_eval_v8_2026-07-25.jsonl`.
 
+> **That OVERALL is on the OLD aggregate rule and does not reproduce.** Since
+> 2026-07-28 the headline counts GATED categories only -- an informational
+> organ column (`vision`/`speech`/`imagery`) reports whether the organ answered
+> and never gates, so it cannot carry a verdict. Re-graded under the current
+> rule the same transcript is **95/122**, and a re-run of today's 152-probe dev
+> file aggregates over 122, not 152. Each scorecard record now carries
+> `overall_scope` and `informational_categories` naming the population, and
+> `eval_behavior --baseline` REFUSES a transcript whose aggregate counted the
+> old one rather than comparing two different denominators.
+
 `vision` is deliberately UNGATED (see `INFORMATIONAL_CATEGORIES`): there was no
 baseline until this run, and the SEALED set is fixed at the eight gated
 categories, so gating vision would fail the honest gate on a category it

@@ -40,10 +40,14 @@ alongside whatever domain corpus the user picks.** C is also the answer to
 "how do I correlate things in an image for her": you don't hand-author
 correlations — the paired-difference data teaches her attention to find them.
 
-**The context prerequisite is satisfied by v2, not only by Phase 4.** If the
-v2 pretrain proceeds, the `v2_deep_*` presets train at a native 8192 context
-and the v2 tokenizer carries 2.41x more text per token — together these clear
-lever A's ~980-image-token problem without a v1 length-extension pass. Read
+**The context prerequisite is EASED by v2, not removed.** The v2 tokenizer
+carries 2.41x more text per token, so block 2048 holds roughly what block
+4900 held on v1. But the `v2_deep_*` presets declare `max_seq_len=8192` but are LAUNCHED at
+block 2048 (the ruled shape). Block 8192 fits only WITH activation
+checkpointing, at 35-40% throughput -- the no-checkpointing fit table in
+BACKLOG 7.9 is what shows it missing at micro-batch 1
+at any of the three sizes -- see the VRAM table in BACKLOG 7.9, so v2 does NOT deliver an 8192 context
+and lever A's ~980-image-token budget still has to be checked against 2048. Read
 every "Phase 4" prerequisite in this document as "context headroom, from v2 or
 Phase 4, whichever lands".
 
@@ -99,8 +103,9 @@ Three findings from the tiny-VLM literature bear directly on this plan:
    encoder re-distill settings.
 4. Whether Phase 4 (context 1024→2048) is approved as the vision
    prerequisite it actually is — **re-check after pixel-shuffle (§3b.3); it
-   may drop from hard-prereq to merely helpful. Moot if the v2 pretrain
-   proceeds: the `v2_deep_*` presets train at a native 8192 context.**
+   may drop from hard-prereq to merely helpful. NOT moot under v2: the
+   presets declare 8192 but train at block 2048, so the question is whether
+   2048 at 2.41x chars/token is enough.**
 5. **Encoder teacher: keep DINOv2, switch to SigLIP, or dual (§3b.1).**
    This one gates any re-distill and should be settled first.
 

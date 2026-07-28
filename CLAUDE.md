@@ -183,9 +183,10 @@ From here the ONLY coupling is the WebSocket bus (`ws://127.0.0.1:8765`).
 - `CLEANUP_TRACKER.md` — the tree as it stands + suite baseline + deletion records.
 - `_archive/` — closed ledgers (present-tense entries there are history, not current state).
 
-**Data state:** bottleneck stays SFT DATA at scale — tool corpus 526 records, identity 422,
-mix 114,027, dpo_pairs 240, general diet `data/finetune/combined_finetune.jsonl` 105,203
-short pairs (counts re-verified 2026-07-25). Recall strategy since 2026-07-15: facts INSTALL
+**Data state:** bottleneck stays SFT DATA at scale — tool corpus 530 records, identity 422,
+mix 114,244, dpo_pairs 240, general diet `data/finetune/combined_finetune.jsonl` 105,203
+short pairs (counts re-verified 2026-07-28 after the reseal-#7 rebuild;
+`EVAL_REDESIGN.md` owns them). Recall strategy since 2026-07-15: facts INSTALL
 via a continued-pretrain pass (`make_facts_pretrain_data.py` → `pretrain_enigma.py
 --tokens-bin`), SFT only SURFACES them — measured factual 13/20 → 19/20. The eval leak
 guard's enforcement design (what refuses vs what reports, at build and at consume time) is

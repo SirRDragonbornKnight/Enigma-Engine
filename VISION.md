@@ -45,8 +45,9 @@ routing; memory that learns/corrects/forgets (six audit rounds hard);
 organs COMPLETE BY DEFAULT since 2026-07-27 (ruled: "the old way of having
 the tools separate was to save space — add them in so she is complete"):
 voice (Kokoro), her own eyes, ears, image-gen, every launch. Sealed-gate
-baseline 47/96 — weak on facts (~50%, capacity) and on saying "I don't
-know" (0/12). A small, real, honest mind. The gap between her and the
+baseline 56/120 — weak on facts and on saying "I don't know" (0/30 across
+both baselines: not one refusal in thirty unanswerable questions).
+A small, real, honest mind. The gap between her and the
 vision is mostly the v2 training block.
 
 ## The five destinations

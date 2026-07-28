@@ -171,8 +171,12 @@ the same corpus ~= fresh tokens — "the cheapest capability lever we have."
 
 **OBSOLETE IF THE v2 PRETRAIN PROCEEDS** — this is a v1-lineage continuation, and
 v2 reaches the same place without it: the v2 tokenizer carries 2.41x more text per
-token (block 1024 goes ~300 -> ~722 words) and the `v2_deep_*` presets train at a
-native 8192 context. Run this ONLY if the v2 go/no-go lands on "no".
+token (block 1024 goes ~300 -> ~722 words) and v2 trains at block 2048, which
+at 2.41x chars/token holds roughly what v1 held at block 4900. NOTE: the
+`v2_deep_*` presets declare `max_seq_len=8192` but are LAUNCHED at block 2048
+(the ruled shape). Block 8192 fits only WITH activation checkpointing, at
+35-40% throughput; the no-checkpointing fit table in BACKLOG 7.9 is what shows
+it missing at micro-batch 1. Run this ONLY if the v2 go/no-go lands on "no", or if 2048 proves short.
 
 Settled 2025 recipe (already researched in SUGGESTIONS): raise RoPE theta +
 continued pretraining on long documents (<10B tokens) + intra-document attention
@@ -211,12 +215,13 @@ weights that result are hers, on her machine, forever.
    last 2-4 LM layers was not run.
 5. **Wire and retire: PARTLY DONE.** Serve ingestion is live and the BLIP path
    was deleted 2026-07-17 — her eyes are hers, and captions enter chat as the
-   "[image: ...]" TEXT marker. The image begin/end tokens are NOT done: ids
-   4724-4735 are still listed as reserved in `chat_format.py`, no delimiter
-   constant exists, and `core/eyes.py` says so outright — she has no trained
-   image-delimiter tokens, and token-level image injection is the next
-   training cycle's work. Also open: the captions are question-blind
-   (see BACKLOG item 5).
+   "[image: ...]" TEXT marker. The image begin/end TOKENS are allocated
+   (`chat_format.py`: `IMAGE_START = 4724`, `<|image|>`/`<|/image|>` at
+   4724/4725 on v1 and 16372/16373 on v2, attached per instance by
+   `attach_image_tokens`; 4726-4735 remain reserved). What is NOT done is
+   TRAINING them — no corpus or SFT record carries the delimiters yet, so
+   token-level image injection is still the next training cycle's work. Also
+   open: the captions are question-blind (see BACKLOG item 5).
 6. **Her ears (same shape, ~3 days):** `collect_audio_data.py` DONE
    (LibriSpeech-clean-100, 28,539 pairs); `distill_audio_encoder.py` DONE
    (own loop, unaffected by the compression pass) but NOT launched.
@@ -302,7 +307,8 @@ This phase is IN PROGRESS: the v2 prefix landed 2026-07-20 and the v2 pretrain i
 the next GPU spend, ahead of Phases 4/5.
 - New tokenizer — **DONE**: v2 vocab is 16,366 rows (leading-space merges,
   per-digit numbers), measured 2.41x chars/token over v1, and the corpus is
-  retokenized to `data/pretrain/tokens_v2.bin` (23,694,200,666 tokens, uint16).
+  retokenized to `data/pretrain/tokens_v2b.bin` (28,261,718,460 tokens, uint16);
+  `tokens_v2.bin` (23,694,200,666) is the receipted rollback.
   v1's `tokens.bin` (227 GB / 211 GiB — the "210GB"/"227 GB" figures in older
   notes are this same file in GiB vs GB) is untouched and still feeds the live
   lineage. Scaling-law grounding: TOKENIZER_V2_SPEC.
@@ -310,14 +316,16 @@ the next GPU spend, ahead of Phases 4/5.
   `core/optim.py`, flag-gated off for lineage compat), QK-norm BEFORE RoPE,
   optional gated attention, 350-700M params — the 5090 (32GB) can carry it.
   **Presets ready**: `v2_deep_186m` / `v2_deep_238m` / `v2_deep_542m`
-  (28L@768 / 20L@1024 / 30L@1280, native 8192 context, Peri-LN,
-  QK-norm-before-RoPE, olmo2_flat init), all opt-in with v1 defaults untouched.
+  (28L@768 / 20L@1024 / 30L@1280, Peri-LN, QK-norm-before-RoPE, olmo2_flat
+  init), all opt-in with v1 defaults untouched. They declare
+  `max_seq_len=8192` but are LAUNCHED at block 2048: 8192 does not fit at
+  micro-batch 1 at any of the three sizes (VRAM table in BACKLOG 7.9).
 - HRM stays a PARKED experiment (heed the ARC Prize critique).
 - **Gate: a written list of things Phase 2-5 Enigma provably cannot do —
   that list lives in `PHASE7_GATE.md` (started 2026-07-06, receipts included).
-  The locked-probe baseline is MEASURED (47/96 for both v5 and v8,
-  2026-07-26 -- see `EVAL_REDESIGN.md`); what still gates the v2 pretrain is
-  T1 corpus prep and the size call — not Phases 4/5.**
+  The locked-probe baseline is MEASURED (56/120 v8, 55/120 v5, 2026-07-27
+  -- see `EVAL_REDESIGN.md`); T1 corpus prep is DONE, so what still gates the
+  v2 pretrain is the T2 probe and the size call — not Phases 4/5.**
 
 ---
 

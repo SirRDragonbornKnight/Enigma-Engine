@@ -51,10 +51,14 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
      int32 fence-redraw bug (fixed, see `_archive/CODE_REVIEW.md`); attempt 2 ran healthy
      ~8 h overnight (51k → 58.5k, ~50–52k tok/s, val ppl steady 3.8) until this
      pause. Detached `cmd /c` → `train_large.log`, survives Claude sessions.
-   - (a) **torch.compile fell back to eager** — triton-windows lives in Claude
-     Desktop's MSIX-virtualized AppData, invisible to this out-of-sandbox
-     process. No cost: compile was measured negligible (06-06) and the run hits
-     the same ~52k tok/s; the is_causal SDPA fast path is in the model code.
+   - (a) ~~**torch.compile fell back to eager**~~ — RESOLVED. triton-windows
+     was invisible from outside Claude Desktop's MSIX-virtualized AppData.
+     Measured 2026-07-28: `import triton` gives 3.7.0 under torch 2.10.0+cu128
+     and the trainer prints `torch.compile: enabled`. The old "no cost" note is
+     also wrong for the v2 shapes: on `v2_deep_238m` at the launch shape,
+     compiled throughput is ~67.4k tok/s against the 31,311 recorded by the
+     eager-era probe (BACKLOG 7.9 carries the re-measured grid). The v1-era
+     ~52k figure stands for the v1 shape and is not comparable.
    - (b) **Windows Update still NOT paused** (Settings UI needs a user click —
      changing update settings is a prohibited action for me, and the no-UI
      route needs admin). Queue verified clean of reboot-class items; next Patch
@@ -103,7 +107,10 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
     holds the receipts: long conversation (block 1024), broad-fact recall
     (~50%), raw arithmetic (bypassed via the server-side `calculate` tool).
     Current SFT data state lives in `BACKLOG.md` 7.95 P2 -- the sealed-gate
-    baseline is 47/96 for both v5 and v8 (measured 2026-07-26).
+    baseline is 56/120 (v8) and 55/120 (v5), measured 2026-07-27 under
+    reseal #7. The two are statistically INDISTINGUISHABLE (paired exact
+    p = 1.00 over 19 disagreements), so 56/120 is a floor to clear, not a
+    score to beat by a probe.
 11. **Modkit-refactor module deletions RESTORED 2026-07-13 (audit).** The
     refactor (`0bd9167e`) deleted modules while their callers survived; an
     import-integrity sweep found SIX dangling imports. Restored verbatim from

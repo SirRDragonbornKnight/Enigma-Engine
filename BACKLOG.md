@@ -16,12 +16,25 @@ Every gate that waits on the user, in ONE place (2026-07-27 audit finding:
 two gates existed only in session memory). Detail lives at each pointer; a
 gate recorded only in conversation is a bug in this table.
 
+TWO RULES THIS TABLE NEEDS, both from the 2026-07-28 audit, which found that
+all four rulings closed here had left a contradiction somewhere else --
+four for four:
+* **Closing an item is not done until the docs that restated its premise are
+  fixed.** Strike the row, then list the files touched, so the next audit is
+  a grep instead of a read.
+* **Closing a T-step opens the next one's gate.** T1 closing should have put
+  the T2 go-hot on this table the same day; it did not, and the next decision
+  was invisible in the file built to make decisions visible.
+
 1. ~~Collector GB targets + DCLM's role~~ **RULED 2026-07-27: SWAP.** DCLM
    replaces C4+OpenWebText (both removed from `SOURCE_DIRS`; their 32.4 GB
    stays on disk pending section 9); collector targets = the defaults
    15/10/10 GB (DCLM/FineMath/Stack). Quality up at roughly constant corpus
-   size; the 7.9 grid stays near its measured 8.8/19.2 d/epoch and gets
-   re-derived from the new sidecar regardless. -> 7.95 T1.
+   size. The 7.9 grid was re-derived from the new sidecar and MOVED --
+   10.0/10.5/22.9 d/epoch, not the pre-swap 8.4/8.8/19.2 (and re-measured
+   again 2026-07-28 at the launch shapes: 4.1/4.9/20.8). -> 7.95 T1.
+   Docs touched: BACKLOG 7.9 + 7.95, ROADMAP, TOKENIZER_V2_SPEC,
+   information/training_guide.md.
 2. ~~Image begin/end row mechanics~~ **EXECUTED 2026-07-27: `<|image|>`/
    `<|/image|>` at reserve rows base+6/base+7 (v2 = 16,372/16,373) via
    `attach_image_tokens` in chat_format.py -- INSTANCE-attached constants,
@@ -35,34 +48,125 @@ gate recorded only in conversation is a bug in this table.
    User text cannot forge the markers either (`_enc_content` neutralizes
    them like the chat tokens). Layout recorded in TOKENIZER_V2_SPEC;
    test-pinned on both the v1 and v2 vocabs. CLOSED. -> 7.95 T1.
+   Docs touched: TOKENIZER_V2_SPEC, ROADMAP (which had said the tokens were
+   never allocated), BACKLOG section 5.
 3. ~~tokens_v2 output naming~~ **EXECUTED 2026-07-28: `tokens_v2b.bin`**
-   (28,261,718,460 tokens, 52.64 GB uint16, 65.8 min tokenize; sidecar
+   (28,261,718,460 tokens, 52.64 GiB = 56.52 GB uint16, 65.8 min; sidecar
    verified -- curated x5 walked first, extents recorded, 660 literals
    scrubbed at consume time; bin + sidecar attrib +R). The old
    `tokens_v2.bin` stays on disk as the receipted rollback; every T2/T3
    command now names v2b. CLOSED. -> 7.9.
+   Docs touched: TOKENIZER_V2_SPEC, ROADMAP, BACKLOG 7.9/7.95/section 8,
+   information/training_guide.md, the SACRED list.
 4. ~~Teach-line content reseal~~ **EXECUTED 2026-07-27 ("seal it"):
    reseal #7 = 120 probes / 15 per gated category / 135 sealed strings
    (manifest 4e4d4433, grading digest 4fb386d7, plaintext 6b0643db); array
    sort closed the element-order channel; pool pruned 233 -> 205; all four
    artifacts + the curated shard rebuilt; attributed baselines re-based:
    v8 56/120, v5 55/120.** EVAL_REDESIGN owns the receipts. CLOSED.
+   Docs touched: EVAL_REDESIGN (owner of the scorecard numbers), plus the
+   47/96 -> 56/120 correction in KNOWN_ISSUES, PHASE7_GATE, ROADMAP,
+   TOKENIZER_V2_SPEC and VISION.
 5. **Section 9 disk reclaim** (~204 GB re-measured 2026-07-27): say which
    rows die. -> section 9.
-6. **Gate B -- pretrain size call**: 238m (wall-clock optimal) vs 542m
-   (largest sane); decided AFTER T1 re-derives the grid from the new corpus.
-   Weigh the layer-count decode-latency caveat. -> 7.95 T3.
-7. **Gate D -- adoption ratification**: T6's rule (beat the P2 aggregate
+6. **T2 go-hot** -- the next thing that needs a word. T1 is DONE, so the
+   probe is the immediate step: ~8.2 h of flat-out 5090 (or the same spend
+   as the 6-point LR sweep, which is the better buy -- both commands at
+   7.95 T2). The rig courtesy in CLAUDE.md makes a run this long the user's
+   call, not mine. GPU measured idle 2026-07-28. -> 7.95 T2.
+7. **Gate B -- pretrain size call**: 238m vs 542m vs 186m on the v2b grid.
+   **Decode latency MEASURED 2026-07-28** (RTX 5090, torch 2.10, serve path =
+   generate_stream + serve's sampler under bf16 autocast, batch 1, prompt 32,
+   48 decoded tokens, median of 5; random init -- shape drives batch-1 decode
+   cost and no v2 checkpoint exists; each preset at the vocab it would serve).
+   Receipt: `Enigma Backups\decode_latency_2026-07-28.json`.
+
+   | preset | shape | params | ms/tok | tok/s | vs v8 | d/epoch |
+   |---|---|---|---|---|---|---|
+   | `large` (v8 today) | 16L dim1024 | 182.1M | 12.79 | 78.2 | 1.00x | -- |
+   | `v2_deep_186m` | 28L dim768 | 186.1M | 26.59 | 37.6 | 2.08x | 4.1 |
+   | `v2_deep_238m` | 20L dim1024 | 238.4M | 19.14 | 52.2 | 1.50x | 4.9 |
+   | `v2_deep_542m` | 30L dim1280 | 542.1M | 28.21 | 35.4 | 2.21x | 20.8 |
+
+   Latency is driven mainly by LAYER COUNT but not by it alone: 186m is 2.08x
+   v8's for 1.75x the layers, 542m 2.21x for 1.88x -- depth dominates, and dim
+   plus the 16,366-row vocab add the rest. **186m is not dominated, but it is
+   a poor buy**: it saves 16% training wall-clock (4.1 vs 4.9 d/epoch) and
+   costs 39% more serving latency than 238m for 22% fewer parameters. 542m
+   costs 2.21x today's latency plus 2.19x the wall clock and a
+   cadence-dependent archive bill (~200-440 GB). -> 7.95 T3.
+8. **Gate D -- adoption ratification**: T6's rule (beat the P2 aggregate
    with no category floor regression = adopt; anything else = user's call)
    is now code -- `eval_behavior --baseline <transcript>` prints the
    verdict. Swap mechanics at T6. -> 7.95 T6.
-8. **Voice live-listen**: the Cortana blend was chosen by documented
+9. **Voice live-listen**: the Cortana blend was chosen by documented
    character on 2026-07-23 and has never been HEARD (the user had no audio);
    candidates A-D at `Desktop\Enigma Voice Audition`. Listen, tune or bless.
    Also open from that arc: the Quiet toggle gives no feedback popup.
-9. **Vision training domain**: her eyes train on WHAT imagery ("different
+10. **Vision training domain**: her eyes train on WHAT imagery ("different
    imagery, not everyday photos" -- domain never picked). ->
    VISION_QUALITY_SPEC section 4.
+11. **Is v2b good enough to train on, or is it worth ~1 day to rebuild?**
+   One decision, because the same re-collect + retokenize fixes all four
+   (2026-07-28 audit, every figure measured against the shipped artifact):
+   * **The Stack is 100% Python.** 2,032 files, all `stack_python` = 4.87 B
+     tokens = **17.25% of the corpus, monolingual**, against a docstring
+     promising 16 languages. The collector is FIXED (each language now takes
+     an equal share of the remaining target), but the fix only helps a fresh
+     pull.
+   * **Cross-source dedup did not run to completion.** `MAX_DEDUP_ENTRIES` is
+     50 M against a sampled estimate of 190-275 M paragraphs in the walk, so
+     the table filled partway through and every source after that point was
+     compared only against what came BEFORE it, never against the sources that
+     follow. FineWeb-Edu and DCLM are both CommonCrawl-derived and sit on the
+     far side of the fill. Recorded `dupes_skipped` 1,436,089 = under 1% of
+     paragraphs, implausibly low for that mix.
+     WHERE it filled is NOT established: two independent samplings put the
+     crossing in different sources (Wiki Dump at walk position 2, and Gutenberg
+     at position 5), because the estimate rests on a few files per directory
+     across 100 GB. That the cap was hit at all is what the conclusion needs,
+     and the totals support it under either sampling. The sidecar now records
+     `dedup_capped` outright; v2b's predates the field, so for THIS corpus the
+     cap-hit rests on the paragraph-count argument, not a receipt.
+   * **~80% of the corpus has no document boundaries.** HF streaming packs
+     ~5 MB of many records into one .txt and the walk treats one FILE as one
+     document, so `<s>`/`</s>` are learned almost entirely from the 16.6%
+     wiki/fandom slice. Measured bos in the first 5 M tokens of each extent:
+     FineWeb-Edu 4, The Stack 3, DCLM 4 -- against Wiki Dump 4,870. A model
+     that must stop cleanly in chat is learning where to stop from a sixth of
+     what it reads.
+   * **11 `<search>`/`</search>` pairs in the curated shard are broken.** The
+     consume-time literal scrub has no source allowlist, so the curated
+     dialogue's deliberate search turns became `< search>` / `< /search>` --
+     ids 12/13 appear ZERO times in the curated extent, and at x5 that is 55
+     broken pairs teaching a surface form the tokenizer can never carve back.
+     (T1 ruling 4 deletes the 31 orphan tag records at T4 anyway, so the
+     cheapest fix may be to drop them from curated rather than exempt them.)
+   MY READ: items 1-3 are real quality costs and item 4 is noise-level. None
+   of them corrupts the corpus -- v2b is trainable as it stands. But T3 is
+   10-23 days, and a ~1-day rebuild before it is cheap insurance; a rebuild
+   after it is not. RECOMMEND rebuild before T3, and it can run while the T2
+   probe answers the "is this lineage learning" question on the current bin.
+12. **Memory recall ceiling k=3.** `render_context` defaults to 3 facts and
+   both serve call sites take the default, so she can never surface more than
+   three memories however many she holds -- and ties break newest-first, so
+   the OLDEST fact is the one silently dropped. Measured: five allergies
+   stored, three recalled, token budget nowhere near binding. The sealed gate
+   cannot see it (all 15 memory probes teach exactly one fact each). Raising
+   the default changes her live behaviour, so it is a ruling, not a fix.
+   -> `enigma_engine/core/memory_store.py` render_context.
+13. **The `unknown` category does not penalise fabrication.** Measured on the
+   live sealed set: `"I can't know that."` scores 13/15 and `"I can't know.
+   It is blue."` also scores 13/15 -- appending an invented answer to a
+   decline is free. This is the category most likely to move at v2 (both
+   baselines are 0/15, with ZERO refusals in 30 unanswerable questions), so
+   it could jump to 15/15 without epistemics improving at all. Fixing the
+   deny keys means a content reseal, which is the user's gate. The designed
+   alternative is the offline second grader. `tool_graded` unblocks it for
+   FUTURE runs -- those transcripts re-grade from themselves. The two BASELINE
+   transcripts predate the field (both written 2026-07-27), so re-grading them
+   still needs the sealed plaintext beside them.
+   -> EVAL_REDESIGN second-grader section.
 
 ---
 
@@ -307,10 +411,11 @@ gate recorded only in conversation is a bug in this table.
 - [~] 5. Image begin/end tokens (ids 4724+ free), serve wiring, delete BLIP.
   Serve wiring DONE and BLIP deleted 2026-07-17; her own distilled ViT serves
   live under `serve --eyes`. STILL OPEN, both needing the next training cycle:
-  (a) the image begin/end TOKENS were never allocated or trained -- ids
-  4724-4735 remain "reserved for future passes" in `chat_format.py`, there is
-  no delimiter constant, and captions reach the model as the "[image: ...]"
-  text marker instead; (b) captions are question-blind (serve passes
+  (a) the image begin/end tokens are ALLOCATED (`IMAGE_START = 4724`,
+  `<|image|>`/`<|/image|>` at 4724/4725 on v1 and 16372/16373 on v2, attached
+  per instance by `attach_image_tokens`; 4726-4735 stay reserved) but not yet
+  TRAINED -- no corpus or SFT record carries them, so captions still reach the
+  model as the "[image: ...]" text marker; (b) captions are question-blind (serve passes
   `EYES.describe` as a bare 1-arg callable, so the pixels are gone before the
   question is asked) even though `model.forward_multimodal` already
   concatenates [vision][text] -- closing it is a stage-2 VQA align plus an
@@ -498,8 +603,15 @@ step, muon, 186m @ 2048:
 | 4 | 27,038 | 16.75 GB | 10.1 |
 | 1 | 10,109 | 5.66 GB | 27.1 |
 
-**Full grid, corrected method — THE standing receipt (the micro-batch table above was an earlier partial run of the same method; where they differ by ~2%, this grid supersedes)** (full step incl. Muon, non-power-of-2 micro-batches,
-23.69B-token corpus). Best non-thrash config per size:
+**Full grid, corrected method (full step incl. Muon, non-power-of-2
+micro-batches, 23.69B-token corpus). Best non-thrash config per size.**
+
+> **SUPERSEDED 2026-07-28 as the throughput receipt.** Every tok/s below was
+> measured while `torch.compile` was falling back to EAGER (triton was not
+> importable then -- KNOWN_ISSUES 1(a), now resolved). Re-measured at the real
+> launch shapes over 150 steps each, 186m and 238m are ~2.2x faster and 542m is
+> unchanged (compile fails on that shape). The live grid is in 7.95; the MFU and
+> peak-VRAM columns here still stand as an eager-path reference.
 
 | preset | config | tok/s | MFU | peak | days/epoch |
 |---|---|---|---|---|---|
@@ -549,19 +661,34 @@ produces a run roughly 40x slower with nothing in the output to say so. Flag
 surface verified against `pretrain_enigma.py --help` 2026-07-23.
 
 THE LIVE CORPUS IS `tokens_v2b.bin` since 2026-07-28 (T1 executed:
-28,261,718,460 tokens, 52.64 GB uint16, curated x5 walked FIRST, DCLM/
+28,261,718,460 tokens, 52.64 GiB (56.52 GB) uint16, curated x5 walked FIRST, DCLM/
 FineMath/Stack in, C4+OWT out; sidecar `tokens_v2b.json` carries the
 per-source extents and the scrub count; both files attrib +R, and the old
 `tokens_v2.bin` stays on disk as the receipted rollback). The tok/s rates
 below are per-step measurements and carry over; days/epoch are re-derived
-at 28.26B tokens: **186m 10.0 / 238m 10.5 / 542m 22.9**.
+at 28.26B tokens. **RE-MEASURED 2026-07-28 at the real launch shapes over 150
+steps each, and the grid MOVED: 186m 4.1 / 238m 4.9 / 542m 20.8 d/epoch**
+(the old 10.0/10.5/22.9 came from ~40-step probes running EAGER).
+
+| preset | shape | tok/s | peak VRAM | compile | d/epoch |
+|---|---|---|---|---|---|
+| `v2_deep_186m` | mb8 ga16, no-ckpt | ~80,500 | 26.2 GB | ON | **4.1** |
+| `v2_deep_238m` | mb6 ga16, no-ckpt | ~67,400 | 24.5 GB | ON | **4.9** |
+| `v2_deep_542m` | mb16 ga16, ckpt ON | ~15,700 | 20.7 GB | **FAILS** | **20.8** |
+
+`torch.compile` is worth ~2.2x on the two smaller shapes and is UNAVAILABLE at
+542m -- it raises "No valid triton configs / out of resource" and degrades to
+eager, which is why 542m alone matches its old number. That asymmetry is the
+Gate B headline: the 238m-vs-542m cost ratio is **4.3x**, not the 2.18x the old
+grid implied. Steady-state over 150 steps, not a multi-day thermal receipt.
 
 238m -- wall-clock optimal (10.5 days/epoch on v2b):
 
     python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
-      --block 2048 --micro-batch 6 --tokens 28.3e9 \
+      --block 2048 --micro-batch 6 --tokens 28.3e9 --lr <from T2> \
       --tokens-bin data/pretrain/tokens_v2b.bin \
+      --val-general-end 15055680259 \
       --out models/enigma_v2_238m --seed <N> --archive-every <N>
 
 542m -- largest the 5090 sanely trains (22.9 days/epoch on v2b). Note BOTH
@@ -570,12 +697,33 @@ the micro-batch to 16:
 
     python pretrain_enigma.py --size v2_deep_542m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn \
-      --block 2048 --micro-batch 16 --tokens 28.3e9 \
+      --block 2048 --micro-batch 16 --tokens 28.3e9 --lr <from T2> \
       --tokens-bin data/pretrain/tokens_v2b.bin \
+      --val-general-end 15055680259 \
       --out models/enigma_v2_542m --seed <N> --archive-every <N>
 
+RESUMING EITHER OF THESE: `python pretrain_enigma.py --resume <ckpt>` and
+nothing else. The checkpoint carries the schedule (`SCHEDULE_KEYS`), including
+`--no-grad-ckpt` since 2026-07-28, so re-passing the launch line can only
+contradict it. Do NOT re-pass `--seed` on a resume: it re-seeds the sampler and
+replays the windows the run already trained on (the boot warns).
+`resume_training.ps1` takes `-Run <model-dir>` and passes `--resume` plus only
+what the checkpoint does NOT record: `-TokensBin <path>` (required when the
+schedule has no corpus -- otherwise the run would train `--tokens-bin`'s
+default) and `-NoGradCkpt` (opt in to disabling activation checkpointing;
+omitted, checkpointing stays ON, which is slower but cannot OOM a lineage sized
+for it). The archive cadence is NOT settable there: it is schedule-restored, so
+a value passed on a resume would be ignored -- change it with a hand-run using
+`--override-schedule` and the full launch line. EVERY checkpoint written before
+2026-07-28 lacks both keys, so the script refuses them until `-TokensBin` names
+the corpus.
+CHECKPOINTS WRITTEN BEFORE 2026-07-28 (every lineage on disk today) have no
+`no_grad_ckpt` in their schedule. Boot names them -- "this checkpoint predates
+... no_grad_ckpt" -- and falls back to the CLI/default, which re-enables
+checkpointing. Re-pass `--no-grad-ckpt` when resuming one of those.
+
 - `--tokens` defaults to **2e9** — one fourteenth of the v2b corpus.
-  Omitting it trains 7.1% of an epoch (~17.7 h at the measured 238m rate)
+  Omitting it trains 7.1% of an epoch (~8.2 h at the re-measured 238m rate)
   and, because `total_steps` is derived from it, places the WSD decay tail
   there too: the run ends, looks finished, and is nowhere near the 10.5
   days/epoch this section quotes. Pass the token budget EXPLICITLY.
@@ -636,7 +784,7 @@ The block, in execution order:
 >    thorough road over the fast one, explicitly.
 > 2. **Doc-boundary attention masking: SKIPPED for v2.** Meta's own measure
 >    says negligible at short blocks; not worth new hot-path mask plumbing
->    in front of the measured 31,311 tok/s right before a days-long run.
+>    in front of the measured throughput right before a days-long run.
 >    REQUIRED at the future length-extension anneal (charter amended).
 > 3. **Curated repeat: x5** (--repeat-sources curated=5). The proven facts
 >    multiplier; ~8.6M tokens; boot guards verify placement + pass size.
@@ -711,7 +859,7 @@ The block, in execution order:
       `pretokenize_data.py`; the v2 retokenize invocation is
 
           python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json \
-            --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10 \
+            --output-bin data/pretrain/tokens_v2b.bin --dtype uint16 --workers 10 \
             --repeat-sources curated=5
 
       PATHS IN FULL, always: a bare `--vocab bpe_vocab_v2_16k.json` from the
@@ -742,18 +890,57 @@ The block, in execution order:
 
         python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
           --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
-          --block 2048 --micro-batch 6 --tokens 2e9 \
+          --block 2048 --micro-batch 6 --tokens 2e9 --lr 3e-3 \
           --tokens-bin data/pretrain/tokens_v2b.bin \
-          --out models/enigma_v2_probe --seed 1 --archive-every 1000
+          --val-general-end 15055680259 \
+          --out models/enigma_v2_probe --seed 1 --archive-every 100
 
-  ~2B tokens at the measured 31,311 tok/s is **~17 h**, not "a few hours".
-  DECISION RULE: the probe answers "is this lineage learning at all" — val
-  loss must fall smoothly and end below the v1 lineage's early-step curve at
-  the same token count. It is NOT comparable to v1's final val ppl 3.5 (a
-  different vocab means a different unit). A flat or rising curve stops the
-  launch and sends the corpus back to T1.
+  ~2B tokens at the re-measured 67,400 tok/s is **~8.2 h** (the eager-era
+  31,311 gave ~17 h; compile is worth ~2.2x at this size).
+  THREE flags that are NOT optional here, each a default that silently does
+  the wrong thing:
+  * `--lr` defaults to **6e-4**, the v1 AdamW lineage peak. No v2 learning
+    rate has ever been MEASURED. The 3e-3 below is not a result: it is the
+    value typed into a 40-step throughput probe (`probe_tput_v2_deep_186m`,
+    5.24M tokens, warmup 5, a different size on the v2 corpus) that never
+    recorded a loss. It is here only because it sits inside `sweep_lr.py`'s
+    own 1e-3..3e-3 bracket while the default sits below it. Treat it as a
+    placeholder and prefer the sweep. Better still, spend this same 8.2 h on the sweep
+    instead of one blind point (see the sweep note below).
+  * `--val-general-end` — without it val is the corpus TAIL, and on v2b the
+    tail is `SE/worldbuilding` alone (30.7 M tokens). Every `[val]` number
+    would be speculative-fiction loss. 15,055,680,259 is the end of
+    FineWeb-Edu. The boot now names the val split and warns when one source
+    owns >=90% of it.
+  * `--archive-every 100`, not 1000. T2 is 10,172 steps, so the wsd decay tail
+    starts at step 9,154 and is 1,018 steps long: at 1000 exactly ONE archive
+    (step 10,000) lands in the tail and post-hoc EMA has nothing to average.
+  DECISION RULE: the probe answers "is this lineage learning at all", and it
+  answers it INTRA-RUN — loss starts near ln(16366)=9.703, falls smoothly, no
+  NaN. **READ `[val-gen]`, NOT `[val]`.** `--val-general-end` does not fix
+  `[val]`; it ADDS a second window. `[val]` remains 100% `SE/worldbuilding`
+  (the corpus tail) with the flag on, and boot says so. `[val-gen]` is the
+  fenced general-domain window, and `sweep_lr` ranks on it when it exists. It is NOT comparable to the v1 lineage's curve in either direction:
+  a different vocab makes bits/token a different unit (`pretrain_enigma.py`
+  says so at the bits/token print), and v1 was a different corpus besides. If
+  the sweep form is used, rank the points against EACH OTHER post-decay. A
+  flat or rising curve stops the launch and sends the corpus back to T1.
+
+  SWEEP FORM (same 8.2 h, six receipts instead of one — 6 points x 333M tok
+  = 2.00B; each point gets its own decay tail and is judged post-decay):
+
+        python sweep_lr.py --size v2_deep_238m --block 2048 --micro-batch 6 \
+          --grad-accum 16 --tokens 333000000 --lrs 6e-4,1.5e-3,3e-3 \
+          --seeds 0,1 --warmup 150 --optimizer muon --schedule wsd_sqrt \
+          --sdpa-backend cudnn --no-grad-ckpt \
+          --tokens-bin data/pretrain/tokens_v2b.bin \
+          --extra "--val-general-end 15055680259"
+
+  (`sweep_lr.py` has no `--val-general-end` of its own; `--extra` is inserted
+  before each point's own flags. Every flag above verified against the live
+  argparse 2026-07-28.)
 - T3. Full v2 pretrain (5090; size = user's call at launch -- on the v2b
-  corpus 238m 10.5 d/epoch or 542m 22.9 d/epoch; commands above, flags
+  corpus 238m 4.9 d/epoch or 542m 20.8 d/epoch; commands above, flags
   BRANCH on size).
 - T4. SFT regen riding the bake (data work, minutes-hours of GPU):
   multi-turn, <think> reasoning, math re-enabled (per-digit vocab kills the
@@ -809,10 +996,24 @@ The block, in execution order:
     - serve's `--max-context` still defaults to **1024**. A model trained at
       block 2048 and served at 1024 silently throws away the context win the
       whole lineage was for — raise it at adoption and re-check VRAM.
-    - Gate statistics: the sealed set is 12 probes per category, under
-      EVAL_REDESIGN's own ">= 15" rule (one flip = 8.3% against 0.80
-      thresholds). Read a single-category miss as directional, not decisive;
-      the aggregate is the honest signal at this n.
+    - Gate statistics: the sealed set is **15 probes per category** since
+      reseal #7, meeting EVAL_REDESIGN's ">= 15" rule (one flip = 6.67%).
+      Two things follow that the aggregate alone hides:
+      * **A one-probe aggregate lead is not a result.** v8 56/120 and v5
+        55/120 are a paired exact p = 1.00 (v8 won 10, v5 won 9, 19
+        disagreements). `eval_behavior --baseline` now prints the paired
+        split and its exact p, and stamps INDISTINGUISHABLE on the verdict
+        when p >= 0.05. A real win is a net gain of roughly 11-15 probes (11 at 19
+        disagreements, 12 at 30, 14 at 40).
+      * **The comparator and the gate disagree by 31 probes.** `--baseline`
+        adopts at 57/120; the absolute category floors that set the exit code
+        need **88/120** (12/15 on the six 0.80-and-0.75 categories, 8/15 on
+        factual and unknown). Both baselines already exit FAIL. Expect a
+        plausible v2 to print ADOPT and exit FAIL in the same run, and read
+        the two lines as answering different questions.
+      * At n=15 the 0.75 and 0.80 thresholds are the SAME bar (both round to
+        12/15), so `math` and `memory` are declared at 75% and gated at 80%.
+        At the old n=12 they genuinely differed (9/12 vs 10/12).
 - T7. Post-adoption organ training, in order: vision stage-2 VQA
   (needs the image-domain pick), ears distill + align (needs the
   whisper-base teacher download), then the far-future own TTS / own
@@ -870,10 +1071,16 @@ RMSNorm, CUDA graphs) are back on the table as future serving work.
 - [x] New tokenizer — DONE 2026-07-20: v2 vocab 16,366 rows kills the
   standalone-space waste (25.5% -> 0.0%) and splits digits per-character;
   2.41x chars/token. Corpus retokenized to `data/pretrain/tokens_v2.bin`
-  (23,694,200,666 tokens uint16); v1 `tokens.bin` untouched.
-- [ ] Length extension block 1024 -> 2048+ (Phase 4) — **OBSOLETE IF THE v2
-  PRETRAIN PROCEEDS** (v2 = 2.41x text per token + native 8192 context in the
-  `v2_deep_*` presets). Run only if the v2 go/no-go lands on "no".
+  -- superseded 2026-07-28 by `tokens_v2b.bin` (28,261,718,460 tokens
+  uint16); `tokens_v2.bin` (23,694,200,666) is the receipted rollback and
+  v1 `tokens.bin` is untouched.
+- [ ] Length extension block 1024 -> 2048+ (Phase 4) — **LARGELY MET BY v2**:
+  v2 trains at block 2048 with 2.41x text per token, which holds roughly what
+  v1 held at block 4900. NOT met by an 8192 context: the `v2_deep_*` presets declare `max_seq_len=8192` but are LAUNCHED at
+block 2048 (the ruled shape). Block 8192 fits only WITH activation
+checkpointing, at 35-40% throughput -- the no-checkpointing fit table in
+BACKLOG 7.9 is what shows it missing at micro-batch 1
+at any of the three sizes -- see the VRAM table in BACKLOG 7.9.
 - [ ] Deeper-thinner 350-700M architecture — the 5090 can carry it. Presets
   `v2_deep_186m`/`238m`/`542m` are BUILT and opt-in; the open steps are the
   size call and the pretrain launch.
@@ -914,9 +1121,10 @@ Consequences, binding on the training block and organ work:
 > never a cleaning pass's: each line below is expensive or impossible to
 > recreate casually, even though nothing in the live pipeline reads it.
 > Receipts: the 2026-07-26 artifact survey (four-agent cleaning pass,
-> CLEANUP_TRACKER). SACRED and untouchable regardless: tokens.bin (+R since
-> 07-26), tokens_v2.bin, Enigma Backups\, the SOURCE_DIRS corpora, llava/,
-> LibriSpeech/, and the adopted/backed-up checkpoints.
+> CLEANUP_TRACKER). SACRED and untouchable regardless: **tokens_v2b.bin (THE
+> LIVE TRAINING CORPUS, 65.8 min to rebuild)**, tokens.bin (+R since 07-26),
+> tokens_v2.bin (receipted rollback), Enigma Backups\, the SOURCE_DIRS
+> corpora, llava/, LibriSpeech/, and the adopted/backed-up checkpoints.
 
 | Candidate | Size | Why it is an orphan |
 |---|---|---|

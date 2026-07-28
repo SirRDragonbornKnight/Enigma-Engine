@@ -1,12 +1,13 @@
 # Tokenizer v2 redo — spec + cost (2026-07-16, MEASURED 2026-07-19)
 
-> Status: **VOCAB + CORPUS DONE 2026-07-20** -- the production v2 vocab
-> (16,366 rows) is trained and the full corpus is retokenized to
-> `data/pretrain/tokens_v2.bin` (receipts in the sections below, ending at
-> "CORPUS LANDED"). Only the pretrain itself remains, queued as
+> Status: **VOCAB DONE 2026-07-20, CORPUS v2b DONE 2026-07-28** -- the
+> production v2 vocab (16,366 rows) is trained, and the live corpus is
+> `data/pretrain/tokens_v2b.bin` (receipts in "CORPUS v2b LANDED 2026-07-28";
+> the earlier "CORPUS LANDED 2026-07-20" section describes `tokens_v2.bin`,
+> which is now the receipted rollback). Only the pretrain itself remains, queued as
 > `BACKLOG.md` T2/T3 inside the training block. The eval-trustworthiness
 > precondition this doc named is MET: the locked gate is sealed and the
-> 47/96 v5/v8 baseline is measured (see `EVAL_REDESIGN.md`).
+> 56/120 (v8) / 55/120 (v5) baseline is measured (see `EVAL_REDESIGN.md`).
 >
 > **2026-07-20: all 9 audit findings FIXED** (see the BLOCKERS section, now a
 > resolution ledger). Suite 475 green at the time; the 9 new/changed
@@ -448,7 +449,7 @@ NEXT, in order:
 
 The T1-ruled diet, tokenized in 65.8 min (10 workers, python path):
 **28,261,718,460 tokens**, 5,689,882 docs, 1,436,089 dupe paragraphs
-skipped, 52.64 GB uint16. Sidecar-verified: **curated shard walks FIRST at
+skipped, 52.64 GiB (56.52 GB decimal) uint16. Sidecar-verified: **curated shard walks FIRST at
 x5** (extent [0, 8,483,455], `repeated_sources {'Curated': 5}`), zero
 absent sources, ETOK header == sidecar == file-size arithmetic. New
 sources: DCLM 4.094B tokens / FineMath 3.483B / The Stack 4.875B = 12.45B

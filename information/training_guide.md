@@ -145,7 +145,7 @@ lineage.
 
 That is exactly what the v2 work is. A second vocab already exists
 (`bpe_vocab_v2_16k.json`, 16,366 rows, 2.41x chars/token) with its own
-corpus (`data/pretrain/tokens_v2.bin`), waiting on the pretrain in
+corpus (`data/pretrain/tokens_v2b.bin`), waiting on the pretrain in
 `BACKLOG.md` §7.95. The two coexist safely because serve and finetune pick
 the vocab from the CHECKPOINT's `vocab_size`, not from a global default --
 so a v1 checkpoint keeps loading the v1 vocab no matter what else is on
