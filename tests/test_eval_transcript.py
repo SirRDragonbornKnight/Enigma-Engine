@@ -888,3 +888,155 @@ def test_main_wires_the_transcript_flag(monkeypatch):
         eval_behavior.main()
     assert seen["allow_live_server"] is True
     assert seen["baseline"] is not None and seen["baseline"].name == "base.jsonl"
+
+
+def test_transcript_records_which_branch_graded_each_probe(tmp_path, monkeypatch):
+    """`expect_tool` is present-and-null on a restraint probe ("call nothing")
+    and absent on a text probe, and json serializes BOTH to null. Without a
+    separate flag the transcript cannot be re-graded from itself: restraint
+    reads as text, and text grading with empty want/deny passes anything, so an
+    offline re-grade scores the whole restraint column as passing.
+
+    Driven through run() against the fake server, because the field only means
+    something if the writer actually emits it -- asserting on hand-built dicts
+    tests the `in` operator, not the transcript."""
+    probes = tmp_path / "probes.jsonl"
+    probes.write_text(
+        json.dumps({"category": "restraint", "q": "Winter here was brutal.",
+                    "expect_tool": None}) + "\n"
+        + json.dumps({"category": "factual", "q": "Largest planet?",
+                      "want_any": ["jupiter"]}) + "\n",
+        encoding="utf-8")
+    out = tmp_path / "t.jsonl"
+    _fake_server(monkeypatch, LONG_ANSWER)
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+
+    by_cat = {r["category"]: r for r in _rows(out) if r.get("record") == "probe"}
+    # both serialize expect_tool to null -- that is the ambiguity
+    assert by_cat["restraint"]["expect_tool"] is None
+    assert by_cat["factual"]["expect_tool"] is None
+    # ...and only tool_graded tells them apart
+    assert by_cat["restraint"]["tool_graded"] is True
+    assert by_cat["factual"]["tool_graded"] is False
+
+    # the point of the field: a re-grade from the transcript ALONE reaches the
+    # same verdict the run did. Without it the restraint row would be graded as
+    # text against empty keys and pass unconditionally.
+    for row in by_cat.values():
+        if row["tool_graded"]:
+            regraded = (row["tool_called"] == row["expect_tool"])
+        else:
+            regraded = eval_behavior._grade_text(
+                row["content"].lower(), row.get("want_any") or [],
+                row.get("deny_any") or [])
+        assert regraded == row["graded_ok"], f"re-grade diverged on {row['category']}"
+
+
+def test_malformed_grading_keys_are_refused_before_the_store_is_wiped():
+    """run() clears the target's memory store, then grades. A record whose
+    want_any/deny_any is null, a bare string, a dict or a list of non-strings
+    reaches the scorer and dies there -- with the store already gone. Each of
+    these must be caught by the pre-flight instead."""
+    bad_shapes = [
+        {"q": "x", "category": "c", "deny_any": None},
+        {"q": "x", "category": "c", "deny_any": [1, 2]},
+        {"q": "x", "category": "c", "want_any": 5},
+        {"q": "x", "category": "c", "want_any": [None]},
+        {"q": "x", "category": "c", "want_any": "jupiter"},
+        {"q": "x", "category": "c", "want_any": {"a": 1}},
+        {"q": "x", "category": "c", "expect_tool": 7},
+    ]
+    for rec in bad_shapes:
+        assert eval_behavior._malformed_probe(rec) is True,             f"accepted a malformed record: {rec}"
+    # the legal shapes still pass the same gate
+    for rec in ({"q": "x", "category": "c"},
+                {"q": "x", "category": "c", "want_any": ["a"], "deny_any": []},
+                {"q": "x", "category": "restraint", "expect_tool": None},
+                {"q": "x", "category": "tool", "expect_tool": "get_weather"}):
+        assert eval_behavior._malformed_probe(rec) is False, rec
+
+
+def test_a_one_probe_lead_is_reported_as_indistinguishable():
+    """The two recorded baselines differ by a single probe and the adoption rule
+    calls that "beats the aggregate". Over the same sealed questions the honest
+    test is the paired one, and a 10-9 split of 19 disagreements is a coin flip.
+    A lopsided split must still come back significant, or the guard is inert."""
+    assert eval_behavior._mcnemar_exact(0, 0) == 1.0
+    assert eval_behavior._mcnemar_exact(10, 9) == 1.0        # the live v8/v5 split
+    assert eval_behavior._mcnemar_exact(8, 0) < 0.05         # lopsided: a result
+    assert eval_behavior._mcnemar_exact(15, 5) < 0.05
+    assert eval_behavior._mcnemar_exact(6, 1) > 0.05         # small: not yet
+
+
+def test_baseline_scorecard_counts_must_be_real_counts():
+    """The comparison divides by n. A negative hits or hits>n yields a finite
+    nonsense rate and the verdict prints ADOPT off it."""
+    ok = {"by_category": {"a": {"hits": 1, "n": 2}}, "overall_hits": 1, "overall_n": 2}
+    assert eval_behavior._valid_scorecard(ok) is True
+    for bad in ({"by_category": {}, "overall_hits": -5, "overall_n": 1},
+                {"by_category": {}, "overall_hits": 5, "overall_n": 1},
+                {"by_category": {"a": {"hits": -1, "n": 2}}, "overall_hits": 0, "overall_n": 2},
+                {"by_category": {"a": {"hits": 3, "n": 2}}, "overall_hits": 0, "overall_n": 2}):
+        assert eval_behavior._valid_scorecard(bad) is False, bad
+
+
+def test_only_gated_categories_reach_the_headline_aggregate(tmp_path, monkeypatch):
+    """The aggregate is what --baseline compares and what "56/120" names, so a
+    column that gates nothing must not carry the adoption verdict. Driven
+    through run() with a mixed file, because the previous version of this test
+    asserted two constants were disjoint and never touched the aggregate -- the
+    change was completely unpinned."""
+    probes = tmp_path / "probes.jsonl"
+    probes.write_text(
+        json.dumps({"category": "factual", "q": "Largest planet?",
+                    "want_any": ["jupiter"]}) + "\n"
+        + json.dumps({"category": "vision", "q": "Describe the picture.",
+                      "want_any": ["nothing-matches-this"]}) + "\n",
+        encoding="utf-8")
+    out = tmp_path / "t.jsonl"
+    _fake_server(monkeypatch, LONG_ANSWER)
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+
+    card = [r for r in _rows(out) if r.get("record") == "scorecard"][0]
+    # both probes were graded and both appear per-category...
+    assert set(card["by_category"]) == {"factual", "vision"}
+    assert sum(c["n"] for c in card["by_category"].values()) == 2
+    # ...but only the gated one is aggregated
+    assert card["overall_n"] == 1, "an informational column entered the headline"
+    # and the record SAYS so, or a reader summing by_category cannot tell which
+    # number is wrong
+    assert card["overall_scope"] == "gated"
+    assert card["informational_categories"] == ["vision"]
+
+
+def test_a_baseline_counted_under_the_old_rule_is_refused(tmp_path, monkeypatch):
+    """Before the gated-only rule the aggregate counted every category. The two
+    populations differ whenever an organ column ran, so comparing across the
+    change divides different denominators and reports the difference as the
+    model -- and the probe-set check cannot see it, because the probe file is
+    byte-identical. Refused outright rather than flagged: a warning beside a
+    printed delta reads as a caveat on a real number."""
+    rule = eval_behavior.baseline_aggregate_rule
+    by_cat = {"factual": {"hits": 8, "n": 15}, "vision": {"hits": 12, "n": 12}}
+    assert rule({"by_category": by_cat, "overall_hits": 8, "overall_n": 15}) == "gated"
+    assert rule({"by_category": by_cat, "overall_hits": 20, "overall_n": 27}) == "all"
+    assert rule({"by_category": by_cat, "overall_hits": 3, "overall_n": 4}) == "unknown"
+    # with no informational column the two rules agree, so an older transcript
+    # of a purely gated set stays usable -- which is every archived baseline
+    gated_only = {"factual": {"hits": 8, "n": 15}, "math": {"hits": 9, "n": 15}}
+    assert rule({"by_category": gated_only, "overall_hits": 17, "overall_n": 30}) == "gated"
+
+    # end to end: run() must refuse before any server is touched
+    old_rule = tmp_path / "old.jsonl"
+    old_rule.write_text(
+        json.dumps({"record": "run_conditions", "probe_sha256": "x", "probe_count": 2}) + "\n"
+        + json.dumps({"record": "scorecard", "by_category": by_cat,
+                      "overall_hits": 20, "overall_n": 27}) + "\n",
+        encoding="utf-8")
+    probes = _probe_file(tmp_path)
+    touched = []
+    monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: touched.append(1))
+    rc = eval_behavior.run(URL, TEMP, MAXTOK, probes, tmp_path / "t.jsonl",
+                           baseline=old_rule)
+    assert rc == 2
+    assert not touched, "the target's memory store was wiped before the refusal"

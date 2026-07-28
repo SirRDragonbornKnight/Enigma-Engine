@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import time
 import urllib.error
@@ -95,6 +96,14 @@ THRESHOLDS = {
 # the right built-in fire, and stay quiet when told not to), which is what can
 # be measured without audio hardware or a diffusion pass.
 INFORMATIONAL_CATEGORIES = frozenset({"vision", "speech", "imagery"})
+
+# The only categories the run offers a tool to. Tool grading compares the call
+# that came back against `expect_tool`, so OUTSIDE this set no tool is ever
+# offered, nothing is ever called, and the comparison is decided before the
+# model answers: `expect_tool: null` passes whatever it says, a named tool
+# fails whatever it says. Gradability depends on this set, which is why the
+# sealer keeps its own copy pinned to it.
+TOOL_OFFERED_CATEGORIES = frozenset({"tool", "restraint"})
 
 WEATHER_TOOL = [
     {
@@ -164,6 +173,11 @@ def _model_identity(base_url: str) -> dict:
 
 # Which organ each probe category needs on the server to mean anything.
 CATEGORY_ORGAN = {"vision": "eyes", "speech": "voice", "imagery": "image_gen"}
+
+# Above this the paired comparison cannot separate the two models, and the
+# adoption verdict says so rather than letting a lead of a probe or two read as
+# a result.
+_PAIRED_ALPHA = 0.05
 
 
 def _clear_memory(base_url: str) -> None:
@@ -522,7 +536,7 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
             for fact in c.get("teach", []):
                 _post(base_url, {"messages": [{"role": "user", "content": fact}], "max_tokens": max_tokens, "temperature": temperature})
         payload = {"messages": [{"role": "user", "content": c["q"]}], "max_tokens": max_tokens, "temperature": temperature}
-        if cat in ("tool", "restraint"):
+        if cat in TOOL_OFFERED_CATEGORIES:
             payload["tools"] = WEATHER_TOOL
         reply = _post(base_url, payload)
         msg = reply["choices"][0]["message"]
@@ -576,6 +590,13 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
                 for t in calls
             ],
             "tools_run": ran,
+            # Which BRANCH graded this row. `expect_tool` is present-and-null on
+            # a restraint probe ("call nothing") and absent on a text probe, and
+            # both serialize to null -- so without this flag a transcript cannot
+            # be re-graded from itself: the restraint column reads as text and
+            # scores whatever the empty want/deny lists allow. A second grader
+            # working offline from the transcript needs the distinction.
+            "tool_graded": "expect_tool" in c,
             "expect_tool": c.get("expect_tool"),
             "want_any": c.get("want_any", []),
             "deny_any": c.get("deny_any", []),
@@ -734,10 +755,46 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     return None
 
 
-def _load_baseline(path: Path) -> tuple[dict, dict]:
-    """(run_conditions, scorecard) of a prior transcript, {} for whichever is absent."""
+def _malformed_probe(c) -> bool:
+    """True for a record the scorer cannot grade without crashing.
+
+    run() clears the target server's memory store and only then grades, so a
+    bad record found mid-suite dies with the store already gone. Every shape
+    the scorer touches is therefore checked up front: q and category are read
+    unconditionally, teach is iterated, and the grading keys are iterated per
+    keyword with each element fed to str methods. Present-but-null is the
+    sharpest shape -- c.get("want_any", []) returns None when the key EXISTS --
+    and a bare string is the quietest, iterating one character at a time and
+    grading the answer against single letters."""
+    if not isinstance(c, dict):
+        return True
+    if not (isinstance(c.get("q"), str) and c["q"].strip()):
+        return True
+    if not (isinstance(c.get("category"), str) and c["category"].strip()):
+        return True
+    for key in ("want_any", "deny_any"):
+        if key not in c:
+            continue
+        keys = c[key]
+        if not (isinstance(keys, list) and all(isinstance(k, str) for k in keys)):
+            return True
+    if "expect_tool" in c and not (c["expect_tool"] is None
+                                   or isinstance(c["expect_tool"], str)):
+        return True
+    if "teach" not in c:
+        return False
+    teach = c["teach"]
+    return not (isinstance(teach, list) and all(isinstance(t, str) for t in teach))
+
+
+def _load_baseline(path: Path) -> tuple[dict, dict, dict]:
+    """(run_conditions, scorecard, {question: graded_ok}) of a prior transcript,
+    empty for whichever is absent. The per-probe map is what makes the two runs
+    PAIRED: both answered the same sealed questions, so the honest comparison is
+    over the probes they disagree on, not over two independent proportions."""
     conditions: dict = {}
     scorecard: dict = {}
+    per_probe: dict = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -751,7 +808,22 @@ def _load_baseline(path: Path) -> tuple[dict, dict]:
             conditions = rec
         elif rec.get("record") == "scorecard":
             scorecard = rec
-    return conditions, scorecard
+        elif (rec.get("record") == "probe" and isinstance(rec.get("q"), str)
+              and isinstance(rec.get("graded_ok"), bool)):
+            per_probe[rec["q"]] = rec["graded_ok"]
+    return conditions, scorecard, per_probe
+
+
+def _mcnemar_exact(b: int, c: int) -> float:
+    """Two-sided exact p for a paired win/loss split (sign test on discordant
+    probes). b = probes only this run got right, c = only the baseline did.
+    Concordant probes carry no information about which model is better."""
+    n = b + c
+    if n == 0:
+        return 1.0
+    k = min(b, c)
+    tail = sum(math.comb(n, i) for i in range(k + 1))
+    return min(1.0, 2.0 * tail / (2 ** n))
 
 
 def _valid_scorecard(card: dict) -> bool:
@@ -760,27 +832,67 @@ def _valid_scorecard(card: dict) -> bool:
     by_cat = card.get("by_category")
     if not isinstance(by_cat, dict):
         return False
+    # Type alone is not enough: the comparison divides by n and compares rates,
+    # so a negative or hits>n scorecard produces a finite nonsense rate and the
+    # verdict prints ADOPT off it. A count must be a real count.
+    def _count(v) -> bool:
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
     for cell in by_cat.values():
-        if not (isinstance(cell, dict)
-                and isinstance(cell.get("hits"), int) and not isinstance(cell.get("hits"), bool)
-                and isinstance(cell.get("n"), int) and not isinstance(cell.get("n"), bool)):
+        if not (isinstance(cell, dict) and _count(cell.get("hits")) and _count(cell.get("n"))):
             return False
-    return (isinstance(card.get("overall_hits"), int)
-            and not isinstance(card.get("overall_hits"), bool)
-            and isinstance(card.get("overall_n"), int)
-            and not isinstance(card.get("overall_n"), bool))
+        if cell["hits"] > cell["n"]:
+            return False
+    return (_count(card.get("overall_hits"))
+            and _count(card.get("overall_n"))
+            and card["overall_hits"] <= card["overall_n"])
+
+
+def baseline_aggregate_rule(card: dict) -> str:
+    """Which population the baseline's recorded aggregate counted.
+
+    "gated"   -- gated categories only (what this code produces)
+    "all"     -- every category, informational included (the older rule)
+    "unknown" -- matches neither; the aggregate was not derived from by_category
+
+    The comparison divides `overall_hits / overall_n` on both sides, so two
+    transcripts written under different rules are two different populations
+    even when the probe file is byte-identical -- the probe-set check cannot
+    see it, and the printed delta is the denominator moving, not the model.
+    A baseline with no informational categories is unambiguous: both rules
+    give the same pair, and it reads as "gated"."""
+    by_cat = card.get("by_category") or {}
+    gated = [c for k, c in by_cat.items() if k not in INFORMATIONAL_CATEGORIES]
+    pairs = {
+        "gated": (sum(c["hits"] for c in gated), sum(c["n"] for c in gated)),
+        "all": (sum(c["hits"] for c in by_cat.values()),
+                sum(c["n"] for c in by_cat.values())),
+    }
+    recorded = (int(card.get("overall_hits", -1)), int(card.get("overall_n", -1)))
+    for rule, pair in pairs.items():
+        if recorded == pair:
+            return rule
+    return "unknown"
 
 
 def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
                          conditions: dict, by_cat: dict[str, list[bool]],
                          overall_hits: int, overall_n: int,
-                         is_gate_run: bool) -> dict:
+                         is_gate_run: bool,
+                         base_probes: dict | None = None,
+                         this_probes: dict | None = None) -> dict:
     """The adoption rule as code: beat the baseline aggregate with no category
     floor regression = ADOPT; anything else = the user's call. Advisory only --
     the absolute thresholds still decide this run's exit code. Doing this
-    comparison by eye at n=12/category is where a one-cell slip decides
-    adoption. The baseline arrives parsed and shape-checked (run() refuses a
-    malformed one before any server is touched)."""
+    comparison by eye is where a one-cell slip decides adoption.
+
+    The verdict is a screen, not a measurement: at this many probes per category
+    a small aggregate lead is inside the noise, so the paired exact test is
+    printed and stapled to the verdict string. The baseline arrives parsed and
+    shape-checked (run() refuses a malformed one before any server is
+    touched)."""
+    base_probes = base_probes or {}
+    this_probes = this_probes or {}
     print(f"baseline comparison: {baseline}")
     record: dict = {"record": "baseline_comparison", "baseline_file": str(baseline)}
     if base_cond.get("probe_sha256") != conditions.get("probe_sha256"):
@@ -827,6 +939,33 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
         if rate < base_rate:
             regressions.append(f"{cat} {base_cell['hits']}/{base_cell['n']} -> {sum(results)}/{len(results)}")
     print("  category regressions:", "; ".join(regressions) if regressions else "none")
+
+    # Both runs answered the SAME sealed questions, so the aggregate delta on
+    # its own cannot say whether a lead is a result or a coin flip: at this n a
+    # one-probe gap is neither. Report the paired split and its exact p beside
+    # the verdict, so "beats the baseline" is never read as "is better than".
+    paired = {"b": None, "c": None, "p": None}
+    shared = [q for q in this_probes if q in base_probes]
+    if not shared:
+        # Silence here would read as "the paired test agreed". Say that it could
+        # not run, so a verdict is never quoted as significance-checked when
+        # nothing was compared.
+        print("  paired test NOT RUN: the two transcripts share no probe questions "
+              "-- the verdict below rests on the aggregate alone")
+    elif len(shared) < len(this_probes):
+        print(f"  paired test covers only {len(shared)} of {len(this_probes)} probes "
+              f"-- the rest are unmatched and contribute nothing to the p below")
+    if shared:
+        b = sum(1 for q in shared if this_probes[q] and not base_probes[q])
+        c = sum(1 for q in shared if base_probes[q] and not this_probes[q])
+        p = _mcnemar_exact(b, c)
+        paired = {"b": b, "c": c, "p": round(p, 4)}
+        print(f"  paired over {len(shared)} shared probes: this run won {b}, "
+              f"baseline won {c}, {b + c} disagreements, exact p = {p:.4f}")
+        if p >= _PAIRED_ALPHA:
+            print(f"  the two are INDISTINGUISHABLE at p<{_PAIRED_ALPHA} -- "
+                  f"any verdict below rests on a difference this gate cannot resolve")
+
     if beats and not regressions:
         verdict = "ADOPT (beats aggregate, no category regression)"
     else:
@@ -836,11 +975,14 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
         if regressions:
             why.append(f"{len(regressions)} category regression(s)")
         verdict = f"USER'S CALL ({', '.join(why)})"
+    if paired["p"] is not None and paired["p"] >= _PAIRED_ALPHA:
+        verdict += f" [INDISTINGUISHABLE p={paired['p']:.3f}]"
     print(f"  VERDICT: {verdict}")
     record.update({
         "verdict": verdict,
         "aggregate_delta": round(delta, 4),
         "regressions": regressions,
+        "paired": paired,
         "baseline_model_sha256": base_id,
         "this_model_sha256": this_id,
     })
@@ -860,13 +1002,13 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     # The baseline is parsed and shape-checked HERE, not after the run: a
     # malformed file discovered at comparison time would cost the 96 answers
     # a completed gate run just collected.
-    base_pair: tuple[dict, dict] | None = None
+    base_pair: tuple[dict, dict, dict] | None = None
     if baseline is not None:
         if not baseline.exists():
             print(f"FAIL: baseline transcript not found: {baseline}")
             return 2
         try:
-            base_cond, base_card = _load_baseline(baseline)
+            base_cond, base_card, base_probes = _load_baseline(baseline)
         except (OSError, UnicodeDecodeError) as exc:
             print(f"FAIL: baseline transcript unreadable ({exc})")
             return 2
@@ -876,7 +1018,20 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         if not _valid_scorecard(base_card):
             print(f"FAIL: baseline scorecard is malformed: {baseline}")
             return 2
-        base_pair = (base_cond, base_card)
+        rule = baseline_aggregate_rule(base_card)
+        if rule != "gated":
+            # Refused, not flagged: a warning next to a printed delta is read as
+            # a caveat on a real number, and this number is not real -- the two
+            # aggregates count different populations. Re-grading the baseline
+            # from its own probe rows regenerates it under the current rule.
+            print(f"FAIL: baseline aggregate counts the '{rule}' population, not "
+                  f"'gated' -- it predates the rule that informational categories "
+                  f"(organ columns) never enter the headline. Comparing it would "
+                  f"divide two different populations and report the difference as "
+                  f"the model. Re-run the baseline, or re-grade its transcript "
+                  f"under the current rule: {baseline}")
+            return 2
+        base_pair = (base_cond, base_card, base_probes)
     if transcript is not None:
         # Fail here, not after a full suite has run against a live server.
         _refuse_unsealing_path(transcript)
@@ -898,25 +1053,13 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     # after this function has cleared the target server's memory store -- a
     # malformed record found mid-suite would crash with the store already
     # gone.
-    def _malformed(c) -> bool:
-        if not isinstance(c, dict):
-            return True
-        if not (isinstance(c.get("q"), str) and c["q"].strip()):
-            return True
-        if not (isinstance(c.get("category"), str) and c["category"].strip()):
-            return True
-        if "teach" not in c:
-            return False
-        teach = c["teach"]
-        # present-but-null is the crash shape: c.get("teach", []) returns
-        # None when the key exists, and the scorer iterates it.
-        return not (isinstance(teach, list) and all(isinstance(t, str) for t in teach))
-
-    bad = [i for i, c in enumerate(cases, start=1) if _malformed(c)]
+    bad = [i for i, c in enumerate(cases, start=1) if _malformed_probe(c)]
     if bad:
-        print(f"FAIL: {len(bad)} probe record(s) missing a non-empty 'q' or 'category' "
-              f"(or carrying a malformed 'teach' / non-object row; record numbers "
-              f"{bad[:10]}{'...' if len(bad) > 10 else ''}) -- "
+        print(f"FAIL: {len(bad)} probe record(s) missing a non-empty 'q' or 'category', "
+              f"or carrying a malformed 'teach' / 'want_any' / 'deny_any' / "
+              f"'expect_tool' (each must be a list of strings, or absent), or a "
+              f"non-object row; record numbers "
+              f"{bad[:10]}{'...' if len(bad) > 10 else ''} -- "
               "fix the file before any server is touched")
         return 2
     print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
@@ -989,8 +1132,14 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     caps = (rows[0].get("capabilities") if rows else {}) or {}
     for cat, results in by_cat.items():
         hits, n = sum(results), len(results)
-        overall_hits += hits
-        overall_n += n
+        # The aggregate is what --baseline compares and what "56/120" names, so
+        # only GATED categories may move it. An informational column reports
+        # whether an organ answered and can never fail a run; letting it into
+        # the headline meant a category that gates nothing could still carry
+        # the adoption verdict.
+        if cat not in INFORMATIONAL_CATEGORIES:
+            overall_hits += hits
+            overall_n += n
         rate = hits / n
         # An organ probe measures nothing when the server was started without
         # that organ: she is never offered the tool, so the score reports a
@@ -1025,9 +1174,17 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         else:
             print(f"  (not a locked run: {len(missing)} unmeasured gate(s) do not decide this result)")
     if not overall_n:
-        print("FAIL: no probe was graded")
-        return 2
-    print(f"  {'OVERALL':12} {overall_hits}/{overall_n} = {overall_hits / overall_n:5.0%}")
+        # An all-informational file grades every probe and aggregates none of
+        # them, so this says "no GATED probe", not "no probe". Returning here
+        # used to skip the transcript write below and throw away answers that
+        # were already collected -- the one thing the transcript exists to
+        # prevent. Fall through: the run is still a failure, and the answers
+        # are still the expensive part.
+        print(f"FAIL: no GATED probe was graded ({len(cases)} probe(s) ran, all in "
+              f"informational categories, which never enter the aggregate)")
+        all_pass = False
+    else:
+        print(f"  {'OVERALL':12} {overall_hits}/{overall_n} = {overall_hits / overall_n:5.0%}")
     if not gated:
         # Nothing in this file has a threshold, so "PASS" would mean only that
         # nothing was checked.
@@ -1045,9 +1202,13 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
 
     if baseline is not None and base_pair is not None:
         try:
-            rows.append(_compare_to_baseline(baseline, base_pair[0], base_pair[1],
-                                             rows[0], by_cat, overall_hits,
-                                             overall_n, is_gate_run))
+            rows.append(_compare_to_baseline(
+                baseline, base_pair[0], base_pair[1], rows[0], by_cat,
+                overall_hits, overall_n, is_gate_run,
+                base_probes=base_pair[2],
+                this_probes={r["q"]: r["graded_ok"] for r in rows
+                             if r.get("record") == "probe"},
+            ))
         except Exception as exc:
             # The transcript is the expensive artifact -- a comparison failure
             # must never cost the answers already collected.
@@ -1059,6 +1220,15 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
             "by_category": {k: {"hits": sum(v), "n": len(v)} for k, v in by_cat.items()},
             "overall_hits": overall_hits,
             "overall_n": overall_n,
+            # by_category covers EVERY category; the aggregate covers gated ones
+            # only, so the two do not add up whenever an organ column ran. Name
+            # the population in the record -- a reader summing by_category and
+            # getting a different headline has no other way to tell which of
+            # the two is wrong, and `--baseline` refuses any transcript whose
+            # aggregate counted a different one.
+            "overall_scope": "gated",
+            "informational_categories": sorted(
+                k for k in by_cat if k in INFORMATIONAL_CATEGORIES),
             "result": "PASS" if all_pass else "FAIL",
             # The transcript IS the adoption receipt, and it recorded nothing
             # about the seal: a rigged run's transcript was structurally

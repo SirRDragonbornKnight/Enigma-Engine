@@ -31,6 +31,35 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 LOCKED_MANIFEST = ROOT / "data" / "eval" / "locked_probes.manifest.json"
+# Mirrors eval_behavior.TOOL_OFFERED_CATEGORIES. Duplicated because
+# eval_behavior imports THIS module, so importing back would be circular; the
+# two are pinned equal by test.
+_TOOL_OFFERED_CATEGORIES = frozenset({"tool", "restraint"})
+
+
+def _ungradable_reason(case: dict) -> str:
+    """Why this probe's verdict is decided before the model answers, or "".
+
+    Tool grading compares the returned call against `expect_tool`. Outside the
+    categories the run offers a tool to, nothing is ever called, so the
+    comparison has one possible outcome whatever the answer says: a null
+    expectation always passes, a named tool always fails. Text grading with no
+    want and no deny has the same shape -- one outcome, fixed in advance."""
+    cat = case.get("category")
+    if "expect_tool" in case:
+        expect = case.get("expect_tool")
+        if cat not in _TOOL_OFFERED_CATEGORIES:
+            verdict = "always passes" if expect is None else "always fails"
+            return (f"expect_tool in category {cat!r}, which is never offered a tool, "
+                    f"so it {verdict}")
+        if expect is not None and not expect.strip():
+            # The graded value is a tool NAME or None. An empty string is
+            # neither, so no reply can match it.
+            return "expect_tool is an empty string, which no tool call can match"
+        return ""
+    if case.get("want_any") or case.get("deny_any"):
+        return ""
+    return "no want_any and no deny_any, so any answer passes"
 
 _WORD = re.compile(r"[a-z0-9]+")
 # Light stoplist: drop function words so Jaccard measures CONTENT overlap. A
@@ -568,6 +597,16 @@ def _cli_seal(src: str) -> int:
     if not src_path.exists():
         print(f"ERROR: locked probe file not found: {src_path}")
         return 1
+    if src_path.suffix != ".jsonl":
+        # The manifest path is derived from the STEM, so a draft named
+        # locked_probes.json (or .txt, or .bak) beside the real set derives the
+        # PRODUCTION manifest and overwrites it -- after which the sealed gate
+        # fails its own check. Requiring the extension makes the derivation
+        # one-to-one.
+        print(f"ERROR: expected a .jsonl probe file, got {src_path.name} -- "
+              "the manifest name is derived from this one, and a different "
+              "extension on the same stem would target another set's manifest")
+        return 1
     raw = src_path.read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
         # A BOM survives strip(), dodges the '#' check below, and would ride
@@ -688,6 +727,29 @@ def _cli_seal(src: str) -> int:
               "non-canonical bytes would ride inside the byte "
               "seal uncovered by any hash; re-emit the file with json.dumps")
         return 1
+    # Bytes and types are settled above; this is the semantic backstop. A
+    # text-graded probe with neither want nor deny CANNOT FAIL -- the text
+    # grader returns True when both lists are empty. Emptying the grading keys
+    # across a file otherwise seals rc=0, verifies against its own manifest, and
+    # turns every text probe into a free pass; since the committed artifact is
+    # hashes and the plaintext is gitignored, the diff that would show it does
+    # not exist.
+    # Every probe must be POSITIVELY gradable -- the rule states what makes a
+    # verdict possible, not what is excused from having one. An exemption list
+    # cannot express this: any probe matching the exempt shape seals with its
+    # grade already decided.
+    #   text grading  -- at least one want_any or deny_any key, OR
+    #   tool grading  -- an `expect_tool` decision in a category the run
+    #                    actually offers a tool to.
+    ungradable = [(c["q"], _ungradable_reason(c)) for c in cases
+                  if _ungradable_reason(c)]
+    if ungradable:
+        q, why = ungradable[0]
+        print(f"ERROR: {len(ungradable)} probe(s) cannot produce a verdict, starting "
+              f"{q[:50]!r} ({why}). A probe whose grade is decided before the model "
+              "answers measures nothing; give it want_any/deny_any keys, or set "
+              f"expect_tool in one of {sorted(_TOOL_OFFERED_CATEGORIES)}")
+        return 1
     if unsorted_records:
         # Refusing would demand a plaintext edit = a content reseal, which is
         # the user's gate; until then element order is a KNOWN open channel
@@ -702,9 +764,15 @@ def _cli_seal(src: str) -> int:
         if not _content_words(t):
             print(f"WARN: probe has no content words (verbatim-match only): {t!r}")
     manifest = seal(texts, cases=cases, probe_file=src_path)
-    LOCKED_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    LOCKED_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(f"sealed {len(texts)} locked probe strings -> {LOCKED_MANIFEST.name} "
+    # The manifest belongs to the file being sealed. Writing LOCKED_MANIFEST
+    # unconditionally meant sealing ANY draft overwrote the production manifest,
+    # after which the live gate file fails its own seal check and only a backup
+    # brings it back -- and the pre-seal step (validate_probes) is documented as
+    # taking arbitrary paths, so drafts are exactly what gets passed here.
+    out_manifest = src_path.with_name(src_path.stem + ".manifest.json")
+    out_manifest.parent.mkdir(parents=True, exist_ok=True)
+    out_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"sealed {len(texts)} locked probe strings -> {out_manifest} "
           f"(jaccard>={manifest['jaccard_threshold']}); manifest carries hashes only")
     print(f"grading keys sealed too (digest {manifest['grading_digest'][:12]}...): "
           "want/deny/expect_tool/category are now tamper-evident without the plaintext")

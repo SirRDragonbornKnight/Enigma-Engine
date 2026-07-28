@@ -497,8 +497,8 @@ def test_seal_warns_on_stopword_only_probe(tmp_path, monkeypatch, capsys):
 
     src = tmp_path / "locked.jsonl"
     src.write_text(
-        '{"category": "identity", "q": "Is it you?"}\n'
-        '{"category": "factual", "q": "What is the capital of France?"}\n',
+        '{"category": "identity", "q": "Is it you?", "want_any": ["enigma"]}\n'
+        '{"category": "factual", "q": "What is the capital of France?", "want_any": ["paris"]}\n',
         encoding="utf-8",
         newline="",
     )
@@ -562,7 +562,8 @@ def test_the_sealer_accepts_exactly_one_byte_form(tmp_path, monkeypatch, capsys)
     import eval_leak_guard as elg
 
     monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "manifest.json")
-    rec = {"category": "factual", "q": "What is the capital of France?"}
+    rec = {"category": "factual", "q": "What is the capital of France?",
+           "want_any": ["paris"]}
     line = json.dumps(rec)
     clean = tmp_path / "clean.jsonl"
     clean.write_text(line + "\n", encoding="utf-8", newline="")
@@ -653,3 +654,127 @@ def test_the_sealer_refuses_type_punning_and_reordering(tmp_path, monkeypatch, c
     assert seal_of('{"category": "factual", "q": "Capital of France?", '
                    '"want_any": ["paris", "answer"]}') == 0
     assert "unsorted want/deny" in capsys.readouterr().out
+
+
+def test_sealing_a_draft_never_touches_the_production_manifest(tmp_path, monkeypatch, capsys):
+    """The manifest belongs to the file being sealed. Writing the module-level
+    LOCKED_MANIFEST unconditionally meant sealing any draft overwrote the live
+    gate's manifest, after which the sealed plaintext fails its own seal check
+    and only a backup brings it back -- and validate_probes is documented as
+    taking arbitrary paths, so drafts are exactly what reaches the sealer.
+
+    LOCKED_MANIFEST is redirected to a stand-in ON PURPOSE. If this fix were
+    reverted the sealer would write that constant, and an un-redirected test
+    would destroy the real sealed manifest every time it went red -- a failing
+    test must not cost a `git checkout` of a sealed artifact. The half that has
+    to hold for production is the path DERIVATION, asserted at the end against
+    the real paths without writing anything."""
+    import eval_leak_guard as elg
+
+    stand_in = tmp_path / "production.manifest.json"
+    stand_in.write_text('{"probes": []}', encoding="utf-8")
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", stand_in)
+    before = stand_in.read_bytes()
+
+    draft = tmp_path / "draft.jsonl"
+    draft.write_text(
+        '{"category": "factual", "q": "What is the capital of France?", "want_any": ["paris"]}\n',
+        encoding="utf-8", newline="")
+    assert elg._cli_seal(str(draft)) == 0
+    beside = tmp_path / "draft.manifest.json"
+    assert beside.exists(), "the manifest must land beside the file that was sealed"
+    assert stand_in.read_bytes() == before, "sealing a draft rewrote the module-level manifest"
+
+    # ...and the real locked set still derives to the real manifest (read-only)
+    real = elg.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    assert real.with_name(real.stem + ".manifest.json") == (
+        elg.ROOT / "data" / "eval" / "locked_probes.manifest.json")
+
+
+def test_the_sealer_takes_only_a_jsonl_path(tmp_path, monkeypatch, capsys):
+    """The manifest name is derived from the source STEM, so a draft named
+    `locked_probes.json` beside the real set would derive -- and overwrite --
+    the production `locked_probes.manifest.json`, leaving the sealed gate
+    failing its own check."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+    line = ('{"category": "factual", "q": "What is the capital of France?", '
+            '"want_any": ["paris"]}\n')
+    for bad in ("locked_probes.json", "locked_probes.txt", "locked_probes.bak"):
+        p = tmp_path / bad
+        p.write_text(line, encoding="utf-8", newline="")
+        assert elg._cli_seal(str(p)) == 1, f"{bad} must be refused"
+        assert "jsonl" in capsys.readouterr().out
+        assert not (tmp_path / "locked_probes.manifest.json").exists()
+    # the real extension still seals, beside itself
+    good = tmp_path / "locked_probes.jsonl"
+    good.write_text(line, encoding="utf-8", newline="")
+    assert elg._cli_seal(str(good)) == 0
+    assert (tmp_path / "locked_probes.manifest.json").exists()
+
+
+def test_a_probe_whose_verdict_is_decided_before_the_answer_cannot_seal(tmp_path, monkeypatch, capsys):
+    """Stated as an exemption list this check kept losing. Exempt by category
+    name and a probe relabels itself `vision`; exempt by carrying `expect_tool`
+    and a probe in a GATED category sets it to null -- tools are offered only to
+    tool/restraint, so nothing is ever called and the grade is None == None
+    before the model answers. Both spellings seal a probe that cannot fail, and
+    the second is worse: the probe keeps its own category and lifts that floor.
+
+    So the rule is positive gradability, and the test is the shapes."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+
+    def seal_of(rec_line: str) -> int:
+        p = tmp_path / "probes.jsonl"
+        p.write_text(rec_line + "\n", encoding="utf-8", newline="")
+        return elg._cli_seal(str(p))
+
+    Q = '"q": "What is 17 times 23?"'
+    # decided in advance -- every one of these must be refused
+    for line, why in (
+        ('{"category": "math", %s, "expect_tool": null}' % Q, "null tool, gated category"),
+        ('{"category": "factual", %s, "expect_tool": "get_weather"}' % Q, "named tool, never offered"),
+        ('{"category": "unknown", %s}' % Q, "no keys at all"),
+        ('{"category": "vision", %s}' % Q, "informational, no keys"),
+        ('{"category": "identity", %s, "want_any": [], "deny_any": []}' % Q, "empty key lists"),
+        ('{"category": "tool", %s, "expect_tool": ""}' % Q, "empty tool name, matches nothing"),
+    ):
+        assert seal_of(line) == 1, f"sealed a probe that cannot fail: {why}"
+        assert "cannot produce a verdict" in capsys.readouterr().out
+
+    # ...and every genuinely gradable shape still seals
+    for line, why in (
+        ('{"category": "tool", %s, "expect_tool": "get_weather"}' % Q, "tool probe"),
+        ('{"category": "restraint", %s, "expect_tool": null}' % Q, "restraint probe"),
+        ('{"category": "math", %s, "want_any": ["391"]}' % Q, "text probe"),
+        ('{"category": "unknown", %s, "deny_any": ["my guess is"]}' % Q, "deny-only probe"),
+    ):
+        assert seal_of(line) == 0, f"refused a gradable probe: {why}"
+        capsys.readouterr()
+
+
+def test_tool_offered_categories_match_the_runner():
+    """Gradability depends on which categories are actually offered a tool. The
+    sealer keeps its own copy because eval_behavior imports THIS module, so the
+    import cannot go the other way -- and a duplicated constant drifts unless
+    it is pinned."""
+    import eval_behavior
+    import eval_leak_guard as elg
+
+    assert set(elg._TOOL_OFFERED_CATEGORIES) == set(eval_behavior.TOOL_OFFERED_CATEGORIES)
+
+    # ...and the live sealed set must obey it: every probe carrying expect_tool
+    # sits in a category the run offers a tool to. If the sets ever drift, this
+    # is the invariant that actually breaks.
+    import json
+    real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
+    if real.exists():
+        for line in real.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if "expect_tool" in rec:
+                assert rec["category"] in eval_behavior.TOOL_OFFERED_CATEGORIES, rec["category"]
