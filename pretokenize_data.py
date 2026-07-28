@@ -17,7 +17,7 @@ finished 2026-07-03, and since the Curated source joined SOURCE_DIRS
 corpus names its own --output-bin; the v2 retokenize (TOKENIZER_V2_SPEC):
 
     python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json ^
-        --output-bin data/pretrain/tokens_v2.bin --dtype uint16 --workers 10 ^
+        --output-bin data/pretrain/tokens_v2b.bin --dtype uint16 --workers 10 ^
         --repeat-sources curated=5
 
 (curated=5 is a standing ruling -- BACKLOG 7.95 T1; omitting the flag runs
@@ -27,8 +27,10 @@ Parallel layout: the PARENT does the walk + paragraph dedup + filters --
 that state is inherently sequential (shared seen_hashes) -- with file
 reads PREFETCHED by a thread pool (see iter_cleaned_docs: per-file open
 latency, not CPU, was the wall on the first v2 attempt), and WORKERS do
-the encoding (Rust v2 backend when built: measured 17.8 MB/s/worker vs
-~0.1 for pure Python). Ordered imap keeps the output stream
+the encoding (Rust v2 backend when built: measured 17.8 MB/s/worker;
+pure Python measured 4.6-6.4 MB/s/worker on real corpus text, 2026-07-28
+-- the python path is slower but is NOT the wall, the parent's walk is).
+The sidecar records which backend ran. Ordered imap keeps the output stream
 byte-deterministic (= the sequential walk order). Launch the whole
 script at BelowNormal priority for the CRD budget (workers also self-set
 it); default 10 workers leaves ~6 cores for the desktop session.
@@ -240,7 +242,7 @@ def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64)
 
     seen_hashes: set[bytes] = set()
     dedup_warned = False
-    stats = iter_cleaned_docs.stats = {"dupes_skipped": 0}
+    stats = iter_cleaned_docs.stats = {"dupes_skipped": 0, "dedup_capped": False}
 
     def walk():
         for label, source_dir in source_dirs:
@@ -291,7 +293,15 @@ def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64)
                     seen_hashes.add(h)
                 elif not dedup_warned:
                     dedup_warned = True
-                    print(f"  WARNING: Dedup table at capacity ({MAX_DEDUP_ENTRIES:,})")
+                    # Past the cap nothing new is remembered, so every source
+                    # after this point is deduped only against what the walk had
+                    # already seen -- never against the sources that follow it.
+                    # The sidecar records it: a console line scrolls past, and
+                    # "dupes_skipped" on its own reads like the dedup ran whole.
+                    stats["dedup_capped"] = True
+                    print(f"  WARNING: Dedup table at capacity ({MAX_DEDUP_ENTRIES:,}) -- "
+                          f"sources walked after this point are NOT deduped against "
+                          f"each other; recorded as dedup_capped in the sidecar")
                 unique_paras.append(para)
 
             cleaned = "\n\n".join(unique_paras).strip()
@@ -616,7 +626,16 @@ def main():
             pass
         raise
 
-    dupes_skipped = getattr(iter_cleaned_docs, "stats", {}).get("dupes_skipped", 0)
+    _stats = getattr(iter_cleaned_docs, "stats", {})
+    dupes_skipped = _stats.get("dupes_skipped", 0)
+    dedup_capped = bool(_stats.get("dedup_capped", False))
+    vocab_sha = None
+    if args.vocab:
+        try:
+            vocab_sha = hashlib.sha256(Path(args.vocab).read_bytes()).hexdigest()
+        except OSError:
+            vocab_sha = None
+    tok_backend = "rust" if getattr(tokenizer, "_rust_backend", None) is not None else "python"
 
     for label, (n_docs, n_tok) in per_label.items():
         print(f"  [{label}] {n_docs:,} docs -> {n_tok:,} tokens")
@@ -644,7 +663,25 @@ def main():
         "repeated_sources": repeats,
         "source_token_extents": extents,
         "dupes_skipped": dupes_skipped,
+        # False means every paragraph in the walk was deduped against every
+        # other. True means the table filled partway and the sources after that
+        # point were never compared to each other, which dupes_skipped alone
+        # cannot show.
+        "dedup_capped": dedup_capped,
+        "dedup_cap": MAX_DEDUP_ENTRIES,
+        # vocab_file is a PATH, and a path is not an identity: regenerating the
+        # vocab to a different table of the same size leaves every downstream
+        # size check passing while the corpus no longer decodes. The hash is
+        # what a later run can actually compare against.
+        "vocab_sha256": vocab_sha,
+        # Which encoder produced these ids. The rust and python paths are
+        # supposed to agree; unrecorded, a corpus built by one and extended by
+        # the other is indistinguishable from a consistent one.
+        "tokenizer_backend": tok_backend,
         "special_literals_sanitized": sanitized_hits[0],
+        # GiB, not GB -- kept under the historic key so older sidecars and the
+        # trainer's corpus banner keep reading.
+        "file_size_gib": round(file_gb, 2),
         "file_size_gb": round(file_gb, 2),
         "elapsed_seconds": round(elapsed, 1),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -655,8 +692,11 @@ def main():
     print("  Done!")
     print(f"  Tokens:    {total_tokens:,}")
     print(f"  Documents: {total_docs:,}")
-    print(f"  Dupes:     {dupes_skipped:,} paragraphs skipped")
-    print(f"  Output:    {out_bin} ({file_gb:.2f} GB, {args.dtype})")
+    print(f"  Dupes:     {dupes_skipped:,} paragraphs skipped"
+          + ("  [TABLE CAPPED -- sources after the cap were not deduped "
+             "against each other]" if dedup_capped else ""))
+    print(f"  Output:    {out_bin} ({file_gb:.2f} GiB / "
+          f"{file_gb * 1024**3 / 1e9:.2f} GB, {args.dtype})")
     print(f"  Metadata:  {out_meta}")
     print(f"  Time:      {elapsed / 60:.1f} min")
     print(f"{'=' * 60}")

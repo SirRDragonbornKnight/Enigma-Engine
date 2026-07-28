@@ -3150,8 +3150,9 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
     `max_stars_repo_licenses`, the fields this loop reads); v2 publishes
     only blob ids that need a separate Software Heritage S3 fetch.
 
-    Iterates over 16 priority languages (SmolLM3 selection) until the target
-    GB is reached. Filters to permissive licenses (MIT/Apache/BSD/ISC/etc.).
+    Iterates over 16 priority languages (SmolLM3 selection), each capped at an
+    equal share of the REMAINING target so no single language can fill the pull.
+    Filters to permissive licenses (MIT/Apache/BSD/ISC/etc.).
     Code data teaches structured reasoning, pattern completion, and precise
     instruction following.
 
@@ -3191,9 +3192,19 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
     locked_guard = _locked_probe_guard("The Stack")
     start_time = time.monotonic()
 
+    remaining_langs = len(_STACK_LANGUAGES)
     for lang in _STACK_LANGUAGES:
         if total_bytes >= target_bytes:
             break
+
+        # Each language takes an equal share of what is LEFT to collect, so no
+        # single language can fill the target alone. Dividing the REMAINDER
+        # rather than the target hands an unavailable or exhausted language's
+        # share to the ones after it, so the target is still met when the data
+        # exists.
+        lang_budget = (target_bytes - total_bytes) / max(1, remaining_langs)
+        remaining_langs -= 1
+        lang_start_bytes = total_bytes
 
         lang_progress_key = f"stack_{lang}"
         lang_dir_prefix = f"stack_{lang}"
@@ -3262,7 +3273,8 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
                     batch_text = []
                     batch_size = 0
 
-                    if total_bytes >= target_bytes:
+                    if (total_bytes >= target_bytes
+                            or total_bytes - lang_start_bytes >= lang_budget):
                         break
 
                     now = time.monotonic()
@@ -3310,6 +3322,20 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
 
     elapsed_min = (time.monotonic() - start_time) / 60
     print(f"\n  [The Stack] Done: {total_saved} files saved ({total_bytes / 1e9:.2f} GB) in {elapsed_min:.0f} min.")
+    # The per-language budget is handed forward, not retried, so a run where
+    # several languages are short or unavailable finishes UNDER target. Report
+    # the shortfall and the per-language split: "Done" alone cannot be told
+    # apart from a full pull.
+    if total_bytes < 0.9 * target_bytes:
+        by_lang = {}
+        for f in STACK_DIR.glob("*.txt"):
+            by_lang[f.name.rsplit("_", 1)[0]] = by_lang.get(f.name.rsplit("_", 1)[0], 0) + f.stat().st_size
+        print(f"  [The Stack] WARNING: {total_bytes / 1e9:.2f} GB is "
+              f"{total_bytes / target_bytes:.0%} of the {target_gb:.1f} GB target -- "
+              f"languages that ran dry hand their share forward, they are not retried. "
+              f"Re-run with --resume to top up.")
+        for lang_key, size in sorted(by_lang.items(), key=lambda kv: -kv[1]):
+            print(f"  [The Stack]   {lang_key}: {size / 1e9:.2f} GB")
     if literals_sanitized:
         print(f"  [The Stack] {literals_sanitized} special-token literal(s) space-broken in saved code")
     if leak_rejected:

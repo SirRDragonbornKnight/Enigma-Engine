@@ -22,6 +22,10 @@ from .pretokenize import (
 
 logger = logging.getLogger(__name__)
 
+# A stale rust extension is a per-INSTALL condition, not a per-tokenizer one,
+# and pretokenize builds one tokenizer per worker. Warn once per process.
+_STALE_RUST_WARNED = False
+
 # Reserved-token names decode() strips when skip_special_tokens=True. Kept
 # separate from special_tokens, which also drives encode(): adding a name
 # there changes how its literal text tokenizes, while this list only affects
@@ -297,6 +301,7 @@ class AdvancedBPETokenizer:
         # parity pin), so one Rust implementation serves both. The
         # backend snapshots the FILE -- any later vocab mutation (e.g.
         # attach_chat_tokens) must detach it or encode goes stale.
+        global _STALE_RUST_WARNED
         self._rust_backend = None
         if self.pretokenizer_version == PRETOKENIZER_V2:
             try:
@@ -311,6 +316,20 @@ class AdvancedBPETokenizer:
                         and self.eos_token in self.token_to_id
                     ):
                         self._rust_backend = backend
+                elif not _STALE_RUST_WARNED:
+                    # An installed extension built before V2_SUPPORTED existed
+                    # falls back silently, and a corpus tokenized under the
+                    # fallback is indistinguishable from one that took the fast
+                    # path. Which encoder ran belongs in the log, and in the
+                    # corpus sidecar's tokenizer_backend. Once per process:
+                    # the condition has no in-run remedy, and a tokenizer is
+                    # built per worker.
+                    _STALE_RUST_WARNED = True
+                    logger.warning(
+                        "enigma_bpe is installed but predates V2_SUPPORTED -- "
+                        "v2 encode is running the python path; rebuild and "
+                        "reinstall the extension to use the rust backend"
+                    )
             except ImportError:
                 pass
             except Exception as exc:
