@@ -11,14 +11,24 @@ from __future__ import annotations
 
 import argparse
 import os
+import glob
 import re
 import sys
 import time
 
+# The middle of the step line grew a cumulative-rate parenthetical and a peak
+# VRAM figure, either of which may be absent (CPU runs print no peak). Anchor on
+# the two ends -- the rate and the trailing token total -- and skip whatever
+# sits between them, so the next field added there does not blind this reader
+# again. The captured rate is the WINDOWED one, which is the honest gauge.
 STEP_RE = re.compile(
-    r"^step (\d+)/(\d+) loss ([\d.]+) lr ([\d.eE+-]+) ([\d,]+) tok/s ([\d.]+)B"
+    r"^step (\d+)/(\d+) loss ([\d.]+|nan|inf|-inf) lr ([\d.eE+-]+) ([\d,]+) tok/s"
+    r"(?:.*?)\s([\d.]+)B\s*$"
 )
-VAL_RE = re.compile(r"\[val\] step (\d+) loss ([\d.]+) ppl ([\d.]+)")
+# Same non-finite tolerance as STEP_RE: `loss_acc` and the val loss are both
+# printed with :.4f, which renders nan/inf. Hardening one and not the other
+# left the ppl curve frozen at the last finite val while the run diverged.
+VAL_RE = re.compile(r"\[val\] step (\d+) loss ([\d.]+|nan|-?inf) ppl ([\d.]+|nan|-?inf)")
 TOKSTEP_RE = re.compile(r"([\d,]+) tok/step")
 
 
@@ -152,8 +162,14 @@ def render(log_path):
 def main():
     ap = argparse.ArgumentParser(description="ASCII progress chart for Enigma pretraining.")
     here = os.path.dirname(os.path.abspath(__file__))
-    ap.add_argument("--log", default=os.path.join(here, "train_large.log"),
-                    help="path to the training log (default: train_large.log)")
+    # Runs write train_<lineage>.log, so a fixed default points at the v1 log
+    # forever. Follow the newest, and name it -- the same rule
+    # tail_training_log.ps1 uses.
+    _newest = sorted(glob.glob(os.path.join(here, "train_*.log")),
+                     key=os.path.getmtime, reverse=True)
+    ap.add_argument("--log", default=(_newest[0] if _newest
+                                      else os.path.join(here, "train_large.log")),
+                    help="path to the training log (default: the newest train_*.log)")
     ap.add_argument("--watch", type=float, default=0.0, metavar="SECS",
                     help="redraw every SECS seconds (Ctrl-C to stop)")
     args = ap.parse_args()
