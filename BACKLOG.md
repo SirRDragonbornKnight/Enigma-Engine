@@ -930,15 +930,30 @@ The block, in execution order:
   = 2.00B; each point gets its own decay tail and is judged post-decay):
 
         python sweep_lr.py --size v2_deep_238m --block 2048 --micro-batch 6 \
-          --grad-accum 16 --tokens 333000000 --lrs 6e-4,1.5e-3,3e-3 \
+          --grad-accum 16 --tokens 333000000 --lrs 1.5e-3,3e-3,6e-3 \
           --seeds 0,1 --warmup 150 --optimizer muon --schedule wsd_sqrt \
           --sdpa-backend cudnn --no-grad-ckpt \
           --tokens-bin data/pretrain/tokens_v2b.bin \
+          --out-root models/sweeps/t2_238m \
           --extra "--val-general-end 15055680259"
 
   (`sweep_lr.py` has no `--val-general-end` of its own; `--extra` is inserted
   before each point's own flags. Every flag above verified against the live
   argparse 2026-07-28.)
+
+  **BRACKET RULED 2026-07-28: 1.5e-3 / 3e-3 / 6e-3**, raised from
+  6e-4/1.5e-3/3e-3. `optim.py` scales each Muon step by
+  `0.2*sqrt(max(p.shape))` -- about 6.4x on a 1024-wide attention matrix and
+  ~10x on the SwiGLU projections. The old low end (6e-4, effective ~4e-3) sat
+  under the band Muon is normally trained in and the old high end (3e-3,
+  effective ~2e-2) sat at its top, so a win at 3e-3 would only have shown "at
+  least 3e-3". The new bracket straddles the band instead of bounding it from
+  below. 1,693 steps/point still clears the horizon guard (10 x warmup 150).
+
+  RUN CONDITION: this holds the whole 5090 for ~8.2 h at ~96% and ~24.6 GB, so
+  it is a wait-until-the-machine-is-free job -- and it must be the ONLY sweep
+  running. Two copies write the same `--out-root` and clobber each other's
+  `sweep_results.json`; that happened 2026-07-28 and neither run survived.
 - T3. Full v2 pretrain (5090; size = user's call at launch -- on the v2b
   corpus 238m 4.9 d/epoch or 542m 20.8 d/epoch; commands above, flags
   BRANCH on size).
