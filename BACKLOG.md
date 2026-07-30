@@ -1158,16 +1158,34 @@ The block, in execution order:
   longer a placeholder -- measured at 238m; a 542m launch inherits it
   unmeasured (item 7).
   **T3 PRE-FLIGHT (before any launch; ~an hour of code+drill total):**
-  1. add `save_every` to SCHEDULE_KEYS + pin it in the schedule test (a
-     resume currently re-imposes the caller's cadence, and the
-     pause-on-a-checkpoint protocol assumes the 250-step save survives);
-  2. the RESUME DRILL: tiny run, kill it, resume via `resume_training.ps1
-     -TokensBin`, verify schedule restoration end-to-end (the script has
-     never executed past its refusal path and has zero coverage);
+  1. ~~add `save_every` to SCHEDULE_KEYS + pin it~~ DONE 2026-07-30, and
+     PROVEN by the drill below: the resumed boot printed
+     `schedule[save_every] = 20 from checkpoint (CLI 250 ignored)`;
+  2. ~~the RESUME DRILL~~ **RUN 2026-07-30, and it found a real launch
+     defect.** Method: `--size tiny --block 256` for 920 steps carrying
+     six DELIBERATELY non-default schedule values (`save_every 20`,
+     `val_per_source 300000`, `archive_every 40`, `--no-grad-ckpt`,
+     `lr 3e-3`, `grad_accum 2`), killed on a checkpoint, resumed through
+     `resume_training.ps1 -Run drill_resume -TokensBin ...` under Task
+     Scheduler. Both segments detached (no `claude.exe` in either chain).
+     **RESULT: all 22 schedule keys restored**, each printing the CLI
+     default it overrode -- including the two new keys and the
+     `no_grad_ckpt` trap. Resume continued at step 920 with the restored
+     20/40 save and archive cadences.
+     **THE DEFECT (fixed, `8dd9f230`):** `cmd.exe` strips the outermost
+     quote pair from the line after `/c` when it holds several quoted
+     tokens, and both the interpreter path and this repo's path contain
+     spaces -- so the script launched NOTHING, wrote no log, and said so
+     only as a yellow note while exiting 0. Under Task Scheduler that
+     reports a dead resume as a successful one. The command now carries
+     an extra enclosing pair and a failed launch exits 1;
+     `test_detached_launchers_survive_cmd_quote_stripping` pins it
+     (mutation-verified against the old form). **A T3 resume would have
+     hit this on the first try.**
   3. ~~raise the `[final]` val prints to 6 decimals~~ DONE 2026-07-30:
      `[val]`/`[val-gen]`/`[val-src]`/`[final]` all print 6dp;
-  4. drop c4/owt from `--all-sources` (item 5 follow-up) so no future
-     collector run refetches what section 9 reclaimed;
+  4. ~~drop c4/owt from `--all-sources`~~ DONE 2026-07-30 (explicit
+     `--c4`/`--openwebtext` still work);
   5. item 11 went REBUILD (ruled 2026-07-30) -- it runs FIRST, per the
      runbook at item 11; the T2-swept LR carries to the rebuilt corpus
      (same vocab, similar mix; accepted 2026-07-29, not to be
