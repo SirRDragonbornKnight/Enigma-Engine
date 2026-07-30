@@ -58,12 +58,14 @@ own active repo (`C:\Users\SirKn\Enigma Avatar\`). Deepens with every other
 destination rather than waiting on any of them.
 
 ### 2. The bigger mind — NEXT (the v2 training block)
-238-542M deeper-thinner, 16k vocab, native block 2048, curated corpus with
-her identity and must-know facts pretrained in. This is where the honest
-weaknesses get attacked: facts (capacity), epistemics ("I don't know" is
-v2's single biggest win condition — 0/24 across both baselines), research-
-length context. Owner: `BACKLOG.md` §7.95 (T1 corpus rulings, then T2 probe,
-Gate B size call, T3-T7). Everything below gets easier after this.
+238M deeper-thinner (`v2_deep_238m`, ruled 2026-07-30), 16k vocab, native
+block 2048, curated corpus with her identity and must-know facts pretrained
+in. This is where the honest weaknesses get attacked: facts (capacity),
+epistemics ("I don't know" is v2's single biggest win condition — 0/24
+across both baselines), research-length context. Owner: `BACKLOG.md` §7.95
+(T1 corpus and the T2 sweep are DONE, Gate B and the rebuild are RULED;
+next the rebuild, then T3-T7).
+Everything below gets easier after this.
 
 ### 3. Her own runtime — "on her own", literally (after v2)
 A Rust inference engine for HER architecture: single executable + weights

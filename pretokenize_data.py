@@ -79,9 +79,9 @@ SOURCE_DIRS = [
     ("FineWeb-Edu", BASE_DIR / "fineweb_edu"),
     # C4 and OpenWebText are OUT by ruling (2026-07-27): DCLM replaces them
     # -- the model-filtered stream beats both on the research receipts, so
-    # the swap raises corpus quality at roughly constant size and keeps the
-    # 7.9 grid near its measured 8.8/19.2 d/epoch. Their dirs stay on disk
-    # (section 9 rules deletions); this list is what the corpus walks.
+    # the swap raises corpus quality at roughly constant size (BACKLOG 7.9
+    # owns the d/epoch grid). Their dirs were ruled dead 2026-07-29
+    # (section 9); this list is what the corpus walks.
     ("Wayback", BASE_DIR / "wayback"),
     ("Fandom", BASE_DIR / "fandom"),
     ("DCLM", BASE_DIR / "dclm"),

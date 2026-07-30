@@ -37,9 +37,16 @@ Muppet.
 ## Update 2026-07-15 — user rulings + methods audit (4-reviewer pass)
 
 **User rulings, binding on all future work:**
-- **Privacy is absolute.** serve is offline-by-default (`HF_HUB_OFFLINE` etc.;
-  `--allow-downloads` exists solely for an explicit first weight fetch).
-  Nothing she hears or says leaves this machine. Ever.
+- **Privacy is absolute (rewritten 2026-07-29 by user ruling: the rule is
+  PRIVACY, not zero egress).** serve is offline-by-default (`HF_HUB_OFFLINE`
+  etc.; `--allow-downloads` exists solely for an explicit first weight
+  fetch) and local-first stays the default posture. Nothing PRIVATE — hers
+  or the user's — leaves this machine, ever; off-machine operations that
+  preserve that privacy are permissible while it holds.
+- **One hot job, one owner (2026-07-29).** Before ANY GPU launch, check
+  `nvidia-smi` and the target out dir; the session or shortcut that
+  launched a run owns it — nobody else stops, duplicates, or relaunches it
+  (born from the 07-28 twin-sweep collision that killed both runs).
 - **Her abilities must become HER OWN.** Borrowed organ backbones
   (whisper/sd-turbo/Kokoro — BLIP is already retired for her own ViT) are
   SCAFFOLDING; every organ has a transplant path to own-trained weights —
@@ -324,8 +331,11 @@ the next GPU spend, ahead of Phases 4/5.
 - **Gate: a written list of things Phase 2-5 Enigma provably cannot do —
   that list lives in `PHASE7_GATE.md` (started 2026-07-06, receipts included).
   The locked-probe baseline is MEASURED (56/120 v8, 55/120 v5, 2026-07-27
-  -- see `EVAL_REDESIGN.md`); T1 corpus prep is DONE, so what still gates the
-  v2 pretrain is the T2 probe and the size call — not Phases 4/5.**
+  -- see `EVAL_REDESIGN.md`); T1 corpus prep is DONE, T2 CLOSED 2026-07-29
+  (LR sweep: 3e-3 measured), and both launch gates RULED 2026-07-30:
+  **Gate B = `v2_deep_238m`**, **corpus rebuild before T3** (records at
+  `BACKLOG.md` items 7/11). What gates the launch now is the rebuild itself
+  plus the T3 pre-flight — not Phases 4/5.**
 
 ---
 

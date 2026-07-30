@@ -454,14 +454,18 @@ x5** (extent [0, 8,483,455], `repeated_sources {'Curated': 5}`), zero
 absent sources, ETOK header == sidecar == file-size arithmetic. New
 sources: DCLM 4.094B tokens / FineMath 3.483B / The Stack 4.875B = 12.45B
 (44%) of the corpus is the new model-filtered web + math + code diet;
-C4 and OpenWebText are out by ruling (their text stays on disk, unwalked).
+C4 and OpenWebText are out by ruling (their dirs ruled dead 2026-07-29 --
+BACKLOG section 9).
 Collector-side screening receipts (2026-07-27 run): 52,618 records dropped
 against the sealed probes across the three fetches, 11,463 special-token
 literals space-broken at fetch + **660 more at the pretokenize choke point**
 (the pre-scrubber sources' residue -- recorded in the sidecar as
 `special_literals_sanitized`). Bin + sidecar attrib +R; `tokens_v2.bin`
 below remains on disk as the receipted rollback. Grid at the measured
-rates: 186m 10.0 / 238m 10.5 / 542m 22.9 days/epoch.
+rates: 186m 4.1 / 238m 4.9 / 542m 20.8 days/epoch (re-measured 2026-07-28 at
+the real launch shapes over 150 steps, compile ON where it works; the earlier
+10.0/10.5/22.9 came from ~40-step eager probes -- BACKLOG item 7 owns the
+receipts).
 
 ### (superseded as the training corpus) CORPUS LANDED 2026-07-20: tokens_v2.bin
 

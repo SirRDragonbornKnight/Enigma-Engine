@@ -5,8 +5,11 @@
 pretrain is the next GPU spend, ahead of Phases 4/5. The baseline it needed
 is measured (56/120 v8, 55/120 v5 on the sealed locked set, 2026-07-27 —
 table and receipts in `EVAL_REDESIGN.md`, which owns all scorecard numbers);
-T1 corpus prep is DONE (tokens_v2b.bin, 2026-07-28); what remains before
-launch is the T2 probe and the size call (`BACKLOG.md` §7.95).
+T1 corpus prep is DONE (tokens_v2b.bin, 2026-07-28), T2 is CLOSED (LR
+sweep, 2026-07-29: 3e-3 measured), and both launch gates are RULED
+2026-07-30: **Gate B = `v2_deep_238m`**, **corpus rebuild before T3**
+(records at `BACKLOG.md` items 7 and 11). What remains before launch is the
+rebuild itself plus the T3 pre-flight.
 
 What stays live in this file: the measured-ceilings ledger (the written list
 of things Phase 2-5 Enigma provably cannot do, each with its receipt — the

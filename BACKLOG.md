@@ -28,7 +28,7 @@ four for four:
 
 1. ~~Collector GB targets + DCLM's role~~ **RULED 2026-07-27: SWAP.** DCLM
    replaces C4+OpenWebText (both removed from `SOURCE_DIRS`; their 32.4 GB
-   stays on disk pending section 9); collector targets = the defaults
+   was ruled dead by section 9 on 2026-07-29); collector targets = the defaults
    15/10/10 GB (DCLM/FineMath/Stack). Quality up at roughly constant corpus
    size. The 7.9 grid was re-derived from the new sidecar and MOVED --
    10.0/10.5/22.9 d/epoch, not the pre-swap 8.4/8.8/19.2 (and re-measured
@@ -67,14 +67,53 @@ four for four:
    Docs touched: EVAL_REDESIGN (owner of the scorecard numbers), plus the
    47/96 -> 56/120 correction in KNOWN_ISSUES, PHASE7_GATE, ROADMAP,
    TOKENIZER_V2_SPEC and VISION.
-5. **Section 9 disk reclaim** (~204 GB re-measured 2026-07-27): say which
-   rows die. -> section 9.
-6. **T2 go-hot** -- the next thing that needs a word. T1 is DONE, so the
-   probe is the immediate step: ~8.2 h of flat-out 5090 (or the same spend
-   as the 6-point LR sweep, which is the better buy -- both commands at
-   7.95 T2). The rig courtesy in CLAUDE.md makes a run this long the user's
-   call, not mine. GPU measured idle 2026-07-28. -> 7.95 T2.
-7. **Gate B -- pretrain size call**: 238m vs 542m vs 186m on the v2b grid.
+5. **Section 9 disk reclaim -- RULED 2026-07-29, EXECUTION PENDING (user):**
+   "delete anything old and unused and will not be used in the future."
+   Every row dies except `enigma_pi_zero.pth` (VISION heritage citation --
+   HELD; its row is split below so the hold is file-granular). Dying under
+   the same ruling from outside the table: C4+OpenWebText (30.2 GiB, out of
+   SOURCE_DIRS by ruling 1), the forgotten June copy at `C:\Enigma-Backups`
+   (18.3 GiB / 19.7 GB), the venv's llama-cpp-python package (0.69 GiB, GGUF-pivot
+   residue), and the 07-29 audit's added orphans (enigma_dpo_v8,
+   enigma_forge_tiny, enigma_lora_v1, two vision-align sibling copies,
+   wiki_dump_index.txt.bz2, models\registry.json, data\prompts\, data\notes\,
+   progress.json.bak, the serve logs, the orphan .venv\) -- ~245 GiB total,
+   every target verified on disk first. NOTE: `data\enigma_voice.md` and
+   `data\personality_corpus.jsonl` are GIT-TRACKED -- their deletion shows
+   as ` D` in git status and rides the next ordered commit. tokens.bin /
+   tokens_v2.bin were NOT named -- SACRED, pending their own word. ADDED
+   post-sweep 07-29: the six sweep point models (models\sweeps\t2_238m\*,
+   ~11.3 GB) are throwaway once Gate B is ruled -- user's word; the receipt
+   `sweep_results.json` itself NEVER dies.
+   FOLLOW-UP opened by the audit: `--all-sources` still re-downloads c4+owt
+   (collect_pretraining_data.py:3011/:3033) -- drop them from that flag
+   before the next collector run. The classifier blocks mass deletion from a
+   Claude tool call, so the exact commands were handed to the user; this row
+   stays OPEN until that run completes. -> section 9.
+   Docs touched: this row, section 9 header + rows, CLEANUP_TRACKER.md:41,
+   TOKENIZER_V2_SPEC.md:457, pretokenize_data.py SOURCE_DIRS comment,
+   extend_length.ps1 header, KNOWN_ISSUES.md item 5, ROADMAP.md rulings
+   block (the privacy scope + one-hot-job rules land THERE while CLAUDE.md
+   stays classifier-blocked).
+6. ~~T2 go-hot~~ **CLOSED 2026-07-29: the sweep RAN** -- detached,
+   2026-07-28 21:16 -> 2026-07-29 (~9 h); receipt
+   `models\sweeps\t2_238m\sweep_results.json`. FINALIZED 05:46 -- 6/6
+   points rc=0; the last point (6e-3 s1) wrote 3.1641, WORSE than 3e-3, so
+   the interior win stands on complete data. GPU RELEASED. Verdict at 7.95 T2: the lineage LEARNS and the
+   LR is MEASURED -- **3e-3, an interior win**. Per the
+   closing-opens-the-next rule: **the live gates are now item 7 (Gate B,
+   size) and item 11 (rebuild y/n) -- both sit directly between here and
+   T3, and T3 has a pre-flight list at 7.95 T3.**
+   Docs touched: 7.95 T2 (status + thermal receipt), item 7 (LR-transfer
+   note), 7.95 T3 (measured-LR annotation + pre-flight); stale-premise trio
+   caught by the 07-29 audit and fixed same day: ROADMAP.md:335,
+   PHASE7_GATE.md:9, VISION.md:65 (all still had T2 gating the launch).
+7. ~~**Gate B -- pretrain size call**~~ **RULED 2026-07-30: `v2_deep_238m`.**
+   Decided on the corrected ballot below (4.29x wall clock, measured LR at
+   the exact shape, compile ON, 1.50x serve latency, ~197 GB archives).
+   T3 launches the 238m command in section 7.9. The table and receipts stay
+   for the record:
+   238m vs 542m vs 186m on the v2b grid.
    **Decode latency MEASURED 2026-07-28** (RTX 5090, torch 2.10, serve path =
    generate_stream + serve's sampler under bf16 autocast, batch 1, prompt 32,
    48 decoded tokens, median of 5; random init -- shape drives batch-1 decode
@@ -93,8 +132,15 @@ four for four:
    plus the 16,366-row vocab add the rest. **186m is not dominated, but it is
    a poor buy**: it saves 16% training wall-clock (4.1 vs 4.9 d/epoch) and
    costs 39% more serving latency than 238m for 22% fewer parameters. 542m
-   costs 2.21x today's latency plus 2.19x the wall clock and a
-   cadence-dependent archive bill (~200-440 GB). -> 7.95 T3.
+   costs 2.21x today's latency and **4.29x the wall clock** -- 20.8 vs 4.9
+   d/epoch, the ratio this table's own rates give -- plus an archive bill of
+   ~450 GB against 238m's ~197 GB at the cadence each shape needs (derivation
+   under the launch commands). -> 7.95 T3.
+   **NEW INPUT 2026-07-29 -- the LR sweep ran at 238m.** A 238m pick
+   inherits a MEASURED 3e-3. A 542m pick inherits 3e-3 only via the Muon
+   scale-invariance argument (unmeasured) -- or spends its own sweep at
+   ~35 h (2B tok at 542m's 15.7k tok/s eager rate, compile unavailable at
+   that shape). One more measured point in 238m's favor.
 8. **Gate D -- adoption ratification**: T6's rule (beat the P2 aggregate
    with no category floor regression = adopt; anything else = user's call)
    is now code -- `eval_behavior --baseline <transcript>` prints the
@@ -106,7 +152,11 @@ four for four:
 10. **Vision training domain**: her eyes train on WHAT imagery ("different
    imagery, not everyday photos" -- domain never picked). ->
    VISION_QUALITY_SPEC section 4.
-11. **Is v2b good enough to train on, or is it worth ~1 day to rebuild?**
+11. ~~**Is v2b good enough to train on, or is it worth ~1 day to rebuild?**~~
+   **RULED 2026-07-30: REBUILD BEFORE T3** (the recommendation as written,
+   incl. the representative val holdout riding the rebuild). v2b stays on
+   disk as the receipted rollback until the rebuilt bin validates. The
+   four defects, kept for the record:
    One decision, because the same re-collect + retokenize fixes all four
    (2026-07-28 audit, every figure measured against the shipped artifact):
    * **The Stack is 100% Python.** 2,032 files, all `stack_python` = 4.87 B
@@ -144,9 +194,17 @@ four for four:
      cheapest fix may be to drop them from curated rather than exempt them.)
    MY READ: items 1-3 are real quality costs and item 4 is noise-level. None
    of them corrupts the corpus -- v2b is trainable as it stands. But T3 is
-   10-23 days, and a ~1-day rebuild before it is cheap insurance; a rebuild
-   after it is not. RECOMMEND rebuild before T3, and it can run while the T2
-   probe answers the "is this lineage learning" question on the current bin.
+   4.9 days at 238m and 20.8 at 542m, and a ~1-day rebuild before it is cheap
+   insurance; a rebuild after it is not. RECOMMEND rebuild before T3. (T2 has since answered the
+   "is this lineage learning" question on the current bin: yes.)
+   **SCOPE ADDED 2026-07-29 (audit + sweep evidence):** the same rebuild
+   must lay down a REPRESENTATIVE VAL HOLDOUT (strided/multi-source -- no
+   flag over a contiguous corpus can produce one, and the sweep measured
+   the FineWeb-Edu window's homogeneity directly: val-gen seed spread
+   tighter than tail-val on every rung -- 23x / below-print-resolution /
+   3.9x, ~9x on rung means). This is the one cheap moment for it; after T3
+   starts it is unfixable for the lineage. The T2-swept LR carries to the
+   rebuilt corpus (same vocab, similar mix) -- accepted 2026-07-29.
 12. **Memory recall ceiling k=3.** `render_context` defaults to 3 facts and
    both serve call sites take the default, so she can never surface more than
    three memories however many she holds -- and ties break newest-first, so
@@ -167,6 +225,17 @@ four for four:
    transcripts predate the field (both written 2026-07-27), so re-grading them
    still needs the sealed plaintext beside them.
    -> EVAL_REDESIGN second-grader section.
+14. **Structured output in v2 scope?** Zero support exists anywhere today
+   (no response_format / grammar / logit_bias; in no doc or backlog line
+   before this one). If v2 should have it, its DATA SHAPES must ride the T4
+   regen -- missing that window costs a full regen cycle. Runtime
+   enforcement can follow later; the trained shapes cannot. -> 7.95 T4.
+15. **Memory Tier-2 + episodic at T4?** The structured fact store
+   {subject, attribute, value, date, kind} is nearly free at the regen (SFT
+   already trains the sentence shape), and reserving kind:"episode" makes
+   session memory ("what were we working on yesterday?") an addition, not a
+   rewrite. Same T4-window argument as item 14; interacts with item 12's
+   k=3 ruling. -> 7.95 T4.
 
 ---
 
@@ -682,25 +751,46 @@ eager, which is why 542m alone matches its old number. That asymmetry is the
 Gate B headline: the 238m-vs-542m cost ratio is **4.3x**, not the 2.18x the old
 grid implied. Steady-state over 150 steps, not a multi-day thermal receipt.
 
-238m -- wall-clock optimal (10.5 days/epoch on v2b):
+238m -- wall-clock optimal (4.9 days/epoch on v2b):
 
     python pretrain_enigma.py --size v2_deep_238m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
-      --block 2048 --micro-batch 6 --tokens 28.3e9 --lr <from T2> \
+      --block 2048 --micro-batch 6 --tokens 28.3e9 --lr 3e-3 \
       --tokens-bin data/pretrain/tokens_v2b.bin \
       --val-general-end 15055680259 \
-      --out models/enigma_v2_238m --seed <N> --archive-every <N>
+      --out models/enigma_v2_238m --seed <N> --archive-every 1440
 
-542m -- largest the 5090 sanely trains (22.9 days/epoch on v2b). Note BOTH
+542m -- largest the 5090 sanely trains (20.8 days/epoch on v2b). Note BOTH
 changes: drop `--no-grad-ckpt` (checkpointing is mandatory here) and raise
 the micro-batch to 16:
 
     python pretrain_enigma.py --size v2_deep_542m --optimizer muon \
       --schedule wsd_sqrt --sdpa-backend cudnn \
-      --block 2048 --micro-batch 16 --tokens 28.3e9 --lr <from T2> \
+      --block 2048 --micro-batch 16 --tokens 28.3e9 --lr 3e-3 \
       --tokens-bin data/pretrain/tokens_v2b.bin \
       --val-general-end 15055680259 \
-      --out models/enigma_v2_542m --seed <N> --archive-every <N>
+      --out models/enigma_v2_542m --seed <N> --archive-every 540
+
+`--lr 3e-3` is the T2 measurement (interior win at 238m, 2026-07-29), and it
+is passed EXPLICITLY because the flag still defaults to the v1 lineage's 6e-4
+until the Gate D sunset. **542m inherits 3e-3 unmeasured on two axes** -- width
+(the Muon scale-invariance argument) and batch: at mb16 ga16 it trains
+524,288 tok/step against the swept 238m's 196,608, a 2.67x larger batch. Pinning
+`--grad-accum 6` at mb16 matches the swept tok/step and makes a 2-point
+spot-check cost ~11.8 h instead of a ~35 h full re-sweep.
+
+`--archive-every` derivation (post-hoc EMA needs ~10 archives inside the decay
+tail; `--wsd-decay-frac` is 0.10, one archive is a full save with optimizer
+state -- 1.9747 GB measured at 238m, `models\sweeps\t2_238m\*\model.pth`):
+
+| preset | tok/step | steps @28.26B | decay tail | archive-every | per-archive | uniform bill |
+|---|---|---|---|---|---|---|
+| `v2_deep_238m` | 196,608 | 143,747 | 14,375 | **1440** | 1.97 GB | ~197 GB |
+| `v2_deep_542m` | 524,288 | 53,905 | 5,390 | **540** | ~4.49 GB (scaled) | ~450 GB |
+
+The bill is the cost of a UNIFORM cadence keeping ~100 archives to get the ~10
+that matter. A tail-only archive gate -- archive only once
+`step >= anneal_first_step(total_steps, wsd_decay_frac)` -- cuts it ~90%.
 
 RESUMING EITHER OF THESE: `python pretrain_enigma.py --resume <ckpt>` and
 nothing else. The checkpoint carries the schedule (`SCHEDULE_KEYS`), including
@@ -883,7 +973,32 @@ The block, in execution order:
       test_vocab_selection pins; the candidates are the 18-row reserve
       (zero surgery, v1's own chat-token pattern) or trimming the 2 lowest
       merges (table stays 16,366; clean only while no v2 checkpoint exists).
-- T2. 10k-step probe pretrain (hours): first val-loss receipt for the v2
+- T2. **DONE 2026-07-29 -- ran as the SWEEP FORM** (detached 2026-07-28
+  21:16; receipt `models\sweeps\t2_238m\sweep_results.json`). Both T2
+  questions answered: the lineage LEARNS (six independent runs, rc=0,
+  finite finals at ~3.15 -- the trainer refuses the final save otherwise;
+  the descent from the ln(16366)=9.703 start was watched live but is
+  UNRECEIPTED: sweep_lr.py keeps child stdout in memory only, no per-step
+  log survives -- tee it next sweep) and the LR is MEASURED: **3e-3 wins
+  INSIDE the bracket**, 6/6 points rc=0, 8.5 h wall:
+
+      lr       s0      s1      seed spread
+      1.5e-3   3.1743  3.1732  0.0011
+      3e-3     3.1544  3.1544  0.0000 (at 4dp)
+      6e-3     3.1554  3.1641  0.0087
+
+  -- an interior minimum, not an endpoint. 3e-3 beats 1.5e-3 by 0.019
+  (~17x the low-LR seed noise); 6e-3's mean is 0.0054 worse AND its seed
+  spread is ~8x the other rungs' -- variance growth at the top of the
+  bracket is itself an instability signal, so 3e-3 is the pick both on
+  loss and on stability margin for a run 85x longer than a sweep point.
+  Caveat: rank resolution is 1e-4 (the `[final]` print is 4dp --
+  pre-flight raises it). **THERMAL RECEIPT:** tok/s 67.5-69.9k across all
+  six points over 8.5 h -- no sustained-load fade.
+  The archive-cadence shakeout did NOT happen (sweep points never
+  archive) -- verify the first decay-tail archives live, early in T3.
+  Original entry, kept as the record of the options weighed:
+  10k-step probe pretrain (hours): first val-loss receipt for the v2
   lineage + live shakeout of archive cadence. The only v2 runs on disk are
   throughput probes. Same flags as T3 at the chosen size, with the budget cut
   down — the defaults are the trap here too:
@@ -956,7 +1071,23 @@ The block, in execution order:
   `sweep_results.json`; that happened 2026-07-28 and neither run survived.
 - T3. Full v2 pretrain (5090; size = user's call at launch -- on the v2b
   corpus 238m 4.9 d/epoch or 542m 20.8 d/epoch; commands above, flags
-  BRANCH on size).
+  BRANCH on size). `--lr 3e-3` is now MEASURED (the T2 sweep winner), no
+  longer a placeholder -- measured at 238m; a 542m launch inherits it
+  unmeasured (item 7).
+  **T3 PRE-FLIGHT (before any launch; ~an hour of code+drill total):**
+  1. add `save_every` to SCHEDULE_KEYS + pin it in the schedule test (a
+     resume currently re-imposes the caller's cadence, and the
+     pause-on-a-checkpoint protocol assumes the 250-step save survives);
+  2. the RESUME DRILL: tiny run, kill it, resume via `resume_training.ps1
+     -TokensBin`, verify schedule restoration end-to-end (the script has
+     never executed past its refusal path and has zero coverage);
+  3. raise the `[final]` val prints to 6 decimals (4dp capped the sweep's
+     rank resolution at 1e-4);
+  4. drop c4/owt from `--all-sources` (item 5 follow-up) so no future
+     collector run refetches what section 9 reclaimed;
+  5. if item 11 goes REBUILD, it runs FIRST -- and the T2-swept LR carries
+     to the rebuilt corpus (same vocab, similar mix; accepted 2026-07-29,
+     not to be re-litigated mid-run).
 - T4. SFT regen riding the bake (data work, minutes-hours of GPU):
   multi-turn, <think> reasoning, math re-enabled (per-digit vocab kills the
   old disable reason), widened knowledge, DPO pairs beyond identity, the
@@ -984,6 +1115,12 @@ The block, in execution order:
   the organ lands by then -- the 31 orphan `<search>` tag records deleted at
   T4 (T1 ruling 4) get replaced by records whose tags have a runtime owner,
   or research waits for the next regen; no tag trains unowned either way.
+  (Privacy scope ruled 2026-07-29 -- canonical text lives in ROADMAP's
+  binding-rulings block, ONE home. Consequence here: privacy-preserving
+  lookup, local first, is permitted, so the research organ is unblocked in
+  principle. T4 REGEN FLAG from the same audit: identity_anchors.py:261
+  trains the ABSOLUTE claim "nothing leaves this machine" -- rescope that
+  anchor at the regen or she asserts a falsehood the day lookup ships.)
 - T5. DPO/polish pass (safe recipe: lr 5e-7 x 1 epoch). Regenerate
   `dpo_pairs.jsonl` as part of this: both trainers now refuse an artifact
   carrying a sealed probe, so a stale file stops the run rather than rigging
@@ -1011,6 +1148,33 @@ The block, in execution order:
     - serve's `--max-context` still defaults to **1024**. A model trained at
       block 2048 and served at 1024 silently throws away the context win the
       whole lineage was for — raise it at adoption and re-check VRAM.
+    - **The pretrain defaults re-point to the ADOPTED lineage at this gate**
+      (ruled 2026-07-29 -- the SUNSET of the never-change-defaults
+      guardrail, following the vocab-contract adoption-flip pattern): flip
+      the `--optimizer/--schedule/--block/--tokens-bin/--val-general-end/
+      --lr` defaults to the adopted v2 values in the same commit that swaps
+      the checkpoint. AUDIT CORRECTION 2026-07-29 (re-corrected same day:
+      the bit-identical CONTRACT is test-encoded --
+      test_pretrain_arsenal.py:36 pins the cosine/adamw math to the live
+      run -- what no test pins is the argparse default SELECTION, so
+      flipping the defaults today would break ZERO tests), so FIRST add a
+      source-scan test in the
+      test_pretrain_seed.py:54 pattern pinning all six defaults, THEN flip
+      it at adoption. Retire ONLY the warnings for flipped flags (`--lr`,
+      `--val-general-end`, `--tokens-bin`, `--block`); the `--tokens` and
+      `--archive-every` warnings cover flags NOT in the flip list and STAY.
+      (The CLAUDE.md guardrail edit recording this sunset was
+      classifier-blocked 2026-07-29; this bullet is the operative record
+      until it can land. The paste package handed to the user had only the
+      privacy-scope and one-hot-job lines -- audit caught the gap. THIRD
+      LINE, for CLAUDE.md:109, append to the do-not-change-defaults rule:
+      "-- SUNSETS at Gate D adoption (BACKLOG 2026-07-29): the defaults
+      flip to the adopted v2 values in the checkpoint-swap commit,
+      test-pinned first.")
+    - **Run the OFFLINE SECOND GRADER on the T6 transcript** (`tool_graded`
+      unblocks it for post-07-28 transcripts): it re-grades from the
+      transcript alone and neutralizes the unknown-category gaming risk
+      (item 13) without needing a content reseal.
     - Gate statistics: the sealed set is **15 probes per category** since
       reseal #7, meeting EVAL_REDESIGN's ">= 15" rule (one flip = 6.67%).
       Two things follow that the aggregate alone hides:
@@ -1130,30 +1294,75 @@ Consequences, binding on the training block and organ work:
 
 ---
 
-## 9. Disk reclaim — pending the user's ruling (surveyed 2026-07-26)
+## 9. Disk reclaim — RULED 2026-07-29; the table below is the manifest
 
-> ~200 GB of verified orphans. Deletions of this class are the user's call,
-> never a cleaning pass's: each line below is expensive or impossible to
-> recreate casually, even though nothing in the live pipeline reads it.
-> Receipts: the 2026-07-26 artifact survey (four-agent cleaning pass,
-> CLEANUP_TRACKER). SACRED and untouchable regardless: **tokens_v2b.bin (THE
-> LIVE TRAINING CORPUS, 65.8 min to rebuild)**, tokens.bin (+R since 07-26),
-> tokens_v2.bin (receipted rollback), Enigma Backups\, the SOURCE_DIRS
-> corpora, llava/, LibriSpeech/, and the adopted/backed-up checkpoints.
+> **THE RULING (user, 2026-07-29): "delete anything old and unused and will
+> not be used in the future."** Made with disk-death on the table: the SSD
+> is trusted to outlive the build, and old weights are never retrained --
+> new ones get trained instead. Every row below dies EXCEPT
+> `enigma_pi_zero.pth` (VISION.md heritage citation -- HELD for an explicit
+> word). Also dying, from outside the table: `data\pretrain\c4` +
+> `openwebtext` (out of SOURCE_DIRS by ledger ruling 1), the June copy at
+> `C:\Enigma-Backups`, and the venv's llama-cpp-python package (GGUF-pivot
+> residue). Execution is the user's hands -- the classifier blocks mass
+> deletion from a Claude tool call. SACRED and untouchable regardless:
+> **tokens_v2b.bin (THE LIVE TRAINING CORPUS, 65.8 min to rebuild)**,
+> tokens.bin (+R since 07-26), tokens_v2.bin (receipted rollback),
+> Enigma Backups\, the SOURCE_DIRS corpora, llava/, LibriSpeech/, and the
+> adopted/backed-up checkpoints -- tokens.bin and tokens_v2.bin were NOT
+> named by the ruling and stay pending their own word.
 
 | Candidate | Size | Why it is an orphan |
 |---|---|---|
 | `data\pretrain\combined.txt` | 95.1 GB | Forge-era combined stream; pretokenize reads SOURCE_DIRS instead ("doesn't touch combined.txt" is in its docstring); the Forge arm is deleted. Rebuildable by `collect_pretraining_data.py --combine`. |
 | `models\qwen3-30b-a3b\` + `models\qwen3-8b\` | 34.95 GB | Qwen-era local weights, zero references; the distill teacher runs over Ollama, not these dirs. |
 | `data\pretrain\enwiki-latest-pages-articles.xml.bz2` | 25.1 GB | Source archive already fully extracted into `wikipedia_dump\` (a live source dir); re-downloadable. |
-| `models\enigma_pretrain_large\step_*.pth` (9 files) | 19.7 GB | Intermediate v1 checkpoints; the lineage-final latest/model/prev are backed up with receipts. Deleting trades mid-run archaeology for the space. |
+| `models\enigma_pretrain_large\step_*.pth` (9 files) | 19.7 GB | Intermediate v1 checkpoints. RE-CORRECTED 2026-07-29 (the first correction was itself wrong): only `model.pth` has a receipted backup (`Enigma Backups\enigma_pretrain_large_final\` = model.pth/config.json/bpe_vocab.json + .sha256s, nothing else). The repo's `latest`/`prev` (07-03 finals) are KEPT. `C:\Enigma-Backups` (also dying) holds 7 of the 9 step files PLUS its own stale mid-run `latest`/`prev` from 06-29 -- older than the repo finals, so still not independent coverage of the final state. Deleting trades mid-run archaeology for the space. |
 | `models\enigma_sft_v8\` | 6.56 GB | Superseded by the `enigma_sft_phase2_pass` backup. |
 | `data\audio\train-clean-100.tar.gz` | 6.4 GB | Extracted to `LibriSpeech\` already; re-downloadable. |
 | `models\enigma_pretrain_probe\` + `probe_tput_v2_deep_186m\` | 5.6 GB | Probe runs, July; their numbers are recorded in BACKLOG/TOKENIZER_V2_SPEC. |
 | `models\enigma_pretrain_base\` + `enigma_pretrain_base_v2\` | 4.2 GB | Abandoned 121M side-runs (base_v2 died at step 2010/5086); historical prose mentions only. |
 | `models\checkpoints\` | 3.4 GB | Forge-era best/final/vision .pt + a May run; nothing loads them. |
 | `models\enigma_sft\model_v2_diluted.pth` | 2.19 GB | A 4th weight copy beside model/latest/prev in a dir whose receipts are already in Backups. |
-| Loose: `enigma_small.pth`, `smoke.pth`, `enigma_pi_zero.pth` | 0.35 GB | Zero code references. NOTE before ruling: VISION.md destination 5 cites `enigma_pi_zero.pth` as the Pi-class heritage artifact -- deleting it orphans that citation. |
+| Loose: `enigma_small.pth`, `smoke.pth` | 0.33 GB | Zero code references. DIE under the 2026-07-29 ruling. |
+| `models\enigma_pi_zero.pth` | 0.01 GB | **HELD** -- VISION.md destination 5 cites it as the Pi-class heritage artifact; deleting it orphans that citation. Needs its own word. |
 | `data\curriculum\`, `data\conversations\`, `data\model_contexts\` + 14 dead loose `data\` files: `.gui_lock`, `anchor_examples.jsonl`, `curated_dataset.jsonl`, `distilled_smoke.txt`, `enigma_gui_training.txt`, `enigma_voice.md`, `gui_settings.json`, `instructions.txt`, `personality_corpus.jsonl`, `prompts.json`, `route_assignments.json`, `training.txt`, `training_brief.json`, `training_history.json` | ~4 MB | Forge/GUI-era outputs, zero code references (census 2026-07-27). NOT in this row: `mute_state.json` (live serve runtime state) and `smoke_test_basic.txt`/`smoke_test_dpo.jsonl` (regenerable outputs of `create_smoke_test_data.py`). |
 
-Say which rows die and they die; the rest stays.
+> **ONE DOT SEPARATES A CLEANUP FROM A BREAKAGE.** `venv\` and `.venv\` are
+> different directories and only one of them dies. **`venv\` (7.73 GB) is
+> LOAD-BEARING** -- kokoro lives there and `Start-Enigma.ps1` launches the
+> server from `venv\Scripts\python.exe`, so deleting it disables voice on
+> every launch. `.venv\` (0.01 GB) is the orphan. Deleting the orphan reclaims
+> 10 MB; the typo costs 7.73 GB and the voice organ. The llama-cpp-python row
+> above is a PACKAGE INSIDE `venv\`, not the directory: uninstall the package,
+> never remove its parent. (Both sizes measured 2026-07-30.)
+
+**Manifest additions -- candidates the ruling's language covers that the table
+above never listed** (sizes measured 2026-07-30; `code_refs` = files matching
+the name under `*.py`/`*.ps1`/`*.bat`):
+
+| Candidate | Size | code_refs | Status |
+|---|---|---|---|
+| `models\enigma_dpo_v8\` | 2.19 GB | 0 | Orphan -- superseded DPO lineage. |
+| `models\enigma_vision_align\` 2 of 3 `.pt` siblings | 1.96 GB | 2 | `vision1` / `vision_best` / `vision_step` are three 0.98 GB copies. The DIR is referenced -- keep `vision_best.pt`, the other two are the reclaim. |
+| `data\pretrain\wiki_dump_index.txt.bz2` | 0.28 GB | 0 | Index for an archive already extracted to `wikipedia_dump\`; re-downloadable. |
+| `models\enigma_forge_tiny\` | 0.15 GB | 0 | Forge-era, zero references. |
+| `models\enigma_lora_v1\` | 0.13 GB | 0 | LoRA-era, zero references. |
+| `.venv\` | 0.01 GB | 0 | The ORPHAN env -- read the one-dot warning above before typing this path. |
+| `models\registry.json`, `data\prompts\` | <0.01 GB | 0 | Forge-era residue. |
+
+Additions total ~4.72 GB. **NOT proposed and NOT orphans:** `venv\` (see
+above) and `models\enigma_pretrain_facts\` (6.56 GB, 1 code ref -- it is the
+facts-pretrain lineage, and the "facts need continued-pretrain not SFT" finding
+rests on it; needs its own word before it dies).
+
+**`models\sweeps\t2_238m\` (11.85 GB / 11.03 GiB, measured 2026-07-30) is on no
+row and should NOT be deleted yet.** The six point dirs are throwaway final
+models, but they are the only cheap way to re-rank the T2 winner: tail-val
+already prefers 6e-3 at seed 0 while [val-gen] picked 3e-3, so the winner is
+window-dependent, and re-scoring six existing checkpoints costs ~0.5-1 h of GPU
+against ~8.5 h to re-run the sweep. SCORE FIRST, THEN DELETE — scoring
+authorized 2026-07-30.
+
+Ruled 2026-07-29 as above; when the user's deletion run completes, move this
+section's record to CLEANUP_TRACKER with the per-item receipts.

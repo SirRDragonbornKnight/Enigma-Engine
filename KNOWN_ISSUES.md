@@ -1,4 +1,4 @@
-# Known Issues — current as of 2026-07-26
+# Known Issues — current as of 2026-07-29
 
 _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
 `_archive/CODE_REVIEW.md` (bugs), `CLEANUP_TRACKER.md` (file state)._
@@ -81,8 +81,9 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
    from `finetune_enigma.py`) get the real template + tool calls. SFT
    checkpoints are live (`models/enigma_sft*`); serve auto-detects per
    checkpoint.
-5. **base_v2 (122M @ step 2,000) is pipeline-validation quality only** —
-   barely trained. Don't judge her by it; probe the large 51k checkpoint.
+5. **base_v2 (122M @ step 2,000) was pipeline-validation quality only** —
+   barely trained, and RULED DEAD under the 2026-07-29 section-9 reclaim.
+   Probe the large 51k checkpoint.
 6. **Vendored weight -- CLOSED 2026-07-25.** `enigma_engine/bin/llama-server/`
    was 1.07 GB (1,066,991,160 bytes) of CUDA DLLs for the GGUF route,
    intentional while the GGUF serving pivot was open. That pivot was

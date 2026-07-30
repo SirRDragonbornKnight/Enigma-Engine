@@ -8,8 +8,6 @@
 # ---------------------------------------------------------------------------
 # DECISIONS baked in below -- review before firing (all measured/derived):
 #   SOURCE  models/enigma_pretrain_large/model.pth  (the finished 182M base).
-#           If you finish the enigma_pretrain_probe anneal first, repoint this
-#           at its exported model.pth -- it is a lower-loss base.
 #   BLOCK   2048 (doubles context). rope_theta is already 500000 in the base,
 #           so no theta raise is needed -- only longer training windows.
 #   GEOM    micro-batch 6 x grad-accum 16 = 196,608 tok/step. Probe-measured

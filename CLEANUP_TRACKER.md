@@ -38,10 +38,12 @@ Current truth:
 - **Judged ALIVE and now listed below (they were reference-free but are ops
   tools for the coming training block):** `sweep_lr.py`, `bench_generate.py`,
   `extend_length.ps1`, `power_guardian.ps1`.
-- Disk-reclaim candidates (~204 GB re-measured 2026-07-27; BACKLOG section 9
-  owns every per-row size, not restated here) are listed in BACKLOG
-  §"Disk reclaim" -- deletions of that class are the user's ruling, not a
-  cleaning pass's.
+- Disk-reclaim candidates (manifest + per-row sizes in BACKLOG §"Disk
+  reclaim") -- **RULED 2026-07-29**: "delete anything old and unused and
+  will not be used in the future." Execution handed to the user (the
+  classifier blocks mass deletion from a Claude tool call); the section-9
+  row tracks it until the run completes. pi_zero.pth HELD; tokens.bin /
+  tokens_v2.bin not named, pending their own word.
 
 ## 2026-07-18 compression pass (what changed)
 
