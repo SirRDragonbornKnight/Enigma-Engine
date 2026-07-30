@@ -67,7 +67,12 @@ four for four:
    Docs touched: EVAL_REDESIGN (owner of the scorecard numbers), plus the
    47/96 -> 56/120 correction in KNOWN_ISSUES, PHASE7_GATE, ROADMAP,
    TOKENIZER_V2_SPEC and VISION.
-5. **Section 9 disk reclaim -- RULED 2026-07-29, EXECUTION PENDING (user):**
+5. ~~**Section 9 disk reclaim**~~ **RULED 2026-07-29, EXECUTED AND CLOSED
+   2026-07-30** (moved -> verified -> deleted on the user's order; +262.4 GB
+   measured; full record + surviving receipts at section 9).
+   Docs touched: section 9 (closure record), CLEANUP_TRACKER.md,
+   `Enigma Backups\s9_manifest_reconstructed_2026-07-30.md`.
+   Original row, kept for the manifest trail:
    "delete anything old and unused and will not be used in the future."
    Every row dies except `enigma_pi_zero.pth` (VISION heritage citation --
    HELD; its row is split below so the hold is file-granular). Dying under
@@ -83,8 +88,8 @@ four for four:
    as ` D` in git status and rides the next ordered commit. tokens.bin /
    tokens_v2.bin were NOT named -- SACRED, pending their own word. ADDED
    post-sweep 07-29: the six sweep point models (models\sweeps\t2_238m\*,
-   ~11.3 GB) are throwaway once Gate B is ruled -- user's word; the receipt
-   `sweep_results.json` itself NEVER dies.
+   11.85 GB measured) are throwaway once Gate B is ruled -- user's word; the
+   receipt `sweep_results.json` itself NEVER dies.
    ~~FOLLOW-UP: `--all-sources` still re-downloads c4+owt~~ DONE 2026-07-30
    (dropped from the flag; explicit `--c4`/`--openwebtext` still work).
    **EXECUTED 2026-07-30 as a MOVE, not a delete: 272.77 GB across 60
@@ -105,9 +110,9 @@ four for four:
    points rc=0; the last point (6e-3 s1) wrote 3.1641, WORSE than 3e-3, so
    the interior win stands on complete data. GPU RELEASED. Verdict at 7.95 T2: the lineage LEARNS and the
    LR is MEASURED -- **3e-3, an interior win**. Per the
-   closing-opens-the-next rule: **the live gates are now item 7 (Gate B,
-   size) and item 11 (rebuild y/n) -- both sit directly between here and
-   T3, and T3 has a pre-flight list at 7.95 T3.**
+   closing-opens-the-next rule: the gates this closing opened were item 7
+   (Gate B) and item 11 (rebuild) -- **both since RULED 2026-07-30**; T3's
+   pre-flight list is at 7.95 T3.
    Docs touched: 7.95 T2 (status + thermal receipt), item 7 (LR-transfer
    note), 7.95 T3 (measured-LR annotation + pre-flight); stale-premise trio
    caught by the 07-29 audit and fixed same day: ROADMAP.md:335,
@@ -115,8 +120,12 @@ four for four:
 7. ~~**Gate B -- pretrain size call**~~ **RULED 2026-07-30: `v2_deep_238m`.**
    Decided on the corrected ballot below (4.29x wall clock, measured LR at
    the exact shape, compile ON, 1.50x serve latency, ~197 GB archives).
-   T3 launches the 238m command in section 7.9. The table and receipts stay
-   for the record:
+   T3 launches the 238m command in section 7.9.
+   Docs touched: this row + the re-score table below, section 7.9 launch
+   commands, ROADMAP.md (gate line + preset line), PHASE7_GATE.md (status +
+   charter band), VISION.md destination 2, TOKENIZER_V2_SPEC.md cost
+   estimate.
+   The table and receipts stay for the record:
    238m vs 542m vs 186m on the v2b grid.
    **Decode latency MEASURED 2026-07-28** (RTX 5090, torch 2.10, serve path =
    generate_stream + serve's sampler under bf16 autocast, batch 1, prompt 32,
@@ -136,10 +145,11 @@ four for four:
    plus the 16,366-row vocab add the rest. **186m is not dominated, but it is
    a poor buy**: it saves 16% training wall-clock (4.1 vs 4.9 d/epoch) and
    costs 39% more serving latency than 238m for 22% fewer parameters. 542m
-   costs 2.21x today's latency and **4.29x the wall clock** -- 20.8 vs 4.9
-   d/epoch, the ratio this table's own rates give -- plus an archive bill of
-   ~450 GB against 238m's ~197 GB at the cadence each shape needs (derivation
-   under the launch commands). -> 7.95 T3.
+   costs 2.21x today's latency and **4.29x the wall clock** (the measured
+   tok/s ratio 67,400/15,700; the rounded d/epoch pair 20.8/4.9 gives 4.24x
+   -- same verdict either way) plus an archive bill of ~450 GB against
+   238m's ~197 GB at the cadence each shape needs (derivation under the
+   launch commands). -> 7.95 T3.
    **NEW INPUT 2026-07-29 -- the LR sweep ran at 238m.** A 238m pick
    inherits a MEASURED 3e-3. A 542m pick inherits 3e-3 only via the Muon
    scale-invariance argument (unmeasured) -- or spends its own sweep at
@@ -159,8 +169,11 @@ four for four:
 11. ~~**Is v2b good enough to train on, or is it worth ~1 day to rebuild?**~~
    **RULED 2026-07-30: REBUILD BEFORE T3** (the recommendation as written,
    incl. the representative val holdout riding the rebuild). v2b stays on
-   disk as the receipted rollback until the rebuilt bin validates. The
-   four defects, kept for the record:
+   disk as the receipted rollback until the rebuilt bin validates.
+   Docs touched: this row + the runbook below, ROADMAP.md gate line,
+   PHASE7_GATE.md status, VISION.md destination 2, 7.95 T3 pre-flight
+   item 5, run_collect_rebuild.ps1 (new, committed `953b8142`).
+   The four defects, kept for the record:
    One decision, because the same re-collect + retokenize fixes all four
    (2026-07-28 audit, every figure measured against the shipped artifact):
    * **The Stack is 100% Python.** 2,032 files, all `stack_python` = 4.87 B
@@ -227,7 +240,8 @@ four for four:
       finemath, the_stack}` were MOVED to
       `C:\Users\SirKn\_retired_packed_2026-07-30\` -- a same-volume
       rename, so it cost no space and is reversible until the new corpus
-      validates. The four source dirs remain, empty. Resume keys
+      validates. The four source dirs remained (empty until the re-collect
+      began refilling them). Resume keys
       `dclm` / `finemath_4plus` / `infiwebmath_3plus` / `stack_python`
       stripped from `data\pretrain\progress.json` (a stale
       `records_consumed` skips the fresh stream past records it never
@@ -299,6 +313,19 @@ four for four:
    session memory ("what were we working on yesterday?") an addition, not a
    rewrite. Same T4-window argument as item 14; interacts with item 12's
    k=3 ruling. -> 7.95 T4.
+16. ~~**The Stack language mix**~~ **RULED 2026-07-30: WEIGHTED** (python
+   3.0x, javascript/typescript/java/c/cpp 1.5x, go/rust/ruby/php/shell/sql/
+   json 1.0x, html/css/markdown 0.3x -- landed in `_STACK_LANGUAGES` before
+   the Stack leg started, so the running collect picks it up when that leg
+   fires). Background kept for the record: equal-share was the negation of
+   the 100%-python bug, never a diet -- it would have cut python 17.25% ->
+   ~1% of corpus and handed 25% of the code budget to markup by default.
+   With the weights, python's floor is ~19.7% of the code budget (~2.1 GiB,
+   ~2-3% of corpus), json keeps 1.0x for the tool-call shape, and a dry
+   language's unused share still spreads forward weight-proportionally
+   (the weights ARE the floor guarantee; order only routes windfalls).
+   Docs touched: this row, `_STACK_LANGUAGES` + fetch_the_stack docstring
+   + budget loop in collect_pretraining_data.py.
 
 ---
 
@@ -878,7 +905,7 @@ checkpointing. Re-pass `--no-grad-ckpt` when resuming one of those.
 - `--tokens` defaults to **2e9** — one fourteenth of the v2b corpus.
   Omitting it trains 7.1% of an epoch (~8.2 h at the re-measured 238m rate)
   and, because `total_steps` is derived from it, places the WSD decay tail
-  there too: the run ends, looks finished, and is nowhere near the 10.5
+  there too: the run ends, looks finished, and is nowhere near the 4.9
   days/epoch this section quotes. Pass the token budget EXPLICITLY.
 - `--tokens-bin` defaults to the v1 `tokens.bin`: pass the v2 corpus
   EXPLICITLY or the run trains the new architecture on the old tokenization.
@@ -1066,15 +1093,16 @@ The block, in execution order:
 
   | rung | val (tail) | val-gen | val-src (30 srcs) |
   |---|---|---|---|
-  | 1.5e-3 | 3.500191 | 3.174746 | 2.675088 |
+  | 1.5e-3 | 3.500192 | 3.174746 | 2.675088 |
   | **3e-3** | **3.485606** | **3.156487** | **2.660042** |
   | 6e-3 | 3.488551 | 3.161336 | 2.664861 |
 
   **3e-3 wins all three signals, and wins 30/30 individual source
   windows** -- including the code/math/StackExchange windows no earlier
   val could see (The Stack 1.097, FineMath 2.280 at 3e-3_s0). It also has
-  the tightest seed spread on all three (val-src sd 0.0011 vs 6e-3's
-  0.0066), so the instability read at the bracket top holds. The one
+  the tightest seed spread on all three (val-src |s0-s1| range 0.0011 vs
+  6e-3's 0.0066; at n=2 seeds a range, not an sd), so the instability read
+  at the bracket top holds. The one
   genuine disagreement the 4dp print had hidden is now resolved: at seed
   0 alone, tail-val does prefer 6e-3 (3.486331 vs 3.486709, a 3.8e-4
   margin) -- but that flips on the seed mean and is contradicted by every
@@ -1084,7 +1112,10 @@ The block, in execution order:
   six points over 8.5 h -- no sustained-load fade.
   The archive-cadence shakeout did NOT happen (sweep points never
   archive) -- verify the first decay-tail archives live, early in T3.
-  Original entry, kept as the record of the options weighed:
+  Original entry, kept as the record of the options weighed -- **its LR
+  language is SUPERSEDED: "treat 3e-3 as a placeholder" was true when
+  written and is now false (measured 2026-07-29, re-confirmed at 6dp
+  2026-07-30; the settled verdict is 20 lines up)**:
   10k-step probe pretrain (hours): first val-loss receipt for the v2
   lineage + live shakeout of archive cadence. The only v2 runs on disk are
   throughput probes. Same flags as T3 at the chosen size, with the budget cut
@@ -1462,26 +1493,29 @@ above) and `models\enigma_pretrain_facts\` (6.56 GB, 1 code ref -- it is the
 facts-pretrain lineage, and the "facts need continued-pretrain not SFT" finding
 rests on it; needs its own word before it dies).
 
-**`models\sweeps\t2_238m\` (11.85 GB / 11.03 GiB, measured 2026-07-30) is on no
-row and should NOT be deleted yet.** The six point dirs are throwaway final
-models, but they are the only cheap way to re-rank the T2 winner: tail-val
-already prefers 6e-3 at seed 0 while [val-gen] picked 3e-3, so the winner is
-window-dependent, and re-scoring six existing checkpoints costs ~0.5-1 h of GPU
-against ~8.5 h to re-run the sweep. **HOLD DISCHARGED 2026-07-30: the scoring
-RAN** (~8.2 min/checkpoint, ~50 min total; receipts in `Enigma Backups\`, verdict
-at item 7 -- 3e-3 confirmed on all three signals and 30/30 source windows). The
-six point dirs have given up everything they hold and are now free to delete on
-the user's word.
+~~**`models\sweeps\t2_238m\` should NOT be deleted yet**~~ **SCORED, THEN
+DELETED -- the hold worked exactly as designed.** The six point dirs
+(11.85 GB / 11.03 GiB measured) were the only cheap way to re-rank the T2
+winner (tail-val preferred 6e-3 at seed 0 while [val-gen] picked 3e-3), so
+they were held for scoring: ~8.2 min/checkpoint, ~50 min total, verdict at
+item 7 -- 3e-3 confirmed on all three signals and 30/30 source windows, the
+seed-0 disagreement resolved as noise. Receipts survive at `Enigma Backups\
+t2_sweep_rescore_2026-07-30.json` + six `t2_rescore_*.log`. The dirs then
+died in the section 9 wave below; `sweep_results.json` remains.
 
-## Section 9 EXECUTED 2026-07-30, as a MOVE
+## Section 9 CLOSED 2026-07-30: moved, verified, then DELETED on the user's order
 
-**272.77 GB across 60 targets** now sits in
-`C:\Users\SirKn\_retired_s9_2026-07-30\`, mirroring its source layout, with a
-`_manifest.json` recording every source path, staged path and byte count.
-Nothing is destroyed yet: a same-volume rename costs no space, is reversible,
-and collapses a dozen risky paths -- including the one-character `venv` /
-`.venv` pair -- into ONE directory for the single irreversible command. The
-free-space reclaim lands when that directory is deleted.
+**272.77 GB across 60 targets** was staged to
+`C:\Users\SirKn\_retired_s9_2026-07-30\` (same-volume rename: no space cost,
+reversible, one path for the single irreversible command instead of a dozen
+including the one-character `venv`/`.venv` pair), verified, and the staging
+directory deleted the same day. **C: free went 1,265.8 -> 1,528.2 GB
+(+262.4 GB measured).** The original `_manifest.json` died WITH the staging
+dir -- the surviving receipt is
+`Enigma Backups\s9_manifest_reconstructed_2026-07-30.md` (all 60 targets at
+2dp GB, transcribed from the move output; exact bytes did not survive --
+lesson: a receipt must never live inside the thing whose deletion it
+documents).
 
 Measured before moving (the "~245 GiB" estimate was in GiB; 272.77 GB = 254 GiB,
 so the two agree). Largest: `combined.txt` 95.12, `enwiki .xml.bz2` 25.10,
@@ -1503,12 +1537,20 @@ model/latest/prev, `progress.json`, `Enigma Backups\`, and all twelve live
 corpus source directories. Suite 831 green, and the detached re-collect ran
 through the whole operation untouched.
 
-`data\enigma_voice.md` and `data\personality_corpus.jsonl` are GIT-TRACKED, so
-the tree now shows those two as ` D` pending an ordered commit.
+The two GIT-TRACKED files (`data\enigma_voice.md`,
+`data\personality_corpus.jsonl`) were removed in `f0d8ac4c` on the user's
+order. Residue that regenerates: `data\pretrain\progress.json.bak` is
+rewritten by every collector save, so its row can only die for real after the
+last collect run -- delete it then, not before. The dead `combine_all_sources`
+path is NOT separator-aware and still carries its own 50M exact-set dedup; it
+stays dead (`--no-combine` is mandatory in the runbook) and must not be
+resurrected without porting both fixes.
 
-**The remaining step is the user's:** delete
-`C:\Users\SirKn\_retired_s9_2026-07-30\` once nothing is missed. Until then
-every byte is recoverable from `_manifest.json`.
+Backups predating the wave, both in `Enigma Backups\`:
+`enigma-engine_all-refs_2026-07-30.bundle` (git bundle --all, verified
+complete history, 10 refs -- the only off-repo copy of the four LOCAL-ONLY
+backup branches; NOTE it was cut at `15518a55` and needs a refresh to cover
+later commits) and `memory-bank_2026-07-30.zip`.
 
-Ruled 2026-07-29 as above; when the deletion completes, move this
-section's record to CLEANUP_TRACKER with the per-item receipts.
+Ruled 2026-07-29, executed and closed 2026-07-30 (this section is the
+per-item record; CLEANUP_TRACKER carries the pointer).

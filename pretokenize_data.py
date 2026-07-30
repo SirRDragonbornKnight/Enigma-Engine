@@ -80,11 +80,10 @@ SOURCE_DIRS = [
     ("Simple Wiki", BASE_DIR / "simple_wiki"),
     ("Gutenberg", BASE_DIR / "gutenberg"),
     ("FineWeb-Edu", BASE_DIR / "fineweb_edu"),
-    # C4 and OpenWebText are OUT by ruling (2026-07-27): DCLM replaces them
-    # -- the model-filtered stream beats both on the research receipts, so
-    # the swap raises corpus quality at roughly constant size (BACKLOG 7.9
-    # owns the d/epoch grid). Their dirs were ruled dead 2026-07-29
-    # (section 9); this list is what the corpus walks.
+    # C4 and OpenWebText are OUT: DCLM replaces them -- the model-filtered
+    # stream beats both on the research receipts, so the swap raises corpus
+    # quality at roughly constant size. Their dirs are retired; this list is
+    # what the corpus walks.
     ("Wayback", BASE_DIR / "wayback"),
     ("Fandom", BASE_DIR / "fandom"),
     ("DCLM", BASE_DIR / "dclm"),
@@ -342,11 +341,15 @@ def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64)
             # separator contain none and pass through as one document.
             for record in text.split(DOC_SEP_CHAR):
                 paragraphs = [p.strip() for p in record.split("\n\n")]
-                # Dedup in three layers that together reproduce the old
-                # sequential first-wins semantics: short paragraphs bypass
-                # (never hashed), an intra-record repeat loses to its first
-                # occurrence, and the record's unique digests are then checked
-                # against -- and added to -- the global filter in one batch.
+                # Dedup in three layers: short paragraphs bypass (never
+                # hashed), an intra-record repeat loses to its first
+                # occurrence (keyed on the full 128-bit digest pair), and the
+                # record's unique digests are then checked against -- and
+                # added to -- the global filter in one batch. Near-sequential
+                # semantics: the one divergence is a Bloom false positive
+                # completed by an EARLIER paragraph in the same batch, which
+                # the batch form keeps (sequential would drop it) -- fewer
+                # unique paragraphs lost, deterministic either way.
                 hashed_idx = [i for i, p in enumerate(paragraphs)
                               if len(p) >= MIN_PARAGRAPH_LENGTH]
                 dropped: set[int] = set()
@@ -383,7 +386,7 @@ def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64)
                         stats["dedup_capped"] = True
                         print(f"  WARNING: dedup filter past its design capacity "
                               f"({bloom.capacity:,} adds) -- false-positive rate now "
-                              f"exceeds {bloom.fpr:.0%}; recorded as dedup_capped "
+                              f"exceeds {bloom.fpr:.2%}; recorded as dedup_capped "
                               f"in the sidecar")
 
                 cleaned = "\n\n".join(p for i, p in enumerate(paragraphs)

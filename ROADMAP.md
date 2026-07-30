@@ -321,7 +321,9 @@ the next GPU spend, ahead of Phases 4/5.
   lineage. Scaling-law grounding: TOKENIZER_V2_SPEC.
 - Deeper-thinner architecture, Muon + WSD from step 0 (both implemented in
   `core/optim.py`, flag-gated off for lineage compat), QK-norm BEFORE RoPE,
-  optional gated attention, 350-700M params — the 5090 (32GB) can carry it.
+  optional gated attention, ~~350-700M params~~ **238M by Gate B ruling
+  (2026-07-30; the band was the pre-measurement hypothesis)** — the 5090
+  (32GB) carries it with compile ON.
   **Presets ready**: `v2_deep_186m` / `v2_deep_238m` / `v2_deep_542m`
   (28L@768 / 20L@1024 / 30L@1280, Peri-LN, QK-norm-before-RoPE, olmo2_flat
   init), all opt-in with v1 defaults untouched. They declare

@@ -3144,24 +3144,32 @@ def fetch_finemath(target_gb: float, progress: dict) -> int:
     return saved_a + saved_b
 
 
-# Languages used by SmolLM3 — priority order (most useful first)
+# Languages used by SmolLM3, with per-language weights (ruled 2026-07-30).
+# The split is weight-proportional, not equal: python carries 3x because
+# co-located step-by-step numeric reasoning is the one measurable lever code
+# has on the math eval category; the compiled workhorses carry 1.5x; the
+# markup/data formats carry 0.3x because FineWeb-Edu and StackExchange
+# already supply that shape -- except json at 1.0, which tool-call emission
+# is shaped like. A dry language's unused share spreads over the languages
+# after it in this order, weight-proportionally; the weights are the floor
+# guarantee, the order only routes windfalls.
 _STACK_LANGUAGES = [
-    "python",
-    "javascript",
-    "typescript",
-    "java",
-    "c",
-    "cpp",
-    "go",
-    "rust",
-    "ruby",
-    "php",
-    "shell",
-    "sql",
-    "html",
-    "css",
-    "markdown",
-    "json",
+    ("python", 3.0),
+    ("javascript", 1.5),
+    ("typescript", 1.5),
+    ("java", 1.5),
+    ("c", 1.5),
+    ("cpp", 1.5),
+    ("go", 1.0),
+    ("rust", 1.0),
+    ("ruby", 1.0),
+    ("php", 1.0),
+    ("shell", 1.0),
+    ("sql", 1.0),
+    ("html", 0.3),
+    ("css", 0.3),
+    ("markdown", 0.3),
+    ("json", 1.0),
 ]
 _STACK_PERMISSIVE = {
     "mit",
@@ -3182,8 +3190,10 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
     `max_stars_repo_licenses`, the fields this loop reads); v2 publishes
     only blob ids that need a separate Software Heritage S3 fetch.
 
-    Iterates over 16 priority languages (SmolLM3 selection), each capped at an
-    equal share of the REMAINING target so no single language can fill the pull.
+    Iterates over 16 languages (SmolLM3 selection), each capped at a
+    WEIGHT-proportional share of the REMAINING target (python 3x, workhorse
+    compiled languages 1.5x, markup 0.3x -- see _STACK_LANGUAGES) so no
+    single language can fill the pull and the mix is a chosen diet.
     Filters to permissive licenses (MIT/Apache/BSD/ISC/etc.).
     Code data teaches structured reasoning, pattern completion, and precise
     instruction following.
@@ -3224,18 +3234,19 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
     locked_guard = _locked_probe_guard("The Stack")
     start_time = time.monotonic()
 
-    remaining_langs = len(_STACK_LANGUAGES)
-    for lang in _STACK_LANGUAGES:
+    remaining_weight = sum(w for _, w in _STACK_LANGUAGES)
+    for lang, lang_weight in _STACK_LANGUAGES:
         if total_bytes >= target_bytes:
             break
 
-        # Each language takes an equal share of what is LEFT to collect, so no
-        # single language can fill the target alone. Dividing the REMAINDER
-        # rather than the target hands an unavailable or exhausted language's
-        # share to the ones after it, so the target is still met when the data
-        # exists.
-        lang_budget = (target_bytes - total_bytes) / max(1, remaining_langs)
-        remaining_langs -= 1
+        # Each language takes its WEIGHT-proportional share of what is LEFT
+        # to collect, so no single language can fill the target alone and the
+        # mix is a chosen diet rather than a uniform default. Dividing the
+        # REMAINDER rather than the target hands an unavailable or exhausted
+        # language's share to the ones after it, weight-proportionally, so
+        # the target is still met when the data exists.
+        lang_budget = (target_bytes - total_bytes) * lang_weight / max(1e-9, remaining_weight)
+        remaining_weight -= lang_weight
         lang_start_bytes = total_bytes
 
         lang_progress_key = f"stack_{lang}"
@@ -3727,10 +3738,9 @@ Examples:
             args.wayback = 1000
         if args.fandom <= 0 and not args.fandom_all:
             args.fandom = 2000
-        # C4 and OpenWebText stay OFF here: DCLM replaced them by ruling
-        # (2026-07-27) and their dirs were reclaimed (section 9, 2026-07-29)
-        # -- a max-defaults run must not refetch 30 GB of retired sources.
-        # Both remain reachable by their explicit flags.
+        # C4 and OpenWebText stay OFF here: DCLM supersedes them and their
+        # dirs are retired -- a max-defaults run must not refetch 30 GB of
+        # retired sources. Both remain reachable by their explicit flags.
         if args.dclm <= 0:
             args.dclm = 15.0
         if args.finemath <= 0:

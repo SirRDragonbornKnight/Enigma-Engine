@@ -1,9 +1,22 @@
 # Detached launcher for the v2c corpus re-collect (BACKLOG item 11 runbook step 3).
 #
-# Runs collect_pretraining_data.py OUTSIDE the Claude process tree via Task
-# Scheduler, so restarting the Claude app cannot kill a multi-hour pull. The
-# launcher waits on the child and writes a .done marker carrying the exit code,
-# so a finished run is distinguishable from a killed one.
+# THIS SCRIPT DOES NOT DETACH ITSELF. Detachment comes from running it FROM a
+# scheduled task -- launched directly, the pull is a child of your shell and
+# dies with it. Register + fire (once; a far-future -Once trigger never
+# refires):
+#   $a = New-ScheduledTaskAction -Execute powershell.exe -Argument
+#     "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File <this file>"
+#   Register-ScheduledTask EnigmaCollectRebuild -Action $a -Trigger
+#     (New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)) -Principal
+#     (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME"
+#       -LogonType Interactive -RunLevel Limited)
+#   Start-ScheduledTask EnigmaCollectRebuild
+# Then verify the python parent chain ends at svchost, not your shell.
+#
+# The launcher waits on the child and writes a .done marker carrying the exit
+# code. A marker means the child EXITED; no marker means running, killed, or
+# timed out (the task's ExecutionTimeLimit kills the whole tree with no
+# marker) -- absence carries no information.
 #
 # --resume is REQUIRED: without it the collector resets progress.json to
 # {gutenberg_ids: [], stats: {}} and drops fandom_done_wikis, forcing a full
@@ -26,6 +39,13 @@ $errLog = Join-Path $repo "data\collect_rebuild_2026-07-30.err.log"
 $done = Join-Path $repo "data\collect_rebuild_2026-07-30.done"
 
 if (Test-Path $done) { Remove-Item $done -Force }
+# -RedirectStandardOutput OVERWRITES. On a relaunch the previous attempt's log
+# is the only record of why it died -- preserve it, don't destroy it.
+foreach ($f in @($log, $errLog)) {
+    if (Test-Path $f) {
+        Move-Item $f ($f + ".prev") -Force
+    }
+}
 
 # ONE string, not an array: -ArgumentList joins array elements with spaces
 # WITHOUT quoting them, so the space in "Enigma Engine" splits the script path
@@ -45,7 +65,15 @@ $proc = Start-Process -FilePath $python -ArgumentList $argString `
 
 # BelowNormal for the Chrome Remote Desktop budget: the session is driven
 # remotely with SMT off, so a foreground-priority job makes the desktop crawl.
+# The venv python.exe is a REDIRECTOR STUB that spawns the base interpreter as
+# a child within milliseconds; priority is inherited at creation, so setting
+# only the stub races the spawn. Set the stub, then sweep its children.
 try { $proc.PriorityClass = "BelowNormal" } catch { }
+Start-Sleep -Seconds 3
+try {
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" |
+        ForEach-Object { (Get-Process -Id $_.ProcessId -ErrorAction Stop).PriorityClass = "BelowNormal" }
+} catch { }
 
 # WaitForExit() on the object, not Wait-Process: Wait-Process leaves the
 # process object's ExitCode unpopulated, so the marker recorded "exit=".

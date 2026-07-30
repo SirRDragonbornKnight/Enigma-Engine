@@ -202,6 +202,9 @@ if (-not $now) {
   Write-Host ("FAILED: no pretrain process appeared. Check {0}." -f $log) -ForegroundColor Red
   Write-Host "--- last log lines ---" -ForegroundColor DarkGray
   if (Test-Path $log) { Get-Content $log -Tail 20 } else { Write-Host "(no log was written at all)" }
+  # The desktop shortcut is the common caller and its window closes with the
+  # script -- without this pause the FAILED banner is visible for ~0 ms.
+  Start-Sleep 12
   exit 1
 }
 Write-Host ("Started. python PID {0}. Logging to {1}." -f $now.ProcessId, $log) -ForegroundColor Green

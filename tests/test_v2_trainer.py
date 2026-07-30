@@ -283,11 +283,66 @@ def test_source_val_windows_hold_out_every_source_but_never_a_repeated_one():
 
 
 def test_the_per_source_fences_survive_a_resume():
-    """The windows are FENCES. A resume that dropped --val-per-source would
-    let train sampling eat every held-out window, and the rest of the run's
-    [val-src] would score data it just trained on. Same trap class as
-    no_grad_ckpt; membership in SCHEDULE_KEYS is the whole fix."""
+    """val_per_source is schedule-recorded, and the restore runs before the
+    value is read. Membership alone is NOT the fence mechanism (that lives in
+    get_batch's redraw, exercised elsewhere) -- this pins the resume half: a
+    key missing from SCHEDULE_KEYS falls back to the CLI default 0 on a bare
+    --resume, the fences vanish, and the rest of the run's [val-src] scores
+    data it just trained on."""
     assert "val_per_source" in pretrain_enigma.SCHEDULE_KEYS
+    assert "save_every" in pretrain_enigma.SCHEDULE_KEYS
+
+    # Restore-before-use, the ordering a membership assert cannot see (same
+    # pin no_grad_ckpt carries): the blind setattr must precede the first
+    # read of either key, or the recorded value never takes effect.
+    import inspect
+
+    src = inspect.getsource(pretrain_enigma.main)
+    restore = src.index("setattr(args, k, v)")
+    assert restore < src.index("args.val_per_source"), \
+        "schedule restore must run before --val-per-source is read"
+    assert restore < src.index("args.save_every"), \
+        "schedule restore must run before --save-every is read"
+
+
+def test_source_windows_slide_below_the_val_gen_window():
+    """FineWeb-Edu's extent ends exactly at the recommended --val-general-end,
+    so an unslid window NESTS INSIDE val-gen and [val-src]'s heaviest
+    component re-measures [val-gen] instead of adding a signal. The slide
+    must move the window below the avoided interval, and must NOT move a
+    window that never overlapped it."""
+    windows = pretrain_enigma.source_val_windows
+    meta = {"source_token_extents": {"FW": [0, 100_000], "Other": [100_000, 200_000]}}
+    # avoid = the val-gen window at FW's tail, exactly the real geometry
+    got = windows(meta, train_end=300_000, block=64, per_source=10_000,
+                  avoid=(90_000, 100_000))
+    fw = dict((w[0], (w[1], w[2])) for w in got)["FW"]
+    assert fw == (80_000, 90_000), (
+        "FW's window must slide BELOW the avoided interval -- an unslid "
+        "builder returns (90_000, 100_000), a re-measurement of val-gen"
+    )
+    # a source that never overlapped the avoid interval is untouched
+    other = dict((w[0], (w[1], w[2])) for w in got)["Other"]
+    assert other == (190_000, 200_000)
+    # no avoid: FW's window sits at its extent tail, the pre-slide behavior
+    got = windows(meta, train_end=300_000, block=64, per_source=10_000)
+    assert dict((w[0], (w[1], w[2])) for w in got)["FW"] == (90_000, 100_000)
+
+
+def test_fence_coverage_past_a_fifth_of_the_train_stream_refuses_at_boot():
+    """The train sampler redraws around fences (rejection sampling), so fence
+    coverage is a boot-time contract: at ~2% it costs nothing, at 100% the
+    first train batch spins forever with NO output -- the run wedges silently.
+    The guard must refuse past 20%, and must stay quiet at sane coverage."""
+    import inspect
+
+    src = inspect.getsource(pretrain_enigma.main)
+    assert "fence_tokens / train_end > 0.20" in src, \
+        "the boot-time fence-coverage refusal is gone -- a --val-per-source " \
+        "typo can wedge the first train batch in a silent infinite redraw"
+    assert "fence redraw spun" in src, \
+        "the per-range spin cap is gone -- fences smothering a subrange " \
+        "(e.g. an anneal region) spin silently instead of failing loudly"
 
 
 def test_resume_restores_the_grad_checkpoint_flag():

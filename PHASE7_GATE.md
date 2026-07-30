@@ -75,8 +75,13 @@ Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
   number handling (kills ceiling #1 at the root). Requires retokenizing the
   raw sources with `pretokenize_data.py` (rebuilds the 227 GB / 211 GiB
   tokens.bin).
-- **350-700M params, deeper-thinner.** Ceilings #2-#4 are capacity walls;
-  the 5090 (32GB) carries this size. HRM stays parked (ARC Prize critique).
+- **~~350-700M params~~ deeper-thinner, RULED BELOW THE BAND: Gate B chose
+  `v2_deep_238m` (238.4M) on 2026-07-30** — the 350-700M charter band was the
+  pre-measurement hypothesis, and the measured grid (compile works at 238m
+  and fails at 542m, 4.9 vs 20.8 d/epoch, 1.50x vs 2.21x serve latency)
+  priced the band's lower half out. Ceilings #2-#4 are capacity walls the
+  238m pick still attacks (1.31x today's params + a 16k vocab + native 2048).
+  HRM stays parked (ARC Prize critique).
 - **Native block 2048-4096** from step 0. Intra-document attention masking
   was part of this line as written; RULED 2026-07-27: skipped for the v2
   run (negligible at this block by Meta's own measurement, and not worth

@@ -61,8 +61,9 @@ destination rather than waiting on any of them.
 238M deeper-thinner (`v2_deep_238m`, ruled 2026-07-30), 16k vocab, native
 block 2048, curated corpus with her identity and must-know facts pretrained
 in. This is where the honest weaknesses get attacked: facts (capacity),
-epistemics ("I don't know" is v2's single biggest win condition — 0/24
-across both baselines), research-length context. Owner: `BACKLOG.md` §7.95
+epistemics ("I don't know" is v2's single biggest win condition — 0/15 on
+BOTH baselines at reseal #7, zero refusals across 30 unanswerables; the old
+"0/24" was the 96-probe era's count), research-length context. Owner: `BACKLOG.md` §7.95
 (T1 corpus and the T2 sweep are DONE, Gate B and the rebuild are RULED;
 next the rebuild, then T3-T7).
 Everything below gets easier after this.

@@ -38,12 +38,14 @@ Current truth:
 - **Judged ALIVE and now listed below (they were reference-free but are ops
   tools for the coming training block):** `sweep_lr.py`, `bench_generate.py`,
   `extend_length.ps1`, `power_guardian.ps1`.
-- Disk-reclaim candidates (manifest + per-row sizes in BACKLOG §"Disk
-  reclaim") -- **RULED 2026-07-29**: "delete anything old and unused and
-  will not be used in the future." Execution handed to the user (the
-  classifier blocks mass deletion from a Claude tool call); the section-9
-  row tracks it until the run completes. pi_zero.pth HELD; tokens.bin /
-  tokens_v2.bin not named, pending their own word.
+- ~~Disk-reclaim candidates~~ **RULED 2026-07-29, EXECUTED AND CLOSED
+  2026-07-30**: 272.77 GB / 60 targets moved to one staging path, verified,
+  then deleted on the user's order -- C: free +262.4 GB measured. Per-item
+  record lives in BACKLOG section 9; the surviving manifest (2dp GB per
+  target -- the byte-exact original died with the staging dir) is
+  `Enigma Backups\s9_manifest_reconstructed_2026-07-30.md`. pi_zero.pth
+  HELD and verified present after; tokens.bin / tokens_v2.bin not named,
+  still pending their own word.
 
 ## 2026-07-18 compression pass (what changed)
 

@@ -360,13 +360,14 @@ Consequences that everything else works around:
      16x1024 is on the wide side). All three UNPROVEN at sub-1B specifically —
      you'd be the replication; A/B on the locked eval.
 
-## Cost estimate (anchored on ROADMAP's ~12 GPU-days/epoch)
+## Cost estimate (SUPERSEDED -- kept as the record of the pre-measurement
+## projection; the measured grid is 186m 4.1 / 238m 4.9 / 542m 20.8 d/epoch
+## on the 28.26B v2b corpus, and Gate B ruled 238m on 2026-07-30)
 
-- Retokenization: hours-to-a-day, no GPU.
-- Pretrain 182M over ~23B tokens ~= **~5 GPU-days** (fewer tokens than the
-  original 56.7B pass at the same throughput). OR spend the budget on size:
-  **350-700M over ~23B tokens ~= ~12-20 GPU-days**. Wall-clock **~1-3 weeks**
-  depending on the size call.
+- Retokenization: hours-to-a-day, no GPU. (Measured since: 42-66 min.)
+- ~~Pretrain 182M over ~23B tokens ~= **~5 GPU-days** ... OR spend the budget
+  on size: **350-700M over ~23B tokens ~= ~12-20 GPU-days**. Wall-clock
+  **~1-3 weeks** depending on the size call.~~
 - Throughput is NOT independently measured here -- it leans on ROADMAP's own
   figure. Run a 10k-step probe first to firm it up.
 - Downstream re-do is cheap: SFT/DPO re-run in minutes-hours; any encoders

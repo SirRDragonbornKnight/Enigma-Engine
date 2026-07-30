@@ -47,6 +47,7 @@ import json
 import random
 from pathlib import Path
 
+from collect_pretraining_data import DOC_SEP_JOIN
 from enigma_engine.core.persona import Persona
 from eval_leak_guard import LockedProbeGuard
 from identity_anchors import EXAMPLES as IDENTITY_EXAMPLES
@@ -170,7 +171,12 @@ def write_shards(kept: dict[str, list[str]], out_dir: Path) -> int:
     for i in range(0, len(docs), DOCS_PER_SHARD):
         chunk = docs[i : i + DOCS_PER_SHARD]
         shard = out_dir / f"curated_{i // DOCS_PER_SHARD:04d}.txt"
-        shard.write_text("\n\n".join(chunk) + "\n", encoding="utf-8")
+        # DOC_SEP_JOIN, not "\n\n": a blank line is indistinguishable from a
+        # paragraph break, so a shard joined with it reads as ONE document at
+        # pretokenize time -- 2,000 identity/fact documents sharing a single
+        # <s>/</s> pair. The packed-source separator contract applies to this
+        # writer exactly as it does to the HF fetchers.
+        shard.write_text(DOC_SEP_JOIN.join(chunk) + "\n", encoding="utf-8")
         written += 1
     return written
 

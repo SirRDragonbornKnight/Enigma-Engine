@@ -58,7 +58,7 @@ _TPS_REF_AFTER = 50  # steps of warmup excluded from the reference rate
 
 # Everything a resume must restore to continue the SAME run, recorded into
 # every checkpoint. Operational knobs that do not change the run's cost or math
-# (--save-every/--eval-every/--compile/--throttle-ms/...) stay CLI-controlled.
+# (--eval-every/--compile/--throttle-ms/...) stay CLI-controlled.
 # --seed is deliberately absent: restoring it would re-seed the sampler and
 # replay the windows the run already trained on.
 SCHEDULE_KEYS = (
@@ -318,7 +318,8 @@ def report_val_sources(meta: dict, train_end: int, n: int,
 
 
 def source_val_windows(meta: dict, train_end: int, block: int,
-                       per_source: int) -> list[tuple[str, int, int]]:
+                       per_source: int,
+                       avoid: tuple[int, int] | None = None) -> list[tuple[str, int, int]]:
     """Carve one held-out window from the tail of each source's extent.
 
     A single contiguous window cannot represent the diet -- it lands inside
@@ -335,6 +336,12 @@ def source_val_windows(meta: dict, train_end: int, block: int,
       after clipping to `train_end` (a window narrower than one sample would
       draw the same span every batch).
 
+    A window that would overlap `avoid` (the val-gen window) is slid below it
+    instead: FineWeb-Edu's extent ends exactly at the recommended
+    --val-general-end, so without the slide its window NESTS INSIDE val-gen
+    and [val-src]'s heaviest component is a re-measurement of [val-gen]
+    rather than an independent signal.
+
     Returns [(label, lo, hi)] in walk order; empty when per_source is 0 or
     the corpus predates the extents record.
     """
@@ -350,6 +357,10 @@ def source_val_windows(meta: dict, train_end: int, block: int,
                 and all(isinstance(v, int) and not isinstance(v, bool) for v in ext[:2])):
             continue
         hi = min(ext[1], train_end)
+        if avoid is not None:
+            a_lo, a_hi = avoid
+            if max(ext[0], hi - per_source) < a_hi and hi > a_lo:
+                hi = min(hi, a_lo)
         lo = max(ext[0], hi - per_source)
         if hi - lo <= block + 1:
             continue
@@ -542,10 +553,12 @@ def main() -> None:
     ap.add_argument(
         "--eval-only",
         action="store_true",
-        help="load --init-from / --resume weights, print every val window at "
-        "6dp, and exit without training. Runs eager (compile warmup would "
-        "dominate) and seeds the batch draw so different checkpoints score "
-        "on IDENTICAL batches -- margins are paired, not two noisy absolutes.",
+        help="load --init-from weights, print every val window at 6dp, and "
+        "exit without training. Runs eager (compile warmup would dominate) "
+        "and seeds the batch draw so different checkpoints score on "
+        "IDENTICAL batches -- margins are paired, not two noisy absolutes. "
+        "--resume is refused here: it restores each checkpoint's own "
+        "schedule, which un-pairs the scores.",
     )
     ap.add_argument("--no-grad-ckpt", action="store_true", help="disable gradient checkpointing")
     ap.add_argument(
@@ -608,7 +621,19 @@ def main() -> None:
     # a NEW run (immutable-lineage rule), so it must have an explicit --out that
     # is not the source checkpoint's own directory (which it would clobber).
     if args.eval_only and not ckpt_arg:
-        raise SystemExit("--eval-only needs weights: pass --init-from <ckpt> (or --resume)")
+        raise SystemExit("--eval-only needs weights: pass --init-from <ckpt>")
+    if args.eval_only and args.resume:
+        # Scoring compares checkpoints under ONE CLI. --resume restores each
+        # checkpoint's OWN recorded schedule (block, corpus, val windows), so
+        # two resumed checkpoints can silently evaluate on different data and
+        # the "paired batches" property the re-seed buys is void. It also
+        # refuses weight-only exports and loads optimizer moments a
+        # forward-only pass never uses.
+        raise SystemExit(
+            "--eval-only with --resume un-pairs the scores (each checkpoint "
+            "restores its own schedule); pass --init-from <ckpt> so every "
+            "checkpoint evaluates under this command line's windows"
+        )
     if warm_start:
         if not args.out and not args.eval_only:
             # eval-only writes nothing, so a scoring pass over an existing
@@ -879,13 +904,19 @@ def main() -> None:
         print(f"val-gen window: [{vg_lo:,}, {vg_end:,}) -- pre-append tail, fenced from train sampling", flush=True)
 
     block = args.block
-    # One held-out window per source, each fenced like the val-gen window.
-    # Weighted by diet share (source extent span), their mean is the
-    # representative signal a single contiguous window cannot give.
-    src_windows = source_val_windows(meta, train_end, block, args.val_per_source)
+    # One held-out window per source, each fenced like the val-gen window,
+    # slid below the val-gen window where they would overlap. Weighted by
+    # diet share (source extent span), their mean is the representative
+    # signal a single contiguous window cannot give.
+    src_windows = source_val_windows(
+        meta, train_end, block, args.val_per_source,
+        avoid=(vg_lo, vg_end) if use_val_gen else None,
+    )
     if args.val_per_source > 0 and not src_windows:
         print("val-src: no eligible source windows (corpus predates the extents "
-              "record, or every source is repeated/too narrow) -- [val-src] disabled",
+              "record, every source is repeated/too narrow, or --val-per-source "
+              f"{args.val_per_source:,} is below block+2={block + 2:,}) -- "
+              "[val-src] disabled",
               flush=True)
     if src_windows:
         extents = meta.get("source_token_extents") or {}
@@ -897,7 +928,9 @@ def main() -> None:
             f"val-src windows ({len(src_windows)}): "
             + ", ".join(f"{lab} [{lo:,}, {hi:,})" for lab, lo, hi in src_windows[:3])
             + ("" if len(src_windows) <= 3 else f", +{len(src_windows) - 3} more")
-            + " -- fenced from train sampling, loss weighted by diet share",
+            + " -- fenced from train sampling, loss weighted by diet share "
+            "(non-repeated sources only: a repeated source cannot be held out, "
+            "its train copies would memorize the window)",
             flush=True,
         )
     # Every fenced interval, in one place: the guard checks them all and the
@@ -905,6 +938,19 @@ def main() -> None:
     fences = ([(vg_lo, vg_end)] if use_val_gen else []) + [
         (lo, hi) for _, lo, hi in src_windows
     ]
+    # The redraw is rejection sampling, so fence coverage is a boot-time
+    # contract: at ~2% it costs nothing, at 100% the first train batch spins
+    # forever with no output. Refuse anything past 20% -- no legitimate
+    # holdout needs a fifth of the corpus, and a --val-per-source typo is the
+    # only way to get there.
+    fence_tokens = sum(hi - lo for lo, hi in fences)
+    if fences and train_end > 0 and fence_tokens / train_end > 0.20:
+        raise SystemExit(
+            f"fenced windows cover {fence_tokens / train_end:.0%} of the train "
+            f"stream ({fence_tokens:,} of {train_end:,} tokens) -- the train "
+            f"sampler redraws around fences and would spin, not sample. Lower "
+            f"--val-per-source (currently {args.val_per_source:,})."
+        )
     # After block and the fenced windows are known, so the guard can check all
     # three couplings (val tail, fence, per-pass span vs window).
     refuse_repeated_source_in_val(
@@ -944,6 +990,32 @@ def main() -> None:
         # Windows) and hi is ~56.7e9.
         return np.random.randint(lo, hi - block - 1, size=size, dtype=np.int64)
 
+    def _draw_train(lo: int, hi: int, size: int):
+        # Train draws redraw around the fences WITHIN THE RANGE THEY WERE
+        # DRAWN FROM. Redrawing from the full train range instead silently
+        # dilutes the anneal: a curated-region index that hits a fence would
+        # come back as a general-region index, and the boot banner would
+        # still announce the requested anneal fraction.
+        ix = _draw(lo, hi, size)
+        if fences:
+            for j in range(len(ix)):
+                spins = 0
+                while any(f_lo - block <= ix[j] < f_hi for f_lo, f_hi in fences):
+                    ix[j] = np.random.randint(lo, hi - block - 1, dtype=np.int64)
+                    spins += 1
+                    if spins > 100_000:
+                        # The boot-time coverage guard bounds the global case;
+                        # this bounds a subrange (e.g. an anneal region) the
+                        # fences happen to smother. Spinning silently IS the
+                        # failure -- say what range cannot be sampled.
+                        raise SystemExit(
+                            f"fence redraw spun {spins:,}x inside "
+                            f"[{lo:,}, {hi:,}) -- the fenced windows cover "
+                            f"this draw range; lower --val-per-source or "
+                            f"move the region"
+                        )
+        return ix
+
     def get_batch(split: str, step: int | None = None,
                   bounds: tuple[int, int] | None = None):
         if bounds is not None:  # an explicit eval window (per-source val)
@@ -961,21 +1033,14 @@ def main() -> None:
             curated, general = anneal_counts(args.micro_batch, args.anneal_frac)
             parts = []
             if curated:
-                parts.append(_draw(anneal_lo, train_end, curated))
+                parts.append(_draw_train(anneal_lo, train_end, curated))
             if general:
-                parts.append(_draw(lo, anneal_lo, general))
+                parts.append(_draw_train(lo, anneal_lo, general))
             ix = np.concatenate(parts)
+        elif split == "train":
+            ix = _draw_train(lo, hi, args.micro_batch)
         else:
             ix = _draw(lo, hi, args.micro_batch)
-        if split == "train" and fences:
-            # Fence: re-draw the rare index (~0.02% chance per window) whose
-            # sample [i, i+block] would overlap a held-out window, keeping
-            # them all held out from here on.
-            for j in range(len(ix)):
-                while any(f_lo - block <= ix[j] < f_hi for f_lo, f_hi in fences):
-                    # dtype is load-bearing: legacy randint defaults to C-long
-                    # (int32 on Windows) and hi is ~56.7e9.
-                    ix[j] = np.random.randint(lo, hi - block - 1, dtype=np.int64)
         x = np.stack([np.asarray(data[i : i + block], dtype=np.int64) for i in ix])
         y = np.stack([np.asarray(data[i + 1 : i + 1 + block], dtype=np.int64) for i in ix])
         X = torch.from_numpy(x).to(device, non_blocking=True)
@@ -1370,17 +1435,20 @@ def main() -> None:
                     tps_warned = False
 
         if step > start_step and step % args.eval_every == 0:
-            # 6dp: T2's rungs differed by 0.001 and the 4dp print quantized a
-            # real seed spread to "identical" (sweep postmortem, 2026-07-29).
+            # 6dp: adjacent LR rungs differ by ~1e-3 and a 4dp print
+            # quantizes real seed spread to identical (measured 2026-07-29).
             vl = estimate_val("val")
             print(f"  [val] step {step} loss {vl:.6f} ppl {math.exp(min(20, vl)):.1f}", flush=True)
             if use_val_gen:
                 vg = estimate_val("val_gen")
                 print(f"  [val-gen] step {step} loss {vg:.6f} ppl {math.exp(min(20, vg)):.1f}", flush=True)
             if src_windows:
-                # The iters budget is spread across windows so the periodic
-                # cost stays ~one estimate_val regardless of source count;
-                # [final] and --eval-only spend the full budget per window.
+                # The iters budget spreads across windows down to a floor of
+                # 4, so past eval_iters/4 windows the periodic cost grows
+                # linearly (30 windows at the default 40 iters = 120 forward
+                # passes, ~3x one estimate_val). [final] and --eval-only
+                # spend the full budget per window -- a different estimator
+                # with different variance than this periodic one.
                 agg, _ = estimate_val_src(max(4, args.eval_iters // len(src_windows)))
                 print(f"  [val-src] step {step} loss {agg:.6f} ppl {math.exp(min(20, agg)):.1f}", flush=True)
 

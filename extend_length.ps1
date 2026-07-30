@@ -73,7 +73,12 @@ if ($hasCkpt) {
   $mode = 'Starting Phase 4 length extension (block 2048, fresh warm-start)'
 }
 
-$inner = "/c `"$py`" -u pretrain_enigma.py $trainArgs >> train_2048.log 2>&1"
+# The whole command after /c carries ONE extra enclosing pair of quotes. With
+# only the interpreter path quoted this line survives by accident (cmd's
+# preserve-quotes rule needs exactly two quote marks) -- one quoted argument
+# added to $trainArgs and cmd strips the pair protecting the path, launches
+# nothing, and reports no error.
+$inner = "/c `"`"$py`" -u pretrain_enigma.py $trainArgs >> train_2048.log 2>&1`""
 
 Write-Host ("{0} (detached)..." -f $mode) -ForegroundColor Cyan
 Start-Process -FilePath 'cmd.exe' -ArgumentList $inner -WorkingDirectory $repo -WindowStyle Hidden

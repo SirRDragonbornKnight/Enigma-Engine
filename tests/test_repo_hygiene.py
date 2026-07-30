@@ -198,19 +198,57 @@ def test_detached_launchers_survive_cmd_quote_stripping():
 
     Pinned because the failure is silent in the worst place -- a resume that
     launches nothing looks exactly like a resume that is training, and the
-    script that does this runs hidden under Task Scheduler."""
-    launcher = REPO_ROOT / "resume_training.ps1"
-    assert launcher.exists(), "resume_training.ps1 is the documented resume path"
-    text = launcher.read_text(encoding="utf-8")
-    inner = [ln for ln in text.splitlines() if ln.strip().startswith("$inner")]
-    assert inner, "resume_training.ps1 no longer builds an $inner command line"
-    for line in inner:
-        body = line.split("=", 1)[1].strip()
-        assert body.startswith('"/c `"`"'), (
-            "the cmd command line must open with /c and TWO quote marks, or "
-            "cmd strips the pair that protects the interpreter path:\n  " + line
+    script that does this runs hidden under Task Scheduler. Covers EVERY
+    detached launcher building an $inner line, not just the one that broke:
+    extend_length.ps1's line survived on a technicality (exactly two quote
+    marks lands in cmd's preserve-quotes rule) and was one quoted argument
+    away from the identical silent failure."""
+    checked = 0
+    for name in ("resume_training.ps1", "extend_length.ps1"):
+        launcher = REPO_ROOT / name
+        assert launcher.exists(), f"{name} is a documented detached launcher"
+        text = launcher.read_text(encoding="utf-8")
+        inner = [ln for ln in text.splitlines()
+                 if ln.strip().startswith("$inner") and "=" in ln]
+        assert inner, f"{name} no longer builds an $inner command line"
+        for line in inner:
+            body = line.split("=", 1)[1].strip()
+            assert body.startswith('"/c `"`"'), (
+                f"{name}: the cmd command line must open with /c and TWO "
+                "quote marks, or cmd strips the pair that protects the "
+                "interpreter path:\n  " + line
+            )
+            assert body.rstrip().endswith('`""'), (
+                f"{name}: the extra enclosing quote must also CLOSE, or cmd "
+                "sees an unterminated quoted line:\n  " + line
+            )
+            checked += 1
+    assert checked >= 2, "expected at least one $inner line per launcher"
+
+
+def test_packed_file_writers_join_records_with_the_separator():
+    """The record separator (U+001E) is a WRITER-side contract: the reader
+    splits on it, so a single write site reverting to "\n\n".join() silently
+    returns that source to one-document-per-5MB -- every <s>/</s> between its
+    records vanishes at the next retokenize and the full suite stays green.
+    The curated shard writer is in scope because it shipped exactly that way
+    (21,218 documents in 11 files, found 2026-07-30) while every eye was on
+    the HF fetchers."""
+    writers = {
+        "collect_pretraining_data.py": 12,   # 4 fineweb + 4 generic HF + 4 stack
+        "make_pretrain_curated.py": 1,
+    }
+    for name, expected in writers.items():
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        legacy = text.count('"\n\n".join(batch_text)') + text.count('"\n\n".join(chunk)')
+        assert legacy == 0, (
+            f"{name}: {legacy} packed-file write site(s) join with a blank "
+            "line -- indistinguishable from a paragraph break, so the reader "
+            "cannot recover the record boundaries"
         )
-        assert body.rstrip().endswith('`""'), (
-            "the extra enclosing quote must also CLOSE, or cmd sees an "
-            "unterminated quoted line:\n  " + line
+        sep_joins = text.count("DOC_SEP_JOIN.join(")
+        assert sep_joins == expected, (
+            f"{name}: expected {expected} DOC_SEP_JOIN write site(s), found "
+            f"{sep_joins} -- a write path was added or removed without the "
+            "separator contract following it"
         )
