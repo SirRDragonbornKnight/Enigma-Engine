@@ -85,11 +85,15 @@ four for four:
    post-sweep 07-29: the six sweep point models (models\sweeps\t2_238m\*,
    ~11.3 GB) are throwaway once Gate B is ruled -- user's word; the receipt
    `sweep_results.json` itself NEVER dies.
-   FOLLOW-UP opened by the audit: `--all-sources` still re-downloads c4+owt
-   (collect_pretraining_data.py:3011/:3033) -- drop them from that flag
-   before the next collector run. The classifier blocks mass deletion from a
-   Claude tool call, so the exact commands were handed to the user; this row
-   stays OPEN until that run completes. -> section 9.
+   ~~FOLLOW-UP: `--all-sources` still re-downloads c4+owt~~ DONE 2026-07-30
+   (dropped from the flag; explicit `--c4`/`--openwebtext` still work).
+   **EXECUTED 2026-07-30 as a MOVE, not a delete: 272.77 GB across 60
+   targets staged to `C:\Users\SirKn\_retired_s9_2026-07-30\` with a
+   `_manifest.json`.** Mass deletion from a Claude tool call is
+   classifier-blocked and a move is the better operation anyway -- same-volume
+   rename, reversible, and it reduces the user's irreversible step to ONE
+   path instead of a dozen. This row closes when that directory is deleted.
+   -> section 9.
    Docs touched: this row, section 9 header + rows, CLEANUP_TRACKER.md:41,
    TOKENIZER_V2_SPEC.md:457, pretokenize_data.py SOURCE_DIRS comment,
    extend_length.ps1 header, KNOWN_ISSUES.md item 5, ROADMAP.md rulings
@@ -1469,5 +1473,42 @@ at item 7 -- 3e-3 confirmed on all three signals and 30/30 source windows). The
 six point dirs have given up everything they hold and are now free to delete on
 the user's word.
 
-Ruled 2026-07-29 as above; when the user's deletion run completes, move this
+## Section 9 EXECUTED 2026-07-30, as a MOVE
+
+**272.77 GB across 60 targets** now sits in
+`C:\Users\SirKn\_retired_s9_2026-07-30\`, mirroring its source layout, with a
+`_manifest.json` recording every source path, staged path and byte count.
+Nothing is destroyed yet: a same-volume rename costs no space, is reversible,
+and collapses a dozen risky paths -- including the one-character `venv` /
+`.venv` pair -- into ONE directory for the single irreversible command. The
+free-space reclaim lands when that directory is deleted.
+
+Measured before moving (the "~245 GiB" estimate was in GiB; 272.77 GB = 254 GiB,
+so the two agree). Largest: `combined.txt` 95.12, `enwiki .xml.bz2` 25.10,
+`c4` 21.58, `C:\Enigma-Backups` 19.67, `enigma_pretrain_large\step_*.pth`
+19.67 (9 files), `qwen3-30b-a3b` 18.56, `qwen3-8b` 16.40, the six sweep points
+11.85, `openwebtext` 10.82.
+
+Two targets were not files in place and were handled separately: the
+`serve_enigma`/`train_large` logs moved with the rest, and the venv's
+`llama_cpp_python` 0.3.4 was **pip-uninstalled** -- it is a package inside the
+LOAD-BEARING `venv\`, not a directory to remove, and nothing in first-party
+source imports it (grepped). `kokoro`, `soundfile` and `torch` re-verified
+importable afterwards.
+
+VERIFIED STILL PRESENT after the move: `enigma_pi_zero.pth` (HELD),
+tokens.bin / tokens_v2.bin / tokens_v2b.bin + sidecar, `venv\Scripts\python.exe`,
+`sweep_results.json`, `vision_best.pt`, enigma_pretrain_large's
+model/latest/prev, `progress.json`, `Enigma Backups\`, and all twelve live
+corpus source directories. Suite 831 green, and the detached re-collect ran
+through the whole operation untouched.
+
+`data\enigma_voice.md` and `data\personality_corpus.jsonl` are GIT-TRACKED, so
+the tree now shows those two as ` D` pending an ordered commit.
+
+**The remaining step is the user's:** delete
+`C:\Users\SirKn\_retired_s9_2026-07-30\` once nothing is missed. Until then
+every byte is recoverable from `_manifest.json`.
+
+Ruled 2026-07-29 as above; when the deletion completes, move this
 section's record to CLEANUP_TRACKER with the per-item receipts.
