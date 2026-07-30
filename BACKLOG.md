@@ -214,22 +214,54 @@ four for four:
       `<s>`/`</s>`), the FineWeb-Edu fetcher now runs the same
       literal-scrub + sealed-probe screen as the other three, and the
       Stack pull takes an equal per-language share (16 languages).
-   2. **Old files must be CLEARED first, or the re-pull no-ops**: every
-      fetcher reads existing bytes against its target and skips when met
-      -- re-pulling over the 2,032 all-Python Stack files keeps the
-      monolingual corpus, and old packs carry no separators. Delete the
-      CONTENTS of `data\pretrain\{fineweb_edu, dclm, finemath,
-      the_stack}` (all re-pullable) and delete those four sources' keys
-      from `data\pretrain\progress.json` -- a stale `records_consumed`
-      makes the fresh stream skip-ahead past records it never saved.
+   2. ~~**Old files must be CLEARED first, or the re-pull no-ops**~~
+      **DONE 2026-07-30 -- and cleared by MOVE, not delete.** Every
+      fetcher reads existing bytes against its target and skips when met,
+      so re-pulling over the 2,032 all-Python Stack files would have kept
+      the monolingual corpus, and old packs carry no separators. The
+      15,314 files / 81.37 GB in `data\pretrain\{fineweb_edu, dclm,
+      finemath, the_stack}` were MOVED to
+      `C:\Users\SirKn\_retired_packed_2026-07-30\` -- a same-volume
+      rename, so it cost no space and is reversible until the new corpus
+      validates. The four source dirs remain, empty. Resume keys
+      `dclm` / `finemath_4plus` / `infiwebmath_3plus` / `stack_python`
+      stripped from `data\pretrain\progress.json` (a stale
+      `records_consumed` skips the fresh stream past records it never
+      saved); `fineweb_edu` had no key. `gutenberg_ids`, `stats` and
+      `fandom_done_wikis` are untouched, and the pre-edit file is at
+      `Enigma Backups\progress_2026-07-30_pre-rebuild.json`.
+      All four sources were PROBED LIVE before the move (one streamed
+      record each, incl. the license-gated Stack): all re-pullable.
       The one-article-per-file sources (wiki/SE/gutenberg/fandom/wayback/
       curated) keep: they have real boundaries already.
-   3. Re-collect the four, then retokenize with the standing line
+      **Delete the staging dir only after the rebuilt bin validates.**
+   3. **RE-COLLECT LAUNCHED 2026-07-30, DETACHED** via scheduled task
+      `EnigmaCollectRebuild` -> `run_collect_rebuild.ps1`. Parent chain
+      verified `python <- python <- powershell <- svchost <- services <-
+      wininit`, no `claude.exe`, so restarting the Claude app cannot kill
+      it. Command:
+      `--resume --no-combine --fineweb 40 --dclm 15 --finemath 10 --code 10`
+      (targets are GiB and reproduce the v2b diet as measured on disk).
+      **`--resume` is MANDATORY**: without it the collector resets
+      progress to `{gutenberg_ids: [], stats: {}}` and drops
+      `fandom_done_wikis`, forcing a full Fandom re-pull -- the four
+      rebuilt sources start fresh anyway because their keys were
+      stripped. **`--no-combine` is MANDATORY**: the combine step writes
+      a ~95 GB `combined.txt` that pretokenize never reads and section 9
+      ruled dead. Log `data\collect_rebuild_2026-07-30.log`, completion
+      marker `.done` carries the exit code. Two launcher bugs found and
+      fixed on the way in, both worth keeping: `-ArgumentList` as an
+      ARRAY does not quote its elements, so the space in "Enigma Engine"
+      split the script path; and python block-buffers redirected stdout,
+      so the log stayed 0 B and a stall would have been invisible for
+      ~80 minutes (`PYTHONUNBUFFERED=1`). Leave the task registered while
+      it runs -- the launcher is what writes the marker.
+   4. Then retokenize with the standing line
       (`--repeat-sources curated=5`, uint16, workers 10, BelowNormal) to
       a NEW versioned bin; v2b stays on disk as rollback until the new
       sidecar validates (extents present, `dedup_capped` false, bos
       counts in the packed extents no longer single-digit per 5M tokens).
-   4. T3 then adds `--val-per-source 2000000` to the launch line: one
+   5. T3 then adds `--val-per-source 2000000` to the launch line: one
       fenced window per source, [val-src] = diet-weighted mean (the
       representative signal; landed with `--eval-only` 2026-07-30).
 12. **Memory recall ceiling k=3.** `render_context` defaults to 3 facts and
