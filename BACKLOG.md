@@ -205,6 +205,33 @@ four for four:
    3.9x, ~9x on rung means). This is the one cheap moment for it; after T3
    starts it is unfixable for the lineage. The T2-swept LR carries to the
    rebuilt corpus (same vocab, similar mix) -- accepted 2026-07-29.
+   **REBUILD RUNBOOK (code landed 2026-07-30; collect is the user-gated
+   step -- network + hours of CPU):**
+   1. The code fixes are IN: Bloom dedup (400M capacity, 0.1% design FPR,
+      ~0.7 GiB -- replaces the 50M exact set that capped mid-walk),
+      U+001E record separators written by every packed-file fetcher and
+      split at the pretokenize walk (each record = own document = own
+      `<s>`/`</s>`), the FineWeb-Edu fetcher now runs the same
+      literal-scrub + sealed-probe screen as the other three, and the
+      Stack pull takes an equal per-language share (16 languages).
+   2. **Old files must be CLEARED first, or the re-pull no-ops**: every
+      fetcher reads existing bytes against its target and skips when met
+      -- re-pulling over the 2,032 all-Python Stack files keeps the
+      monolingual corpus, and old packs carry no separators. Delete the
+      CONTENTS of `data\pretrain\{fineweb_edu, dclm, finemath,
+      the_stack}` (all re-pullable) and delete those four sources' keys
+      from `data\pretrain\progress.json` -- a stale `records_consumed`
+      makes the fresh stream skip-ahead past records it never saved.
+      The one-article-per-file sources (wiki/SE/gutenberg/fandom/wayback/
+      curated) keep: they have real boundaries already.
+   3. Re-collect the four, then retokenize with the standing line
+      (`--repeat-sources curated=5`, uint16, workers 10, BelowNormal) to
+      a NEW versioned bin; v2b stays on disk as rollback until the new
+      sidecar validates (extents present, `dedup_capped` false, bos
+      counts in the packed extents no longer single-digit per 5M tokens).
+   4. T3 then adds `--val-per-source 2000000` to the launch line: one
+      fenced window per source, [val-src] = diet-weighted mean (the
+      representative signal; landed with `--eval-only` 2026-07-30).
 12. **Memory recall ceiling k=3.** `render_context` defaults to 3 facts and
    both serve call sites take the default, so she can never surface more than
    three memories however many she holds -- and ties break newest-first, so
@@ -757,7 +784,7 @@ grid implied. Steady-state over 150 steps, not a multi-day thermal receipt.
       --schedule wsd_sqrt --sdpa-backend cudnn --no-grad-ckpt \
       --block 2048 --micro-batch 6 --tokens 28.3e9 --lr 3e-3 \
       --tokens-bin data/pretrain/tokens_v2b.bin \
-      --val-general-end 15055680259 \
+      --val-general-end 15055680259 --val-per-source 2000000 \
       --out models/enigma_v2_238m --seed <N> --archive-every 1440
 
 542m -- largest the 5090 sanely trains (20.8 days/epoch on v2b). Note BOTH
@@ -768,7 +795,7 @@ the micro-batch to 16:
       --schedule wsd_sqrt --sdpa-backend cudnn \
       --block 2048 --micro-batch 16 --tokens 28.3e9 --lr 3e-3 \
       --tokens-bin data/pretrain/tokens_v2b.bin \
-      --val-general-end 15055680259 \
+      --val-general-end 15055680259 --val-per-source 2000000 \
       --out models/enigma_v2_542m --seed <N> --archive-every 540
 
 `--lr 3e-3` is the T2 measurement (interior win at 238m, 2026-07-29), and it
@@ -992,8 +1019,32 @@ The block, in execution order:
   spread is ~8x the other rungs' -- variance growth at the top of the
   bracket is itself an instability signal, so 3e-3 is the pick both on
   loss and on stability margin for a run 85x longer than a sweep point.
-  Caveat: rank resolution is 1e-4 (the `[final]` print is 4dp --
-  pre-flight raises it). **THERMAL RECEIPT:** tok/s 67.5-69.9k across all
+  ~~Caveat: rank resolution is 1e-4 (the `[final]` print is 4dp --
+  pre-flight raises it).~~ **RE-SCORED AND CONFIRMED 2026-07-30** (the
+  score-first hold on the sweep dirs, discharged). All six checkpoints
+  re-measured at 6dp with `--eval-only`, paired batches (seed 1234, so
+  every point scores the SAME windows in the same order), 200 iters per
+  window, on the new 30-window per-source holdout. Receipts:
+  `Enigma Backups\t2_sweep_rescore_2026-07-30.json` + the six
+  `t2_rescore_*.log`.
+
+  | rung | val (tail) | val-gen | val-src (30 srcs) |
+  |---|---|---|---|
+  | 1.5e-3 | 3.500191 | 3.174746 | 2.675088 |
+  | **3e-3** | **3.485606** | **3.156487** | **2.660042** |
+  | 6e-3 | 3.488551 | 3.161336 | 2.664861 |
+
+  **3e-3 wins all three signals, and wins 30/30 individual source
+  windows** -- including the code/math/StackExchange windows no earlier
+  val could see (The Stack 1.097, FineMath 2.280 at 3e-3_s0). It also has
+  the tightest seed spread on all three (val-src sd 0.0011 vs 6e-3's
+  0.0066), so the instability read at the bracket top holds. The one
+  genuine disagreement the 4dp print had hidden is now resolved: at seed
+  0 alone, tail-val does prefer 6e-3 (3.486331 vs 3.486709, a 3.8e-4
+  margin) -- but that flips on the seed mean and is contradicted by every
+  other signal, so it was seed noise, not a window-dependent winner.
+  **LR = 3e-3 is settled for T3; no further sweep.**
+  **THERMAL RECEIPT:** tok/s 67.5-69.9k across all
   six points over 8.5 h -- no sustained-load fade.
   The archive-cadence shakeout did NOT happen (sweep points never
   archive) -- verify the first decay-tail archives live, early in T3.
@@ -1081,13 +1132,14 @@ The block, in execution order:
   2. the RESUME DRILL: tiny run, kill it, resume via `resume_training.ps1
      -TokensBin`, verify schedule restoration end-to-end (the script has
      never executed past its refusal path and has zero coverage);
-  3. raise the `[final]` val prints to 6 decimals (4dp capped the sweep's
-     rank resolution at 1e-4);
+  3. ~~raise the `[final]` val prints to 6 decimals~~ DONE 2026-07-30:
+     `[val]`/`[val-gen]`/`[val-src]`/`[final]` all print 6dp;
   4. drop c4/owt from `--all-sources` (item 5 follow-up) so no future
      collector run refetches what section 9 reclaimed;
-  5. if item 11 goes REBUILD, it runs FIRST -- and the T2-swept LR carries
-     to the rebuilt corpus (same vocab, similar mix; accepted 2026-07-29,
-     not to be re-litigated mid-run).
+  5. item 11 went REBUILD (ruled 2026-07-30) -- it runs FIRST, per the
+     runbook at item 11; the T2-swept LR carries to the rebuilt corpus
+     (same vocab, similar mix; accepted 2026-07-29, not to be
+     re-litigated mid-run).
 - T4. SFT regen riding the bake (data work, minutes-hours of GPU):
   multi-turn, <think> reasoning, math re-enabled (per-digit vocab kills the
   old disable reason), widened knowledge, DPO pairs beyond identity, the
@@ -1361,8 +1413,11 @@ row and should NOT be deleted yet.** The six point dirs are throwaway final
 models, but they are the only cheap way to re-rank the T2 winner: tail-val
 already prefers 6e-3 at seed 0 while [val-gen] picked 3e-3, so the winner is
 window-dependent, and re-scoring six existing checkpoints costs ~0.5-1 h of GPU
-against ~8.5 h to re-run the sweep. SCORE FIRST, THEN DELETE — scoring
-authorized 2026-07-30.
+against ~8.5 h to re-run the sweep. **HOLD DISCHARGED 2026-07-30: the scoring
+RAN** (~8.2 min/checkpoint, ~50 min total; receipts in `Enigma Backups\`, verdict
+at item 7 -- 3e-3 confirmed on all three signals and 30/30 source windows). The
+six point dirs have given up everything they hold and are now free to delete on
+the user's word.
 
 Ruled 2026-07-29 as above; when the user's deletion run completes, move this
 section's record to CLEANUP_TRACKER with the per-item receipts.

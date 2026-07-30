@@ -24,7 +24,7 @@ corpus names its own --output-bin; the v2 retokenize (TOKENIZER_V2_SPEC):
 with NO curated oversample and nothing refuses, so copy the line whole.)
 
 Parallel layout: the PARENT does the walk + paragraph dedup + filters --
-that state is inherently sequential (shared seen_hashes) -- with file
+that state is inherently sequential (shared dedup filter) -- with file
 reads PREFETCHED by a thread pool (see iter_cleaned_docs: per-file open
 latency, not CPU, was the wall on the first v2 attempt), and WORKERS do
 the encoding (Rust v2 backend when built: measured 17.8 MB/s/worker;
@@ -42,6 +42,7 @@ import argparse
 import array
 import hashlib
 import json
+import math
 import os
 import struct
 import sys
@@ -49,7 +50,9 @@ import time
 from collections import deque
 from pathlib import Path
 
-from collect_pretraining_data import _sanitize_special_literals
+import numpy as np
+
+from collect_pretraining_data import DOC_SEP_CHAR, _sanitize_special_literals
 
 # ---------------------------------------------------------------------------
 # Config — mirrors collect_pretraining_data.py
@@ -91,7 +94,62 @@ SOURCE_DIRS = [
 SE_DIR = BASE_DIR / "stackexchange"
 
 MIN_PARAGRAPH_LENGTH = 50
-MAX_DEDUP_ENTRIES = 50_000_000
+
+# DOC_SEP_CHAR (imported above): one RECORD SEPARATOR (U+001E) between
+# records inside a packed .txt file. The HF-streamed sources batch ~5 MB of
+# records per file joined by "\n\n", indistinguishable from a paragraph
+# break -- so the walk read one FILE as one document and <s>/</s> were
+# learned almost entirely from the one-article-per-file sources (bos in the
+# first 5M tokens of each extent, measured 2026-07-28: FineWeb-Edu 4,
+# The Stack 3, DCLM 4, Wiki Dump 4,870). The collector writes it; files
+# predating it contain none and still read as one document each.
+
+# Paragraph-dedup membership. The 50M-entry exact set capped out mid-walk on
+# v2b (sampled estimate 190-275M paragraphs), so every source past the fill
+# was deduped only against what came before it -- and an exact set at that
+# scale is measured 75 B/entry (2026-07-30): 19-28 GiB, a RAM gamble on a
+# box that is also running 10 tokenize workers. A Bloom filter holds the
+# whole walk in ~0.7 GiB: no false negatives (a stored paragraph is always
+# found), and a false positive drops a unique paragraph at the design rate
+# below -- 0.1% random loss against the measured multi-percent under-dedup
+# it replaces.
+DEDUP_CAPACITY = 400_000_000
+DEDUP_FPR = 1e-3
+
+
+class ParagraphBloom:
+    """Bloom-filter membership for paragraph digests.
+
+    Standard construction: m = -n*ln(p)/ln(2)^2 bits, k = (m/n)*ln(2)
+    probes, double hashing (Kirsch-Mitzenmacher) from two independent
+    64-bit halves of the paragraph's sha256.
+    """
+
+    def __init__(self, capacity: int = DEDUP_CAPACITY, fpr: float = DEDUP_FPR):
+        m = int(-capacity * math.log(fpr) / (math.log(2) ** 2))
+        self.n_bits = ((m + 63) // 64) * 64
+        self.k = max(1, round((self.n_bits / capacity) * math.log(2)))
+        self.words = np.zeros(self.n_bits // 64, dtype=np.uint64)
+        self.capacity = capacity
+        self.fpr = fpr
+        self.adds = 0
+
+    def seen_or_add(self, digests: "np.ndarray") -> "np.ndarray":
+        """(N, 2) uint64 rows -> (N,) bool "was already present"; every row
+        is added. uint64 wraparound in the probe arithmetic is fine -- the
+        probes only need to stay well-distributed mod n_bits."""
+        h1 = digests[:, 0][:, None]
+        h2 = digests[:, 1][:, None]
+        probes = np.arange(self.k, dtype=np.uint64)[None, :]
+        idx = (h1 + probes * h2) % np.uint64(self.n_bits)
+        word = (idx >> np.uint64(6)).astype(np.int64)
+        bit = np.uint64(1) << (idx & np.uint64(63))
+        present = ((self.words[word] & bit) != 0).all(axis=1)
+        # bitwise_or.at, not words[word] |= bit: fancy-index assignment drops
+        # all but one write when the same word index repeats in a batch.
+        np.bitwise_or.at(self.words, word.ravel(), bit.ravel())
+        self.adds += int((~present).sum())
+        return present
 
 OUTPUT_BIN = BASE_DIR / "tokens.bin"
 OUTPUT_META = BASE_DIR / "tokens.json"
@@ -240,9 +298,10 @@ def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64)
     entire 25-hour wall."""
     from concurrent.futures import ThreadPoolExecutor
 
-    seen_hashes: set[bytes] = set()
+    bloom = ParagraphBloom()
     dedup_warned = False
-    stats = iter_cleaned_docs.stats = {"dupes_skipped": 0, "dedup_capped": False}
+    stats = iter_cleaned_docs.stats = {"dupes_skipped": 0, "dedup_capped": False,
+                                       "dedup_adds": 0}
 
     def walk():
         for label, source_dir in source_dirs:
@@ -278,36 +337,60 @@ def iter_cleaned_docs(source_dirs, read_threads: int = 16, read_ahead: int = 64)
             if text is None or len(text.strip()) < MIN_PARAGRAPH_LENGTH:
                 continue
 
-            paragraphs = text.split("\n\n")
-            unique_paras: list[str] = []
-            for para in paragraphs:
-                para = para.strip()
-                if len(para) < MIN_PARAGRAPH_LENGTH:
-                    unique_paras.append(para)
-                    continue
-                h = hashlib.sha256(para.encode("utf-8")).digest()[:8]
-                if h in seen_hashes:
-                    stats["dupes_skipped"] += 1
-                    continue
-                if len(seen_hashes) < MAX_DEDUP_ENTRIES:
-                    seen_hashes.add(h)
-                elif not dedup_warned:
-                    dedup_warned = True
-                    # Past the cap nothing new is remembered, so every source
-                    # after this point is deduped only against what the walk had
-                    # already seen -- never against the sources that follow it.
-                    # The sidecar records it: a console line scrolls past, and
-                    # "dupes_skipped" on its own reads like the dedup ran whole.
-                    stats["dedup_capped"] = True
-                    print(f"  WARNING: Dedup table at capacity ({MAX_DEDUP_ENTRIES:,}) -- "
-                          f"sources walked after this point are NOT deduped against "
-                          f"each other; recorded as dedup_capped in the sidecar")
-                unique_paras.append(para)
+            # Packed files carry DOC_SEP_CHAR between records; each record is
+            # its own document (own <s>/</s> downstream). Files predating the
+            # separator contain none and pass through as one document.
+            for record in text.split(DOC_SEP_CHAR):
+                paragraphs = [p.strip() for p in record.split("\n\n")]
+                # Dedup in three layers that together reproduce the old
+                # sequential first-wins semantics: short paragraphs bypass
+                # (never hashed), an intra-record repeat loses to its first
+                # occurrence, and the record's unique digests are then checked
+                # against -- and added to -- the global filter in one batch.
+                hashed_idx = [i for i, p in enumerate(paragraphs)
+                              if len(p) >= MIN_PARAGRAPH_LENGTH]
+                dropped: set[int] = set()
+                if hashed_idx:
+                    digests = np.empty((len(hashed_idx), 2), dtype=np.uint64)
+                    first_seen: dict[tuple[int, int], int] = {}
+                    intra_dupes: list[int] = []
+                    for row, i in enumerate(hashed_idx):
+                        d = hashlib.sha256(paragraphs[i].encode("utf-8")).digest()
+                        pair = (int.from_bytes(d[:8], "little"),
+                                int.from_bytes(d[8:16], "little"))
+                        digests[row] = pair
+                        if pair in first_seen:
+                            intra_dupes.append(row)
+                        else:
+                            first_seen[pair] = row
+                    unique_rows = sorted(first_seen.values())
+                    present = bloom.seen_or_add(digests[unique_rows])
+                    for row, was_present in zip(unique_rows, present):
+                        if was_present:
+                            dropped.add(hashed_idx[row])
+                    for row in intra_dupes:
+                        dropped.add(hashed_idx[row])
+                    stats["dupes_skipped"] += len(intra_dupes) + int(present.sum())
+                    stats["dedup_adds"] = bloom.adds
+                    if bloom.adds > bloom.capacity and not dedup_warned:
+                        dedup_warned = True
+                        # Past design capacity the filter keeps answering, but
+                        # its false-positive rate climbs above DEDUP_FPR --
+                        # unique paragraphs start being dropped as dupes at an
+                        # unmeasured rate. The sidecar records it: a console
+                        # line scrolls past, and "dupes_skipped" on its own
+                        # reads like the dedup ran clean.
+                        stats["dedup_capped"] = True
+                        print(f"  WARNING: dedup filter past its design capacity "
+                              f"({bloom.capacity:,} adds) -- false-positive rate now "
+                              f"exceeds {bloom.fpr:.0%}; recorded as dedup_capped "
+                              f"in the sidecar")
 
-            cleaned = "\n\n".join(unique_paras).strip()
-            if len(cleaned) < MIN_PARAGRAPH_LENGTH:
-                continue
-            yield label, cleaned
+                cleaned = "\n\n".join(p for i, p in enumerate(paragraphs)
+                                      if i not in dropped).strip()
+                if len(cleaned) < MIN_PARAGRAPH_LENGTH:
+                    continue
+                yield label, cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -663,12 +746,15 @@ def main():
         "repeated_sources": repeats,
         "source_token_extents": extents,
         "dupes_skipped": dupes_skipped,
-        # False means every paragraph in the walk was deduped against every
-        # other. True means the table filled partway and the sources after that
-        # point were never compared to each other, which dupes_skipped alone
-        # cannot show.
+        # False means the whole walk was deduped at the design false-positive
+        # rate. True means adds exceeded the filter's design capacity and the
+        # FPR climbed past dedup_fpr partway through, which dupes_skipped
+        # alone cannot show.
         "dedup_capped": dedup_capped,
-        "dedup_cap": MAX_DEDUP_ENTRIES,
+        "dedup_backend": "bloom",
+        "dedup_cap": DEDUP_CAPACITY,
+        "dedup_fpr": DEDUP_FPR,
+        "dedup_adds": _stats.get("dedup_adds", 0),
         # vocab_file is a PATH, and a path is not an identity: regenerating the
         # vocab to a different table of the same size leaves every downstream
         # size check passing while the corpus no longer decodes. The hash is
@@ -693,8 +779,8 @@ def main():
     print(f"  Tokens:    {total_tokens:,}")
     print(f"  Documents: {total_docs:,}")
     print(f"  Dupes:     {dupes_skipped:,} paragraphs skipped"
-          + ("  [TABLE CAPPED -- sources after the cap were not deduped "
-             "against each other]" if dedup_capped else ""))
+          + ("  [FILTER PAST DESIGN CAPACITY -- false-positive rate exceeded "
+             "its design bound partway through]" if dedup_capped else ""))
     print(f"  Output:    {out_bin} ({file_gb:.2f} GiB / "
           f"{file_gb * 1024**3 / 1e9:.2f} GB, {args.dtype})")
     print(f"  Metadata:  {out_meta}")

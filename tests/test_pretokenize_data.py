@@ -397,6 +397,72 @@ def test_on_disk_copies_collapse_but_repeats_do_not(tmp_path):
     assert list(pd.with_repeats(iter(docs), {"C": 3})) == docs * 3
 
 
+def test_packed_files_split_into_documents_at_the_record_separator(tmp_path):
+    """The HF-streamed sources batch ~5 MB of records per file joined by
+    "\\n\\n" -- indistinguishable from a paragraph break, so one FILE read as
+    one document and <s>/</s> came almost entirely from the
+    one-article-per-file sources (measured 2026-07-28: 3-4 bos in the first
+    5M tokens of FineWeb-Edu/Stack/DCLM vs Wiki Dump's 4,870). The collector
+    now writes U+001E between records; the walk must yield each record as
+    its OWN document, and a file predating the separator must still read as
+    exactly one."""
+    src = tmp_path / "packed"
+    src.mkdir()
+    rec_a = "First record with enough text to clear the minimum paragraph gate. " * 2
+    rec_b = "Second record, also long enough to clear the minimum length gate. " * 2
+    (src / "packed_00000000.txt").write_text(
+        rec_a + "\n\x1e\n" + rec_b, encoding="utf-8")
+    docs = list(pd.iter_cleaned_docs([("P", src)]))
+    assert [d[1] for d in docs] == [rec_a.strip(), rec_b.strip()], (
+        "each record must become its own document -- one joined doc here "
+        "means the separator was not split on and every packed source is "
+        "back to one <s>/</s> per 5 MB file"
+    )
+    # a legacy file with no separator is ONE document, not zero, not many
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "old_00000000.txt").write_text(
+        rec_a + "\n\n" + rec_b, encoding="utf-8")
+    docs = list(pd.iter_cleaned_docs([("L", legacy)]))
+    assert len(docs) == 1 and rec_a.strip() in docs[0][1] and rec_b.strip() in docs[0][1]
+
+
+def test_bloom_dedup_drops_cross_and_intra_record_dupes_only():
+    """The 50M-entry exact set capped out mid-walk on v2b, so sources past
+    the fill were never deduped against each other. The Bloom replacement
+    must keep the first-wins semantics the corpus contract rests on: a
+    repeat inside one record loses to its first occurrence, a repeat across
+    records/files loses to the earlier record, short paragraphs bypass, and
+    a NEVER-seen paragraph is never dropped (no false negatives at test
+    scale)."""
+    bloom = pd.ParagraphBloom(capacity=10_000, fpr=1e-3)
+    import numpy as _np
+
+    def dig(s):
+        import hashlib as _h
+        d = _h.sha256(s.encode()).digest()
+        return (int.from_bytes(d[:8], "little"), int.from_bytes(d[8:16], "little"))
+
+    a, b, c = dig("para a"), dig("para b"), dig("para c")
+    arr = _np.array([a, b], dtype=_np.uint64)
+    assert list(bloom.seen_or_add(arr)) == [False, False]
+    # a again (cross-batch dupe) + c (fresh): exactly one flagged
+    arr2 = _np.array([a, c], dtype=_np.uint64)
+    assert list(bloom.seen_or_add(arr2)) == [True, False]
+    # no false negatives: everything added answers present
+    arr3 = _np.array([a, b, c], dtype=_np.uint64)
+    assert list(bloom.seen_or_add(arr3)) == [True, True, True]
+    assert bloom.adds == 3
+
+    # the same-word-collision hazard the .at() comment guards: many digests
+    # in ONE batch landing bits in the same backing word must ALL persist
+    # (fancy-index |= keeps only one write). 64 fresh paragraphs, then
+    # re-query: every one must answer present.
+    fresh = _np.array([dig(f"p{i}") for i in range(64)], dtype=_np.uint64)
+    bloom.seen_or_add(fresh)
+    assert list(bloom.seen_or_add(fresh)) == [True] * 64
+
+
 def test_repeats_emit_whole_passes_never_adjacent_copies():
     """Copies of one doc must land a full source apart -- adjacent copies can
     share a training window and teach verbatim repetition."""

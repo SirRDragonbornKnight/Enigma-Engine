@@ -32,7 +32,7 @@ Usage:
   python collect_pretraining_data.py --dclm 15              # 15 GB of DCLM model-filtered web text
   python collect_pretraining_data.py --finemath 10          # 10 GB of FineMath step-by-step math
   python collect_pretraining_data.py --code 10              # 10 GB of The Stack v1 code (needs HF auth)
-  python collect_pretraining_data.py --all-sources          # Everything: wiki, books, fineweb, SE, wayback, fandom, owt, c4
+  python collect_pretraining_data.py --all-sources          # Everything current: wiki, books, fineweb, SE, wayback, fandom, dclm, finemath, code (c4/owt retired -- explicit flags only)
   python collect_pretraining_data.py --books-only           # Download only Gutenberg books
   python collect_pretraining_data.py --resume               # Resume interrupted download
   python collect_pretraining_data.py --stats                # Show current data stats
@@ -112,6 +112,15 @@ MAX_RETRIES = 8  # max retries before giving up on a source
 MIN_ARTICLE_LENGTH = 500  # characters - skip stubs
 MIN_BOOK_LENGTH = 10000  # characters - skip fragments
 MIN_PARAGRAPH_LENGTH = 50  # characters - skip tiny paragraphs
+
+# One RECORD SEPARATOR (U+001E) between records inside a packed .txt file.
+# "\n\n" alone is indistinguishable from a paragraph break, so the reader
+# (pretokenize_data.iter_cleaned_docs, which imports this constant) had to
+# treat one 5 MB packed FILE as one document and <s>/</s> boundaries were
+# lost for every batched source. _sanitize_special_literals strips stray
+# U+001E from record text so the separator can never be forged from inside.
+DOC_SEP_CHAR = "\x1e"
+DOC_SEP_JOIN = f"\n{DOC_SEP_CHAR}\n"
 
 # User agent (required by Wikipedia and Gutenberg policies)
 USER_AGENT = (
@@ -1665,6 +1674,9 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
     batch_text = []
     batch_size = 0
     file_target = 5 * 1024 * 1024  # 5 MB per file — fewer files, faster combine
+    leak_rejected = 0
+    literals_sanitized = 0
+    locked_guard = _locked_probe_guard("FineWeb-Edu")
     start_time = time.monotonic()
     last_print = start_time
 
@@ -1679,6 +1691,17 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
             if not quality_filter(text, MIN_ARTICLE_LENGTH):
                 continue
 
+            # Same screen the other HF fetchers run: the original FineWeb-Edu
+            # pull predates both the literal scrub and the probe seal, and a
+            # re-pull is 36% of the diet -- unscreened, it could hand the
+            # pretrain a sealed probe's text verbatim.
+            text, _hits = _sanitize_special_literals(text)
+            if locked_guard is not None and locked_guard.leaks(text):
+                leak_rejected += 1
+                continue
+            # count AFTER the screen: only hits that reached disk
+            literals_sanitized += _hits
+
             text_bytes = len(text.encode("utf-8"))
             batch_text.append(text)
             batch_size += text_bytes
@@ -1687,7 +1710,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
             if batch_size >= file_target:
                 file_idx = saved
                 filepath = FINEWEB_DIR / f"fineweb_{file_idx:08d}.txt"
-                filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
                 saved += 1
                 total_bytes += batch_size
                 batch_text = []
@@ -1722,7 +1745,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
         # Write any remaining batch
         if batch_text:
             filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
-            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
             saved += 1
             total_bytes += batch_size
 
@@ -1730,7 +1753,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
         # Write partial batch on interrupt
         if batch_text:
             filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
-            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
             saved += 1
             total_bytes += batch_size
         elapsed_min = (time.monotonic() - start_time) / 60
@@ -1744,7 +1767,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
         # consumed-but-unwritten records would be skipped forever on resume.
         if batch_text:
             filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
-            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
             saved += 1
             total_bytes += batch_size
         print(f"  [FineWeb-Edu] Error: {e}")
@@ -1752,6 +1775,10 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
 
     elapsed_min = (time.monotonic() - start_time) / 60
     print(f"\n  [FineWeb-Edu] Done: {saved} files saved ({total_bytes / 1e9:.2f} GB) in {elapsed_min:.0f} min.")
+    if leak_rejected:
+        print(f"  [FineWeb-Edu] {leak_rejected:,} records dropped by the sealed-probe screen")
+    if literals_sanitized:
+        print(f"  [FineWeb-Edu] {literals_sanitized:,} special-token literal(s) space-broken")
 
     progress["fineweb_edu"] = {
         "files_saved": saved,
@@ -2782,6 +2809,11 @@ def _sanitize_special_literals(text: str) -> tuple[str, int]:
         if lit in text:
             hits += text.count(lit)
             text = text.replace(lit, lit[0] + " " + lit[1:])
+    # The packed-file record separator must never occur INSIDE a record --
+    # a stray U+001E would forge a document boundary at pretokenize time.
+    # Not counted as a literal hit: it is format armor, not token armor.
+    if DOC_SEP_CHAR in text:
+        text = text.replace(DOC_SEP_CHAR, " ")
     return text, hits
 
 
@@ -2929,7 +2961,7 @@ def _fetch_hf_streaming(
             # Write batch when it hits ~5 MB
             if batch_size >= file_target:
                 filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-                filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
                 saved += 1
                 total_bytes += batch_size
                 batch_text = []
@@ -2963,14 +2995,14 @@ def _fetch_hf_streaming(
         # Write remaining batch
         if batch_text:
             filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
             saved += 1
             total_bytes += batch_size
 
     except KeyboardInterrupt:
         if batch_text:
             filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
             saved += 1
             total_bytes += batch_size
         elapsed_min = (time.monotonic() - start_time) / 60
@@ -2984,7 +3016,7 @@ def _fetch_hf_streaming(
         # consumed-but-unwritten records would be skipped forever on resume.
         if batch_text:
             filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-            filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
             saved += 1
             total_bytes += batch_size
         print(f"  [{label}] Error: {e}")
@@ -3267,7 +3299,7 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
 
                 if batch_size >= file_target:
                     filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                    filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                    filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
                     total_saved += 1
                     total_bytes += batch_size
                     batch_text = []
@@ -3288,14 +3320,14 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
 
             if batch_text:
                 filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
                 total_saved += 1
                 total_bytes += batch_size
 
         except KeyboardInterrupt:
             if batch_text:
                 filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
                 total_saved += 1
                 total_bytes += batch_size
             progress[lang_progress_key] = {"records_consumed": records_consumed}
@@ -3312,7 +3344,7 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
             # consumed-but-unwritten records would be skipped forever.
             if batch_text:
                 filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                filepath.write_text("\n\n".join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
                 total_saved += 1
                 total_bytes += batch_size
             print(f"  [The Stack/{lang}] Error: {e} -- moving to next language")
@@ -3695,10 +3727,10 @@ Examples:
             args.wayback = 1000
         if args.fandom <= 0 and not args.fandom_all:
             args.fandom = 2000
-        if args.openwebtext <= 0:
-            args.openwebtext = 10.0
-        if args.c4 <= 0:
-            args.c4 = 20.0
+        # C4 and OpenWebText stay OFF here: DCLM replaced them by ruling
+        # (2026-07-27) and their dirs were reclaimed (section 9, 2026-07-29)
+        # -- a max-defaults run must not refetch 30 GB of retired sources.
+        # Both remain reachable by their explicit flags.
         if args.dclm <= 0:
             args.dclm = 15.0
         if args.finemath <= 0:

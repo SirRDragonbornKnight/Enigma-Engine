@@ -250,6 +250,46 @@ def test_source_placement_that_defeats_training_is_refused():
     refuse({"repeated_sources": {"Curated": 5}}, train_end=10)
 
 
+def test_source_val_windows_hold_out_every_source_but_never_a_repeated_one():
+    """One window per source is the representative val signal a contiguous
+    window cannot give ([val-gen] measured 100% FineWeb-Edu at every
+    --val-tokens, 2026-07-28). The two adversarial cases are the ones that
+    would silently corrupt training if the builder got them wrong: a REPEATED
+    source's window holds one copy out while its train siblings memorize it,
+    and an unclipped window past train_end would overlap the val tail."""
+    windows = pretrain_enigma.source_val_windows
+    meta = {
+        "repeated_sources": {"Curated": 5},
+        "source_token_extents": {
+            "Curated": [0, 10_000],       # repeated: must get NO window
+            "Web": [10_000, 50_000],      # plain: window at its tail
+            "SE/x": [50_000, 100_000],    # straddles train_end: clipped
+            "Tiny": [100_000, 100_050],   # narrower than block+2 after clip
+            "Broken": "not-an-extent",    # malformed: skipped, not crashed
+        },
+    }
+    got = windows(meta, train_end=60_000, block=64, per_source=1_000)
+    labels = [w[0] for w in got]
+    # the repeated source is EXCLUDED even though it is wide enough -- this is
+    # the assertion that fails if the repeated-check is dropped
+    assert "Curated" not in labels
+    assert got == [("Web", 49_000, 50_000), ("SE/x", 59_000, 60_000)]
+    # the clipped window ends at train_end, not at the extent's true end --
+    # an unclipped builder returns 99_000/100_000 here and leaks the val tail
+    assert all(hi <= 60_000 for _, _, hi in got)
+    # off switch and pre-extents corpora produce no windows, not a crash
+    assert windows(meta, train_end=60_000, block=64, per_source=0) == []
+    assert windows({}, train_end=60_000, block=64, per_source=1_000) == []
+
+
+def test_the_per_source_fences_survive_a_resume():
+    """The windows are FENCES. A resume that dropped --val-per-source would
+    let train sampling eat every held-out window, and the rest of the run's
+    [val-src] would score data it just trained on. Same trap class as
+    no_grad_ckpt; membership in SCHEDULE_KEYS is the whole fix."""
+    assert "val_per_source" in pretrain_enigma.SCHEDULE_KEYS
+
+
 def test_resume_restores_the_grad_checkpoint_flag():
     """--no-grad-ckpt DISABLES a config default that is on, and costs 30-40%
     throughput. Unrecorded in the schedule, a bare --resume reverts it to the
@@ -263,6 +303,9 @@ def test_resume_restores_the_grad_checkpoint_flag():
     # the archive cadence is sized against the launch's decay tail, so a resume
     # that re-imposed a caller's value would lose it
     assert "archive_every" in pretrain_enigma.SCHEDULE_KEYS
+    # the pause-on-a-checkpoint protocol assumes the save cadence survives a
+    # resume; unrecorded, a bare --resume reverted it to 250 with no boot line
+    assert "save_every" in pretrain_enigma.SCHEDULE_KEYS
 
     # The restore is a blind setattr over the recorded dict, so membership is
     # the whole fix -- PROVIDED the restore runs before the flag is read. That
