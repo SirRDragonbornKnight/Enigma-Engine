@@ -179,7 +179,11 @@ if ($ckinfo.Missing -contains 'no_grad_ckpt') {
 Write-Host "  archive-every:  from the checkpoint" -ForegroundColor DarkGray
 
 $log = Join-Path $repo ("train_{0}.log" -f $runName)
-$inner = "/c `"$py`" -u pretrain_enigma.py $trainArgs >> `"$log`" 2>&1"
+# The whole command after /c carries ONE extra enclosing pair of quotes. cmd
+# strips the outermost pair when the line holds several quoted tokens, and both
+# the interpreter path and this repo contain spaces, so without the extra pair
+# cmd receives a mangled line, launches nothing, and reports no error.
+$inner = "/c `"`"$py`" -u pretrain_enigma.py $trainArgs >> `"$log`" 2>&1`""
 
 Write-Host ""
 Write-Host "Starting in 8s -- Ctrl+C now to pick a different lineage with -Run." -ForegroundColor Yellow
@@ -191,11 +195,16 @@ Start-Process -FilePath 'cmd.exe' -ArgumentList $inner -WorkingDirectory $repo -
 Start-Sleep 8
 $now = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
   Where-Object { $_.CommandLine -like '*pretrain_enigma*' }
-if ($now) {
-  Write-Host ("Started. python PID {0}. Logging to {1}." -f $now.ProcessId, $log) -ForegroundColor Green
-} else {
-  Write-Host ("Process did not appear yet -- check {0} for an error." -f $log) -ForegroundColor Yellow
+if (-not $now) {
+  # A resume that launched nothing must FAIL, not warn. Run from Task Scheduler
+  # this script is invisible, and exiting 0 here reports a dead resume as a
+  # successful one -- the days-long silence that follows looks like training.
+  Write-Host ("FAILED: no pretrain process appeared. Check {0}." -f $log) -ForegroundColor Red
+  Write-Host "--- last log lines ---" -ForegroundColor DarkGray
+  if (Test-Path $log) { Get-Content $log -Tail 20 } else { Write-Host "(no log was written at all)" }
+  exit 1
 }
+Write-Host ("Started. python PID {0}. Logging to {1}." -f $now.ProcessId, $log) -ForegroundColor Green
 Write-Host "--- last log lines ---" -ForegroundColor DarkGray
 if (Test-Path $log) { Get-Content $log -Tail 8 }
 Write-Host ""

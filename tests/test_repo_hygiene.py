@@ -184,3 +184,33 @@ def test_console_bound_strings_are_ascii() -> None:
         "non-ASCII in console-bound strings (crashes cp1252 consoles; "
         "CLAUDE.md ASCII rule):\n" + "\n".join(sorted(set(violations)))
     )
+
+
+def test_detached_launchers_survive_cmd_quote_stripping():
+    """cmd.exe strips the outermost quote pair from the line after /c when
+    that line holds several quoted tokens. Both the venv interpreter path and
+    this repo's own path contain spaces, so a command built as
+
+        /c "<py>" -u script.py --resume "<ckpt>" >> "<log>" 2>&1
+
+    reaches cmd mangled: it launches nothing, writes no log, and returns no
+    error. The whole command therefore carries ONE extra enclosing pair.
+
+    Pinned because the failure is silent in the worst place -- a resume that
+    launches nothing looks exactly like a resume that is training, and the
+    script that does this runs hidden under Task Scheduler."""
+    launcher = REPO_ROOT / "resume_training.ps1"
+    assert launcher.exists(), "resume_training.ps1 is the documented resume path"
+    text = launcher.read_text(encoding="utf-8")
+    inner = [ln for ln in text.splitlines() if ln.strip().startswith("$inner")]
+    assert inner, "resume_training.ps1 no longer builds an $inner command line"
+    for line in inner:
+        body = line.split("=", 1)[1].strip()
+        assert body.startswith('"/c `"`"'), (
+            "the cmd command line must open with /c and TWO quote marks, or "
+            "cmd strips the pair that protects the interpreter path:\n  " + line
+        )
+        assert body.rstrip().endswith('`""'), (
+            "the extra enclosing quote must also CLOSE, or cmd sees an "
+            "unterminated quoted line:\n  " + line
+        )
