@@ -48,8 +48,7 @@ Output:
   data/pretrain/fandom/          - Fandom wiki articles
   data/pretrain/dclm/            - DCLM-Baseline model-filtered web pages
   data/pretrain/finemath/        - FineMath step-by-step math pages
-  data/pretrain/the_stack/       - The Stack v2 source code files
-  data/pretrain/combined.txt     - All sources merged into one file (ready for FORGE)
+  data/pretrain/the_stack/       - The Stack (v1) source code files, weighted per-language
 """
 
 import argparse
@@ -121,6 +120,12 @@ MIN_PARAGRAPH_LENGTH = 50  # characters - skip tiny paragraphs
 # U+001E from record text so the separator can never be forged from inside.
 DOC_SEP_CHAR = "\x1e"
 DOC_SEP_JOIN = f"\n{DOC_SEP_CHAR}\n"
+# Every packed-file write passes newline="\n": text-mode write_text otherwise
+# translates \n to \r\n on Windows, putting \r\n\x1e\r\n on disk. The
+# universal-newlines reader round-trips that invisibly, but a binary reader,
+# hash manifest, or grep for the documented pattern finds nothing. (The
+# 2026-07-30 v2c pull predates this and is CRLF at rest; its TOKENS are
+# unaffected because the reader normalizes on the way in.)
 
 # User agent (required by Wikipedia and Gutenberg policies)
 USER_AGENT = (
@@ -1710,7 +1715,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
             if batch_size >= file_target:
                 file_idx = saved
                 filepath = FINEWEB_DIR / f"fineweb_{file_idx:08d}.txt"
-                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
                 saved += 1
                 total_bytes += batch_size
                 batch_text = []
@@ -1745,7 +1750,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
         # Write any remaining batch
         if batch_text:
             filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
-            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
             saved += 1
             total_bytes += batch_size
 
@@ -1753,7 +1758,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
         # Write partial batch on interrupt
         if batch_text:
             filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
-            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
             saved += 1
             total_bytes += batch_size
         elapsed_min = (time.monotonic() - start_time) / 60
@@ -1767,7 +1772,7 @@ def fetch_fineweb_edu(target_gb: float, progress: dict) -> int:
         # consumed-but-unwritten records would be skipped forever on resume.
         if batch_text:
             filepath = FINEWEB_DIR / f"fineweb_{saved:08d}.txt"
-            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
             saved += 1
             total_bytes += batch_size
         print(f"  [FineWeb-Edu] Error: {e}")
@@ -2961,7 +2966,7 @@ def _fetch_hf_streaming(
             # Write batch when it hits ~5 MB
             if batch_size >= file_target:
                 filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
                 saved += 1
                 total_bytes += batch_size
                 batch_text = []
@@ -2995,14 +3000,14 @@ def _fetch_hf_streaming(
         # Write remaining batch
         if batch_text:
             filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
             saved += 1
             total_bytes += batch_size
 
     except KeyboardInterrupt:
         if batch_text:
             filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
             saved += 1
             total_bytes += batch_size
         elapsed_min = (time.monotonic() - start_time) / 60
@@ -3016,7 +3021,7 @@ def _fetch_hf_streaming(
         # consumed-but-unwritten records would be skipped forever on resume.
         if batch_text:
             filepath = output_dir / f"{prefix}_{saved:08d}.txt"
-            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+            filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
             saved += 1
             total_bytes += batch_size
         print(f"  [{label}] Error: {e}")
@@ -3310,7 +3315,7 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
 
                 if batch_size >= file_target:
                     filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                    filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+                    filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
                     total_saved += 1
                     total_bytes += batch_size
                     batch_text = []
@@ -3331,14 +3336,14 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
 
             if batch_text:
                 filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
                 total_saved += 1
                 total_bytes += batch_size
 
         except KeyboardInterrupt:
             if batch_text:
                 filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
                 total_saved += 1
                 total_bytes += batch_size
             progress[lang_progress_key] = {"records_consumed": records_consumed}
@@ -3355,7 +3360,7 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
             # consumed-but-unwritten records would be skipped forever.
             if batch_text:
                 filepath = STACK_DIR / f"{lang_dir_prefix}_{total_saved:08d}.txt"
-                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8")
+                filepath.write_text(DOC_SEP_JOIN.join(batch_text), encoding="utf-8", newline="\n")
                 total_saved += 1
                 total_bytes += batch_size
             print(f"  [The Stack/{lang}] Error: {e} -- moving to next language")
@@ -3616,8 +3621,9 @@ def print_stats() -> None:
         total_str = f"{total_size / 1024 / 1024:6.1f} MB"
     print(f"  {'TOTAL:':16s} {total_files:>6d} files  ({total_str})")
     print()
-    print("  Ready for training: data/pretrain/combined.txt")
-    print("  Load this file in FORGE -> Pre-Train mode")
+    # The next step reads SOURCE_DIRS directly; combined.txt is a retired
+    # artifact and pointing the summary at it invites rebuilding it.
+    print("  Next step: pretokenize_data.py (reads these dirs directly)")
     print("=" * 60)
 
 
@@ -3882,10 +3888,11 @@ Examples:
             print("\n--- FineMath ---")
             finemath_count = fetch_finemath(args.finemath, progress)
 
-        # 12. The Stack v2 (source code from HuggingFace — requires auth)
+        # 12. The Stack v1 (source code from HuggingFace — requires auth;
+        # v1 is the config with inline content, NOT -v2 -- see fetch_the_stack)
         stack_count = 0
         if args.code > 0:
-            print("\n--- The Stack v2 ---")
+            print("\n--- The Stack ---")
             stack_count = fetch_the_stack(args.code, progress)
 
         progress["stats"] = {

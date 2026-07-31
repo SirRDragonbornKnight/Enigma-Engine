@@ -309,7 +309,8 @@ Consequences that everything else works around:
      COMPUTE-OPTIMAL vocab at ~200M non-embedding params; 24-32k is defensible
      only via the paper's overtraining adjustment (our ~23B-token pass IS
      heavily over-trained, which nudges it up) — but 16k is the safe pick and
-     32k is right only if the model also grows to 350-700M. Embedding cost at
+     32k is right only if the model also grows to 350-700M (Gate B has since
+     ruled 238m, so 16k stands). Embedding cost at
      dim 1024: 16k ~= 16M params, 32k ~= 33M vs ~4.8M now. The 32k bump pairs
      naturally with a size bump; at a flat 182M prefer 16k.
    - **SuperBPE (arxiv 2503.13423) is worth a controlled A/B, not a blind
@@ -330,6 +331,7 @@ Consequences that everything else works around:
    lineage, new directory; the 182M lineage stays immutable (revert intact).
    - Chinchilla-optimal for 182M ~= 3.6B tokens; ~23B -> heavily over-trained
      (good for a small model). At 350-700M, optimal ~7-14B; ~23B still ample.
+     (Gate B ruled 238m: optimal ~4.8B, the 28.26B corpus is ~5.9x it.)
    - **Turn ON the levers that already exist but were frozen off for lineage
      compat** (2026-07-18 research, fact-checked): `--optimizer muon` (hybrid
      Muon-on-matrices / AdamW-on-embeddings+head — real ~1.3-1.4x speedup at

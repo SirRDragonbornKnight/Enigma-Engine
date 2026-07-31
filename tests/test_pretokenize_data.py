@@ -228,6 +228,34 @@ def test_refuses_any_write_at_the_lineage_path(monkeypatch, corpus, tmp_path):
     assert not lineage.exists() and not (lineage.parent / "tokens.json").exists()
 
 
+def test_refuses_to_rebuild_any_existing_bin_in_place(monkeypatch, corpus, tmp_path):
+    """Corpora are versioned, never rebuilt in place. This is not lineage
+    paranoia but a measured hazard: after v2b became the ROLLBACK, the
+    standing retokenize line in two documents still named tokens_v2b.bin as
+    its output -- "copy the line whole" would have destroyed the rollback
+    with no receipt (found 2026-07-30). Any --output-bin that already exists
+    on disk must refuse at boot, before the walk touches anything."""
+    root, sources, vocab = corpus
+    existing = tmp_path / "corpora" / "tokens_v9x.bin"
+    existing.parent.mkdir()
+    existing.write_bytes(b"ETOK" + b"\x00" * 60)  # stands in for a live corpus
+    monkeypatch.setattr(pd, "SOURCE_DIRS", sources)
+    monkeypatch.setattr(pd, "SE_DIR", tmp_path / "_no_stackexchange")
+    monkeypatch.setattr(sys, "argv",
+                        ["pretokenize_data.py", "--output-bin", str(existing),
+                         "--vocab", str(vocab), "--dtype", "uint16"])
+    with pytest.raises(SystemExit, match="never rebuilt in place"):
+        pd.main()
+    assert existing.read_bytes()[:4] == b"ETOK", "the existing bin was touched"
+    # a FRESH name beside it is fine -- the guard must not block new versions
+    fresh = existing.parent / "tokens_v9y.bin"
+    monkeypatch.setattr(sys, "argv",
+                        ["pretokenize_data.py", "--output-bin", str(fresh),
+                         "--vocab", str(vocab), "--dtype", "uint16"])
+    pd.main()
+    assert fresh.exists(), "a new version name must still build"
+
+
 def test_special_literals_are_scrubbed_at_consume_time(monkeypatch, corpus, tmp_path):
     """~96 GB of source text predates the collectors' fetch-time sanitizer and
     a sampled scan found real literals in it ("List<A>" carves the actual <A>

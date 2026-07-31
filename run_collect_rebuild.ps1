@@ -62,6 +62,11 @@ $env:PYTHONUNBUFFERED = "1"
 $proc = Start-Process -FilePath $python -ArgumentList $argString `
     -WorkingDirectory $repo -NoNewWindow -PassThru `
     -RedirectStandardOutput $log -RedirectStandardError $errLog
+# Touch the handle WHILE THE CHILD IS ALIVE or ExitCode reads empty after
+# exit under PowerShell 5.1 -- the marker then says "exit=" and a finished
+# run is indistinguishable from a killed one, which is the marker's one job.
+# (Measured: without this, exit=[]; with it, a child's exit 7 reads 7.)
+$null = $proc.Handle
 
 # BelowNormal for the Chrome Remote Desktop budget: the session is driven
 # remotely with SMT off, so a foreground-priority job makes the desktop crawl.

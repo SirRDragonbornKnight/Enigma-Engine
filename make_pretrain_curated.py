@@ -47,7 +47,7 @@ import json
 import random
 from pathlib import Path
 
-from collect_pretraining_data import DOC_SEP_JOIN
+from collect_pretraining_data import DOC_SEP_JOIN, _SPECIAL_TOKEN_LITERALS
 from enigma_engine.core.persona import Persona
 from eval_leak_guard import LockedProbeGuard
 from identity_anchors import EXAMPLES as IDENTITY_EXAMPLES
@@ -133,6 +133,14 @@ def conversational_lines(persona: Persona, limit: int, seed: int = 21) -> list[s
             # pass is not something a later stage can undo.
             if _is_low_quality({"messages": [{"role": "assistant", "content": a}]}):
                 continue
+            # A raw control-token literal ("<search>...</search>" turns in the
+            # bulk pull) cannot survive into the corpus intact: the consume-time
+            # scrub space-breaks it into a mangled surface form the tokenizer
+            # can never carve back, so the doc would TRAIN the mangled form.
+            # The tags also have no runtime owner; records with owned tags are
+            # the instruct pass's to author.
+            if any(lit in q or lit in a for lit in _SPECIAL_TOKEN_LITERALS):
+                continue
             pairs.append((" ".join(q.split()), " ".join(a.split())))
     rng.shuffle(pairs)
     return [f"User: {q}\n{persona.name}: {a}" for q, a in pairs[:limit]]
@@ -176,7 +184,7 @@ def write_shards(kept: dict[str, list[str]], out_dir: Path) -> int:
         # pretokenize time -- 2,000 identity/fact documents sharing a single
         # <s>/</s> pair. The packed-source separator contract applies to this
         # writer exactly as it does to the HF fetchers.
-        shard.write_text(DOC_SEP_JOIN.join(chunk) + "\n", encoding="utf-8")
+        shard.write_text(DOC_SEP_JOIN.join(chunk) + "\n", encoding="utf-8", newline="\n")
         written += 1
     return written
 

@@ -230,7 +230,9 @@ four for four:
       split at the pretokenize walk (each record = own document = own
       `<s>`/`</s>`), the FineWeb-Edu fetcher now runs the same
       literal-scrub + sealed-probe screen as the other three, and the
-      Stack pull takes an equal per-language share (16 languages).
+      Stack pull takes a WEIGHT-proportional per-language share (16
+      languages; the weights are item 16's ruling -- the equal share this
+      line first recorded was superseded the same day).
    2. ~~**Old files must be CLEARED first, or the re-pull no-ops**~~
       **DONE 2026-07-30 -- and cleared by MOVE, not delete.** Every
       fetcher reads existing bytes against its target and skips when met,
@@ -315,9 +317,15 @@ four for four:
    k=3 ruling. -> 7.95 T4.
 16. ~~**The Stack language mix**~~ **RULED 2026-07-30: WEIGHTED** (python
    3.0x, javascript/typescript/java/c/cpp 1.5x, go/rust/ruby/php/shell/sql/
-   json 1.0x, html/css/markdown 0.3x -- landed in `_STACK_LANGUAGES` before
-   the Stack leg started, so the running collect picks it up when that leg
-   fires). Background kept for the record: equal-share was the negation of
+   json 1.0x, html/css/markdown 0.3x). **Landing it required RESTARTING the
+   collect** -- a live python holds the module object it imported, so
+   editing `_STACK_LANGUAGES` on disk cannot reach a running process. The
+   collector was killed mid-FineWeb (~29.9 GB) and relaunched via the same
+   scheduled task: byte-based skip checks plus `records_consumed` resumed
+   the pull cleanly, the previous log survived as `.log.prev`, and the
+   Stack leg then ran entirely under the weighted code. VERIFIED on disk
+   after completion: 16/16 languages, every one within 0.1pp of its target
+   share (python 16.3% of the code budget = exactly 3.0/18.4). Background kept for the record: equal-share was the negation of
    the 100%-python bug, never a diet -- it would have cut python 17.25% ->
    ~1% of corpus and handed 25% of the code budget to markup by default.
    With the weights, python's floor is ~19.7% of the code budget (~2.1 GiB,
@@ -1036,10 +1044,12 @@ The block, in execution order:
       a literal "</s>" wrote EOS mid-document -- measured). Text collected
       BEFORE that date (wiki/fineweb/c4/owt/books) was never screened.
     - Adding sources means editing the hardcoded `SOURCE_DIRS` in
-      `pretokenize_data.py`; the v2 retokenize invocation is
+      `pretokenize_data.py`; the retokenize invocation (OUTPUT NAME = the
+      NEXT free version -- an existing bin is refused at boot since
+      2026-07-30, because this line once pointed at the live rollback) is
 
           python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json \
-            --output-bin data/pretrain/tokens_v2b.bin --dtype uint16 --workers 10 \
+            --output-bin data/pretrain/tokens_v2c.bin --dtype uint16 --workers 10 \
             --repeat-sources curated=5
 
       PATHS IN FULL, always: a bare `--vocab bpe_vocab_v2_16k.json` from the
@@ -1517,8 +1527,10 @@ dir -- the surviving receipt is
 lesson: a receipt must never live inside the thing whose deletion it
 documents).
 
-Measured before moving (the "~245 GiB" estimate was in GiB; 272.77 GB = 254 GiB,
-so the two agree). Largest: `combined.txt` 95.12, `enwiki .xml.bz2` 25.10,
+Measured before moving: 272.77 GB = 254 GiB against the manifest's "~245 GiB"
+estimate -- a ~9 GiB gap, consistent with the 07-29 audit's added orphans and
+the step-file corrections landing after the estimate was written; the
+per-target reconciliation is in the reconstructed receipt. Largest: `combined.txt` 95.12, `enwiki .xml.bz2` 25.10,
 `c4` 21.58, `C:\Enigma-Backups` 19.67, `enigma_pretrain_large\step_*.pth`
 19.67 (9 files), `qwen3-30b-a3b` 18.56, `qwen3-8b` 16.40, the six sweep points
 11.85, `openwebtext` 10.82.

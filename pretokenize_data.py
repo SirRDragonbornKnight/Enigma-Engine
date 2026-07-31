@@ -17,11 +17,14 @@ finished 2026-07-03, and since the Curated source joined SOURCE_DIRS
 corpus names its own --output-bin; the v2 retokenize (TOKENIZER_V2_SPEC):
 
     python pretokenize_data.py --vocab enigma_engine/vocab_model/bpe_vocab_v2_16k.json ^
-        --output-bin data/pretrain/tokens_v2b.bin --dtype uint16 --workers 10 ^
+        --output-bin data/pretrain/tokens_v2c.bin --dtype uint16 --workers 10 ^
         --repeat-sources curated=5
 
 (curated=5 is a standing ruling -- BACKLOG 7.95 T1; omitting the flag runs
-with NO curated oversample and nothing refuses, so copy the line whole.)
+with NO curated oversample and nothing refuses, so copy the line whole. The
+output name is the NEXT free version: an existing bin is refused at boot,
+because overwriting the live corpus or the rollback in place destroys the
+receipt a failed build would need.)
 
 Parallel layout: the PARENT does the walk + paragraph dedup + filters --
 that state is inherently sequential (shared dedup filter) -- with file
@@ -507,6 +510,18 @@ def main():
             "refusing to overwrite the v1 lineage sidecar tokens.json -- this "
             "--output-bin maps its metadata onto the lineage receipt; pick a bin "
             "name whose .json lands elsewhere"
+        )
+    # And the general form: corpora are VERSIONED, never rebuilt in place. An
+    # --output-bin that already exists is either the live corpus or a
+    # rollback, and the standing command line has pointed at an existing bin
+    # before (the v2b line survived in two docs after v2b became the
+    # rollback). Overwrite-in-place destroys the receipt a failed build
+    # would need.
+    if out_bin.exists():
+        raise SystemExit(
+            f"refusing to overwrite {out_bin} -- it already exists, and corpora "
+            f"are versioned, never rebuilt in place. Name a NEW bin (the next "
+            f"free version suffix) or delete the old one deliberately first."
         )
 
     from enigma_engine.core.tokenizer import get_tokenizer
