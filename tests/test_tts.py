@@ -7,19 +7,23 @@ the GPU, or opens an audio device."""
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
+import types
 import wave
 
 import numpy as np
 import pytest
 
+from enigma_engine.core import tts as tts_mod
 from enigma_engine.core.tts import (
     DEFAULT_RECIPE,
     MAX_SPEAK_CHARS,
     PRESET_VOICES,
     Speaker,
     TTSError,
+    _match_output_device,
     _normalize_recipe,
     split_sentences,
 )
@@ -58,13 +62,15 @@ class FakePlayer:
 
     def __init__(self, block: bool = False):
         self.plays: list[int] = []
+        self.devices: list = []  # the output index each play was routed to
         self.stopped = False
         self.block = block
         self.playing = threading.Event()
         self._release = threading.Event()
 
-    def play(self, audio, sample_rate: int):
+    def play(self, audio, sample_rate: int, device=None):
         self.plays.append(len(audio))
+        self.devices.append(device)
         self.playing.set()
 
     def wait(self):
@@ -483,3 +489,225 @@ def test_split_sentences_keeps_decimals_and_abbreviations():
     assert split_sentences("Dr. Smith left. Bye.") == ["Dr. Smith left.", "Bye."]
     # A run of terminators stays with its sentence.
     assert split_sentences("Really?! Yes.") == ["Really?!", "Yes."]
+
+
+# -------------------------------------------------------- output routing
+
+# Two entries deliberately share "NVIDIA High Definition Audio" -- that is what
+# real monitor endpoints look like, and it is what makes a loose substring
+# ambiguous rather than merely wrong.
+FAKE_OUTPUTS = [
+    {"index": 4, "name": "HP 2310 (NVIDIA High Definition Audio)", "channels": 2, "default": True},
+    {"index": 5, "name": "LG ULTRAGEAR (NVIDIA High Definition Audio)", "channels": 2, "default": False},
+    {"index": 8, "name": "Steam Streaming Speakers", "channels": 2, "default": False},
+]
+
+
+@pytest.fixture()
+def outputs(monkeypatch):
+    """Stand in for the machine's sound hardware; the suite opens no device."""
+    monkeypatch.setattr(tts_mod, "list_output_devices", lambda: list(FAKE_OUTPUTS))
+    return FAKE_OUTPUTS
+
+
+def test_default_recipe_follows_the_system_default_output(rig):
+    sp, _, player = rig
+    assert sp.get_output_device() is None
+    sp.speak("hello", wait=True)
+    # None is not "no device" -- it is the instruction sounddevice reads as
+    # "whatever the OS default is right now".
+    assert player.devices == [None]
+
+
+def test_set_output_device_stores_the_full_name_not_the_index(outputs, rig):
+    sp, _, _ = rig
+    sp.set_output_device(5)
+    # An index is a position in a list rebuilt on every import; storing it would
+    # silently re-point at another speaker after a driver reload.
+    assert sp.get_output_device() == "LG ULTRAGEAR (NVIDIA High Definition Audio)"
+
+
+def test_set_output_device_expands_a_substring_to_the_full_name(outputs, rig):
+    sp, _, _ = rig
+    sp.set_output_device("ultragear")
+    assert sp.get_output_device() == "LG ULTRAGEAR (NVIDIA High Definition Audio)"
+
+
+def test_playback_routes_to_the_configured_device(outputs, rig):
+    sp, _, player = rig
+    sp.set_output_device("Steam Streaming Speakers")
+    sp.speak("hello", wait=True)
+    assert player.devices == [8]
+
+
+@pytest.mark.parametrize("value", [None, "default", "", "  Default  ", "system default"])
+def test_clearing_the_device_returns_to_the_system_default(outputs, rig, value):
+    sp, _, player = rig
+    sp.set_output_device(8)
+    sp.set_output_device(value)
+    assert sp.get_output_device() is None
+    sp.speak("hello", wait=True)
+    assert player.devices == [None]
+
+
+def test_unknown_device_is_a_ttserror_listing_what_exists(outputs, rig):
+    sp, _, _ = rig
+    with pytest.raises(TTSError) as exc:  # a bare ValueError here 500s the endpoint
+        sp.set_output_device("Bose QuietComfort")
+    assert "Steam Streaming Speakers" in str(exc.value)
+    assert sp.get_output_device() is None  # a rejected change leaves routing alone
+
+
+def test_ambiguous_substring_is_refused_rather_than_guessed(outputs, rig):
+    sp, _, _ = rig
+    with pytest.raises(TTSError) as exc:
+        sp.set_output_device("NVIDIA High Definition Audio")
+    assert "HP 2310" in str(exc.value) and "LG ULTRAGEAR" in str(exc.value)
+    assert sp.get_output_device() is None
+
+
+def test_index_that_does_not_exist_is_refused(outputs, rig):
+    sp, _, _ = rig
+    with pytest.raises(TTSError):
+        sp.set_output_device(99)
+
+
+def test_a_device_that_vanished_degrades_to_default_and_warns_once(
+    outputs, rig, monkeypatch, capsys
+):
+    sp, _, player = rig
+    sp.set_output_device("Steam Streaming Speakers")
+    # The dongle is unplugged between one utterance and the next.
+    monkeypatch.setattr(tts_mod, "list_output_devices", lambda: FAKE_OUTPUTS[:1])
+    sp.speak("first", wait=True)
+    sp.speak("second", wait=True)
+    # Speaking out of the wrong speaker is recoverable; going silent is not.
+    assert player.devices == [None, None]
+    # ...but a warning per sentence would bury every other line in the log.
+    assert capsys.readouterr().out.count("is unavailable") == 1
+    # The choice is REMEMBERED, so replugging restores it with no user action.
+    assert sp.get_output_device() == "Steam Streaming Speakers"
+
+
+def test_device_choice_persists_to_the_recipe_file(outputs, tmp_path):
+    path = tmp_path / "voice.json"
+    sp, _, _ = make_speaker(recipe_path=path)
+    try:
+        sp.set_output_device("ultragear")
+    finally:
+        sp.close()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["output_device"] == "LG ULTRAGEAR (NVIDIA High Definition Audio)"
+
+    sp2, _, player = make_speaker(recipe_path=path)
+    try:
+        assert sp2.get_output_device() == "LG ULTRAGEAR (NVIDIA High Definition Audio)"
+        sp2.speak("hello", wait=True)
+        assert player.devices == [5]
+    finally:
+        sp2.close()
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, None),
+    ("default", None),
+    ("   ", None),
+    ("Speakers", "Speakers"),
+    ("  Speakers  ", "Speakers"),
+])
+def test_normalize_recipe_canonicalizes_the_device_field(value, expected):
+    recipe = _normalize_recipe({**DEFAULT_RECIPE, "output_device": value})
+    assert recipe["output_device"] == expected
+
+
+@pytest.mark.parametrize("value", [True, 1.5, ["Speakers"], {"name": "Speakers"}])
+def test_normalize_recipe_rejects_a_malformed_device_as_ttserror(value):
+    with pytest.raises(TTSError):
+        _normalize_recipe({**DEFAULT_RECIPE, "output_device": value})
+
+
+def test_normalize_recipe_does_not_touch_the_hardware(monkeypatch):
+    # A recipe is validated at boot and on every set_voice. If that checked the
+    # live device list, a sleeping monitor at startup would make the whole voice
+    # invalid -- so shape validation stays offline; playback resolves.
+    def explode():
+        raise AssertionError("_normalize_recipe must not enumerate audio devices")
+
+    monkeypatch.setattr(tts_mod, "list_output_devices", explode)
+    recipe = _normalize_recipe({**DEFAULT_RECIPE, "output_device": "Nothing Like This"})
+    assert recipe["output_device"] == "Nothing Like This"
+
+
+def test_match_output_device_prefers_an_exact_name_over_a_substring():
+    devices = [
+        {"index": 1, "name": "Speakers", "channels": 2, "default": False},
+        {"index": 2, "name": "Speakers (USB Headset)", "channels": 2, "default": False},
+    ]
+    # "Speakers" is a substring of both, so substring-first would be ambiguous
+    # and refuse a name the user can plainly see in the listing.
+    assert _match_output_device("Speakers", devices)["index"] == 1
+
+
+def test_match_output_device_on_a_machine_with_no_outputs():
+    with pytest.raises(TTSError) as exc:
+        _match_output_device("Speakers", [])
+    assert "no audio output devices" in str(exc.value)
+
+
+class _FakeSoundDevice:
+    """Stands in for the `sounddevice` module: an enumeration and a default."""
+
+    def __init__(self, devices, default_output):
+        self._devices = devices
+        self.default = types.SimpleNamespace(device=(None, default_output))
+
+    def query_devices(self):
+        return self._devices
+
+
+# What Windows actually reports on this machine: MME first (names truncated at
+# 31 characters), then the same endpoints again under a later host API with
+# their full names, plus a Bluetooth headset whose name embeds a raw CRLF.
+RAW_DEVICES = [
+    {"name": "Microphone (Realtek HD Audio)", "max_output_channels": 0},
+    {"name": "HP 2310 (NVIDIA High Definition", "max_output_channels": 2},
+    {"name": "LG ULTRAGEAR (NVIDIA High Defin", "max_output_channels": 2},
+    {"name": "HP 2310 (NVIDIA High Definition Audio)", "max_output_channels": 2},
+    {"name": "LG ULTRAGEAR (NVIDIA High Definition Audio)", "max_output_channels": 2},
+    {"name": "Headset (bthhfenum.sys,#2;%1 Hands-Free%0\r\n;(TOZO OpenBuds))", "max_output_channels": 1},
+]
+
+
+def test_list_output_devices_merges_the_truncated_host_api_twin(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", _FakeSoundDevice(RAW_DEVICES, 1))
+    out = tts_mod.list_output_devices()
+    # Six raw rows -> one input dropped, two pairs merged, one headset = three.
+    assert [d["name"] for d in out] == [
+        "HP 2310 (NVIDIA High Definition Audio)",
+        "LG ULTRAGEAR (NVIDIA High Definition Audio)",
+        "Headset (bthhfenum.sys,#2;%1 Hands-Free%0 ;(TOZO OpenBuds))",
+    ]
+    # Lowest index of the group -- MME, the host API with the widest support.
+    assert [d["index"] for d in out] == [1, 2, 5]
+    # The default index is the TRUNCATED twin, so a name-equality flag would
+    # have marked nothing as default at all.
+    assert [d["default"] for d in out] == [True, False, False]
+
+
+def test_list_output_devices_strips_a_newline_from_a_device_name(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", _FakeSoundDevice(RAW_DEVICES, 1))
+    headset = tts_mod.list_output_devices()[-1]
+    # A raw CRLF inside a name breaks every single-line listing that prints it.
+    assert "\r" not in headset["name"] and "\n" not in headset["name"]
+
+
+def test_list_output_devices_without_an_audio_stack_is_a_ttserror(monkeypatch):
+    class _Broken:
+        default = types.SimpleNamespace(device=(None, 0))
+
+        def query_devices(self):
+            raise OSError("PortAudio not initialized")
+
+    monkeypatch.setitem(sys.modules, "sounddevice", _Broken())
+    with pytest.raises(TTSError, match="cannot list audio outputs"):
+        tts_mod.list_output_devices()

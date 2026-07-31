@@ -53,7 +53,7 @@ from enigma_engine.core.asr import ASRError, Ears
 from enigma_engine.core.calculator import CalcError, evaluate, format_result
 from enigma_engine.core.eyes import Eyes, EyesError, flatten_image_content
 from enigma_engine.core.imagegen import ImageGenError, Painter
-from enigma_engine.core.tts import Speaker, TTSError
+from enigma_engine.core.tts import Speaker, TTSError, list_output_devices
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.memory_store import renders_forget_pending as _renders_forget_pending
@@ -106,6 +106,18 @@ _p.add_argument(
     "--voice-name",
     default=None,
     help="override the voice with a single Kokoro preset, e.g. 'af_heart' (default: her saved blend)",
+)
+_p.add_argument(
+    "--voice-device",
+    default=None,
+    help="which speaker she talks out of: a device name, part of one, or an index from "
+    "--list-audio-outputs. 'default' follows the Windows default output. The choice "
+    "persists, so this is only needed to CHANGE it (default: her saved choice)",
+)
+_p.add_argument(
+    "--list-audio-outputs",
+    action="store_true",
+    help="print the output devices --voice-device accepts, then exit",
 )
 _p.add_argument(
     "--barge-in",
@@ -604,6 +616,17 @@ def boot(argv: list[str] | None = None) -> None:
             SPEAKER = Speaker(recipe_path=_VOICE_STATE, voice_name=ARGS.voice_name)
         except TTSError as exc:
             print(f"  WARN: voice disabled -- {exc}", flush=True)
+    if SPEAKER is not None:
+        # A --voice-device that no longer exists keeps the SAVED choice rather
+        # than falling back silently: the flag was an instruction, and losing it
+        # without a word is how she ends up talking to an empty room again.
+        if ARGS.voice_device is not None:
+            try:
+                SPEAKER.set_output_device(ARGS.voice_device)
+            except TTSError as exc:
+                print(f"  WARN: --voice-device ignored -- {exc}", flush=True)
+        _out = SPEAKER.get_output_device()
+        print(f"  voice output: {_out if _out else 'system default'}", flush=True)
 
     # Barge-in: let the mic cut her off when the user talks over her. The mic
     # opens only while she speaks (via the speaking-state callback). Off unless
@@ -2523,6 +2546,42 @@ def set_voice(req: VoiceReq):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class OutputReq(BaseModel):
+    """Which speaker she plays out of; null (or "default") follows the system."""
+
+    device: str | int | None = None
+
+
+@app.get("/v1/audio/outputs")
+def audio_outputs():
+    """The output endpoints on the SERVER machine, plus the one in use.
+
+    This governs server-side playback only -- the speak built-in and talk mode.
+    Audio a browser fetches from /v1/audio/speech is routed by that browser's
+    own OS, so a remote client picks its speaker in its own sound settings.
+    """
+    if SPEAKER is None:
+        raise _organ_off("voice disabled -- start with --voice")
+    try:
+        outputs = SPEAKER.output_devices
+    except TTSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"outputs": outputs, "current": SPEAKER.get_output_device()}
+
+
+@app.post("/v1/audio/output")
+def set_audio_output(req: OutputReq):
+    """Point her at a speaker by name or index; null means the system default.
+    Persisted, and live on her next utterance. A device that does not exist is
+    a 400 naming the ones that do -- the current routing is left alone."""
+    if SPEAKER is None:
+        raise _organ_off("voice disabled -- start with --voice")
+    try:
+        return SPEAKER.set_output_device(req.device)
+    except TTSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/v1/audio/transcriptions")
 def audio_transcriptions(file: UploadFile = File(...)):
     """OpenAI audio.transcriptions shape (subset): upload audio, get text.
@@ -2582,9 +2641,32 @@ def images_generations(req: ImageGenReq):
     return {"created": int(time.time()), "data": data}
 
 
+def print_audio_outputs() -> None:
+    """Print the output devices --voice-device accepts, marking the default."""
+    try:
+        outputs = list_output_devices()
+    except TTSError as exc:
+        print(f"cannot list audio outputs: {exc}", flush=True)
+        return
+    if not outputs:
+        print("no audio output devices found on this machine", flush=True)
+        return
+    print("Output devices -- pass the name or the index to --voice-device:", flush=True)
+    for d in outputs:
+        mark = "   <== system default" if d["default"] else ""
+        print(f"  [{d['index']:2}] {d['name']}  ({d['channels']} ch){mark}", flush=True)
+    print("  --voice-device default follows whatever Windows calls the default", flush=True)
+
+
 def main() -> None:
     """Run the server. Console-script entry point (pyproject [project.scripts])
     and the __main__ path share this."""
+    # Listing speakers must not cost a checkpoint load, so this is answered
+    # before boot() -- the flag is a question about the machine, not about her.
+    _early, _ = _p.parse_known_args()
+    if _early.list_audio_outputs:
+        print_audio_outputs()
+        return
     boot()
     print(f"Enigma OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     print(f"In Odysseus:  /setup local http://{ARGS.host}:{ARGS.port}/v1", flush=True)

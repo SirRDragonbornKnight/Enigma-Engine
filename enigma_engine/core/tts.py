@@ -57,6 +57,9 @@ DEFAULT_RECIPE: dict = {
     "lang_code": "a",  # 'a' American English, 'b' British English
     "blend": [["af_heart", 0.50], ["af_nicole", 0.30], ["af_kore", 0.20]],
     "speed": 0.92,
+    # Which speaker she comes out of. None = whatever Windows calls the default
+    # output right now, which is what most machines want and what she ships as.
+    "output_device": None,
 }
 
 # Kokoro's built-in presets, offered by /v1/audio/voices and accepted in blends.
@@ -73,6 +76,129 @@ PRESET_VOICES: tuple[str, ...] = (
 
 class TTSError(Exception):
     """The voice backend is unavailable or a synthesis/playback job failed."""
+
+
+# ------------------------------------------------------------ output routing
+
+# A recipe stores the output device by NAME, never by index. sounddevice's
+# indices are positions in a list rebuilt at import time, so they renumber when
+# a monitor sleeps, a driver reloads, or a USB endpoint is plugged in -- an
+# index saved today can address a different speaker tomorrow. Names are stable,
+# and a name is also what a human can read back in a config file.
+_DEFAULT_DEVICE_WORDS = ("", "default", "system", "system default", "none")
+
+
+def _clean_device_name(name) -> str:
+    """One line, single-spaced. Some Bluetooth endpoints carry a raw CRLF inside
+    their name ("Headset (...bthhfenum.sys,#2;%1 Hands-Free%0\\r\\n;(TOZO
+    OpenBuds))") and would otherwise break every single-line listing."""
+    return " ".join(str(name).split())
+
+
+# Windows' MME host API truncates device names at 31 characters, so the merge
+# below compares prefixes. Requiring a few characters of agreement keeps a short
+# generic name ("Speakers") from swallowing unrelated endpoints.
+_MIN_PREFIX_MATCH = 12
+
+
+def list_output_devices() -> list[dict]:
+    """Every output endpoint on this machine, one entry per device.
+
+    Windows exposes the same speaker once per host API (MME, DirectSound,
+    WASAPI) -- each with its own index AND ITS OWN SPELLING, because MME
+    truncates at 31 characters. "LG ULTRAGEAR (NVIDIA High Defin" and "LG
+    ULTRAGEAR (NVIDIA High Definition Audio)" are one monitor listed twice.
+    Entries merge when one name is a prefix of the other, keeping the fullest
+    name (for a human to read) and the lowest index (MME, the host API with the
+    widest driver support). Without the merge a real machine lists twenty-one
+    outputs where it has about a dozen, and every substring is ambiguous
+    against the truncated twin of the device it already found.
+    """
+    try:
+        import sounddevice as sd
+    except Exception as exc:  # no audio stack at all (headless box, CI)
+        raise TTSError(f"cannot list audio outputs: {exc}") from exc
+    try:
+        devices = sd.query_devices()
+        default_idx = sd.default.device[1]
+    except Exception as exc:
+        raise TTSError(f"cannot list audio outputs: {exc}") from exc
+
+    out: list[dict] = []
+    members: list[list[int]] = []  # every index merged into out[n]
+    for i, d in enumerate(devices):
+        if d["max_output_channels"] <= 0:
+            continue
+        name = _clean_device_name(d["name"])
+        if not name:
+            continue
+        low = name.lower()
+        merged = False
+        for entry, seen in zip(out, members):
+            other = entry["name"].lower()
+            short, long = (low, other) if len(low) <= len(other) else (other, low)
+            if len(short) >= _MIN_PREFIX_MATCH and long.startswith(short):
+                seen.append(i)
+                if len(name) > len(entry["name"]):
+                    entry["name"] = name  # prefer the un-truncated spelling
+                merged = True
+                break
+        if not merged:
+            out.append(
+                {
+                    "index": i,  # ascending scan, so this is the group's lowest
+                    "name": name,
+                    "channels": int(d["max_output_channels"]),
+                    "default": False,
+                }
+            )
+            members.append([i])
+    # Flag by MEMBERSHIP, not by name: the default index often points at the
+    # truncated MME twin, whose name no longer equals the merged entry's.
+    if isinstance(default_idx, int):
+        for entry, seen in zip(out, members):
+            if default_idx in seen:
+                entry["default"] = True
+    return out
+
+
+def _match_output_device(device, devices: list[dict]) -> dict:
+    """Find one device by index or by name, or raise TTSError naming the field.
+
+    Name matching is exact first, then case-insensitive substring, because the
+    same endpoint carries different names under different host APIs -- MME
+    truncates at 31 characters ("LG ULTRAGEAR (NVIDIA High Defi") where WASAPI
+    spells it out. A stored full name still matches after such a shift.
+    """
+    if not devices:
+        raise TTSError("this machine reports no audio output devices")
+    listing = "; ".join(f"[{d['index']}] {d['name']}" for d in devices)
+    if isinstance(device, bool):
+        raise TTSError(f"output device must be an index or a name, got {device!r}")
+    if isinstance(device, int) or (isinstance(device, str) and device.strip().isdigit()):
+        idx = int(device)
+        for d in devices:
+            if d["index"] == idx:
+                return d
+        raise TTSError(f"no output device with index {idx} -- available: {listing}")
+    name = str(device).strip()
+    for d in devices:
+        if d["name"] == name:
+            return d
+    hits = [d for d in devices if name.lower() in d["name"].lower()]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        both = "; ".join(f"[{d['index']}] {d['name']}" for d in hits)
+        raise TTSError(f"'{name}' matches several output devices: {both}")
+    raise TTSError(f"no output device matches '{name}' -- available: {listing}")
+
+
+def resolve_output_device(name: str | None) -> int | None:
+    """Turn a stored device name into a live index. None stays None (default)."""
+    if name is None:
+        return None
+    return _match_output_device(name, list_output_devices())["index"]
 
 
 # Words whose trailing period is an abbreviation dot, not a sentence end.
@@ -181,7 +307,24 @@ def _normalize_recipe(recipe: dict) -> dict:
     if not math.isfinite(total) or total <= 0:
         raise TTSError(f"blend weights sum to an unusable total ({total})")
     blend = [[n, w / total] for n, w in blend]  # weights always sum to 1.0
-    return {"engine": "kokoro", "lang_code": lang, "blend": blend, "speed": speed}
+    # The device is normalized by SHAPE only -- never checked against the live
+    # hardware here. A recipe is loaded at boot and validated on every set_voice,
+    # and a speaker that happens to be asleep at that moment must not make the
+    # whole voice invalid; playback resolves it (and degrades) per utterance.
+    device = recipe.get("output_device")
+    if device is not None:
+        if isinstance(device, bool) or not isinstance(device, (str, int)):
+            raise TTSError(f"output_device must be a device name or null, got {device!r}")
+        device = str(device).strip()
+        if device.lower() in _DEFAULT_DEVICE_WORDS:
+            device = None
+    return {
+        "engine": "kokoro",
+        "lang_code": lang,
+        "blend": blend,
+        "speed": speed,
+        "output_device": device,
+    }
 
 
 class KokoroBackend:
@@ -258,8 +401,9 @@ class SoundDevicePlayer:
 
         self._sd = sd
 
-    def play(self, audio, sample_rate: int) -> None:
-        self._sd.play(audio, sample_rate)
+    def play(self, audio, sample_rate: int, device: int | None = None) -> None:
+        """device=None means the system default output, resolved by sounddevice."""
+        self._sd.play(audio, sample_rate, device=device)
 
     def wait(self) -> None:
         self._sd.wait()
@@ -313,6 +457,7 @@ class Speaker:
         # (race-free) rather than a clearable flag that a stop() could lose.
         self._epoch = 0
         self._voice_lock = threading.Lock()  # serializes set_voice commits
+        self._device_warned: str | None = None  # last device we warned was missing
         self.last_error: BaseException | None = None
 
         init_done = threading.Event()
@@ -424,6 +569,7 @@ class Speaker:
         # lands within one sentence. No clearable flag, so a stop cannot be lost.
         if self._player is None:
             self._player = self._player_factory()
+        device = self._resolve_device()
         self._signal_speaking(True)
         try:
             for sentence in split_sentences(text):
@@ -432,10 +578,36 @@ class Speaker:
                 audio = self._backend.synth(sentence)
                 if self._epoch != epoch:  # a stop during synth cancels playback
                     break
-                self._player.play(audio, self._backend.sample_rate)
+                self._player.play(audio, self._backend.sample_rate, device=device)
                 self._player.wait()  # returns early if stop() aborted the stream
         finally:
             self._signal_speaking(False)
+
+    def _resolve_device(self) -> int | None:
+        """Index of the configured output, resolved fresh for each utterance.
+
+        Resolving per utterance rather than caching one index means unplugging a
+        headset or waking a monitor is picked up by her next sentence. A device
+        that has gone away degrades to the system default with ONE warning --
+        speaking out of the wrong speaker is recoverable, silence is not, and a
+        warning per sentence would bury the log.
+        """
+        name = self._recipe.get("output_device")
+        if name is None:
+            return None
+        try:
+            index = resolve_output_device(name)
+        except TTSError as exc:
+            if self._device_warned != name:
+                self._device_warned = name
+                print(
+                    f"  WARN: output device '{name}' is unavailable ({exc}); "
+                    f"speaking on the system default instead",
+                    flush=True,
+                )
+            return None
+        self._device_warned = None
+        return index
 
     def _signal_speaking(self, active: bool) -> None:
         if self._on_speaking is None:
@@ -534,6 +706,39 @@ class Speaker:
     def voices(self) -> list[dict]:
         """Presets available for a recipe (the /v1/audio/voices shape)."""
         return [{"id": name, "name": name} for name in PRESET_VOICES]
+
+    @property
+    def output_devices(self) -> list[dict]:
+        """The output endpoints she can be pointed at, for a picker."""
+        return list_output_devices()
+
+    def get_output_device(self) -> str | None:
+        """The configured output name, or None when following the system default."""
+        return self._recipe.get("output_device")
+
+    def set_output_device(self, device=None) -> dict:
+        """Route her speech to a specific speaker, and persist the choice.
+
+        Accepts a device name, a substring of one, an index from
+        output_devices, or None/"default" to follow whatever Windows calls the
+        default output. An index is resolved to its NAME before being stored,
+        so the setting survives the renumbering that a driver reload causes.
+        Raises TTSError (a 400, not a 500) if nothing matches.
+
+        Takes effect on the next utterance -- no backend round-trip, because the
+        device is a property of playback, not of the synthesized voice.
+        """
+        with self._voice_lock:
+            if device is None or (
+                isinstance(device, str) and device.strip().lower() in _DEFAULT_DEVICE_WORDS
+            ):
+                name = None
+            else:
+                name = _match_output_device(device, list_output_devices())["name"]
+            self._recipe = _normalize_recipe({**self._recipe, "output_device": name})
+            self._device_warned = None
+            self._persist()
+            return self.get_voice()
 
     def close(self) -> None:
         self._queue.put(None)
