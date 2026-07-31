@@ -252,3 +252,56 @@ def test_packed_file_writers_join_records_with_the_separator():
             f"{sep_joins} -- a write path was added or removed without the "
             "separator contract following it"
         )
+
+
+def test_start_process_launchers_avoid_the_four_detach_traps():
+    """The Start-Process family of detached launchers, pinned against the four
+    traps that each cost a real launch (2026-07-30, corpus re-collect and
+    retokenize):
+
+    1. -ArgumentList given an ARRAY joins with spaces and does NOT quote the
+       elements, so a repo path with a space reaches python split in half and
+       it dies instantly with "can't open file". The argument list must be ONE
+       string whose script path is explicitly quoted.
+    2. Python block-buffers stdout when redirected to a file, so the log sits
+       at 0 bytes and a stall is indistinguishable from a healthy quiet buffer
+       for over an hour. PYTHONUNBUFFERED must be set.
+    3. $proc.Handle must be touched WHILE THE CHILD IS ALIVE or ExitCode reads
+       empty under PowerShell 5.1 and the done-marker cannot tell a finished
+       run from a killed one.
+    4. Wait-Process -Id leaves ExitCode unpopulated; the -PassThru object's
+       WaitForExit() is what actually populates it.
+
+    A green LastTaskResult describes the LAUNCHER, never the child -- which is
+    why these are pinned in a test rather than trusted to a task result."""
+    launchers = ("run_collect_rebuild.ps1", "run_pretokenize_v2c.ps1", "run_pretrain_t3.ps1")
+    for name in launchers:
+        launcher = REPO_ROOT / name
+        assert launcher.exists(), f"{name} is a documented detached launcher"
+        text = launcher.read_text(encoding="utf-8")
+
+        assert "-ArgumentList $argString" in text, (
+            f"{name}: pass ONE pre-quoted string to -ArgumentList; an array is "
+            "joined without quoting and splits any path containing a space"
+        )
+        arg_lines = [ln for ln in text.splitlines() if ln.strip().startswith("$argString")]
+        assert arg_lines, f"{name} no longer builds an $argString"
+        assert arg_lines[0].split("=", 1)[1].strip().startswith('"`"$script`"'), (
+            f"{name}: the script path must be quoted INSIDE the argument "
+            "string:\n  " + arg_lines[0]
+        )
+        assert 'PYTHONUNBUFFERED' in text, (
+            f"{name}: set PYTHONUNBUFFERED or the log stays empty while the job runs"
+        )
+        assert "$proc.Handle" in text, (
+            f"{name}: touch $proc.Handle while the child lives or ExitCode is lost"
+        )
+        assert "$proc.WaitForExit()" in text, (
+            f"{name}: use $proc.WaitForExit(), not Wait-Process, to populate ExitCode"
+        )
+        # Code lines only: these launchers name the trap in PROSE on purpose,
+        # so the next reader does not re-introduce what they were fixed for.
+        code = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
+        assert "Wait-Process" not in code, (
+            f"{name}: Wait-Process leaves ExitCode unpopulated"
+        )
