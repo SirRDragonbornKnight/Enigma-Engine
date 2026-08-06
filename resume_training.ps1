@@ -207,7 +207,10 @@ if (-not $now) {
   Start-Sleep 12
   exit 1
 }
-Write-Host ("Started. python PID {0}. Logging to {1}." -f $now.ProcessId, $log) -ForegroundColor Green
+# Two pids is normal, not a double launch: a venv python.exe is a shim that
+# spawns the base interpreter as a child. Unjoined, -f renders the array as
+# "System.Object[]" and the one line that proves the launch reads as noise.
+Write-Host ("Started. python PID {0}. Logging to {1}." -f (@($now.ProcessId) -join ', '), $log) -ForegroundColor Green
 Write-Host "--- last log lines ---" -ForegroundColor DarkGray
 if (Test-Path $log) { Get-Content $log -Tail 8 }
 Write-Host ""

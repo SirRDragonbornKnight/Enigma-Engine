@@ -94,6 +94,8 @@ models/*/*.pth
 # Logs
 *.log
 logs/
+# launcher-written run receipts (train_<run>.done) -- runtime state, like logs
+*.done
 
 # Temporary
 tmp/

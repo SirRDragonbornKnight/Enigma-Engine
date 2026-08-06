@@ -110,6 +110,29 @@ def anneal_first_step(total_steps: int, decay_frac: float) -> int:
     return int(total_steps * (1.0 - decay_frac))
 
 
+def pause_resets_window(step: int, start_step: int, eval_every: int,
+                        save_every: int, archive_every: int) -> bool:
+    """True when this step ran an eval/checkpoint/archive pause, so the
+    throughput window must restart after it.
+
+    The windowed rate divides tokens by wall time since the last step-print.
+    Eval and saves run BETWEEN two prints, so without a restart the next
+    window absorbs the pause and reads as a collapse -- the same shape a
+    real collapse takes (a config spilling to host memory), so every
+    checkpoint window warns and the one signal that catches a genuine
+    slowdown stops meaning anything.
+    Mirrors the guards on the eval/save/archive blocks themselves: nothing
+    fires at or before start_step, and archive_every=0 means no archives.
+    """
+    if step <= start_step:
+        return False
+    return (
+        step % eval_every == 0
+        or step % save_every == 0
+        or bool(archive_every) and step % archive_every == 0
+    )
+
+
 def anneal_counts(micro_batch: int, anneal_frac: float) -> tuple[int, int]:
     """(curated, general) draws for one micro-batch during the decay phase.
 
@@ -1466,6 +1489,12 @@ def main() -> None:
         if args.archive_every and step > start_step and step % args.archive_every == 0 and math.isfinite(loss_acc):
             save(f"step_{step:06d}.pth", step)
             print(f"  [archive] step {step} -> {out / f'step_{step:06d}.pth'}", flush=True)
+
+        # A pause is not training time: restart the throughput window after
+        # eval/save/archive so the next window measures only training (the
+        # cumulative avg above keeps counting everything, unchanged).
+        if pause_resets_window(step, start_step, args.eval_every, args.save_every, args.archive_every):
+            win_t0, win_base = time.time(), seen
 
     if not math.isfinite(loss_acc):
         # same guard the periodic saves have: never ship NaN weights as model.pth

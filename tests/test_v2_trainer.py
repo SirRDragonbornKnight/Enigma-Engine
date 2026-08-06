@@ -536,3 +536,46 @@ def test_cli_refuses_overwriting_a_source(tmp_path):
     b = _ckpt(tmp_path, "b.pth", 1.0, 200)
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         ema_checkpoints.main([str(a), str(b), "--out", str(b)])
+
+
+# ---------------------------------------------------------------------------
+# The throughput window must not count eval/checkpoint pauses as training
+# time: a window that spans one reads as a collapse and warns "below 70% of
+# best" while nothing is wrong.
+# ---------------------------------------------------------------------------
+
+def test_a_pause_restarts_the_throughput_window():
+    fires = pretrain_enigma.pause_resets_window
+    # each pause kind restarts the window on its own cadence
+    assert fires(250, 0, eval_every=250, save_every=250, archive_every=1440)
+    assert fires(500, 0, eval_every=500, save_every=250, archive_every=0)
+    assert fires(1440, 0, eval_every=250, save_every=250, archive_every=1440)
+    # a plain training step does not
+    assert not fires(260, 0, eval_every=250, save_every=250, archive_every=1440)
+    # nothing fires at or before start_step -- mirrors the eval/save guards,
+    # which all carry `step > start_step` (a resume's first step is not a pause)
+    assert not fires(29500, 29500, eval_every=250, save_every=250, archive_every=1440)
+    assert not fires(29250, 29500, eval_every=250, save_every=250, archive_every=1440)
+    # archive_every=0 means archives are off, not modulo-by-zero
+    assert not fires(1440, 0, eval_every=251, save_every=251, archive_every=0)
+
+
+def test_the_window_restart_runs_after_the_pause_it_excuses():
+    """The restart must sit AFTER the eval/save/archive blocks in the loop
+    body: placed before them it stamps the window start BEFORE the pause and
+    excludes nothing. Source order is the property, so it is what gets pinned
+    (the repo's established idiom for loop structure)."""
+    import inspect
+
+    src = inspect.getsource(pretrain_enigma.main)
+    call = "pause_resets_window(step, start_step"
+    assert call in src, "the throughput window no longer restarts after pauses"
+    reset_at = src.index(call)
+    assert src.index("[ckpt] step {step} SKIPPED") < reset_at, \
+        "the window restart moved above the checkpoint block -- it now " \
+        "stamps the window before the pause and the false alarm is back"
+    assert src.index("[archive] step {step}") < reset_at, \
+        "the window restart moved above the archive block"
+    body = src[reset_at:reset_at + 400]
+    assert "win_t0, win_base = time.time(), seen" in body, \
+        "the restart no longer resets both the window clock and its token base"
