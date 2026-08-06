@@ -91,6 +91,13 @@ _p.add_argument(
     help="enable the local memory store (JSONL + BM25); relevant memories are injected into her system context",
 )
 _p.add_argument(
+    "--memory-recall",
+    type=int,
+    default=5,
+    help="how many remembered facts the injected memory block may carry; the token "
+    "budget trims further, and 0 keeps the store readable while injecting nothing",
+)
+_p.add_argument(
     "--persona",
     default=None,
     help="serve a DIFFERENT AI: a persona pack (JSON) giving her name, data home and "
@@ -191,6 +198,7 @@ MODEL_SHA256: str | None = None
 META: dict = {}
 INSTRUCT = False
 MEMORY = None
+MEMORY_RECALL = 5
 SPEAKER = None
 MUTED = False
 EARS = None
@@ -370,7 +378,7 @@ def boot(argv: list[str] | None = None) -> None:
     directly). argv=None reads sys.argv -- byte-identical behavior to the
     old import-time startup."""
     global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META, MODEL_PATH, MODEL_SHA256
-    global INSTRUCT, MEMORY, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, EOS_ID, BOS_ID
+    global INSTRUCT, MEMORY, MEMORY_RECALL, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, EOS_ID, BOS_ID
     global _BOOTED, PERSONA, _VOICE_STATE, IMAGES_DIR, _STOP_TEXTS
 
     _BOOTED = False  # a re-boot is unready until it completes
@@ -596,6 +604,12 @@ def boot(argv: list[str] | None = None) -> None:
         )
 
     MEMORY = None
+    MEMORY_RECALL = max(0, ARGS.memory_recall)
+    if ARGS.memory_recall < 0:
+        print(
+            f"  WARN: --memory-recall {ARGS.memory_recall} is below zero; recalling nothing",
+            flush=True,
+        )
     if ARGS.memory_dir:
         from enigma_engine.core.memory_store import MemoryStore
 
@@ -973,6 +987,29 @@ def _gen_ids(
         if tid in stop_ids:
             break
         yield tid
+
+
+def _sse_role_open(cid: str, created: int) -> str:
+    """The opening chunk of a chat stream: the assistant role, no content.
+
+    OpenAI clients read the role from the first frame to open the message,
+    and this one carries no "content" key, so a consumer joining the content
+    deltas sees the same bytes with or without it. It is yielded before the
+    prompt is encoded, which is what puts something on the wire during the
+    prefill and tool hops rather than leaving the connection silent."""
+    return (
+        "data: "
+        + json.dumps(
+            {
+                "id": cid,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": MODEL_ID,
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        )
+        + "\n\n"
+    )
 
 
 def _sse_error_end(cid: str, created: int, object_name: str, exc: BaseException):
@@ -1451,7 +1488,7 @@ def _with_context(msgs: list[dict], req: ChatReq) -> list[dict]:
     if MEMORY is not None:
         mem = MEMORY.render_context(
             _recent_user_text(req.messages), tokenizer, max_ids=128,
-            focus_query=_last_user_text(req.messages),
+            k=MEMORY_RECALL, focus_query=_last_user_text(req.messages),
         )
         if mem:
             extra.append(mem)
@@ -1535,6 +1572,7 @@ def _chat_instruct(req: ChatReq):
     if req.stream:
 
         def _events_body():
+            yield _sse_role_open(cid, created)
             # Span ids from the ATTACHED tokenizer (v1: identical to the
             # module constants; bigger vocab: derived rows -- HIGH-2).
             _ct = chat_token_ids(tokenizer)
@@ -2169,7 +2207,7 @@ def chat(req: ChatReq):
     if MEMORY is not None:
         mem = MEMORY.render_context(
             _recent_user_text(messages), tokenizer, max_ids=128,
-            focus_query=_last_user_text(messages),
+            k=MEMORY_RECALL, focus_query=_last_user_text(messages),
         )
         if mem:
             messages = [Msg(role="system", content=mem)] + messages
@@ -2185,6 +2223,7 @@ def chat(req: ChatReq):
     if req.stream:
 
         def _events_body():
+            yield _sse_role_open(cid, created)
             for delta in gen:
                 yield (
                     "data: "
@@ -2333,7 +2372,11 @@ def memory_add(req: MemReq):
 def memory_list(q: str | None = None, k: int = 5):
     if MEMORY is None:
         raise _organ_off("memory disabled -- start with --memory-dir")
-    recs = MEMORY.search(q, k=k) if q else MEMORY.all()[-k:]
+    if k < 0:
+        raise HTTPException(status_code=400, detail="k must be 0 or more")
+    # The tail slice reads as "everything but the oldest k" on a k of 0, so
+    # the no-query door answers an empty ask explicitly instead of slicing.
+    recs = MEMORY.search(q, k=k) if q else (MEMORY.all()[-k:] if k else [])
     return {"count": len(MEMORY), "results": recs}
 
 
@@ -2360,7 +2403,7 @@ class SpeechReq(BaseModel):
 
     model: str = MODEL_ID
     input: str
-    voice: str | None = None  # one system voice for now; reject others honestly
+    voice: str | None = None  # the active voice is server state; reject per-request picks honestly
 
 
 @app.post("/v1/audio/speech")
@@ -2368,7 +2411,11 @@ def audio_speech(req: SpeechReq):
     if SPEAKER is None:
         raise _organ_off("voice disabled -- start with --voice")
     if req.voice is not None:
-        raise HTTPException(status_code=400, detail="voice selection not supported yet -- one system voice")
+        raise HTTPException(
+            status_code=400,
+            detail="per-request voice selection is not supported; set the active voice with "
+            "POST /v1/audio/voice, and list the choices at GET /v1/audio/voices",
+        )
     text = (req.input or "").strip()
     if not text:  # a client input error is a 400, not a server 500
         raise HTTPException(status_code=400, detail="nothing to say -- 'input' is empty")

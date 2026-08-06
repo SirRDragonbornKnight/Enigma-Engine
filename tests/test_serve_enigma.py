@@ -719,7 +719,7 @@ def test_with_context_matches_training_system_shape(monkeypatch, tok, tmp_path):
     req = serve.ChatReq(messages=[serve.Msg(role="user", content=user)])
     out = serve._with_context([m.model_dump(exclude_none=True) for m in req.messages], req)
 
-    mem_block = store.render_context(user, tok, max_ids=128)
+    mem_block = store.render_context(user, tok, max_ids=128, k=serve.MEMORY_RECALL)
     assert mem_block.startswith("Things you remember:")  # retrieval really hit
     calc = next(t for t in make_sft_data.TOOLS if t[0] == "calculate")
     expected = mem_block + "\n\n" + make_sft_data._system([calc])
@@ -743,10 +743,61 @@ def test_with_context_client_system_message_is_appended_not_preambled(monkeypatc
     msgs = [{"role": "system", "content": "Client system."}, {"role": "user", "content": user}]
     out = serve._with_context(msgs, req)
 
-    mem_block = store.render_context(user, tok, max_ids=128)
+    mem_block = store.render_context(user, tok, max_ids=128, k=serve.MEMORY_RECALL)
     tools_block = render_tools_system([serve._CALC_TOOL])
     assert out[0]["content"] == "Client system." + "\n\n" + mem_block + "\n\n" + tools_block
     assert "You are Enigma" not in out[0]["content"]
+
+
+def test_injected_memory_honours_the_recall_setting(monkeypatch, tok, tmp_path):
+    """--memory-recall decides how many facts reach her context. The token
+    budget trims further; here it is nowhere near binding, so the count is
+    the setting."""
+    store = MemoryStore(str(tmp_path / "mem"))
+    for food in ("peanuts", "shellfish", "kiwi", "sesame", "walnuts"):
+        store.add(f"User is allergic to {food}.")
+    monkeypatch.setattr(serve, "MEMORY", store)
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+
+    def recalled() -> int:
+        req = serve.ChatReq(messages=[serve.Msg(role="user", content="What am I allergic to?")])
+        out = serve._with_context([m.model_dump(exclude_none=True) for m in req.messages], req)
+        text = "\n".join(m["content"] for m in out if m["role"] == "system")
+        return sum(1 for line in text.splitlines() if line.startswith("- User is allergic"))
+
+    monkeypatch.setattr(serve, "MEMORY_RECALL", 3)
+    assert recalled() == 3
+    monkeypatch.setattr(serve, "MEMORY_RECALL", 5)
+    assert recalled() == 5
+    monkeypatch.setattr(serve, "MEMORY_RECALL", 0)
+    assert recalled() == 0
+
+
+def test_the_shipped_recall_default_is_five():
+    """How many memories reach her context is a user decision, so the shipped
+    number is pinned rather than tuned. The flag and the module constant have
+    to carry the same value: `boot()` sets the constant from the flag, and an
+    imported-but-unbooted server answers from the constant alone."""
+    assert serve._p.get_default("memory_recall") == 5
+    assert serve.MEMORY_RECALL == 5
+
+
+def test_memory_list_refuses_a_negative_k(monkeypatch, tmp_path):
+    """A negative k would slice from the END and hand back every record but
+    the lowest-ranked -- the opposite of the narrow ask it looks like."""
+    store = MemoryStore(str(tmp_path / "mem"))
+    for pet in ("Rex", "Bubbles", "Milo"):
+        store.add(f"User's pet is named {pet}.")
+    monkeypatch.setattr(serve, "MEMORY", store)
+
+    with pytest.raises(serve.HTTPException) as exc:
+        serve.memory_list(q="pet", k=-1)
+    assert exc.value.status_code == 400
+    assert serve.memory_list(q="pet", k=0)["results"] == []
+    assert serve.memory_list(q=None, k=0)["results"] == []
+    assert len(serve.memory_list(q="pet", k=2)["results"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +860,79 @@ def test_stream_and_nonstream_content_byte_identical(monkeypatch, tok, gen_text)
     nonstream = resp["choices"][0]["message"]["content"] or ""
     stream = _drain_stream(serve._chat_instruct(_req(stream=True)))
     assert stream == nonstream
+
+
+# ---------------------------------------------------------------------------
+# the opening SSE frame: OpenAI's role chunk, and what it must not disturb
+# ---------------------------------------------------------------------------
+
+
+def _stream_chunks(resp) -> list[dict]:
+    async def _drain():
+        frames = []
+        async for chunk in resp.body_iterator:
+            frames.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8"))
+        return frames
+
+    out = []
+    for frame in asyncio.run(_drain()):
+        for line in frame.splitlines():
+            if line.startswith("data: ") and line != "data: [DONE]":
+                out.append(json.loads(line[6:]))
+    return out
+
+
+def _assert_opens_with_role(chunks: list[dict], body: str) -> None:
+    """The first chunk declares the assistant role and carries no content key,
+    so a client joining the content deltas still sees exactly `body`."""
+    first = chunks[0]
+    assert first["object"] == "chat.completion.chunk"
+    assert first["choices"][0]["delta"] == {"role": "assistant"}
+    assert first["choices"][0]["finish_reason"] is None
+    assert "".join(c["choices"][0]["delta"].get("content", "") for c in chunks) == body
+
+
+def test_instruct_stream_opens_with_the_assistant_role(monkeypatch, tok):
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "EOS_ID", tok.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tok.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512))
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+    scripted = tok.encode("Hello world.", add_special_tokens=False)
+
+    def fake_gen(ids, max_tokens, *a, **k):
+        yield from scripted
+
+    monkeypatch.setattr(serve, "_gen_ids", fake_gen)
+
+    req = serve.ChatReq(
+        messages=[serve.Msg(role="user", content="Tell me a story.")],
+        stream=True,
+        max_tokens=64,
+    )
+    _assert_opens_with_role(_stream_chunks(serve._chat_instruct(req)), "Hello world.")
+
+
+def test_base_stream_opens_with_the_assistant_role(monkeypatch, tok):
+    monkeypatch.setattr(serve, "INSTRUCT", False)
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "EYES", None)
+    monkeypatch.setattr(serve, "_STOP_TEXTS", ())
+
+    def fake_text(*a, **k):
+        yield from ("Hel", "lo.")
+
+    monkeypatch.setattr(serve, "_generate_text", fake_text)
+
+    req = serve.ChatReq(
+        messages=[serve.Msg(role="user", content="Tell me a story.")],
+        stream=True,
+        max_tokens=64,
+    )
+    _assert_opens_with_role(_stream_chunks(serve.chat(req)), "Hello.")
 
 
 # ---------------------------------------------------------------------------

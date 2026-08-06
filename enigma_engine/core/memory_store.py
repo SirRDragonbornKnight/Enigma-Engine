@@ -638,7 +638,13 @@ class MemoryStore:
 
         Scoring runs on CONTENT terms only. A query whose every word is a
         stopword ("is that right?") shares nothing identifying with any record
-        and correctly retrieves nothing, rather than ranking on "is"."""
+        and correctly retrieves nothing, rather than ranking on "is".
+
+        A k of 0 or less asks for nothing and gets nothing."""
+        # The slice below counts from the END on a negative k, which would
+        # answer a request for nothing with every record but the worst-ranked.
+        if k <= 0:
+            return []
         q_terms = _content_term_list(query)
         with self._lock:
             if not q_terms or not self._records:

@@ -284,14 +284,17 @@ four for four:
    5. T3 then adds `--val-per-source 2000000` to the launch line: one
       fenced window per source, [val-src] = diet-weighted mean (the
       representative signal; landed with `--eval-only` 2026-07-30).
-12. **Memory recall ceiling k=3.** `render_context` defaults to 3 facts and
-   both serve call sites take the default, so she can never surface more than
-   three memories however many she holds -- and ties break newest-first, so
-   the OLDEST fact is the one silently dropped. Measured: five allergies
-   stored, three recalled, token budget nowhere near binding. The sealed gate
-   cannot see it (all 15 memory probes teach exactly one fact each). Raising
-   the default changes her live behaviour, so it is a ruling, not a fix.
-   -> `enigma_engine/core/memory_store.py` render_context.
+12. ~~**Memory recall ceiling k=3.**~~ **RULED 2026-08-06: FIVE.** The ceiling
+   is `--memory-recall` on serve, default 5, and both call sites pass it
+   explicitly instead of taking the library default; the token budget still
+   trims below it, and 0 keeps the store readable while injecting nothing.
+   What the old ceiling cost: ties break newest-first, so at 3 the OLDEST
+   fact was the one silently dropped -- measured with five allergies stored
+   and three recalled, token budget nowhere near binding. The sealed gate
+   cannot score the change (all 15 memory probes teach exactly one fact
+   each), so `test_the_shipped_recall_default_is_five` pins the number
+   instead. -> `serve_enigma.py --memory-recall`.
+   Docs touched: BACKLOG item 15's cross-reference.
 13. **The `unknown` category does not penalise fabrication.** Measured on the
    live sealed set: `"I can't know that."` scores 13/15 and `"I can't know.
    It is blue."` also scores 13/15 -- appending an invented answer to a
@@ -314,7 +317,7 @@ four for four:
    already trains the sentence shape), and reserving kind:"episode" makes
    session memory ("what were we working on yesterday?") an addition, not a
    rewrite. Same T4-window argument as item 14; interacts with item 12's
-   k=3 ruling. -> 7.95 T4.
+   recall ceiling, now ruled at 5. -> 7.95 T4.
 16. ~~**The Stack language mix**~~ **RULED 2026-07-30: WEIGHTED** (python
    3.0x, javascript/typescript/java/c/cpp 1.5x, go/rust/ruby/php/shell/sql/
    json 1.0x, html/css/markdown 0.3x). **Landing it required RESTARTING the

@@ -56,6 +56,21 @@ def test_render_context_respects_budget_and_silence(tmp_path, tok):
     assert m.render_context("quantum frogs", tok) == ""
 
 
+def test_non_positive_k_recalls_nothing(tmp_path, tok):
+    # The top-k slice counts from the END on a negative k, so a request for
+    # nothing came back holding every record but the lowest-ranked one.
+    m = MemoryStore(tmp_path)
+    for pet in ("Rex", "Bubbles", "Milo"):
+        m.add(f"User's pet is named {pet}.")
+    assert len(m.search("pet", k=2)) == 2  # precondition: the query really matches all three
+    assert m.search("pet", k=0) == []
+    assert m.search("pet", k=-1) == []
+    assert m.render_context("pet", tok, k=0) == ""
+    assert m.render_context("pet", tok, k=-1) == ""
+    # the reserved focus slot must not smuggle a hit past a zero budget either
+    assert m.render_context("pet", tok, k=0, focus_query="pet") == ""
+
+
 def test_the_current_ask_keeps_a_recall_slot(tmp_path, tok):
     # Widening recall to the recent thread let prior-turn chatter fill every
     # slot and evict the answer to the question actually being asked. k=2 is

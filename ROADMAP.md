@@ -79,10 +79,11 @@ Muppet.
   "trains frozen" doc line was wrong). SAVE/RESUME/optimizer FIXED `f9ec5184`
   (2026-07-15); serve-side encoder loading remains Phase 4.5 work.
   (Historical: both methods lived on the Forge Trainer. `train_vision` was
-  carved into `enigma_engine/training/vision_align.py` on 2026-07-18 keeping
-  this fix intact — smoke-verified: the checkpoint carries 45 encoder tensors
-  plus the stepped local optimizer. `train_audio` was NOT carved — see the
-  Phase 4.5 step-6 gap note.)
+  carved out on 2026-07-18 keeping this fix intact — smoke-verified: the
+  checkpoint carries 45 encoder tensors plus the stepped local optimizer.
+  `train_audio` followed on 2026-07-19; both now live in
+  `enigma_engine/training/encoder_align.py` over one shared `_train_encoder`
+  core — see the Phase 4.5 step-6 note.)
 - DATA: OpenThoughts3 (1,000 recs) is 100% dead weight — median completion
   ~14.5k tokens vs block 1024, every record silently dropped at build. Dolly
   (73% of general) trains extract-from-context, not recall. Rebuild the diet

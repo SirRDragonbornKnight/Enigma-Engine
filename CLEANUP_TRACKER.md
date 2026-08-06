@@ -150,10 +150,15 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **810 passed (2026-07-27)** — THE live number; other docs
+4. Suite baseline: **873 passed (2026-08-06)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
-   a manual step nothing enforces will drift again without the pairing).
+   a manual step nothing enforces will drift again without the pairing — and
+   it did, sitting at 810 across the whole 07-28→08-06 arc while the suite
+   grew by 63). The number is device-dependent: it was measured with
+   `CUDA_VISIBLE_DEVICES=""` while a pretrain owned the card, and a run with
+   the GPU visible collects 3 more — the cuda half of the three
+   `DEVICES`-parametrized tests in `test_model_kv_cache.py`.
    History: 574 before the 2026-07-18 compression pass, 349 after it (the
    delta was the dormant stack's own test mass, every removed test named),
    then steady growth through the v2-prep and audit arcs. Any cleanup that
