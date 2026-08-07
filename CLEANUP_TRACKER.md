@@ -90,9 +90,11 @@ Deleted after a three-agent adversarial audit verified every claim
 - **LIVE — her core:** `model.py`, `model_components.py`, `model_presets.py`,
   `model_utils.py`, `safe_save.py`, `tokenizer.py`, `bpe_tokenizer.py`
   (the vocab TRAINER — needed for tokenizer v2), `advanced_tokenizer.py`
-  (the runtime tokenizer), `kv_cache.py`, `model_registry.py`,
+  (the runtime tokenizer), `kv_cache.py` (the one real cache — the unused
+  research variants and `config/` were deleted 2026-08-06; serve builds its
+  CONFIG from the checkpoint), `model_registry.py`,
   `calculator.py`, `chat_format.py` (ONE template for train+serve),
-  `memory_store.py` (BM25/JSONL), `hardware_detection.py`, `config/`,
+  `memory_store.py` (BM25/JSONL), `hardware_detection.py`,
   and `optim.py` — the shared pretrain/finetune optimizer+schedule arsenal
   (`build_optimizer`/`get_lr`; also holds the flag-gated Muon and WSD that
   ROADMAP Phase 7 depends on).
@@ -150,15 +152,17 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **873 passed (2026-08-06)** — THE live number; other docs
+4. Suite baseline: **867 passed (2026-08-07)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
    it did, sitting at 810 across the whole 07-28→08-06 arc while the suite
-   grew by 63). The number is device-dependent: it was measured with
-   `CUDA_VISIBLE_DEVICES=""` while a pretrain owned the card, and a run with
-   the GPU visible collects 3 more — the cuda half of the three
-   `DEVICES`-parametrized tests in `test_model_kv_cache.py`.
+   grew by 63). 873 → 867 is the kv-cache strip: six tests of the deleted
+   research caches (TurboQuant/H2O/StreamingLLM) went with their classes.
+   The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
+   not reproduce and is retired: on this torch build `is_available()`
+   ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —
+   867 counts the cuda cells of the `DEVICES`-parametrized tests.
    History: 574 before the 2026-07-18 compression pass, 349 after it (the
    delta was the dormant stack's own test mass, every removed test named),
    then steady growth through the v2-prep and audit arcs. Any cleanup that

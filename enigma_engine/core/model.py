@@ -491,34 +491,6 @@ class Enigma(nn.Module):
         for layer in self.layers:
             layer.rewind_cache(position)
 
-    def restore_prefix_cache(self, prefix_cache) -> None:
-        """Restore prefix KV into each layer's attention cache.
-
-        After calling this, ``current_pos`` in each layer's
-        ``KVCache`` equals ``prefix_cache.prefix_len``, so the
-        next token-by-token decode starts at the right position.
-
-        Args:
-            prefix_cache: A :class:`PrefixKVCache` with one entry
-                per layer.
-        """
-        for i, layer in enumerate(self.layers):
-            pk, pv = prefix_cache.get(i)
-            attn = layer.attention
-            # Ensure the per-layer KVCache exists (lazy-init)
-            if attn._kv_cache is None:
-                from enigma_engine.core.kv_cache import KVCache
-
-                attn._kv_cache = KVCache(
-                    batch_size=pk.shape[0],
-                    max_seq_len=attn.max_cache_len,
-                    n_kv_heads=attn.n_kv_heads,
-                    head_dim=attn.head_dim,
-                    device=pk.device,
-                    dtype=pk.dtype,
-                )
-            attn._kv_cache.restore_prefix(pk, pv)
-
     def forward_multimodal(
         self,
         input_ids: Optional[torch.Tensor] = None,
