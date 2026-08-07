@@ -40,9 +40,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from enigma_engine.core.chat_format import (
+    BUILTIN_NAMES,
     CHAT_FORMAT_NAME,
     ROLES,
     attach_chat_tokens,
+    builtin_tool,
     chat_token_ids,
     parse_assistant_ids,
     render_chat,
@@ -1054,50 +1056,12 @@ def _recent_user_text(messages: list[Msg], n: int = 3) -> str:
 # inconsistently). remember: the ChatGPT-bio-tool pattern -- she calls it when
 # the user states a fact worth keeping, serve writes it to the MemoryStore,
 # and render_context injects it back on every future relevant ask.
-_CALC_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "calculate",
-        "description": "Evaluate an arithmetic expression and return the exact result.",
-        "parameters": {"expression": "string"},
-    },
-}
-_REMEMBER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "remember",
-        "description": "Save a fact about the user to long-term memory.",
-        "parameters": {"text": "string"},
-    },
-}
-_SPEAK_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "speak",
-        "description": "Speak text out loud through the computer speakers.",
-        "parameters": {"text": "string"},
-    },
-}
-_IMAGINE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "imagine",
-        "description": "Generate an image from a text description and save it as a file.",
-        "parameters": {"prompt": "string"},
-    },
-}
-_FORGET_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "forget",
-        "description": "Remove a fact about the user from long-term memory when they ask "
-        "you to forget it or say it is no longer true. Pass the fact to remove as "
-        "'text'. If a previous call reported several matching memories, pass the "
-        "'id' of the one they meant instead.",
-        "parameters": {"text": "string", "id": "integer"},
-    },
-}
-_BUILTIN_NAMES = {"calculate", "remember", "speak", "imagine", "forget"}
+_CALC_TOOL = builtin_tool("calculate")
+_REMEMBER_TOOL = builtin_tool("remember")
+_SPEAK_TOOL = builtin_tool("speak")
+_IMAGINE_TOOL = builtin_tool("imagine")
+_FORGET_TOOL = builtin_tool("forget")
+_BUILTIN_NAMES = BUILTIN_NAMES
 _MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
 
 # The calculate tool is offered ONLY when the ask looks arithmetic. Injecting

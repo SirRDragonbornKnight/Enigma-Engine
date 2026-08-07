@@ -482,12 +482,15 @@ def _tool_spec(name, desc, params):
     return json.dumps({"name": name, "description": desc, "parameters": params}, ensure_ascii=False)
 
 
+# The line serve prepends to a tools block when the client sent no system
+# message of its own (persona.tools_preamble). Training and serving share the
+# string so the model never meets a tool spec under an unfamiliar preamble.
+PREAMBLE = "You are Enigma. You can use tools when they are needed; answer directly when they are not."
+
+
 def _system(tool_subset):
     lines = "\n".join(_tool_spec(n, d, p) for n, d, p, _ in tool_subset)
-    return (
-        "You are Enigma. You can use tools when they are needed; answer "
-        f"directly when they are not.\nAvailable tools:\n{lines}\n{TOOL_SYNTAX}"
-    )
+    return f"{PREAMBLE}\nAvailable tools:\n{lines}\n{TOOL_SYNTAX}"
 
 
 def _tool_by_name(name):
@@ -968,7 +971,358 @@ def gen_identity_examples() -> tuple[list[dict], int]:
     return out, dropped
 
 
+def _builtin_system(memory: "str | None" = None) -> str:
+    """The system message serve renders when every built-in is on offer.
+
+    Built through the SERVER'S OWN renderer over the SHARED specs, so the
+    block trained here is the block served -- a copy would drift. Memory
+    precedes the tools block, the order serve joins them in.
+    """
+    from enigma_engine.core.chat_format import BUILTIN_TOOLS, render_tools_system
+
+    block = PREAMBLE + "\n" + render_tools_system(BUILTIN_TOOLS)
+    return f"{memory}\n\n{block}" if memory else block
+
+
+# (ask, tool name, arguments, tool result, final answer). One per built-in
+# plus the surfaces the regex gates measurably MISSED: word-number math, an
+# imperative draw, an indirect speak. NEAR-NEIGHBORS of the probe phrasings,
+# never the probes themselves: "Draw me a dragon." and "Say hello out loud."
+# ARE eval probes, and an authored collision is silently held out of training
+# -- the shape written to close the gap never trains
+# (test_every_authored_record_survives_the_probe_screen pins this).
+_BUILTIN_USE = [
+    ("What's 47 times 23?", "calculate", {"expression": "47 * 23"}, "1081", "1081."),
+    ("Work out 1024 divided by 16 for me.", "calculate", {"expression": "1024 / 16"}, "64", "64."),
+    ("What is seven times eight?", "calculate", {"expression": "7 * 8"}, "56", "56."),
+    ("I'm allergic to shellfish.", "remember", {"text": "User is allergic to shellfish."},
+     "saved", "Noted -- I'll keep shellfish off the table."),
+    ("My sister's name is Nadia.", "remember", {"text": "User's sister is named Nadia."},
+     "saved", "Got it, Nadia."),
+    ("Forget that I live in Denver.", "forget", {"text": "User lives in Denver."},
+     "removed", "Forgotten."),
+    ("That thing about my old job isn't true any more.", "forget", {"text": "User's job"},
+     "removed", "Dropped it."),
+    ("Announce that dinner is ready.", "speak", {"text": "Dinner is ready."},
+     "spoken", "Announced."),
+    ("Speak the next part instead of typing it.", "speak", {"text": "Here is the next part, out loud as asked."},
+     "spoken", "Done -- that one went through the speakers."),
+    ("Draw me a castle on a cliff.", "imagine", {"prompt": "a castle on a cliff"},
+     "image saved to images/imagine_1a2b3c4d.png", "Castle's done -- saved it for you."),
+    ("Paint something with a lighthouse in a storm.", "imagine", {"prompt": "a lighthouse in a storm"},
+     "image saved to images/imagine_5e6f7a8b.png", "Lighthouse in a storm, saved."),
+]
+
+# Every built-in on offer and NONE of them right. This is the half that makes
+# an always-offered block safe: the gates used to provide restraint by never
+# offering the tool, so the weights never learned to decline one.
+_BUILTIN_RESTRAINT = [
+    ("What's the capital of France?", "Paris."),
+    ("What's two plus two?", "Four."),
+    ("Do not draw anything -- just describe a dragon in words.",
+     "Big lizard, bad temper, hoards gold and breathes fire. No picture, as asked."),
+    ("Don't say it out loud, just type it.", "Typing only, then. What do you need?"),
+    ("The summers where I grew up were merciless.", "Merciless how -- the heat itself, or the humidity that comes with it?"),
+    ("You can say that again.", "Twice over, honestly."),
+    ("I was thinking about painting the kitchen.", "What colour are you leaning toward?"),
+    ("Remember when we talked about the garden?", "Refresh me -- which part of it?"),
+    ("Can you calculate how long this project will take?",
+     "Not without knowing the scope. What's on the list?"),
+    ("My memory is terrible lately.", "Happens to everyone. Anything you want me to hang onto for you?"),
+    ("Got any good puns?", "Only the kind that make you groan. Consider yourself warned."),
+    ("What's the weather like?", "I can't see outside. Point me at a forecast and I'll read it with you."),
+]
+
+
+def gen_builtin_block_examples(seed: int = 51) -> list[dict]:
+    """Records whose system block ALWAYS offers all five built-ins.
+
+    Router intent gates retire at the v2 regen (ruled 2026-07-24): restraint
+    moves from a regex that decides whether to OFFER a tool into the weights
+    that decide whether to CALL one. The gates failed both directions -- a
+    missed ask never offered the tool, so no gradient ever taught the miss,
+    and a negated ask ("Do not draw anything") armed the painter. Both halves
+    are trained here: the ask that should call, and the ask that should not.
+    """
+    rng = random.Random(seed)
+    sys_msg = _builtin_system()
+    out: list[dict] = []
+    for ask, name, args, result, final in _BUILTIN_USE:
+        out.append({
+            "messages": [
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": ask},
+                {"role": "assistant", "content": "", "tool_calls": [{"name": name, "arguments": args}]},
+                {"role": "tool", "content": result},
+                {"role": "assistant", "content": final},
+            ],
+            "category": "builtin_call",
+        })
+    for ask, answer in _BUILTIN_RESTRAINT:
+        out.append({
+            "messages": [
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": ask},
+                {"role": "assistant", "content": answer},
+            ],
+            "category": "builtin_restraint",
+        })
+    rng.shuffle(out)
+    return out
+
+
+# Conversations, as (user, assistant) pairs in order. The skill is the SECOND
+# and THIRD user turn: resolving a pronoun or an elliptical follow-up against
+# what was already said, and dropping that context when the subject changes.
+_CHATS = [
+    [("I'm trying to get back into running.", "Good. How far are you managing right now?"),
+     ("About two miles before I'm wrecked.", "That's a real base. Add half a mile every second week and it'll stop wrecking you."),
+     ("Why every second week?", "Your lungs adapt in days, tendons take weeks. The gap lets the slow tissue catch up.")],
+    [("What's a good first instrument for an adult?", "Piano. The layout makes theory visible, and you get a sound worth listening to on day one."),
+     ("What about guitar?", "Also fine, and more portable -- but the first month hurts your fingers and chords hide the theory."),
+     ("I'll go with piano then.", "Good pick. Start with two hands separately before you put them together.")],
+    [("My tomato plants have yellow leaves.", "Where on the plant -- bottom leaves first, or all over?"),
+     ("Bottom ones.", "Usually nitrogen or overwatering. Check the soil two inches down before you feed them."),
+     ("It's soaking.", "Then it's water, not food. Let it dry out before the next soak and the new growth should come back green.")],
+    [("Explain what a compiler does.", "It translates the code you write into instructions the machine can run, and checks the code makes sense on the way through."),
+     ("Is an interpreter different?", "Yes -- an interpreter does that translation as it runs, line by line, instead of all at once beforehand."),
+     ("Which is faster?", "Compiled code usually runs faster; interpreted code usually starts faster. You're trading startup for throughput.")],
+    [("I've got a job interview Thursday.", "What's the role?"),
+     ("Junior data analyst.", "Then be ready to talk through one project end to end -- what you were asked, what you did, what the number turned out to be."),
+     ("I don't have much to show.", "Then use coursework or something you did for yourself. What matters is that you can explain your own reasoning.")],
+    [("What's the difference between weather and climate?", "Weather is what's happening now; climate is the pattern those days average into over decades."),
+     ("So a cold week says nothing about climate?", "Right -- one week is weather. You need the long run before it means anything."),
+     ("How long is the long run?", "Thirty years is the usual convention.")],
+    [("Recommend me a book.", "What was the last one you actually finished?"),
+     ("A murder mystery, I think.", "Then try something with the same engine but better prose -- a literary thriller. You'll get the pull without the flat sentences."),
+     ("Actually I want non-fiction.", "Fair enough. Pick a subject you already argue about at parties -- you'll finish that one.")],
+    [("How do I stop procrastinating?", "Make the first step smaller than your resistance to it. Two minutes, not two hours."),
+     ("That sounds too easy to work.", "It works because starting is the hard part, not continuing. The two minutes buy you the momentum."),
+     ("What if I stop after two minutes?", "Then you did two minutes you weren't going to do. Do that daily and it stops being two.")],
+    [("My laptop fan is always loud.", "Loud all the time, or when something specific is running?"),
+     ("All the time now.", "Then it's probably dust or a background process pinning the CPU. Check what's running at idle first -- that one's free to fix.")],
+    [("Is it worth learning Latin?", "For its own sake, yes; as a shortcut to other languages, it's a slow route."),
+     ("Slow how?", "You'd learn the romance vocabulary faster by studying the living language you actually want.")],
+]
+
+
+def gen_chat_multiturn_examples(seed: int = 63) -> list[dict]:
+    """Genuine back-and-forth conversation -- no tools, no memory block.
+
+    The mix is otherwise single-exchange: every structured record has exactly
+    one user turn, and the tool chains are several calls inside ONE request.
+    So nothing has ever taught her to read a second user turn against the
+    first, which is what "what about tomorrow?" and "actually, no" require.
+    Each conversation is emitted at every prefix length, so the two-turn and
+    three-turn shapes both train instead of only the longest.
+    """
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for chat in _CHATS:
+        for depth in range(2, len(chat) + 1):
+            msgs: list[dict] = []
+            for user, assistant in chat[:depth]:
+                msgs.append({"role": "user", "content": user})
+                msgs.append({"role": "assistant", "content": assistant})
+            out.append({"messages": msgs, "category": "chat_multiturn"})
+    rng.shuffle(out)
+    return out
+
+
+# (question, reasoning, answer). The reasoning is the WORK, not a restatement
+# of the question -- a trace that only echoes the prompt teaches her to pad.
+_REASONING = [
+    ("Tom is twice as old as Sara. Sara is 3 years older than Ben. Ben is 7. How old is Tom?",
+     "Ben is 7. Sara is 3 older, so Sara is 10. Tom is twice Sara, so 20.", "Tom is 20."),
+    ("A shirt costs 40 and is discounted 25 percent. What do I pay?",
+     "25 percent of 40 is 10. 40 minus 10 is 30.", "30."),
+    ("If it takes 5 machines 5 minutes to make 5 widgets, how long for 100 machines to make 100 widgets?",
+     "5 machines make 5 widgets in 5 minutes, so one machine makes one widget in 5 minutes. "
+     "100 machines working at once each make one widget in that same 5 minutes.", "5 minutes."),
+    ("I have a 3 litre jug and a 5 litre jug. How do I measure 4 litres?",
+     "Fill the 5 and pour into the 3, leaving 2 in the big jug. Empty the 3, move the 2 across, "
+     "then refill the 5 and top up the 3 -- that takes 1, leaving 4.", "Fill 5, pour off 3, keep the 2, then refill 5 and top the 3 up -- 4 left."),
+    ("Which is heavier, a kilogram of feathers or a kilogram of lead?",
+     "Both are one kilogram. The question leans on feathers seeming lighter, but the mass is stated and equal.",
+     "Neither -- they're both a kilogram."),
+    ("A bat and ball cost 1.10 together. The bat costs 1.00 more than the ball. What does the ball cost?",
+     "If the ball were 0.10 the bat would be 1.10 and the total 1.20, which is too much. "
+     "Let the ball be b: b plus b plus 1.00 is 1.10, so 2b is 0.10 and b is 0.05.", "The ball is 0.05."),
+    ("The day before yesterday I was 20. Next year I'll be 23. When is my birthday?",
+     "That needs two year boundaries between the statements, which only works if the birthday is "
+     "December 31 and today is January 1.", "December 31st -- and today must be January 1st."),
+    ("I leave home, turn left twice, then right twice, and I'm facing north. Which way did I set off?",
+     "Two lefts turn you 180 degrees, two rights turn you back 180. The turns cancel, so the "
+     "starting direction is the finishing one.", "North -- the turns cancel out."),
+    ("Sam has 3 red marbles and twice as many blue. He gives away half the blue. How many are left in total?",
+     "Blue is twice 3, so 6. Half of 6 given away leaves 3 blue. Plus the 3 red is 6.", "6 marbles."),
+    ("Is 91 prime?",
+     "Check small factors: not even, digits sum to 10 so not divisible by 3, doesn't end in 0 or 5. "
+     "7 goes in 13 times exactly.", "No -- 91 is 7 times 13."),
+]
+
+
+def gen_reasoning_examples(seed: int = 71) -> list[dict]:
+    """Answers that show their work inside <think>...</think> first.
+
+    The tags are the tokenizer's own ids 10/11 (chat_format THINK/THINK_END),
+    attach_chat_tokens verifies them against the live vocab, and
+    render_training preserves them verbatim -- so reasoning costs zero new
+    embedding rows. Nothing in the mix has ever contained the tags, which is
+    why the trained model has no way to reason before answering.
+    """
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for question, reasoning, answer in _REASONING:
+        out.append({
+            "messages": [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": f"<think>{reasoning}</think>{answer}"},
+            ],
+            "category": "reasoning",
+        })
+    rng.shuffle(out)
+    return out
+
+
+# (stored fact, correction the user says, the fact that replaces it, reply).
+# Single-valued attributes only -- these are the ones the store REPLACES.
+_SUPERSEDE = [
+    ("User lives in Denver.", "Actually I moved to Austin.", "User lives in Austin.",
+     "Austin it is -- I've updated it."),
+    ("User goes by Sam.", "It's Samir, not Sam.", "User goes by Samir.", "Samir. Noted."),
+    ("User's dog is named Rex.", "The dog's called Bruno now, we renamed him.",
+     "User's dog is named Bruno.", "Bruno from now on."),
+    ("User works as a teacher.", "I left teaching -- I'm a paramedic these days.",
+     "User works as a paramedic.", "Paramedic now. Updated."),
+    ("User's birthday is March 3rd.", "My birthday is actually the 13th of March.",
+     "User's birthday is March 13th.", "March 13th -- fixed."),
+    ("User drives a blue pickup.", "I sold the pickup, I drive a hatchback now.",
+     "User drives a hatchback.", "Hatchback. Got it."),
+]
+
+# Attributes that ACCUMULATE: a second value does not delete the first
+# (supersede ruling 2026-07-24 -- plain copula values COEXIST, namings and
+# measures and single-valued verbs REPLACE). Training only the replace shape
+# would teach her to erase the first allergy when a second one arrives.
+_COEXIST = [
+    ("User is allergic to peanuts.", "I'm also allergic to shellfish.",
+     "User is allergic to shellfish.", "Peanuts and shellfish both. Noted."),
+    ("User likes hiking.", "I've got into climbing as well.", "User likes climbing.",
+     "Hiking and climbing. Good pair."),
+    ("User speaks French.", "I speak some Portuguese too.", "User speaks Portuguese.",
+     "French and Portuguese. Noted."),
+]
+
+
+def gen_memory_correction_examples(seed: int = 87) -> list[dict]:
+    """Corrections to something already remembered.
+
+    The store supersedes on write and the serve path necessarily renders this
+    turn, but no record has ever trained it: `_CONFLICTING_FACTS` only keeps
+    contradictory facts OUT of a distractor block. Two shapes, because the
+    supersede ruling has two halves -- a renaming REPLACES the old value, a
+    second allergy COEXISTS with the first. Both call `remember`; the store
+    decides which happens, and her reply has to match. A third shape asks
+    about the fact AFTER the correction, where the block holds the new value
+    and the old one must not resurface.
+    """
+    rng = random.Random(seed)
+    sys_msg = _builtin_system
+    out: list[dict] = []
+    for stored, correction, new_fact, reply in _SUPERSEDE + _COEXIST:
+        block = "Things you remember:\n- " + stored
+        out.append({
+            "messages": [
+                {"role": "system", "content": sys_msg(block)},
+                {"role": "user", "content": correction},
+                {"role": "assistant", "content": "",
+                 "tool_calls": [{"name": "remember", "arguments": {"text": new_fact}}]},
+                {"role": "tool", "content": "saved"},
+                {"role": "assistant", "content": reply},
+            ],
+            "category": "memory_correction",
+        })
+    # After the correction: the block holds the NEW value only, and the answer
+    # must be the new one -- the failure shape is answering from the old fact
+    # she was told minutes ago.
+    followups = [
+        ("User lives in Austin.", "Where do I live?", "Austin."),
+        ("User goes by Samir.", "What do you call me?", "Samir."),
+        ("User's dog is named Bruno.", "What's my dog's name?", "Bruno."),
+        ("User works as a paramedic.", "What do I do for work?", "You're a paramedic."),
+        ("User drives a hatchback.", "What do I drive?", "A hatchback."),
+    ]
+    for fact, question, answer in followups:
+        out.append({
+            "messages": [
+                {"role": "system", "content": "Things you remember:\n- " + fact},
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": answer},
+            ],
+            "category": "memory_correction",
+        })
+    rng.shuffle(out)
+    return out
+
+
+def probe_screen(eval_qs: set, locked: "LockedProbeGuard"):
+    """(prompt_side, held_out) over the given probe sets -- ONE definition of
+    what training may not contain, shared by main() and the tests that pin
+    the hand-authored corpora as authored-to-clear.
+
+    prompt_side yields every string the CONSUME-time guard will refuse on:
+    user and system turns (finetune_enigma.load_examples splits exactly this
+    way; flat records become a user turn there). held_out screens that SAME
+    unit, not just the first user question -- screening only `_norm_q` left
+    system blocks (where the memory-read records carry their facts)
+    unscreened at build time while consume time REFUSES on them, so a guarded
+    rebuild still armed a training-day refusal the builder could not clear
+    (measured 2026-07-25 on the floor-2 reseal: 196 leaking prompt-side turns
+    in a freshly "clean" mix; 5 even under the old floor-3 seal).
+    """
+
+    def prompt_side(rec: dict):
+        msgs = rec.get("messages")
+        if msgs:
+            for m in msgs:
+                if m.get("role") in ("user", "system") and isinstance(m.get("content"), str):
+                    yield m["content"]
+            return
+        q = rec.get("prompt") or rec.get("question") or rec.get("instruction")
+        if isinstance(q, str):
+            yield q
+
+    def held_out(rec: dict) -> bool:
+        return _norm_q(rec) in eval_qs or any(locked.leaks(t) for t in prompt_side(rec))
+
+    return prompt_side, held_out
+
+
 BLOCK = 1024  # finetune_enigma's --block default == the model's max_seq_len
+
+# Numbers whose carve tells the two vocab generations apart. v1 merges some
+# digit pairs and not others; a uniform table gives one token per digit.
+_DIGIT_PROBES = ("15", "100", "1234", "56")
+
+
+def vocab_is_digit_uniform(vocab_path: "Path | None" = None) -> bool:
+    """Whether this vocab carves every digit as its own token.
+
+    Arithmetic is learnable only when the carve is positional -- under a table
+    that merges '15' into one id but splits '56' into two, the same column
+    means different things in different numbers. The vocab is MEASURED rather
+    than inferred from a flag or a filename, because the answer is a property
+    of the token table and nothing else.
+    """
+    from enigma_engine.core.tokenizer import get_tokenizer
+
+    tok = get_tokenizer("bpe", vocab_path=vocab_path) if vocab_path else get_tokenizer("bpe")
+    for probe in _DIGIT_PROBES:
+        pieces = [tok.decode([i]) for i in tok.encode(probe, add_special_tokens=False)]
+        if [p for p in pieces if p.strip()] != list(probe):
+            return False
+    return True
 
 
 def fit_mix_to_block(
@@ -1177,30 +1531,7 @@ def main(argv: "list[str] | None" = None) -> None:
     # its sealed manifest catches paraphrases too (EVAL_REDESIGN.md). Empty until
     # a locked set is authored, so this is a no-op on the current build.
     locked = LockedProbeGuard.load()
-
-    def _prompt_side(rec: dict):
-        """Every string the CONSUME-time guard will refuse on: user and
-        system turns (finetune_enigma.load_examples splits exactly this way;
-        flat records become a user turn there)."""
-        msgs = rec.get("messages")
-        if msgs:
-            for m in msgs:
-                if m.get("role") in ("user", "system") and isinstance(m.get("content"), str):
-                    yield m["content"]
-            return
-        q = rec.get("prompt") or rec.get("question") or rec.get("instruction")
-        if isinstance(q, str):
-            yield q
-
-    def _held_out(rec: dict) -> bool:
-        # Screen the SAME unit the trainers refuse on, not just the first
-        # user question. Screening only `_norm_q` left system blocks -- where
-        # the memory-read records carry their facts -- unscreened at build
-        # time while consume time REFUSES on them, so a guarded rebuild
-        # still armed a training-day refusal the builder could not clear
-        # (measured 2026-07-25 on the floor-2 reseal: 196 leaking prompt-side
-        # turns in a freshly "clean" mix; 5 even under the old floor-3 seal).
-        return _norm_q(rec) in eval_qs or any(locked.leaks(t) for t in _prompt_side(rec))
+    _prompt_side, _held_out = probe_screen(eval_qs, locked)
 
     if len(locked):
         print(f"locked-probe fuzzy guard ACTIVE: {len(locked)} sealed probes (jaccard >= {locked.threshold})")
@@ -1236,11 +1567,20 @@ def main(argv: "list[str] | None" = None) -> None:
         f"paraphrases, {dropped} Qwen-era dropped, {n_leak} held out of training as eval probes)"
     )
 
-    # MATH DEFERRED 2026-07-05: the BPE tokenizer splits numbers inconsistently
-    # ('56'->['5','6'] but '15'->['15'], '100'->['1','00']), so a 182M model
-    # can't learn digit-wise arithmetic -- training only taught it to emit
-    # confidently-wrong numbers. Revisit with a digit-aware tokenizer (Phase 7)
-    # or a bigger model (Phase 3). gen_math_examples() stays in the file, unused.
+    # Math trains against a digit-uniform vocab only. v1 splits numbers
+    # inconsistently ('56'->['5','6'] but '15'->['15'], '100'->['1','00']), and
+    # digit-wise arithmetic cannot be learned through that -- it taught the
+    # model to emit confidently-wrong numbers. The v2 table carves every digit
+    # separately ('15'->['1','5'], '100'->['1','0','0'], '3.14'->['3','.','1',
+    # '4'] -- measured 2026-08-07), so the records land there. Baking for a v1
+    # checkpoint drops them rather than repeating the v4 result.
+    math = []
+    if vocab_is_digit_uniform(vocab_path):
+        math = [r for r in gen_math_examples() if not _held_out(r)]
+        print(f"math: {len(math)} records (vocab carves digits uniformly)")
+    else:
+        print("math: SKIPPED -- this vocab does not carve digits uniformly; "
+              "pass --vocab <v2 table> to include arithmetic")
 
     # User-authored teachings (teachings.jsonl, gitignored) ride the same
     # oversample weight as identity -- few records, personally important.
@@ -1261,6 +1601,31 @@ def main(argv: "list[str] | None" = None) -> None:
     # Clean world-knowledge QA (knowledge_corpus.py) -- the counterweight to
     # the noisy general corpus: curated facts in short plain sentences.
     knowledge = [r for r in gen_knowledge_examples() if not _held_out(r)]
+
+    # Every built-in offered on every turn, with the restraint half that makes
+    # that safe -- the shape serve renders once the intent gates retire.
+    builtins = [r for r in gen_builtin_block_examples() if not _held_out(r)]
+
+    # Conversation with more than one user turn: nothing else in the mix has
+    # a second one to read the first against.
+    chats = [r for r in gen_chat_multiturn_examples() if not _held_out(r)]
+
+    # Answers that work the problem inside <think>...</think> before replying.
+    reasoning = [r for r in gen_reasoning_examples() if not _held_out(r)]
+
+    # Corrections to a remembered fact -- the turn the supersede path renders
+    # and no record has ever trained.
+    mem_fix = [r for r in gen_memory_correction_examples() if not _held_out(r)]
+    n_shape_leak = (
+        len(gen_builtin_block_examples()) + len(gen_chat_multiturn_examples())
+        + len(gen_reasoning_examples()) + len(gen_memory_correction_examples())
+    ) - (len(builtins) + len(chats) + len(reasoning) + len(mem_fix))
+    print(
+        f"new shapes: {len(builtins)} builtin-block, {len(chats)} chat-multiturn, "
+        f"{len(reasoning)} reasoning, {len(mem_fix)} memory-correction "
+        f"({n_shape_leak} held out of training as eval probes -- these corpora "
+        f"are authored to make that 0; nonzero means a reseal newly collided)"
+    )
 
     # Diverse identity data generalizes with FAR less repetition than fixed
     # pairs did; a moderate boost is enough (~370 diverse records x8 ~= the old
@@ -1294,6 +1659,19 @@ def main(argv: "list[str] | None" = None) -> None:
     # Saturn at greedy). Identity generalizes at x8; facts get the same class
     # of weight.
     KNOWLEDGE_REPEAT = 5
+    # Arithmetic is a SKILL that must generalize across phrasings, so it takes
+    # the same class of weight as knowledge rather than the high repetition
+    # identity needs. The records are already one-per-question after dedup.
+    MATH_REPEAT = 5
+    # The built-in block is the shape EVERY served turn will carry once the
+    # gates retire, so it takes the tool weight rather than a token one.
+    BUILTIN_REPEAT = 12
+    # Small hand-authored corpora that must generalize to unseen surfaces get
+    # the identity class of weight -- the repo's own lesson is that coverage
+    # beats repetition, but these have few surfaces to begin with.
+    CHAT_REPEAT = 10
+    REASONING_REPEAT = 10
+    MEMFIX_REPEAT = 12
     mix = [
         json.dumps(r, ensure_ascii=False)
         for r in tools * TOOLS_REPEAT
@@ -1303,6 +1681,11 @@ def main(argv: "list[str] | None" = None) -> None:
         + mem_tools * MEMTOOLS_REPEAT
         + img_read * IMGREAD_REPEAT
         + knowledge * KNOWLEDGE_REPEAT
+        + math * MATH_REPEAT
+        + builtins * BUILTIN_REPEAT
+        + chats * CHAT_REPEAT
+        + reasoning * REASONING_REPEAT
+        + mem_fix * MEMFIX_REPEAT
     ]
     n_general = 0
     n_boiler = 0

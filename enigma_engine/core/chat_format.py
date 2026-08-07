@@ -90,6 +90,67 @@ TOOL_SYNTAX = (
     'Call a tool by writing <|tool_call|>{"name": "...", "arguments": {...}}<|/tool_call|> and wait for the result.'
 )
 
+# The tools the SERVER itself executes. They live here because the SFT data and
+# the server must offer byte-identical specs: a description differing by one
+# word between training and serving is a system block the model never saw.
+# serve binds its own names to these; make_sft_data bakes them through
+# render_tools_system, so one edit moves both.
+BUILTIN_TOOLS = (
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Evaluate an arithmetic expression and return the exact result.",
+            "parameters": {"expression": "string"},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": "Save a fact about the user to long-term memory.",
+            "parameters": {"text": "string"},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "forget",
+            "description": "Remove a fact about the user from long-term memory when they ask "
+            "you to forget it or say it is no longer true. Pass the fact to remove as "
+            "'text'. If a previous call reported several matching memories, pass the "
+            "'id' of the one they meant instead.",
+            "parameters": {"text": "string", "id": "integer"},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "speak",
+            "description": "Speak text out loud through the computer speakers.",
+            "parameters": {"text": "string"},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "imagine",
+            "description": "Generate an image from a text description and save it as a file.",
+            "parameters": {"prompt": "string"},
+        },
+    },
+)
+
+BUILTIN_NAMES = frozenset(t["function"]["name"] for t in BUILTIN_TOOLS)
+
+
+def builtin_tool(name: str) -> dict:
+    """The shared spec for one built-in, by name."""
+    for t in BUILTIN_TOOLS:
+        if t["function"]["name"] == name:
+            return t
+    raise KeyError(name)
+
 
 def _flat_params(params) -> dict:
     """JSON-schema tool parameters -> the flat ``{name: type}`` shape ALL the

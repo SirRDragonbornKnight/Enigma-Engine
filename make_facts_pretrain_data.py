@@ -73,6 +73,42 @@ def eos_from_sidecar(meta: dict, vocab_size: int) -> int:
 
 
 REVIEW_DIR = ROOT / "data" / "pretrain"
+TEACHINGS = ROOT / "teachings.jsonl"  # user-authored; gitignored
+
+
+def gen_teaching_pretrain_text(path: Path = TEACHINGS) -> list[str]:
+    """User-authored teachings as plain-text fact lines.
+
+    teachings.jsonl reaches the weights through the SFT mix, and SFT cannot
+    install a fact -- it only surfaces one the weights already hold. So a
+    teaching the user writes is trained in exactly the channel that cannot
+    learn it. The same lines route here as well, in the forms the knowledge
+    stream uses: the answer as standalone prose, and one Q/A line per
+    phrasing. The SFT route stays; this adds the one that installs.
+
+    Reuses the SFT reader so the two routes cannot disagree about what a
+    teaching IS -- malformed-line handling, the bare-string case and the
+    thin-phrasing note all live in one parser.
+    """
+    from make_sft_data import gen_teaching_examples
+
+    lines: list[str] = []
+    for rec in gen_teaching_examples(path):
+        msgs = rec["messages"]
+        question = msgs[0]["content"].strip()
+        answer = msgs[1]["content"].strip()
+        # A one-word answer carries no signal standing alone ("Rome."); the
+        # Q/A line is what teaches it. Same bar the knowledge stream uses.
+        if len(answer.split()) >= 4:
+            lines.append(answer)
+        lines.append(f"Q: {question} A: {answer}")
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for line in lines:
+        if line not in seen:
+            seen.add(line)
+            uniq.append(line)
+    return uniq
 
 
 def screen_locked_probes(lines: list[str], guard: "LockedProbeGuard",
@@ -283,6 +319,11 @@ def main() -> None:
     print(f"replay: {source_bin.name} | dtype {src_dtype} | vocab {vocab_size} -> {vocab_file.name}", flush=True)
 
     source_lines = gen_knowledge_pretrain_text()
+    teaching_lines = gen_teaching_pretrain_text()
+    if teaching_lines:
+        print(f"teachings: {len(teaching_lines)} fact lines from {TEACHINGS.name} "
+              f"(they ride the SFT mix too -- only this route installs them)")
+        source_lines = source_lines + teaching_lines
     if not source_lines:
         raise SystemExit("knowledge_corpus produced no fact lines; nothing to build")
     lines = screen_locked_probes(source_lines, LockedProbeGuard.load())

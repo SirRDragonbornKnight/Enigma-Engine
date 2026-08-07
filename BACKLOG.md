@@ -1260,7 +1260,42 @@ The block, in execution order:
   the regen: the client-system "Available tools:" shape, image turns
   carrying system/tools/memory blocks, URL-bearing records now kept,
   trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
-  passed explicitly, finetune `--block` raised. Also here per VISION.md
+  passed explicitly, finetune `--block` raised.
+  **DATA SHAPES LANDED 2026-08-07 (the bake itself still waits on the regen
+  scope + identity ruling).** In `make_sft_data.py`: the always-offered
+  five-built-in block with its restraint half (`gen_builtin_block_examples`),
+  conversational multi-turn (`gen_chat_multiturn_examples` -- the mix had
+  ZERO records with a second user turn), `<think>` traces
+  (`gen_reasoning_examples` -- zero before), memory corrections
+  (`gen_memory_correction_examples` -- the supersede turn nothing trained),
+  and math re-enabled behind `vocab_is_digit_uniform`, which MEASURES the
+  token table instead of trusting a flag (v1 False / v2 True, so a v1 bake
+  drops math rather than repeating the v4 result). `make_facts_pretrain_data`
+  now dual-routes `teachings.jsonl` into the install channel. The five
+  built-in specs moved to `chat_format.BUILTIN_TOOLS` so train and serve read
+  ONE table. Preview build on the v2 vocab at block 2048: 120,688 records,
+  flat general text 90.94% -> 86.91%.
+  The 2026-08-07 audit of the wave caught authored PROBE COLLISIONS: 4 of the
+  23 built-in records ("Draw me a dragon.", "Say hello out loud.", two
+  restraint turns) were probe phrasings, silently held out, so the exact
+  surfaces the retirement exists for were not training. Re-authored as
+  near-neighbors measured clean against both screens;
+  `test_every_authored_record_survives_the_probe_screen` runs main()'s own
+  screen over all four corpora so a future reseal that newly collides fails
+  the suite instead of thinning the corpus. BEFORE THE REAL BAKE: widen these
+  starter corpora (10-23 surfaces each at x10-12) with paraphrase families --
+  the identity lesson says coverage beats repetition, and these have the
+  repetition without the coverage yet.
+  **TWO CORRECTIONS to this bullet, both measured:** (a) `forget` had a
+  runtime and ZERO training records -- the gap ran the other way too, and the
+  built-in block now covers all five; (b) the "prune trained tool names to
+  what has a runtime" line is NOT executed and should be re-read before it
+  is: serve honors arbitrary CLIENT tools (`req.tools` joins the built-ins in
+  `_with_context`), so the 10 runtime-less names are what teaches the
+  call SHAPE that makes client tool-calling work at all. Pruning to the five
+  executable names would train her only on those five surfaces. The
+  runtime-less names are absent from the always-offered block, which is where
+  a promise she cannot keep would actually hurt. USER'S CALL. Also here per VISION.md
   destination 4: the deep-research organ's data shapes ride THIS regen if
   the organ lands by then -- the 31 orphan `<search>` tag records deleted at
   T4 (T1 ruling 4) get replaced by records whose tags have a runtime owner,

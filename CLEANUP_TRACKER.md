@@ -152,13 +152,15 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **867 passed (2026-08-07)** — THE live number; other docs
+4. Suite baseline: **895 passed (2026-08-07)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
    it did, sitting at 810 across the whole 07-28→08-06 arc while the suite
    grew by 63). 873 → 867 is the kv-cache strip: six tests of the deleted
-   research caches (TurboQuant/H2O/StreamingLLM) went with their classes.
+   research caches (TurboQuant/H2O/StreamingLLM) went with their classes;
+   867 → 895 is the T4 regen shapes (`test_sft_regen_shapes.py` 23, plus 5
+   teachings-route tests in `test_facts_pretrain_data.py`).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

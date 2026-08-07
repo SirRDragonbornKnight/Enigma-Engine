@@ -193,6 +193,7 @@ def test_an_empty_knowledge_corpus_is_not_blamed_on_the_screen(monkeypatch):
     """The 'everything was screened out' error used to fire when the corpus was
     simply empty, pointing the operator at a guard that never ran."""
     monkeypatch.setattr(make_facts_pretrain_data, "gen_knowledge_pretrain_text", lambda: [])
+    monkeypatch.setattr(make_facts_pretrain_data, "gen_teaching_pretrain_text", lambda: [])
     monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
 
     with pytest.raises(SystemExit) as exc:
@@ -200,3 +201,82 @@ def test_an_empty_knowledge_corpus_is_not_blamed_on_the_screen(monkeypatch):
 
     assert "no fact lines" in str(exc.value)
     assert "screened out" not in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# teachings.jsonl routes here as well as into the SFT mix. SFT cannot install
+# a fact -- it only surfaces one the weights already hold -- so a teaching
+# that reaches the model ONLY through the mix is trained in the one channel
+# that provably cannot learn it.
+# ---------------------------------------------------------------------------
+
+
+def _teachings(tmp_path, *records):
+    path = tmp_path / "teachings.jsonl"
+    path.write_text(
+        "# a comment line\n" + "\n".join(json.dumps(r) for r in records) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_teachings_become_fact_lines(tmp_path):
+    path = _teachings(
+        tmp_path,
+        {
+            "questions": ["What is my favourite tea?", "Which tea do I drink?", "Do you know my tea?"],
+            "answers": ["Oolong -- you drink it every morning.", "That would be oolong."],
+        },
+    )
+    lines = make_facts_pretrain_data.gen_teaching_pretrain_text(path)
+
+    assert lines, "a written teaching produced no fact lines"
+    # Both installable forms: the answer as standalone prose, and a Q/A line
+    # per phrasing (the knowledge stream's own shapes).
+    assert "Oolong -- you drink it every morning." in lines
+    qa = [ln for ln in lines if ln.startswith("Q: ")]
+    assert len({ln.split(" A: ")[0] for ln in qa}) == 3, "not every phrasing became a Q/A line"
+
+
+def test_a_one_word_answer_only_rides_the_qa_form(tmp_path):
+    """A bare "Rome." teaches nothing standing alone in a pretrain stream --
+    the same bar the knowledge corpus applies."""
+    path = _teachings(tmp_path, {"q": "Who is my vet?", "a": "Dr Halloway."})
+    lines = make_facts_pretrain_data.gen_teaching_pretrain_text(path)
+
+    assert "Dr Halloway." not in lines
+    assert "Q: Who is my vet? A: Dr Halloway." in lines
+
+
+def test_the_untouched_template_yields_nothing(tmp_path):
+    """teachings.jsonl ships as comments only and is the user's authoring
+    channel -- the route must be a no-op until they write in it, not a crash."""
+    path = tmp_path / "teachings.jsonl"
+    path.write_text("# only comments here\n", encoding="utf-8")
+    assert make_facts_pretrain_data.gen_teaching_pretrain_text(path) == []
+    assert make_facts_pretrain_data.gen_teaching_pretrain_text(tmp_path / "absent.jsonl") == []
+
+
+def test_teaching_lines_reach_the_build(monkeypatch, tmp_path):
+    """The lines must actually be APPENDED to the stream the builder screens
+    and tokenizes -- generating them and dropping them on the floor would
+    leave the install channel exactly as empty as before."""
+    monkeypatch.setattr(make_facts_pretrain_data, "gen_knowledge_pretrain_text", lambda: ["A base fact line here."])
+    monkeypatch.setattr(
+        make_facts_pretrain_data, "gen_teaching_pretrain_text",
+        lambda: ["Q: What is my favourite tea? A: Oolong."],
+    )
+    seen = {}
+
+    def spy_screen(lines, guard, review_dir=None):
+        seen["lines"] = list(lines)
+        raise SystemExit("stop here")
+
+    monkeypatch.setattr(make_facts_pretrain_data, "screen_locked_probes", spy_screen)
+    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
+
+    with pytest.raises(SystemExit):
+        make_facts_pretrain_data.main()
+
+    assert "Q: What is my favourite tea? A: Oolong." in seen["lines"]
+    assert "A base fact line here." in seen["lines"], "the knowledge stream must survive too"
