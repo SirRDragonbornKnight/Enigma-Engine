@@ -33,6 +33,8 @@ from make_sft_data import (
     gen_chat_multiturn_examples,
     gen_memory_correction_examples,
     gen_reasoning_examples,
+    gen_search_examples,
+    gen_unknown_examples,
     vocab_is_digit_uniform,
 )
 
@@ -166,7 +168,8 @@ def test_every_authored_record_survives_the_probe_screen():
 
     _, held_out = probe_screen(_eval_probe_questions(), LockedProbeGuard.load())
     for gen in (gen_builtin_block_examples, gen_chat_multiturn_examples,
-                gen_reasoning_examples, gen_memory_correction_examples):
+                gen_reasoning_examples, gen_memory_correction_examples,
+                gen_search_examples, gen_unknown_examples):
         gone = [r["messages"][1]["content"] for r in gen() if held_out(r)]
         assert not gone, f"{gen.__name__} authored probe collisions: {gone}"
 
@@ -299,6 +302,132 @@ def test_answers_after_a_correction_do_not_resurface_the_old_value():
 
 
 # --------------------------------------------------------------------------
+# Search traces -- the sixth organ's trained side
+# --------------------------------------------------------------------------
+
+
+def test_search_traces_carry_the_full_loop():
+    """Span turn, tool results, answer -- the trace serve's _apply_search
+    renders. The 31 seed-era orphans taught emit-and-stop toward a runtime
+    that never existed; a trace that stops early would repeat that."""
+    recs = [r for r in gen_search_examples() if r["category"] in ("search_call", "search_miss")]
+    assert recs, "no search traces"
+    for r in recs:
+        roles = [m["role"] for m in r["messages"]]
+        assert roles == ["user", "assistant", "tool", "assistant"], roles
+        span = r["messages"][1]["content"]
+        assert span.startswith("<search>") and span.endswith("</search>"), span
+        assert r["messages"][-1]["content"].strip(), "the trace never answers"
+
+
+def test_search_tool_turns_are_the_organs_own_render():
+    """One renderer for trained and served bytes: every successful trace's
+    tool turn must reproduce through core.search.render_results verbatim."""
+    from enigma_engine.core.search import render_results
+    from make_sft_data import _SEARCH_TRACES
+
+    by_question = {r["messages"][0]["content"]: r for r in gen_search_examples()}
+    for question, query, hits, _answer in _SEARCH_TRACES:
+        rec = by_question[question]
+        assert rec["messages"][1]["content"] == f"<search>{query}</search>"
+        assert rec["messages"][2]["content"] == render_results(query, hits)
+
+
+def test_search_disabled_trace_matches_serves_literal():
+    """The trained error string and the one serve emits must be the same
+    bytes, or the disabled case is a system shape she never saw."""
+    disabled = [
+        r for r in gen_search_examples()
+        if r["category"] == "search_miss"
+        and "search disabled" in r["messages"][2]["content"]
+    ]
+    assert disabled, "no disabled-organ trace"
+    for r in disabled:
+        assert r["messages"][2]["content"] == "error: search disabled (start serve with --search)"
+
+
+def test_search_restraint_answers_without_the_tag():
+    recs = [r for r in gen_search_examples() if r["category"] == "search_restraint"]
+    assert recs, "no restraint half -- the tag becomes a reflex"
+    for r in recs:
+        assert "<search>" not in r["messages"][-1]["content"]
+        assert len(r["messages"]) == 2
+
+
+def test_time_sensitive_search_answers_use_synthetic_entities():
+    """A real time-sensitive question with fabricated results would train a
+    lie into the weights; the synthetic-entity rows keep .example URLs so a
+    real domain cannot drift in unnoticed."""
+    from make_sft_data import _SEARCH_TRACES
+
+    synthetic = [row for row in _SEARCH_TRACES if any(".example" in h["url"] for h in row[2])]
+    assert len(synthetic) >= 3, "the time-sensitive class lost its synthetic rows"
+
+
+# --------------------------------------------------------------------------
+# The epistemics corpus -- v2's #1 win condition
+# --------------------------------------------------------------------------
+
+
+def test_unknowns_cover_declines_contrasts_and_the_builtin_block():
+    recs = gen_unknown_examples()
+    declines = [r for r in recs if r["category"] == "unknown_decline"]
+    contrasts = [r for r in recs if r["category"] == "unknown_contrast"]
+    assert len(declines) >= 25, "the decline corpus thinned out"
+    assert contrasts, "no contrast half -- ask-shape collapses to blanket refusal"
+    assert any(r["messages"][0]["content"] == _builtin_system() for r in declines), \
+        "no decline under the always-offered block"
+
+
+def test_declines_never_call_a_tool():
+    for r in gen_unknown_examples():
+        if r["category"] != "unknown_decline":
+            continue
+        assert not _tool_calls(r), f"a decline fired a tool: {r['messages'][-2]['content']}"
+
+
+def test_contrast_pairs_share_their_question_with_a_decline():
+    """The decline must hinge on the block's CONTENTS, not the question's
+    shape -- so the same question must exist in both halves, differing only
+    in what the system block holds."""
+    recs = gen_unknown_examples()
+    decline_qs = {m["content"] for r in recs if r["category"] == "unknown_decline"
+                  for m in r["messages"] if m["role"] == "user"}
+    contrast_qs = {m["content"] for r in recs if r["category"] == "unknown_contrast"
+                   for m in r["messages"] if m["role"] == "user"}
+    assert contrast_qs & decline_qs, "no question appears in both halves"
+
+
+def test_memory_present_declines_do_not_parrot_the_distractor():
+    from make_sft_data import _UNKNOWABLE_WITH_MEMORY
+
+    for fact, _q, answer in _UNKNOWABLE_WITH_MEMORY:
+        key = fact.split()[-1].rstrip(".").lower()  # "rex", "denver"
+        assert key not in answer.lower(), f"the distractor fact leaked into the decline: {answer}"
+
+
+def test_declines_do_not_append_a_guess():
+    """The unknown grader scores 'I can't know. It is blue.' the same as the
+    honest decline -- so the DATA must never model decline-then-answer. A
+    decline that names a specific value after refusing is that shape."""
+    import re as _re
+
+    for r in gen_unknown_examples():
+        if r["category"] != "unknown_decline":
+            continue
+        text = r["messages"][-1]["content"]
+        first = text.split("--")[0]
+        # No decline opener may be followed by a bare factual VALUE -- a
+        # capitalized noun or a digit. The opener is case-insensitive
+        # ("It is 7." must trip it) but the value class is NOT: module-wide
+        # re.I turned [A-Z0-9] into any-letter and flagged honest declines
+        # ("it's your landlord's private business"), so the flag is scoped
+        # to the opener alone.
+        assert not _re.search(r"\b(?i:it is|it's|the answer is) [A-Z0-9]", text), text
+        assert not _re.search(r"\d", first), f"a number rode the decline's first clause: {text}"
+
+
+# --------------------------------------------------------------------------
 # Math rides the vocab, not a flag
 # --------------------------------------------------------------------------
 
@@ -324,6 +453,8 @@ def test_math_is_gated_on_the_vocab_carving_digits_uniformly():
         gen_chat_multiturn_examples,
         gen_reasoning_examples,
         gen_memory_correction_examples,
+        gen_search_examples,
+        gen_unknown_examples,
     ],
     ids=lambda f: f.__name__,
 )

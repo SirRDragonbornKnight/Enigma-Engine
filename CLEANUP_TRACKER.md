@@ -101,7 +101,9 @@ Deleted after a three-agent adversarial audit verified every claim
   Edits here require the bit-identical fingerprint regime
   (`_verify_ckpt.py`) — the live checkpoint lineage depends on this code.
 - **LIVE — organs (served behind flags):** `tts.py` (--voice), `asr.py`
-  (--ears), `eyes.py` (--eyes, native), `imagegen.py` (--image-gen).
+  (--ears), `eyes.py` (--eyes, native), `imagegen.py` (--image-gen),
+  `search.py` (--search, the sixth: <search>-span lookups through the local
+  SearXNG; v2 vocab only — legacy tables carry no tag ids).
 - **LIVE — perception training:** `vision_encoder.py`, `audio_encoder.py`,
   `training/encoder_align.py` (one hardened `_train_encoder` core;
   `train_vision` + `train_audio` wrappers for align_vision.py /
@@ -152,7 +154,7 @@ Deleted after a three-agent adversarial audit verified every claim
 2. **Fingerprint before/after** any edit near the live model code
    (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **895 passed (2026-08-07)** — THE live number; other docs
+4. Suite baseline: **929 passed (2026-08-07)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -160,7 +162,9 @@ Deleted after a three-agent adversarial audit verified every claim
    grew by 63). 873 → 867 is the kv-cache strip: six tests of the deleted
    research caches (TurboQuant/H2O/StreamingLLM) went with their classes;
    867 → 895 is the T4 regen shapes (`test_sft_regen_shapes.py` 23, plus 5
-   teachings-route tests in `test_facts_pretrain_data.py`).
+   teachings-route tests in `test_facts_pretrain_data.py`); 895 → 929 is the
+   search organ + epistemics wave (`test_search_organ.py` 22, and the shape
+   file grew to 36 with the search/unknown corpora).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

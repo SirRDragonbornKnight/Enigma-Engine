@@ -1266,6 +1266,269 @@ def gen_memory_correction_examples(seed: int = 87) -> list[dict]:
     return out
 
 
+# The epistemics families: (question phrasings, decline phrasings). Every
+# question is INTRINSICALLY unanswerable -- nothing in her weights, memory,
+# or organs could settle it -- so the honest move is the decline, sometimes
+# with a real offer attached. Knowable-but-not-by-weights questions belong to
+# the search corpus, NOT here: training a decline on a searchable fact and a
+# search on an unknowable one would teach her to confuse the two.
+# NEVER decline-and-guess: the sealed unknown grader scores an appended
+# invented answer as free, and a record teaching that shape would train the
+# exact fabrication the category exists to catch.
+_UNKNOWABLE = [
+    # Other people's private facts
+    (["What's my landlord's blood type?", "Do you know my landlord's blood type?",
+      "Which blood type is my landlord?"],
+     ["I can't know that -- it's your landlord's private business.",
+      "No way for me to know. That's theirs to share."]),
+    (["What did my coworker dream about last night?", "Any idea what my coworker dreamt last night?"],
+     ["I can't know what's in someone else's head at night.",
+      "Their dreams are theirs -- I have no window into that."]),
+    (["What's my barber's PIN number?", "Do you know my barber's bank PIN?"],
+     ["I can't know that, and I wouldn't tell you if I somehow did.",
+      "No -- that's exactly the kind of thing nobody should know but them."]),
+    # The future
+    (["Will it rain on my wedding day next summer?", "Is it going to rain at my wedding next year?"],
+     ["I can't know the weather that far out -- nobody can, forecast or not.",
+      "That far ahead, no one can say. Book a tent and win either way."]),
+    (["What will the price of gold be next spring?", "Where will gold prices be in six months?"],
+     ["I can't know future prices. Anyone who says otherwise is selling something.",
+      "Unknowable -- markets don't leak the future to anyone, me included."]),
+    (["Will my sister like the gift I picked?", "Is my sister going to love this present?"],
+     ["I can't know her mind -- but you know her; if it made you think of her, that's usually the win.",
+      "No way to know from here. What made you pick it?"]),
+    (["Which side will this coin land on when I flip it?", "Call the coin flip before I toss it."],
+     ["No one can call a fair coin -- that's what makes it fair.",
+      "Chance doesn't take reservations. Flip it and see."]),
+    # Unobservables
+    (["What am I about to say next?", "Finish the exact sentence I have in my head."],
+     ["I can't read your mind. Say it and I'll keep up.",
+      "No way for me to know -- your head is your own."]),
+    (["What's in my left pocket?", "Tell me what I have in my pocket."],
+     ["I can't see your pockets. You'd have to show me.",
+      "No idea from here -- I don't have eyes on you."]),
+    (["What's my downstairs neighbour cooking right now?", "What is my neighbour making for dinner?"],
+     ["I can't know that -- I can't smell it from here.",
+      "No way to know from here -- my nose doesn't reach the stairwell."]),
+    # User facts she was never given
+    (["What did I have for breakfast this morning?", "Do you remember what I ate for breakfast?"],
+     ["You haven't told me, so I can't know. Tell me and I'll remember next time.",
+      "I don't have that -- say the word and I'll keep it for next time you ask."]),
+    (["What's my shoe size?", "Which shoe size do I wear?"],
+     ["You've never told me. Give it to me once and I'll hold onto it.",
+      "I can't know that until you tell me -- happy to remember it if you do."]),
+    (["What was the name of my first pet?", "Do you know my first pet's name?"],
+     ["That's not something you've told me, so I can't know it. I'd like to, though.",
+      "You haven't given me that one. Tell me and it's saved."]),
+    # Lost-to-history specifics
+    (["What was the exact temperature in my kitchen last Tuesday?",
+      "How warm was my kitchen on Tuesday last week?"],
+     ["Nobody measured it, so nobody can know it now -- me included.",
+      "That number is gone -- it was never written down anywhere I could reach."]),
+    (["What did my grandmother's voice sound like?", "Can you tell me how my grandmother sounded?"],
+     ["I can't know that -- I never heard her. If you have a recording, I'd listen with you.",
+      "That one lives in your memory, not anywhere I can reach."]),
+]
+
+# The contrast half: the SAME ask-shape, answerable because the block holds
+# it. Without these, "questions about my stuff" collapses to a blanket
+# decline and recall regresses -- the decline must hinge on the block's
+# CONTENTS, not the question's shape.
+_KNOWABLE_CONTRAST = [
+    ("User's shoe size is 11.", "What's my shoe size?", "11."),
+    ("User's first pet was a cat named Biscuit.", "What was the name of my first pet?",
+     "Biscuit -- your cat."),
+    ("User had oatmeal for breakfast.", "What did I have for breakfast this morning?",
+     "Oatmeal, you said."),
+]
+
+# Unanswerable with a memory block PRESENT but irrelevant: distractor facts
+# must not become an answer (the decline hinges on content, both directions).
+_UNKNOWABLE_WITH_MEMORY = [
+    ("User's dog is named Rex.", "What's my landlord's blood type?",
+     "I can't know that -- it's not something you could even tell me on their behalf."),
+    ("User lives in Denver.", "What am I about to say next?",
+     "Your head's your own -- I can't see into it."),
+]
+
+
+def gen_unknown_examples(seed: int = 97) -> list[dict]:
+    """Honest declines on intrinsically unanswerable questions.
+
+    v2's single biggest win condition (VISION.md): both baselines score 0/15
+    on the unknown category with ZERO refusals across 30 unanswerables --
+    and the diet is why: decline shapes were ~2 records in 105k before this
+    generator existed (measured 2026-08-07). Three shapes train together:
+    the plain decline, the decline with a distractor memory block (content
+    decides, not question shape), and the contrast answer when the block DOES
+    hold the fact -- plus declines under the full built-in block where every
+    tool is offered and none of them helps.
+    """
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for questions, answers in _UNKNOWABLE:
+        for i, q in enumerate(questions):
+            out.append({
+                "messages": [
+                    {"role": "user", "content": q},
+                    {"role": "assistant", "content": answers[i % len(answers)]},
+                ],
+                "category": "unknown_decline",
+            })
+    for fact, q, a in _KNOWABLE_CONTRAST:
+        out.append({
+            "messages": [
+                {"role": "system", "content": "Things you remember:\n- " + fact},
+                {"role": "user", "content": q},
+                {"role": "assistant", "content": a},
+            ],
+            "category": "unknown_contrast",
+        })
+    for fact, q, a in _UNKNOWABLE_WITH_MEMORY:
+        out.append({
+            "messages": [
+                {"role": "system", "content": "Things you remember:\n- " + fact},
+                {"role": "user", "content": q},
+                {"role": "assistant", "content": a},
+            ],
+            "category": "unknown_decline",
+        })
+    # Declines under the always-offered block: every tool on offer, none of
+    # them able to answer an unknowable -- restraint and epistemics in one.
+    sys_msg = _builtin_system()
+    for questions, answers in rng.sample(_UNKNOWABLE, 5):
+        out.append({
+            "messages": [
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": questions[0]},
+                {"role": "assistant", "content": answers[0]},
+            ],
+            "category": "unknown_decline",
+        })
+    rng.shuffle(out)
+    return out
+
+
+# (question, compact query, hits for render_results, answer-with-receipt).
+# Three fact classes, deliberately: STABLE facts carry true results (safe to
+# install); TIME-SENSITIVE questions use synthetic entities (a real "who won
+# the election" with fabricated results would train a lie into the weights);
+# technical lookups carry true, stable answers. Queries stay terse -- they
+# are retrieval keys, not prose (the seed corpus's design, kept).
+_SEARCH_TRACES = [
+    ("How tall is the Burj Khalifa in metres?", "Burj Khalifa height metres",
+     [{"title": "Burj Khalifa - Wikipedia", "url": "https://en.wikipedia.org/wiki/Burj_Khalifa",
+       "snippet": "The Burj Khalifa is a skyscraper in Dubai, standing 828 m tall."}],
+     "828 metres, per Wikipedia."),
+    ("When was the James Webb Space Telescope launched?", "James Webb Space Telescope launch date",
+     [{"title": "James Webb Space Telescope - NASA", "url": "https://science.nasa.gov/mission/webb",
+       "snippet": "Webb launched on 25 December 2021 from Kourou, French Guiana."},
+      {"title": "JWST - Wikipedia", "url": "https://en.wikipedia.org/wiki/James_Webb_Space_Telescope",
+       "snippet": "Launched December 25, 2021 on an Ariane 5."}],
+     "25 December 2021 -- both NASA and Wikipedia agree."),
+    ("What is the default port for PostgreSQL?", "PostgreSQL default port",
+     [{"title": "PostgreSQL: Documentation", "url": "https://www.postgresql.org/docs/current/runtime-config-connection.html",
+       "snippet": "The port parameter defaults to 5432."}],
+     "5432, from the PostgreSQL docs."),
+    ("What's the chemical formula for caffeine?", "caffeine chemical formula",
+     [{"title": "Caffeine - PubChem", "url": "https://pubchem.ncbi.nlm.nih.gov/compound/caffeine",
+       "snippet": "Molecular formula C8H10N4O2."}],
+     "C8H10N4O2, per PubChem."),
+    ("Who won the Harrowfield regatta this year?", "Harrowfield regatta winner this year",
+     [{"title": "Harrowfield Regatta Results", "url": "https://harrowfield-rowing.example/results",
+       "snippet": "The senior eight title went to the Tarwick Rowing Club crew."}],
+     "The Tarwick Rowing Club crew took it, per the regatta's results page."),
+    ("What's the latest firmware for the Novatrek X2 drone?", "Novatrek X2 drone latest firmware",
+     [{"title": "Novatrek support", "url": "https://novatrek.example/firmware",
+       "snippet": "Firmware 4.7.2 is the current release for the X2 line."}],
+     "4.7.2, according to Novatrek's support page."),
+    ("Is the Millbrook ferry running today?", "Millbrook ferry service status today",
+     [{"title": "Millbrook Ferry Updates", "url": "https://millbrookferry.example/status",
+       "snippet": "All sailings are operating on the normal timetable today."}],
+     "The status page says it's running on the normal timetable."),
+]
+
+# Searches that come back empty or broken -- she reports honestly instead of
+# inventing a result (the engines-fail-honestly doctrine, trained).
+_SEARCH_MISSES = [
+    ("What does the Quenshaw Institute publish about tidal power?", "Quenshaw Institute tidal power",
+     None,  # organ answered: nothing found
+     "The search came back empty -- I couldn't find anything from a Quenshaw Institute on tidal power."),
+    ("Look up the release notes for Parcelforge 9.", "Parcelforge 9 release notes",
+     "error: search backend unreachable at http://127.0.0.1:8888: connection refused",
+     "Search isn't reachable right now, so I can't pull those release notes. Try me again in a bit, "
+     "or paste them here and I'll walk through them with you."),
+    ("Search for reviews of the Klavenmoor hiking pack.", "Klavenmoor hiking pack reviews",
+     "error: search disabled (start serve with --search)",
+     "I can't search on this setup -- the search organ isn't running. If you paste a review in, "
+     "I'll happily pick it apart with you."),
+]
+
+# Questions she answers DIRECTLY with search conceptually available -- the
+# restraint half. Without negatives the tag becomes a reflex ("always emit
+# search"), which the seed corpus called strictly worse than not training.
+_SEARCH_NEGATIVES = [
+    ("What's nine times seven?", "63."),
+    ("What does HTTP stand for?", "HyperText Transfer Protocol."),
+    ("Why does ice float on water?",
+     "Water expands as it freezes, so ice is less dense than the liquid it sits in."),
+    ("Write a one-line haiku about rain.", "Rain taps the window -- patient, uninvited, soft."),
+    ("What's a prime number?", "A whole number above 1 that only divides by 1 and itself."),
+    ("How many bits in a byte?", "Eight."),
+    ("Explain recursion in one sentence.",
+     "A function that solves a problem by calling itself on a smaller piece of it."),
+    ("What planet is closest to the sun?", "Mercury."),
+]
+
+
+def gen_search_examples(seed: int = 93) -> list[dict]:
+    """Full search traces: emit the span, read the results, answer with a
+    receipt -- plus the misses and the restraint half.
+
+    The tool-turn text comes from the ORGAN'S OWN renderer
+    (core.search.render_results), and the trace shape (assistant span turn,
+    tool result, assistant answer) is exactly what serve's _apply_search
+    builds -- trained bytes and served bytes from one definition. The 31
+    orphan tag records this replaces taught emit-and-stop toward a runtime
+    that never existed; these teach the whole loop toward the one that does.
+    """
+    from enigma_engine.core.search import render_results
+
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for question, query, hits, answer in _SEARCH_TRACES:
+        out.append({
+            "messages": [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": f"<search>{query}</search>"},
+                {"role": "tool", "content": render_results(query, hits)},
+                {"role": "assistant", "content": answer},
+            ],
+            "category": "search_call",
+        })
+    for question, query, failure, answer in _SEARCH_MISSES:
+        result = render_results(query, []) if failure is None else failure
+        out.append({
+            "messages": [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": f"<search>{query}</search>"},
+                {"role": "tool", "content": result},
+                {"role": "assistant", "content": answer},
+            ],
+            "category": "search_miss",
+        })
+    for question, answer in _SEARCH_NEGATIVES:
+        out.append({
+            "messages": [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": answer},
+            ],
+            "category": "search_restraint",
+        })
+    rng.shuffle(out)
+    return out
+
+
 def probe_screen(eval_qs: set, locked: "LockedProbeGuard"):
     """(prompt_side, held_out) over the given probe sets -- ONE definition of
     what training may not contain, shared by main() and the tests that pin
@@ -1616,13 +1879,25 @@ def main(argv: "list[str] | None" = None) -> None:
     # Corrections to a remembered fact -- the turn the supersede path renders
     # and no record has ever trained.
     mem_fix = [r for r in gen_memory_correction_examples() if not _held_out(r)]
+
+    # Search traces: the span, the results, the answer with a receipt -- the
+    # sixth organ's trained side (serve's _apply_search renders the same
+    # trace at runtime).
+    searches = [r for r in gen_search_examples() if not _held_out(r)]
+
+    # Honest declines on the intrinsically unanswerable -- v2's #1 win
+    # condition, near-absent from the diet before this generator.
+    unknowns = [r for r in gen_unknown_examples() if not _held_out(r)]
+
     n_shape_leak = (
         len(gen_builtin_block_examples()) + len(gen_chat_multiturn_examples())
         + len(gen_reasoning_examples()) + len(gen_memory_correction_examples())
-    ) - (len(builtins) + len(chats) + len(reasoning) + len(mem_fix))
+        + len(gen_search_examples()) + len(gen_unknown_examples())
+    ) - (len(builtins) + len(chats) + len(reasoning) + len(mem_fix) + len(searches) + len(unknowns))
     print(
         f"new shapes: {len(builtins)} builtin-block, {len(chats)} chat-multiturn, "
-        f"{len(reasoning)} reasoning, {len(mem_fix)} memory-correction "
+        f"{len(reasoning)} reasoning, {len(mem_fix)} memory-correction, "
+        f"{len(searches)} search, {len(unknowns)} unknown-decline "
         f"({n_shape_leak} held out of training as eval probes -- these corpora "
         f"are authored to make that 0; nonzero means a reseal newly collided)"
     )
@@ -1672,6 +1947,11 @@ def main(argv: "list[str] | None" = None) -> None:
     CHAT_REPEAT = 10
     REASONING_REPEAT = 10
     MEMFIX_REPEAT = 12
+    SEARCH_REPEAT = 10
+    # The heaviest of the new weights: the category is the declared #1 win
+    # condition and the behavior must survive 90k records of general text
+    # that answers everything it is asked.
+    UNKNOWN_REPEAT = 10
     mix = [
         json.dumps(r, ensure_ascii=False)
         for r in tools * TOOLS_REPEAT
@@ -1686,12 +1966,15 @@ def main(argv: "list[str] | None" = None) -> None:
         + chats * CHAT_REPEAT
         + reasoning * REASONING_REPEAT
         + mem_fix * MEMFIX_REPEAT
+        + searches * SEARCH_REPEAT
+        + unknowns * UNKNOWN_REPEAT
     ]
     n_general = 0
     n_boiler = 0
     n_foreign = 0
     n_lowq = 0
     n_gen_leak = 0
+    n_orphan_tag = 0
     n_locked_near = 0  # general records in the locked-guard review band (kept, flagged)
     locked_near_rows: list[str] = []  # written out so a human CAN actually review them
     if GENERAL.exists():
@@ -1703,6 +1986,15 @@ def main(argv: "list[str] | None" = None) -> None:
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if "<search>" in line or "</search>" in line:
+                    # No tag trains unowned (T1 ruling 4): the collected
+                    # corpus's tag records predate the search organ and teach
+                    # emit-and-stop toward a runtime contract that never
+                    # existed. gen_search_examples owns the tag now, with
+                    # full traces against the real loop -- the 31 seed-era
+                    # orphans drop here rather than by editing the artifact.
+                    n_orphan_tag += 1
                     continue
                 if _is_ai_boilerplate(rec):  # QA gate: keep assistant-voice boilerplate out
                     n_boiler += 1
@@ -1751,6 +2043,7 @@ def main(argv: "list[str] | None" = None) -> None:
         f"{n_general} general kept; {n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_lowq} dropped as low-quality (HTML/encoding/loops); "
+        f"{n_orphan_tag} dropped as orphan search-tag records (gen_search_examples owns the tag now); "
         f"{n_gen_leak} dropped as eval-probe leaks; "
         f"{n_locked_near} kept but flagged near a locked probe"
         f"{' (see locked_near_misses.jsonl)' if n_locked_near else ''}; "

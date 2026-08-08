@@ -1295,11 +1295,26 @@ The block, in execution order:
   call SHAPE that makes client tool-calling work at all. Pruning to the five
   executable names would train her only on those five surfaces. The
   runtime-less names are absent from the always-offered block, which is where
-  a promise she cannot keep would actually hurt. USER'S CALL. Also here per VISION.md
-  destination 4: the deep-research organ's data shapes ride THIS regen if
-  the organ lands by then -- the 31 orphan `<search>` tag records deleted at
-  T4 (T1 ruling 4) get replaced by records whose tags have a runtime owner,
-  or research waits for the next regen; no tag trains unowned either way.
+  a promise she cannot keep would actually hurt. USER'S CALL.
+  **THE RESEARCH-ORGAN FORK IS RULED AND EXECUTED (user order 2026-08-07:
+  "do the epistemics corpus and the research organ before T4").** The sixth
+  organ EXISTS: `core/search.py` (SearXNG-backed, transport-injectable,
+  per-query honest degrade -- the WSL VM sleeps, so reachability is never a
+  boot gate), serve `--search`/`--search-url`/`--search-k` with the
+  tag-triggered hop: a CLOSED `<search>query</search>` span executes and
+  the results splice back as a tool turn; a dangling span surfaces as
+  content and never executes; user text cannot forge the ids
+  (`_enc_content` neutralizes the tags outside assistant turns).
+  `gen_search_examples` replaces the 31 orphans with full traces through
+  the organ's OWN `render_results` (emit -> read -> answer-with-receipt,
+  plus none-found, unreachable, disabled, and the restraint half); the
+  orphans drop at build time, counted (exactly 31 on the live corpus).
+  `gen_unknown_examples` is the epistemics corpus (v2's #1 win condition):
+  intrinsically-unanswerable declines, contrast pairs that hinge on the
+  memory block's contents, declines under the full built-in block, and a
+  no-decline-then-guess rule enforced by test. Remaining research-side for
+  LATER: the deep-research MODE (the gather-read-answer loop wearing the
+  organ) -- the organ, hop, and trained shapes are its substrate.
   (Privacy scope ruled 2026-07-29 -- canonical text lives in ROADMAP's
   binding-rulings block, ONE home. Consequence here: privacy-preserving
   lookup, local first, is permitted, so the research organ is unblocked in
@@ -1333,6 +1348,10 @@ The block, in execution order:
     - serve's `--max-context` still defaults to **1024**. A model trained at
       block 2048 and served at 1024 silently throws away the context win the
       whole lineage was for — raise it at adoption and re-check VRAM.
+    - The launcher gains `--search` at adoption too (complete-by-default,
+      ruled 2026-07-27: the user-facing chain boots ALL organs). It is NOT
+      added today because v8's vocab carries no tag ids — the flag would
+      WARN on every boot until the v2 checkpoint is the one being served.
     - **The pretrain defaults re-point to the ADOPTED lineage at this gate**
       (ruled 2026-07-29 -- the SUNSET of the never-change-defaults
       guardrail, following the vocab-contract adoption-flip pattern): flip

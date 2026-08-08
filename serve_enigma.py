@@ -49,8 +49,11 @@ from enigma_engine.core.chat_format import (
     parse_assistant_ids,
     render_chat,
     render_tools_system,
+    search_token_ids,
     think_token_ids,
 )
+from enigma_engine.core.search import DEFAULT_K as SEARCH_DEFAULT_K
+from enigma_engine.core.search import Searcher, SearchError, render_results
 from enigma_engine.core.asr import ASRError, Ears
 from enigma_engine.core.calculator import CalcError, evaluate, format_result
 from enigma_engine.core.eyes import Eyes, EyesError, flatten_image_content
@@ -167,6 +170,25 @@ _p.add_argument(
     help="enable the imagination organ: the imagine built-in tool + /v1/images/generations (local Stable Diffusion)",
 )
 _p.add_argument(
+    "--search",
+    action="store_true",
+    help="enable the search organ: a <search>query</search> span in her output runs a lookup "
+    "through the machine's own SearXNG and the results return to her context. Needs a vocab "
+    "that carves the tags (v2); on older vocabs the feature is honestly absent",
+)
+_p.add_argument(
+    "--search-url",
+    default=None,
+    help="SearXNG base URL (default http://127.0.0.1:8888 -- the local WSL2 docker instance; "
+    "queries leave this machine only through THAT service's user-configured engines)",
+)
+_p.add_argument(
+    "--search-k",
+    type=int,
+    default=SEARCH_DEFAULT_K,
+    help="results per lookup fed back into her context",
+)
+_p.add_argument(
     "--allow-downloads",
     action="store_true",
     help="permit a one-time organ weight download from HuggingFace; WITHOUT this flag the server is fully offline",
@@ -206,6 +228,7 @@ MUTED = False
 EARS = None
 EYES = None
 PAINTER = None
+SEARCHER = None
 EOS_ID = 2
 BOS_ID = 1
 # True only when boot() ran to COMPLETION. `model is None` was the readiness
@@ -380,7 +403,7 @@ def boot(argv: list[str] | None = None) -> None:
     directly). argv=None reads sys.argv -- byte-identical behavior to the
     old import-time startup."""
     global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META, MODEL_PATH, MODEL_SHA256
-    global INSTRUCT, MEMORY, MEMORY_RECALL, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, EOS_ID, BOS_ID
+    global INSTRUCT, MEMORY, MEMORY_RECALL, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, SEARCHER, EOS_ID, BOS_ID
     global _BOOTED, PERSONA, _VOICE_STATE, IMAGES_DIR, _STOP_TEXTS
 
     _BOOTED = False  # a re-boot is unready until it completes
@@ -705,6 +728,25 @@ def boot(argv: list[str] | None = None) -> None:
         except ImageGenError as exc:
             print(f"  WARN: image-gen disabled -- {exc}", flush=True)
 
+    SEARCHER = None
+    if ARGS.search:
+        _search_ids_ok = None not in search_token_ids(tokenizer)
+        if not _search_ids_ok:
+            # The v1 table predates the tags: the model cannot emit a span the
+            # vocab does not carve, so the organ would sit unreachable. Say so
+            # instead of pretending search is on.
+            print("  WARN: search disabled -- this vocab carries no <search> tags (needs the v2 table)", flush=True)
+        else:
+            try:
+                SEARCHER = Searcher(base_url=ARGS.search_url) if ARGS.search_url else Searcher()
+                # Reachability is a per-query property, never a boot gate: the
+                # backend lives in WSL, whose VM sleeps and wakes AFTER serve
+                # starts. The probe only makes the boot log honest.
+                _up = "reachable" if SEARCHER.probe() else "NOT reachable yet (checked per query)"
+                print(f"  search: SearXNG at {SEARCHER.base_url} -- {_up}", flush=True)
+            except SearchError as exc:
+                print(f"  WARN: search disabled -- {exc}", flush=True)
+
     _n_params = sum(p.numel() for p in model.parameters())
     print(
         f"Enigma loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
@@ -714,7 +756,8 @@ def boot(argv: list[str] | None = None) -> None:
         + (" | voice: on" if SPEAKER is not None else "")
         + (" | ears: on" if EARS is not None else "")
         + (" | eyes: on" if EYES is not None else "")
-        + (" | image-gen: on" if PAINTER is not None else ""),
+        + (" | image-gen: on" if PAINTER is not None else "")
+        + (" | search: on" if SEARCHER is not None else ""),
         flush=True,
     )
     _BOOTED = True  # LAST statement: readiness means boot ran to completion
@@ -1533,6 +1576,37 @@ def _chat_instruct(req: ChatReq):
         named = [c for c in parsed if c.get("name")]
         return bool(named) and all(c["name"] in _BUILTIN_NAMES for c in named) and hop < _MAX_TOOL_HOPS
 
+    def _loop_on_search(out: dict, parsed: list[dict], hop: int) -> bool:
+        # A search hop runs only when the turn is PURELY a search: a turn
+        # that also names tool calls takes the tool path above (mixed intents
+        # follow the older, surfaced route rather than guessing an order).
+        # It runs even with the organ absent -- the error text below is how
+        # a search-trained model serving without --search learns, in-context,
+        # that the ability is off, instead of the span silently vanishing.
+        return bool(out.get("search")) and not parsed and hop < _MAX_TOOL_HOPS
+
+    def _apply_search(cur_msgs: list[dict], out: dict, results: list | None = None) -> list[dict]:
+        # Append the assistant turn that asked (the literal span -- assistant
+        # content keeps native tag ids, so history re-renders exactly as
+        # generated) and the lookup's answer as a tool turn: the same trace
+        # shape the SFT data teaches (gen_search_examples).
+        q = out["search"]
+        if SEARCHER is None:
+            result = "error: search disabled (start serve with --search)"
+        else:
+            try:
+                result = render_results(q, SEARCHER.query(q, k=ARGS.search_k))
+            except SearchError as exc:
+                result = f"error: {exc}"
+        if results is not None:
+            results.append(("search", result))
+        # Any content she spoke before the span stays in the history turn,
+        # matching _apply_builtins keeping out["content"] beside its calls.
+        return cur_msgs + [
+            {"role": "assistant", "content": f"{out.get('content') or ''}<search>{q}</search>"},
+            {"role": "tool", "content": result},
+        ]
+
     if req.stream:
 
         def _events_body():
@@ -1542,6 +1616,8 @@ def _chat_instruct(req: ChatReq):
             _ct = chat_token_ids(tokenizer)
             THINK, THINK_END = think_token_ids(tokenizer)
             TOOL_CALL, TOOL_CALL_END = _ct["<|tool_call|>"], _ct["<|/tool_call|>"]
+            # None on vocabs without the tags -- the comparisons below skip.
+            SEARCH, SEARCH_END = search_token_ids(tokenizer)
             stop_ids = _stop_ids()
 
             cur_msgs = msgs
@@ -1571,10 +1647,10 @@ def _chat_instruct(req: ChatReq):
                 pending_ws = ""
                 for tid in gen:
                     all_ids.append(tid)
-                    if tid in (THINK, TOOL_CALL):
+                    if tid in (THINK, TOOL_CALL) or (SEARCH is not None and tid == SEARCH):
                         depth += 1
                         continue
-                    if tid in (THINK_END, TOOL_CALL_END):
+                    if tid in (THINK_END, TOOL_CALL_END) or (SEARCH_END is not None and tid == SEARCH_END):
                         depth = max(0, depth - 1)
                         continue
                     if depth:
@@ -1626,6 +1702,11 @@ def _chat_instruct(req: ChatReq):
                 # a forget refusal that asks WHICH memory is surfaced as
                 # content, or the handshake's marker (and the ids the user
                 # must answer with) dies in the server-side tool trace.
+                if _loop_on_search(out, parsed, hop):
+                    # The query never streams (the span is depth-suppressed
+                    # above); the next hop answers from the spliced results.
+                    cur_msgs = _apply_search(cur_msgs, out)
+                    continue
                 if _loop_on_builtins(parsed, hop):
                     tool_results: list = []
                     cur_msgs = _apply_builtins(cur_msgs, out, parsed, tool_results)
@@ -1748,6 +1829,13 @@ def _chat_instruct(req: ChatReq):
         # collected across hops and surfaced as content instead of silently
         # dropping the model's action.
         raw_all += [c["raw"] for c in parsed if not c.get("name") and c.get("raw")]
+        if _loop_on_search(out, parsed, hop):
+            if out.get("content"):
+                hop_texts.append(out["content"])
+            search_results: list = []
+            cur_msgs = _apply_search(cur_msgs, out, search_results)
+            tools_run += [name for name, _ in search_results]
+            continue
         if _loop_on_builtins(parsed, hop):
             if out.get("content"):
                 hop_texts.append(out["content"])
@@ -2518,6 +2606,7 @@ def capabilities():
         "ears": EARS is not None,
         "eyes": EYES is not None,
         "image_gen": PAINTER is not None,
+        "search": SEARCHER is not None,
         "instruct": INSTRUCT,
         # The built-ins that can actually run right now. The model is offered a
         # subset of these per request, by intent.

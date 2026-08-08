@@ -344,6 +344,19 @@ def think_token_ids(tokenizer) -> tuple[int, int]:
     return t2i.get("<think>", THINK), t2i.get("</think>", THINK_END)
 
 
+def search_token_ids(tokenizer) -> "tuple[int | None, int | None]":
+    """(<search>, </search>) ids for THIS instance -- None on vocabs that do
+    not carve them. DELIBERATELY no constant fallback, unlike think: the v1
+    table predates the tags, and None is how the generation hook detects
+    "feature absent on this model" instead of aliasing a learned id (the
+    tokenizer's own None-on-legacy contract, Stage B-1)."""
+    t2i = getattr(tokenizer, "token_to_id", {})
+    return (
+        getattr(tokenizer, "search_start_id", None) or t2i.get("<search>"),
+        getattr(tokenizer, "search_end_id", None) or t2i.get("</search>"),
+    )
+
+
 def _enc(tokenizer, text: str) -> list[int]:
     """Encode a segment WITHOUT the BOS/EOS bracketing."""
     if not text:
@@ -360,8 +373,11 @@ def _enc_content(tokenizer, text: str, allow_think: bool) -> list[int]:
     marker is split at its second character and encoded as two plain-text
     pieces (neither half matches the special-token regex); decode() still
     round-trips the exact original characters. Assistant content keeps the
-    native <think>/</think> mapping (``allow_think=True``) — the SFT corpus
-    carries real reasoning spans; every other role gets those neutralized too.
+    native <think>/</think> and <search>/</search> mappings
+    (``allow_think=True`` means "assistant-authored") — the SFT corpus
+    carries real reasoning and search spans; every other role gets both
+    families neutralized, since a user-forged <search> span would otherwise
+    land in context as live control ids on a v2 vocab.
     """
     if not text:
         return []
@@ -371,7 +387,7 @@ def _enc_content(tokenizer, text: str, allow_think: bool) -> list[int]:
     # plain text either way.
     forbidden = list(CHAT_TOKENS) + list(IMAGE_TOKENS)
     if not allow_think:
-        forbidden += ["<think>", "</think>"]
+        forbidden += ["<think>", "</think>", "<search>", "</search>"]
     out: list[int] = []
     rest = text
     while rest:
@@ -509,25 +525,44 @@ def render_training(
 
 def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
     """Decode one assistant turn's generated IDs into
-    {content, tool_calls, thinking}. Parsing is ID-level (immune to text
-    collisions); generation should stop at <|im_end|>/EOS, but a trailing
-    one is tolerated and stripped."""
+    {content, tool_calls, thinking, search}. Parsing is ID-level (immune to
+    text collisions); generation should stop at <|im_end|>/EOS, but a
+    trailing one is tolerated and stripped.
+
+    ``search`` is the first CLOSED <search>...</search> span's query, or
+    None. Closed is the contract: a span still open when generation ends is
+    a truncated intent, and executing a half-written query would act on
+    something the model never finished saying -- the dangling text joins
+    content instead, mirroring how a truncated tool call surfaces as raw
+    rather than executing. Later closed spans also join content (one lookup
+    per hop; the loop regenerates, so a second question gets its own turn).
+    On vocabs without the tags (v1) the ids are None and no span can open.
+    """
     eos = getattr(tokenizer, "eos_token_id", 2)
     ct = chat_token_ids(tokenizer)
     im_end = ct["<|im_end|>"]
     tool_call, tool_call_end = ct["<|tool_call|>"], ct["<|/tool_call|>"]
     think, think_end = think_token_ids(tokenizer)
+    search_start, search_end = search_token_ids(tokenizer)
     content_ids: list[int] = []
     think_ids: list[int] = []
     tool_calls: list[dict[str, Any]] = []
+    search_query: str | None = None
     span: list[int] | None = None
     span_kind = ""
 
-    def flush_span():
+    def flush_span(closed: bool = True):
+        nonlocal search_query
         if span is None:
             return
         if span_kind == "think":
             think_ids.extend(span)
+        elif span_kind == "search":
+            raw = tokenizer.decode(span, skip_special_tokens=True).strip()
+            if closed and search_query is None and raw:
+                search_query = raw
+            else:
+                content_ids.extend(span)
         else:
             raw = tokenizer.decode(span, skip_special_tokens=True).strip()
             try:
@@ -554,7 +589,9 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
             span, span_kind = [], "think"
         elif t == tool_call:
             span, span_kind = [], "tool"
-        elif t in (think_end, tool_call_end):
+        elif search_start is not None and t == search_start:
+            span, span_kind = [], "search"
+        elif t in (think_end, tool_call_end) or (search_end is not None and t == search_end):
             flush_span()
             span = None
         elif span is not None:
@@ -563,10 +600,12 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
             content_ids.append(t)
     # Generation can end mid-span (max_tokens budget): flush the dangling span
     # instead of silently discarding the model's output — a truncated think
-    # becomes thinking, a truncated tool call surfaces as a raw call.
-    flush_span()
+    # becomes thinking, a truncated tool call surfaces as a raw call, and a
+    # truncated search query becomes content (never an executed lookup).
+    flush_span(closed=False)
     return {
         "content": tokenizer.decode(content_ids, skip_special_tokens=True).strip(),
         "tool_calls": tool_calls,
         "thinking": (tokenizer.decode(think_ids, skip_special_tokens=True).strip() or None),
+        "search": search_query,
     }
