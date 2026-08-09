@@ -332,6 +332,27 @@ def _valid_id(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def episode_text(date: str, summary: str) -> str:
+    """The text an episode record carries -- ONE definition, shared.
+
+    Tier-2 reserves kind:"episode" for session memory (ruled into T4 scope
+    2026-08-08): an episode is an ordinary record whose text is a dated
+    session summary, so it rides add()/recall/render_context unchanged --
+    an addition, not a rewrite. The future session-writer stores
+    ``add(episode_text(date, summary), kind="episode")``; the SFT data
+    renders its trained block lines through this same function, so the
+    surface she trains on and the one the store will render cannot drift.
+    Recency contract: render_context tie-breaks equal scores newest-id
+    first, so when several session lines surface, the FIRST is the newest
+    -- the trained rule is answer-from-the-first.
+    """
+    date = " ".join(str(date).split())
+    summary = " ".join(str(summary).split())
+    if not date or not summary:
+        raise ValueError("an episode needs both a date and a summary")
+    return f"Session {date}: {summary}"
+
+
 class MemoryStore:
     """Append-mostly JSONL store with BM25 search and budgeted rendering."""
 

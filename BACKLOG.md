@@ -155,10 +155,35 @@ four for four:
    scale-invariance argument (unmeasured) -- or spends its own sweep at
    ~35 h (2B tok at 542m's 15.7k tok/s eager rate, compile unavailable at
    that shape). One more measured point in 238m's favor.
-8. **Gate D -- adoption ratification**: T6's rule (beat the P2 aggregate
-   with no category floor regression = adopt; anything else = user's call)
-   is now code -- `eval_behavior --baseline <transcript>` prints the
-   verdict. Swap mechanics at T6. -> 7.95 T6.
+8. ~~**Gate D -- adoption ratification**~~ **RULED 2026-08-08 BY THE USER:
+   ADOPT `enigma_v2_sft2`.** Four v2 candidates were gated on the sealed set
+   vs the v8 reseal-7 baseline (56/120): base pretrain, SFT-1 (60/120),
+   DPO (58/120), and SFT-2 (**67/120**). SFT-2 is the ONLY one the gate could
+   statistically distinguish from v8 (paired won 18 / lost 7, exact
+   **p=0.0433**); it wins or ties every category but factual (one regression,
+   10->9, recall corruption of the 238M-ceiling class). The coded verdict was
+   USER'S CALL on that one regression + the absolute floors; the user adopted.
+   DPO measured WORSE than plain SFT here (over-steer: factual 9->6, tool
+   15->13) -- the lineage is not dropped from doctrine, to be re-tried at
+   lower beta / fewer pairs. **unknown stayed 0/15 on ALL FOUR candidates --
+   the #1 win condition is a DESIGN problem, not a data-volume one (and the
+   grader still scores decline-then-guess free, item 13).**
+   **SWAP MECHANICS LANDED THE SAME COMMIT** (the T6 requirement -- do not
+   split them): `Start-Enigma.ps1` and serve's `--model` default both point
+   at `models\enigma_v2_sft2\model.pth`; serve's `--max-context` default
+   SUNSET 1024->2048 (the adopted model trains at block 2048; boot() caps it
+   down with a WARN for smaller checkpoints, so the flip is safe for every
+   model). The v8 checkpoint stays at `models\enigma_dpo\model.pth` as the
+   rollback -- verified BYTE-IDENTICAL to `Enigma Backups\enigma_dpo_v8_adopted`
+   at adoption time, so nothing was lost by repointing rather than overwriting.
+   Docs touched: this row, T6 swap bullets, Start-Enigma.ps1, serve_enigma.py
+   (--model + --max-context defaults + the max_context capabilities field).
+   OPEN residue the user must still weigh: the eyes organ's vision projection
+   was aligned against v8's embedding space -- dims match (both 1024) so it
+   BOOTS, but caption quality on v2 is unproven and a v2 vision re-align is a
+   separate step; and `--search` is now servable (v2 vocab carries the tags)
+   but stays OUT of the daily launcher until the WSL SearXNG dependency is
+   ruled in. -> 7.95 T6.
 9. **Voice live-listen**: the Cortana blend was chosen by documented
    character on 2026-07-23 and has never been HEARD (the user had no audio);
    candidates A-D at `Desktop\Enigma Voice Audition`. Listen, tune or bless.
@@ -307,12 +332,17 @@ four for four:
    transcripts predate the field (both written 2026-07-27), so re-grading them
    still needs the sealed plaintext beside them.
    -> EVAL_REDESIGN second-grader section.
-14. **Structured output in v2 scope?** Zero support exists anywhere today
+14. ~~**Structured output in v2 scope?**~~ **RULED 2026-08-08: IN -- the
+   data shapes ride the T4 regen; runtime enforcement follows later.**
+   Docs touched: this row, 7.95 T4 (scope-ruled block).
+   Original row, kept: Zero support exists anywhere today
    (no response_format / grammar / logit_bias; in no doc or backlog line
    before this one). If v2 should have it, its DATA SHAPES must ride the T4
    regen -- missing that window costs a full regen cycle. Runtime
    enforcement can follow later; the trained shapes cannot. -> 7.95 T4.
-15. **Memory Tier-2 + episodic at T4?** The structured fact store
+15. ~~**Memory Tier-2 + episodic at T4?**~~ **RULED 2026-08-08: IN.**
+   Docs touched: this row, 7.95 T4 (scope-ruled block).
+   Original row, kept: The structured fact store
    {subject, attribute, value, date, kind} is nearly free at the regen (SFT
    already trains the sentence shape), and reserving kind:"episode" makes
    session memory ("what were we working on yesterday?") an addition, not a
@@ -1259,10 +1289,38 @@ The block, in execution order:
   that is LIVE today on the gate-mediated v8, not just v2 history. Also in
   the regen: the client-system "Available tools:" shape, image turns
   carrying system/tools/memory blocks, URL-bearing records now kept,
-  trained-tool-name list pruned to what has a runtime, `--vocab`/`--block`
-  passed explicitly, finetune `--block` raised.
-  **DATA SHAPES LANDED 2026-08-07 (the bake itself still waits on the regen
-  scope + identity ruling).** In `make_sft_data.py`: the always-offered
+  trained-tool-name list KEPT IN FULL (ruled 2026-08-08 -- correction (b)
+  below has the evidence; an earlier draft of this line said "pruned"),
+  `--vocab`/`--block` passed explicitly, finetune `--block` raised.
+  **REGEN SCOPE RULED 2026-08-08 -- all six candidates IN, one sitting:**
+  structured-output shapes (ledger 14), memory Tier-2 + episodic (ledger
+  15), identity-anchor rewrite (the draft is Claude's, the curation pass is
+  the user's -- the bake waits on it), corpora widening (paraphrase
+  families over the starter shapes, per the coverage note below), image
+  turns carrying system/tools/memory blocks, and knowledge expansion via
+  the facts-pretrain stream (**domain RULED same sitting: WIDEN THE FLOOR
+  -- same common-stable class, ~138 -> 300-500 facts, Claude drafts to the
+  file's authoring rules, user caps and spot-checks -- plus
+  SELF/CAPABILITY facts aligned with the rewritten anchors so the two
+  never disagree. Local-world facts and deep domain knowledge DECLINED on
+  the record: the memory store and the search organ are their designed
+  homes**). Tool names ruled the same day: KEEP ALL 14 (correction (b)
+  below). The bake now waits ONLY on the identity curation pass.
+  **SEARCH POSTURE RULED 2026-08-08 (during the anchor curation): search
+  happens WHEN NEEDED -- with the organ on, she looks things up herself,
+  no per-query ask; unknown-but-knowable means look it up ("search should
+  happen when needed i should not need to ask for the search"). This is
+  the posture the built mechanism already has (she emits the span
+  mid-answer; --search is the only switch) -- the ruling pins it against
+  any future confirm-before-search idea. The draft's restraint anchor was
+  INVERTED to carry it. The epistemics split stands: intrinsically
+  unanswerable -> decline; knowable-but-unknown -> search.**
+  **CURATION CLASSES A-D LANDED 2026-08-08 (working tree): 240M/24B
+  numbers everywhere, privacy-not-egress rescope, 6 capability
+  corrections, 7 organ anchors (ears left untrained this round) -- 166
+  anchors, 0 new screen collisions, suite 942. Class E (the two avatar
+  anchors) still theirs.**
+  **DATA SHAPES LANDED 2026-08-07 (scope since ruled -- block above).** In `make_sft_data.py`: the always-offered
   five-built-in block with its restraint half (`gen_builtin_block_examples`),
   conversational multi-turn (`gen_chat_multiturn_examples` -- the mix had
   ZERO records with a second user turn), `<think>` traces
@@ -1295,7 +1353,8 @@ The block, in execution order:
   call SHAPE that makes client tool-calling work at all. Pruning to the five
   executable names would train her only on those five surfaces. The
   runtime-less names are absent from the always-offered block, which is where
-  a promise she cannot keep would actually hurt. USER'S CALL.
+  a promise she cannot keep would actually hurt. ~~USER'S CALL.~~
+  **RULED 2026-08-08: KEEP ALL 14.**
   **THE RESEARCH-ORGAN FORK IS RULED AND EXECUTED (user order 2026-08-07:
   "do the epistemics corpus and the research organ before T4").** The sixth
   organ EXISTS: `core/search.py` (SearXNG-backed, transport-injectable,

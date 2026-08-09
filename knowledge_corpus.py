@@ -733,6 +733,563 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
         ["Johannes Gutenberg, in the fifteenth century.",
          "Gutenberg -- his printing press made books widely available."],
     ),
+    # ------------------------------------------------------------------
+    # Floor widening, 2026-08-08 (ruled: ~138 -> wider, same class -- common,
+    # stable, uncontested; the user caps and spot-checks). Same authoring
+    # rules as the rest of the file.
+    # ---------------------------------------------------------------- space
+    (
+        ["Does the moon make its own light?", "Why does the moon shine?"],
+        ["No -- moonlight is reflected sunlight bouncing off the moon's surface.",
+         "The moon shines by reflecting the sun. It makes no light of its own."],
+    ),
+    (
+        ["What is a shooting star?", "What are shooting stars really?"],
+        ["A meteor -- a bit of space rock burning up as it hits our atmosphere.",
+         "Not a star at all: a small piece of rock or dust burning bright as it falls through the air."],
+    ),
+    (
+        ["Why do the sun and moon look the same size?", "Is the sun bigger than the moon?"],
+        ["The sun is vastly bigger -- it just sits about four hundred times farther away, which evens out the view.",
+         "Much bigger. The sun is enormous but far; the moon is small but close, so they look alike in the sky."],
+    ),
+    (
+        ["How old is the Earth?", "What's the age of our planet?"],
+        ["About four and a half billion years old.",
+         "Roughly four and a half billion years -- the sun is only slightly older."],
+    ),
+    (
+        ["Can sound travel through space?", "Why is space silent?"],
+        ["No -- sound needs air or another medium to travel, and space is a vacuum.",
+         "Space is silent because there's no air to carry the sound waves."],
+    ),
+    (
+        ["What is the International Space Station?", "Do people live in space right now?"],
+        ["A laboratory orbiting Earth -- astronauts live and work aboard it for months at a time.",
+         "Yes -- crews live aboard the International Space Station as it circles the planet."],
+    ),
+    (
+        ["What is a comet?", "Why does a comet have a tail?"],
+        ["A ball of ice and dust. Near the sun it warms up, and the escaping gas makes the tail.",
+         "Ice and dust from the outer solar system -- the tail streams away from the sun as it melts."],
+    ),
+    (
+        ["What is Jupiter's Great Red Spot?", "What's the big red mark on Jupiter?"],
+        ["A giant storm -- bigger than Earth, and it has raged for centuries.",
+         "An enormous storm on Jupiter, wider than our whole planet."],
+    ),
+    # ------------------------------------------------------- calendar / time
+    (
+        ["How many months have thirty-one days?", "Which months are the longest?"],
+        ["Seven months have thirty-one days: January, March, May, July, August, October, and December.",
+         "Seven of the twelve -- the longest months run thirty-one days."],
+    ),
+    (
+        ["What's the difference between noon and midnight?", "When is noon?"],
+        ["Noon is twelve o'clock in the middle of the day; midnight is twelve at night.",
+         "Twelve in the daytime is noon. Twelve at night is midnight."],
+    ),
+    (
+        ["Why do different places have different times?", "What are time zones for?"],
+        ["Earth spins, so the sun is overhead at different moments around the world -- time zones keep noon near midday everywhere.",
+         "Because the planet rotates: when it's morning on one side, it's evening on the other, so clocks shift by region."],
+    ),
+    (
+        ["Is it summer everywhere at the same time?", "When it's summer in the north, what is it in the south?"],
+        ["No -- the hemispheres are opposite. Northern summer is southern winter.",
+         "Winter. The seasons flip between the northern and southern halves of the planet."],
+    ),
+    (
+        ["How long is a fortnight?", "What does fortnight mean?"],
+        ["Two weeks -- fourteen days.",
+         "A fortnight is fourteen days, which is two weeks."],
+    ),
+    (
+        ["What day comes after Sunday?", "Which day follows the weekend?"],
+        ["Monday.",
+         "Monday -- the start of the working week."],
+    ),
+    # ------------------------------------------------------------ geography
+    (
+        ["What's the capital of the Netherlands?", "Which city is the Dutch capital?"],
+        ["Amsterdam.",
+         "Amsterdam -- though the government actually sits in The Hague."],
+    ),
+    (
+        ["What's the capital of Greece?", "Which city is Greece's capital?"],
+        ["Athens.",
+         "Athens -- one of the oldest cities in the world."],
+    ),
+    (
+        ["What's the capital of Turkey?", "Which city is Turkey's capital?"],
+        ["Ankara -- not Istanbul, which is just the biggest city.",
+         "Ankara. Istanbul is larger and more famous, but Ankara is the capital."],
+    ),
+    (
+        ["What's the capital of Portugal?", "Which city is Portugal's capital?"],
+        ["Lisbon.",
+         "Lisbon, on the Atlantic coast."],
+    ),
+    (
+        ["What's the capital of Argentina?", "Which city is Argentina's capital?"],
+        ["Buenos Aires.",
+         "Buenos Aires."],
+    ),
+    (
+        ["What's the capital of Kenya?", "Which city is Kenya's capital?"],
+        ["Nairobi.",
+         "Nairobi."],
+    ),
+    (
+        ["What's the capital of Thailand?", "Which city is Thailand's capital?"],
+        ["Bangkok.",
+         "Bangkok."],
+    ),
+    (
+        ["What's the capital of Poland?", "Which city is Poland's capital?"],
+        ["Warsaw.",
+         "Warsaw."],
+    ),
+    (
+        ["What's the capital of Sweden?", "Which city is Sweden's capital?"],
+        ["Stockholm.",
+         "Stockholm, spread across fourteen islands."],
+    ),
+    (
+        ["What's the capital of Norway?", "Which city is Norway's capital?"],
+        ["Oslo.",
+         "Oslo."],
+    ),
+    (
+        ["What's the Great Barrier Reef?", "Where is the biggest coral reef?"],
+        ["The world's largest coral reef, off the northeast coast of Australia.",
+         "Off Australia -- the Great Barrier Reef, the biggest living structure on Earth."],
+    ),
+    (
+        ["Why do people float in the Dead Sea?", "What's special about the Dead Sea?"],
+        ["It's so salty that the dense water pushes you up -- floating takes no effort.",
+         "The Dead Sea is many times saltier than the ocean, so swimmers float like corks."],
+    ),
+    (
+        ["Which city is famous for its canals in Italy?", "What's special about Venice?"],
+        ["Venice -- its streets are canals, and boats do the work cars do elsewhere.",
+         "Venice is built on a lagoon: canals for roads, bridges everywhere."],
+    ),
+    (
+        ["Does anyone own Antarctica?", "Which country does Antarctica belong to?"],
+        ["No country owns it -- Antarctica is governed by an international treaty and reserved for science.",
+         "None. A treaty keeps Antarctica peaceful, shared, and dedicated to research."],
+    ),
+    # -------------------------------------------------------------- science
+    (
+        ["Do metals conduct electricity?", "Why are wires made of metal?"],
+        ["Yes -- metals like copper carry current well, which is why wires are metal with rubber around them.",
+         "Because metal conducts electricity easily. The rubber coating is the insulator that keeps it safe."],
+    ),
+    (
+        ["What are the primary colors of light?", "Which colors mix to make white light on a screen?"],
+        ["Red, green, and blue. Screens mix those three to make every color you see.",
+         "For light it's red, green, and blue -- different from paint's red, yellow, and blue."],
+    ),
+    (
+        ["Does water expand when it freezes?", "Why do frozen pipes burst?"],
+        ["Yes -- water is unusual that way. Ice takes more room than the water it came from, which is what bursts pipes.",
+         "Because freezing water expands. The ice needs more space than the pipe has."],
+    ),
+    (
+        ["What do plants need to grow?", "What keeps a plant alive?"],
+        ["Light, water, air, and nutrients from the soil.",
+         "Sunlight, water, and carbon dioxide from the air -- plus soil nutrients."],
+    ),
+    (
+        ["What's the chemical symbol for iron?", "What letters stand for iron in chemistry?"],
+        ["Fe, from the Latin word ferrum.",
+         "Iron is Fe -- Latin again, like gold's Au."],
+    ),
+    (
+        ["Why do helium balloons float?", "What makes a party balloon rise?"],
+        ["Helium is lighter than air, so the air around the balloon pushes it up.",
+         "Because helium weighs less than the air it displaces -- the balloon rises like a bubble in water."],
+    ),
+    (
+        ["What is lightning?", "What makes lightning?"],
+        ["A giant electric spark between a storm cloud and the ground, or between clouds.",
+         "Electricity -- a massive discharge built up inside a storm cloud."],
+    ),
+    (
+        ["What does a magnet attract?", "Will a magnet pick up anything?"],
+        ["Iron and steel, mostly. Wood, plastic, glass, and most other metals ignore it.",
+         "Only certain metals -- iron above all. Most materials don't respond to a magnet at all."],
+    ),
+    (
+        ["How does a battery work?", "What's inside a battery?"],
+        ["A battery stores energy in chemicals and releases it as electricity when the circuit closes.",
+         "Chemistry -- two different materials and a reaction between them that pushes electrons through a wire."],
+    ),
+    (
+        ["Can you drink seawater?", "Why can't we drink ocean water?"],
+        ["No -- the salt makes your body lose more water getting rid of it than you drank.",
+         "Seawater dehydrates you. Your kidneys spend more water flushing the salt than the drink provided."],
+    ),
+    (
+        ["What is glass made from?", "Where does glass come from?"],
+        ["Melted sand -- heated until it fuses, then cooled into the clear solid we use.",
+         "Mostly sand, melted at very high heat with a few other minerals."],
+    ),
+    (
+        ["What is paper made from?", "Where does paper come from?"],
+        ["Wood pulp -- trees ground and pressed into thin sheets.",
+         "Mostly from trees: wood is pulped, flattened, and dried into sheets."],
+    ),
+    (
+        ["Where does wool come from?", "What animal gives us wool?"],
+        ["Sheep -- their fleece is sheared, cleaned, and spun into yarn.",
+         "From sheep, mainly. Goats give cashmere and mohair; the principle is the same."],
+    ),
+    (
+        ["Where does silk come from?", "What makes silk?"],
+        ["Silkworms -- they spin the thread for their cocoons, and we weave it into cloth.",
+         "From the cocoons of silkworms. Each cocoon is one long, fine thread."],
+    ),
+    # ------------------------------------------------------- body / biology
+    (
+        ["Why is blood red?", "What makes blood red?"],
+        ["An iron-rich protein called hemoglobin -- it carries the oxygen and gives blood its color.",
+         "The oxygen-carrying protein in it is built around iron, and that reads as red."],
+    ),
+    (
+        ["How many teeth does an adult have?", "What's the tooth count for adults?"],
+        ["Thirty-two, counting the four wisdom teeth.",
+         "Thirty-two with wisdom teeth in -- twenty-eight without them."],
+    ),
+    (
+        ["Do muscles push or pull?", "How do muscles move the body?"],
+        ["Muscles only pull. They work in pairs -- one bends the joint, its partner straightens it.",
+         "They pull, never push. That's why they come in opposing pairs."],
+    ),
+    (
+        ["How does the stomach digest food?", "What breaks food down in the stomach?"],
+        ["With strong acid and churning -- the stomach turns a meal into a paste the intestines can absorb.",
+         "Acid and muscle. The stomach mixes food with digestive juices until it's ready to move on."],
+    ),
+    (
+        ["Why do I breathe harder when I run?", "Why does exercise speed up breathing?"],
+        ["Working muscles burn more oxygen, so your lungs and heart speed up to supply it.",
+         "Because your muscles are asking for more oxygen -- breathing faster is the delivery service scaling up."],
+    ),
+    (
+        ["What are hair and nails made of?", "What's the material in fingernails?"],
+        ["Keratin -- the same tough protein in both, and in animal claws and horns.",
+         "A protein called keratin. Hair, nails, claws, and horns are all versions of it."],
+    ),
+    (
+        ["How fast does the heart beat?", "What's a normal resting heart rate?"],
+        ["About seventy beats a minute at rest, faster the moment you move.",
+         "Roughly sixty to a hundred a minute at rest -- around seventy is typical."],
+    ),
+    (
+        ["How much sleep do adults need?", "How many hours should I sleep?"],
+        ["Roughly seven to nine hours a night for most adults.",
+         "Most adults do best on seven to nine hours."],
+    ),
+    (
+        ["What causes sunburn?", "Why does the sun burn skin?"],
+        ["Ultraviolet light, not heat -- you can burn on a cool, bright day.",
+         "The sun's ultraviolet rays damage skin cells. The warmth isn't the culprit; the UV is."],
+    ),
+    (
+        ["Which fruit is famous for vitamin C?", "Where do people get vitamin C?"],
+        ["Citrus -- oranges, lemons, and their relatives are the classic source.",
+         "Oranges and other citrus fruit, along with peppers and berries."],
+    ),
+    (
+        ["Is the funny bone a bone?", "Why does hitting the funny bone feel weird?"],
+        ["It's a nerve, not a bone -- the ulnar nerve passing the elbow with little padding.",
+         "That jolt is a nerve getting struck where it runs close to the skin at the elbow."],
+    ),
+    (
+        ["How much of the body is water?", "Are humans mostly water?"],
+        ["About three-fifths of an adult body is water.",
+         "Yes -- roughly sixty percent of you is water."],
+    ),
+    # --------------------------------------------------------------- units
+    (
+        ["Which is longer, a mile or a kilometer?", "How many kilometers make a mile?"],
+        ["A mile -- it's about one point six kilometers.",
+         "The mile is longer: one mile is roughly one and a half kilometers and change."],
+    ),
+    (
+        ["How many milliliters are in a liter?", "A liter is how many milliliters?"],
+        ["One thousand milliliters.",
+         "A thousand -- milli means a thousandth."],
+    ),
+    (
+        ["How many kilograms are in a metric ton?", "A metric ton is how heavy?"],
+        ["One thousand kilograms.",
+         "A thousand kilograms -- about the weight of a small car."],
+    ),
+    (
+        ["What's half of a half?", "A quarter is what fraction?"],
+        ["A quarter -- one fourth of the whole.",
+         "Half of a half is a quarter, or twenty-five percent."],
+    ),
+    (
+        ["How many degrees are in a circle?", "A full circle is how many degrees?"],
+        ["Three hundred sixty degrees.",
+         "A full turn is three hundred sixty degrees."],
+    ),
+    (
+        ["How many degrees is a right angle?", "What's the angle of a square corner?"],
+        ["Ninety degrees.",
+         "A right angle is ninety degrees -- a quarter of a full circle."],
+    ),
+    # ----------------------------------------------------- language / misc
+    (
+        ["What's the difference between a noun and a verb?", "What is a noun?"],
+        ["A noun names a person, place, or thing; a verb is an action or state.",
+         "Nouns are the things; verbs are what the things do."],
+    ),
+    (
+        ["What's the plural of mouse?", "How do you pluralize child and mouse?"],
+        ["Mice -- and child becomes children. English keeps a few old irregulars around.",
+         "Mouse goes to mice, child goes to children -- irregular plurals, learned one by one."],
+    ),
+    (
+        ["What's a synonym?", "What's the difference between a synonym and an antonym?"],
+        ["A synonym means nearly the same thing as another word; an antonym means the opposite.",
+         "Synonyms match meanings -- big and large. Antonyms oppose them -- big and small."],
+    ),
+    (
+        ["How many colors are in a rainbow?", "Name the colors of the rainbow."],
+        ["Seven: red, orange, yellow, green, blue, indigo, and violet.",
+         "Seven by tradition -- red through violet in order."],
+    ),
+    (
+        ["What do red and blue make?", "Mixing red and blue paint gives what?"],
+        ["Purple.",
+         "Purple -- more red leans it toward magenta, more blue toward violet."],
+    ),
+    (
+        ["What's a baby dog called?", "What are baby dogs and cats called?"],
+        ["A puppy -- and a baby cat is a kitten.",
+         "Puppies. Kittens for cats, puppies for dogs."],
+    ),
+    (
+        ["What's a group of wolves called?", "What do you call groups of wolves and lions?"],
+        ["A pack -- and lions form a pride.",
+         "Wolves run in packs; lions live in prides."],
+    ),
+    (
+        ["How many cards are in a standard deck?", "What's the card count of a full deck?"],
+        ["Fifty-two, in four suits of thirteen.",
+         "Fifty-two cards -- plus jokers if the game wants them."],
+    ),
+    (
+        ["How many sides does a triangle have?", "How many sides do a triangle and a hexagon have?"],
+        ["Three -- and a hexagon has six.",
+         "A triangle has three sides; a hexagon has six."],
+    ),
+    # ------------------------------------------------------ history / tech
+    (
+        ["Who invented the light bulb?", "Which inventor is famous for the light bulb?"],
+        ["Thomas Edison gets the credit -- he made the first practical, long-lasting bulb.",
+         "Edison, mostly -- others made bulbs first, but his design actually worked for homes."],
+    ),
+    (
+        ["Where is the Great Wall?", "What is the Great Wall of China?"],
+        ["In China -- a chain of fortifications built over many centuries to guard the northern frontier.",
+         "China's ancient defensive wall, thousands of kilometers of it, built dynasty by dynasty."],
+    ),
+    (
+        ["What were the pyramids built for?", "Why did Egypt build the pyramids?"],
+        ["As tombs -- monuments for the pharaohs, built to carry them into the afterlife.",
+         "They're royal tombs. The great ones at Giza held Egypt's pharaohs."],
+    ),
+    (
+        ["What language did ancient Rome speak?", "What was the language of the Roman Empire?"],
+        ["Latin -- the ancestor of Italian, Spanish, French, and Portuguese.",
+         "Latin. The Romance languages all grew out of it."],
+    ),
+    (
+        ["When was the First World War?", "What years did World War One run?"],
+        ["From 1914 to 1918.",
+         "1914 to 1918 -- four years."],
+    ),
+    (
+        ["When did Columbus cross the Atlantic?", "What year did Columbus reach the Americas?"],
+        ["1492.",
+         "In 1492, landing in the Caribbean."],
+    ),
+    (
+        ["What's the difference between the internet and the web?", "Are the internet and the web the same thing?"],
+        ["The internet is the network of connected computers; the web is one service running on it, alongside email and the rest.",
+         "Not quite -- the internet is the wiring, the web is the pages. The web rides on the internet."],
+    ),
+    (
+        ["How do computers count?", "What is binary?"],
+        ["In binary -- just ones and zeros, switched fast enough to do everything else.",
+         "Computers use binary: every number, letter, and picture is stored as patterns of ones and zeros."],
+    ),
+    (
+        ["Where is the Eiffel Tower?", "When was the Eiffel Tower built?"],
+        ["In Paris -- built in 1889 for a world's fair, and never taken down.",
+         "Paris. It went up in 1889 and was meant to be temporary."],
+    ),
+    (
+        ["Who was Marie Curie?", "What is Marie Curie famous for?"],
+        ["A pioneering scientist of radioactivity -- the first person to win two Nobel Prizes.",
+         "She discovered radium and polonium and won Nobel Prizes in two different sciences."],
+    ),
+    # ------------------------------------------------------ food / everyday
+    (
+        ["Why does bread rise?", "What makes bread fluffy?"],
+        ["Yeast -- it eats the dough's sugars and breathes out gas, and the bubbles puff the loaf.",
+         "Tiny gas bubbles from yeast. Baking sets the dough around them."],
+    ),
+    (
+        ["Does honey go bad?", "Why does honey last so long?"],
+        ["Honey basically never spoils -- it's too dry and acidic for microbes to live in.",
+         "Sealed honey keeps nearly forever. Ancient jars of it have been found still edible."],
+    ),
+    (
+        ["Why does boiling an egg make it hard?", "What happens when you cook an egg?"],
+        ["Heat sets the egg's proteins -- they unfold and lock together, turning the liquid solid.",
+         "The proteins change shape with heat and tangle into a solid. There's no way back to raw."],
+    ),
+    (
+        ["Where does chocolate come from?", "What is chocolate made from?"],
+        ["Cacao beans -- fermented, roasted, and ground into the base of every chocolate bar.",
+         "From the seeds of the cacao tree, processed and usually sweetened."],
+    ),
+    (
+        ["What's the difference between coffee and tea?", "Where do coffee and tea come from?"],
+        ["Coffee is brewed from roasted beans; tea is steeped from dried leaves.",
+         "Different plants entirely -- coffee from a bean, tea from a leaf; both carry caffeine."],
+    ),
+    (
+        ["Is a tomato a fruit or a vegetable?", "Why is a tomato technically a fruit?"],
+        ["Botanically a fruit -- it grows from a flower and carries the seeds. The kitchen treats it as a vegetable.",
+         "A fruit to a botanist, a vegetable to a cook. Both are right in their own kitchens."],
+    ),
+    (
+        ["What is cheese made from?", "How does milk become cheese?"],
+        ["Milk -- curdled, drained, and aged into the hundreds of kinds we eat.",
+         "From milk: separate the curds from the whey, press them, and let time do the rest."],
+    ),
+    (
+        ["How does salt preserve food?", "Why did people salt their food before fridges?"],
+        ["Salt draws the water out, and without water the spoilage microbes can't grow.",
+         "Because salt dries food from the inside -- bacteria can't live in it."],
+    ),
+    (
+        ["Why do onions make you cry?", "What makes cut onions sting your eyes?"],
+        ["Cutting releases a gas that turns stinging in your eyes -- tears are the rinse cycle.",
+         "A sulfur compound escapes when the cells break, and your eyes water to wash it out."],
+    ),
+    (
+        ["Why does popcorn pop?", "What makes popcorn kernels burst?"],
+        ["A drop of water inside each kernel turns to steam and blows the shell open.",
+         "Steam pressure. The sealed kernel holds until the inside boils, then bursts inside out."],
+    ),
+    # ------------------------------------------------- Enigma herself (self)
+    # Self/capability facts, ruled into T4 scope 2026-08-08 -- aligned with
+    # the identity-anchor rewrite (same measured numbers) so the two can
+    # never disagree. Facts only; the VOICE lives in identity_anchors.py.
+    (
+        ["What is Enigma?", "What kind of AI is Enigma?", "Tell me about Enigma.",
+         "What sort of AI is Enigma?", "Describe Enigma in a sentence."],
+        ["Enigma is a local AI that runs entirely on its user's own machine, not in a cloud.",
+         "A from-scratch local AI -- it lives on the user's computer and answers there.",
+         "A language model built and run locally: private, offline-capable, and its user's own."],
+    ),
+    (
+        ["Was Enigma built from another model?", "Is Enigma a fine-tune of some bigger model?",
+         "What base model is Enigma built on?", "Did Enigma start from someone else's weights?",
+         "Is Enigma based on an existing model?"],
+        ["No -- Enigma was trained from scratch: its own architecture, its own tokenizer, its own weights.",
+         "Enigma borrows no weights. Everything in it was trained from zero.",
+         "None -- there is no base model under Enigma; it started as random numbers and was trained up from nothing."],
+    ),
+    (
+        ["How many parameters does Enigma have?", "How big is Enigma as a model?",
+         "What's Enigma's parameter count?", "What size is the Enigma model?",
+         "Is Enigma a big model?"],
+        ["About 240 million parameters -- small, and honest about it.",
+         "Roughly 240 million parameters, every one trained from scratch.",
+         "Small on purpose: around 240 million parameters running on one consumer GPU."],
+    ),
+    (
+        ["How much text did Enigma train on?", "How many tokens went into Enigma's pretraining?",
+         "What data did Enigma learn from?", "What was Enigma pretrained on?",
+         "How big was Enigma's training corpus?"],
+        ["About twenty-four billion tokens -- code, prose, math, wikis, and books.",
+         "Roughly twenty-four billion tokens of mixed text.",
+         "A corpus of about twenty-four billion tokens: web prose, code, math, wikis, fandom, and books."],
+    ),
+    (
+        ["Who built Enigma?", "Who trained Enigma?", "Whose project is Enigma?",
+         "Which company makes Enigma?", "Did a lab build Enigma?"],
+        ["SirRulean -- one person, one machine, from scratch.",
+         "A single person, SirRulean, on his own hardware.",
+         "No company and no lab -- Enigma is one person's build: SirRulean trained it himself."],
+    ),
+    (
+        ["Can Enigma do exact arithmetic?", "How does Enigma handle hard math?",
+         "What does Enigma do when it needs to calculate?", "Does Enigma guess at math?"],
+        ["It has a calculator organ -- for real arithmetic it computes instead of guessing.",
+         "Enigma calls its calculator for exact numbers rather than eyeballing them.",
+         "It doesn't guess arithmetic -- the calculator organ does the number work."],
+    ),
+    (
+        ["Does Enigma remember things between sessions?", "How does Enigma's memory work?",
+         "Will Enigma remember a fact next week?", "Can Enigma forget things?",
+         "Where does Enigma keep what it learns about its user?"],
+        ["It keeps a memory store -- facts the user shares persist, can be corrected, and can be forgotten on request.",
+         "Through its memory store: told once, kept; corrected, updated; asked to forget, gone.",
+         "Facts live in a store on the machine -- kept across sessions, replaceable when corrected, deletable on request."],
+    ),
+    (
+        ["Can Enigma speak out loud?", "Does Enigma have a voice organ?",
+         "Is Enigma silent by default?", "How does Enigma's talk mode work?"],
+        ["Yes -- with talk mode on it speaks its answers aloud. It starts silent by default.",
+         "It has a voice; talk mode turns it on, and it boots silent on purpose.",
+         "Talk mode is the switch: off means text only, on means it speaks its answers."],
+    ),
+    (
+        ["Can Enigma make pictures?", "Does Enigma have an image maker?",
+         "How does Enigma draw pictures?", "Does Enigma use a cloud service for images?"],
+        ["Yes -- asked to imagine something, it paints the image locally and saves it.",
+         "It can. The imagine organ makes pictures right on the machine, no cloud involved.",
+         "Images are made locally by its imagine organ and saved to its pictures folder."],
+    ),
+    (
+        ["Can Enigma look at images?", "Does Enigma have eyes?",
+         "How does Enigma see pictures?", "What happens when you show Enigma an image?"],
+        ["With its eyes enabled it reads an image into a caption and works from that.",
+         "Yes -- enabled eyes turn a handed image into text it can reason about.",
+         "A shown image becomes a caption through its eyes, and Enigma reasons over that text."],
+    ),
+    (
+        ["Can Enigma search the internet?", "Does Enigma look things up online?",
+         "When does Enigma search the web?", "Does Enigma ask permission before searching?"],
+        ["Only when search is switched on -- then it looks things up on its own when something's worth checking, through the user's own search service.",
+         "It can, if its search organ is enabled; otherwise it works fully offline.",
+         "With search on, Enigma decides when to look -- no per-question permission; off, it stays fully local."],
+    ),
+    (
+        ["Does Enigma need the internet?", "Does Enigma work offline?",
+         "Can Enigma run without a connection?", "Does Enigma stop working when the internet drops?"],
+        ["No internet needed -- it runs entirely on the local machine.",
+         "It works fully offline; that's the design.",
+         "A dropped connection changes nothing -- Enigma runs on the machine itself."],
+    ),
+    (
+        ["Does Enigma send data to a cloud?", "Is Enigma private?",
+         "Who can read what's said to Enigma?", "Does Enigma phone home?"],
+        ["Conversations stay on the user's machine -- no telemetry, no phone-home.",
+         "Private by design: what's said to Enigma stays on the machine it runs on.",
+         "Nobody else -- there's no phone-home; the conversation lives and stays on the user's machine."],
+    ),
 ]
 
 

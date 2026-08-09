@@ -90,7 +90,15 @@ $log = Join-Path $engineDir "serve_enigma.log"
 # Each organ WARNs and text serving continues if its backend is missing, so
 # the flags are always safe; voice loaded stays SILENT until asked (speak is
 # intent-gated; talk-mode persists separately in data\talk_mode.json).
-$serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_dpo\model.pth",
+# ADOPTED 2026-08-08 (Gate D): the v2 lineage's SFT-2 checkpoint. It is the
+# first candidate the sealed gate could distinguish from v8 (67/120 vs 56,
+# paired p=0.0433) and wins or ties every category but factual. The v8
+# checkpoint stays at models\enigma_dpo\model.pth as the rollback (byte-
+# identical to Enigma Backups\enigma_dpo_v8_adopted). --max-context 2048 is
+# NOT optional here: this model trained at block 2048 and serving it at the
+# 1024 default silently discards the context the whole v2 lineage was for.
+$serveArgs = @("serve_enigma.py", "--port", "$port", "--model", "models\enigma_v2_sft2\model.pth",
+               "--max-context", "2048",
                "--memory-dir", "data\memory", "--eyes", "--ears", "--voice", "--image-gen")
 if ($VoiceName) { $serveArgs += @("--voice-name", $VoiceName) }
 Start-Process -FilePath $python `

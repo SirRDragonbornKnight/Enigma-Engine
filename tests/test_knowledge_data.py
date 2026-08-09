@@ -62,8 +62,12 @@ def test_pretrain_text_lines_are_clean():
 
 
 def test_pretrain_text_count_bounds():
+    # Corridor re-based 2026-08-08 for the ruled floor widening (138 -> 240
+    # intents incl. the Enigma self/capability section): measured 1573 lines.
+    # The corridor is a sanity band -- several forms per fact, no runaway
+    # generator -- not a pin on the exact count.
     n = len(gen_knowledge_pretrain_text())
-    assert 600 <= n <= 1100, n
+    assert 1200 <= n <= 2400, n
     assert n >= 4 * len(KNOWLEDGE), n  # several textual forms per fact
 
 

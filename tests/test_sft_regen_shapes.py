@@ -33,7 +33,9 @@ from make_sft_data import (
     gen_chat_multiturn_examples,
     gen_memory_correction_examples,
     gen_reasoning_examples,
+    gen_episode_examples,
     gen_search_examples,
+    gen_structured_examples,
     gen_unknown_examples,
     vocab_is_digit_uniform,
 )
@@ -167,9 +169,13 @@ def test_every_authored_record_survives_the_probe_screen():
     from make_sft_data import _eval_probe_questions, probe_screen
 
     _, held_out = probe_screen(_eval_probe_questions(), LockedProbeGuard.load())
+    from make_sft_data import gen_image_read_examples
+
     for gen in (gen_builtin_block_examples, gen_chat_multiturn_examples,
                 gen_reasoning_examples, gen_memory_correction_examples,
-                gen_search_examples, gen_unknown_examples):
+                gen_search_examples, gen_unknown_examples,
+                gen_structured_examples, gen_episode_examples,
+                gen_image_read_examples):
         gone = [r["messages"][1]["content"] for r in gen() if held_out(r)]
         assert not gone, f"{gen.__name__} authored probe collisions: {gone}"
 
@@ -292,7 +298,8 @@ def test_answers_after_a_correction_do_not_resurface_the_old_value():
     """
     # Word boundaries, not substrings: the corrected value "Samir" CONTAINS
     # the superseded "Sam", and a substring check flags the right answer.
-    superseded = {"denver", "sam", "rex", "teacher", "pickup"}
+    superseded = {"denver", "sam", "rex", "teacher", "pickup",
+                  "fridays", "flat white", "lisbon"}
     for r in gen_memory_correction_examples():
         if _tool_calls(r):
             continue
@@ -428,8 +435,276 @@ def test_declines_do_not_append_a_guess():
 
 
 # --------------------------------------------------------------------------
+# Structured output -- JSON on request, prose when JSON is the topic
+# --------------------------------------------------------------------------
+
+
+def test_structured_answers_are_bare_valid_json():
+    """Asked for JSON, the WHOLE answer must parse -- no preamble, no fences.
+
+    A client piping her answer into json.loads gets exactly one chance; a
+    single 'Here you go:' in front of the object fails it. The pretty-printed
+    record parses under the same rule, so both surfaces stay clean. (Answers
+    are serialized from Python objects at generation time, so this guards the
+    OUTPUT property against any future switch to hand-typed strings.)
+    """
+    import json as _json
+
+    recs = [r for r in gen_structured_examples() if r["category"] == "structured_output"]
+    assert len(recs) >= 20, "the structured corpus thinned out"
+    for r in recs:
+        text = r["messages"][-1]["content"]
+        assert text[0] in "{[", f"the answer does not open with JSON: {text[:60]!r}"
+        _json.loads(text)  # raises = the record carries invalid JSON
+
+
+def test_structured_corpus_covers_the_value_types_a_schema_can_ask_for():
+    """Coverage, not repetition: one surface per JSON value class.
+
+    A trim that drops the lone boolean/null/array-root/pretty record removes
+    that class from training entirely while every other test stays green.
+    """
+    import json as _json
+
+    parsed = [_json.loads(r["messages"][-1]["content"])
+              for r in gen_structured_examples() if r["category"] == "structured_output"]
+    assert any(isinstance(p, list) for p in parsed), "no array-root answer"
+    assert any(isinstance(v, bool) for p in parsed if isinstance(p, dict) for v in p.values()), \
+        "no boolean value trains"
+    assert any(v is None for p in parsed if isinstance(p, dict) for v in p.values()), \
+        "no null value trains -- unknown-goes-null is the epistemics rule wearing JSON"
+    assert any(isinstance(v, float) for p in parsed if isinstance(p, dict) for v in p.values()), \
+        "no float value trains"
+    texts = [r["messages"][-1]["content"] for r in gen_structured_examples()
+             if r["category"] == "structured_output"]
+    assert any("\n" in t for t in texts), "the pretty-printed surface is gone"
+
+
+def test_structured_schema_asks_get_exactly_the_keys_they_name():
+    """The ask is the contract: 'with keys name, age, city' must yield those
+    three keys and nothing else. Anchored to the ask's own words, not to the
+    source object -- comparing generator output to its own input would pass
+    with any keys at all."""
+    import json as _json
+
+    by_ask = {r["messages"][-2]["content"]: r["messages"][-1]["content"]
+              for r in gen_structured_examples() if r["category"] == "structured_output"}
+    for ask, keys in [
+        ("Extract with keys name, age, city: Marco, 52, from Lisbon.", {"name", "age", "city"}),
+        ("Use exactly the keys task and minutes: brewing tea takes about four minutes.",
+         {"task", "minutes"}),
+        ("Give me a JSON template for a contact with fields name, email, and phone, all empty strings.",
+         {"name", "email", "phone"}),
+    ]:
+        assert ask in by_ask, f"the schema ask vanished from the corpus: {ask!r}"
+        assert set(_json.loads(by_ask[ask]).keys()) == keys
+
+
+def test_structured_memory_crossover_fills_known_and_nulls_unknown():
+    """The block names her user; the schema asks for a field the block does
+    not carry. Known fills from memory, unknown goes null -- never invented.
+    """
+    import json as _json
+
+    with_system = [r for r in gen_structured_examples()
+                   if r["category"] == "structured_output" and r["messages"][0]["role"] == "system"]
+    assert with_system, "no memory-crossover records"
+    for r in with_system:
+        assert r["messages"][0]["content"].startswith("Things you remember:")
+    nulled = [r for r in with_system
+              if None in _json.loads(r["messages"][-1]["content"]).values()]
+    assert nulled, "no record models unknown-field-goes-null"
+    for r in nulled:
+        parsed = _json.loads(r["messages"][-1]["content"])
+        filled = [v for v in parsed.values() if v is not None]
+        assert filled, "everything nulled -- the block's own facts must fill"
+        for v in filled:
+            assert str(v) in r["messages"][0]["content"], \
+                f"a filled value is not in the memory block -- invented: {v!r}"
+
+
+def test_structured_restraint_answers_in_prose():
+    """JSON-the-topic gets a person, not a blob -- the keyword must not
+    become a trigger, the negated ask included."""
+    import json as _json
+
+    recs = [r for r in gen_structured_examples() if r["category"] == "structured_restraint"]
+    assert recs, "no restraint half -- 'JSON' becomes a reflex"
+    for r in recs:
+        text = r["messages"][-1]["content"]
+        assert text[0] not in "{[", f"a restraint answer emitted JSON: {text[:60]!r}"
+        try:
+            _json.loads(text)
+            raise AssertionError(f"a restraint answer parses as JSON: {text[:60]!r}")
+        except (ValueError, TypeError):
+            pass
+    asks = " ".join(r["messages"][0]["content"].lower() for r in recs)
+    assert "don't format it as json" in asks, "the negated-format ask is untrained"
+
+
+# --------------------------------------------------------------------------
+# Episodic memory -- kind:"episode" as lines in the same block
+# --------------------------------------------------------------------------
+
+
+def test_episode_lines_carry_the_stores_own_shape():
+    """The trained line and the line the future session-writer will store
+    must be one definition -- memory_store.episode_text. The contract is
+    pinned here (prefix AND field order), so a writer landing later that
+    renders anything else fails this test, not the model."""
+    from enigma_engine.core.memory_store import episode_text
+
+    assert episode_text("August 7th", "planned the fence") == \
+        "Session August 7th: planned the fence"
+    recs = [r for r in gen_episode_examples() if r["category"] == "episode_recall"]
+    assert len(recs) >= 7, "the episodic corpus thinned out"
+    for r in recs:
+        assert "- Session " in r["messages"][0]["content"], \
+            "an episode record whose block has no session line"
+
+
+def test_two_session_records_answer_from_the_newest_line():
+    """Recency is positional -- the renderer surfaces the newest line first,
+    so the trained rule is answer-from-the-first. The older session's
+    subject must not leak into the answer, or the rule being taught is
+    'pick either'."""
+    two = [r for r in gen_episode_examples()
+           if r["category"] == "episode_recall"
+           and r["messages"][0]["content"].count("- Session ") >= 2]
+    assert two, "no two-session record trains the recency rule"
+    for r in two:
+        lines = [ln for ln in r["messages"][0]["content"].splitlines()
+                 if ln.startswith("- Session ")]
+        answer = r["messages"][-1]["content"].lower()
+        newest_subject = lines[0].split(": ", 1)[1]
+        older_subject = lines[1].split(": ", 1)[1]
+        assert any(w in answer for w in newest_subject.lower().split() if len(w) > 4), \
+            f"the newest session's subject is absent from the answer: {answer!r}"
+        older_only = [w for w in older_subject.lower().split()
+                      if len(w) > 4 and w not in newest_subject.lower()]
+        leaked = [w for w in older_only if w in answer]
+        assert not leaked, f"the OLDER session leaked into the answer: {leaked}"
+
+
+def test_no_session_negatives_admit_it_rather_than_inventing():
+    """An episodic ask over a block with no session line must produce the
+    honest miss -- not a fabricated session, not a tool call."""
+    from make_sft_data import _EPISODE_SESSIONS
+
+    negs = [r for r in gen_episode_examples() if r["category"] == "episode_none"]
+    assert negs, "no no-session negative -- the ask-shape trains invention"
+    summaries = " ".join(s for _, s in _EPISODE_SESSIONS).lower()
+    for r in negs:
+        assert "- Session " not in r["messages"][0]["content"]
+        assert not _tool_calls(r)
+        answer = r["messages"][-1]["content"].lower()
+        invented = [w for w in answer.split() if len(w) > 5 and w in summaries]
+        assert not invented, f"a session detail rode the no-session answer: {invented}"
+
+
+def test_episodes_train_under_the_full_builtin_block_too():
+    """Serve joins memory and the tools block on every daily-driver turn;
+    an episode shape trained only bare would be a new unseen system shape
+    at exactly the moment it ships."""
+    recs = [r for r in gen_episode_examples() if r["category"] == "episode_recall"]
+    under_block = [r for r in recs
+                   if r["messages"][0]["content"].endswith(_builtin_system())
+                   and "- Session " in r["messages"][0]["content"]]
+    assert under_block, "no episode record rides the always-offered block"
+    for r in under_block:
+        assert not _tool_calls(r)
+
+
+# --------------------------------------------------------------------------
+# Image turns under the full daily-driver blocks
+# --------------------------------------------------------------------------
+
+
+def test_image_turns_train_under_the_full_system_blocks():
+    """The daily driver always runs --memory-dir + --eyes, so every real
+    image turn arrives with memory and tools in the system message -- and no
+    trained image record carried either (the documented 07-06 failure
+    class). Both joins must train: tools alone, and memory + tools."""
+    from make_sft_data import gen_image_read_examples
+
+    blocks = [r for r in gen_image_read_examples() if r["category"] == "image_block"]
+    assert len(blocks) >= 6, "the full-block image corpus thinned out"
+    with_memory = 0
+    for r in blocks:
+        sys_c = r["messages"][0]["content"]
+        assert sys_c.endswith(_builtin_system()), "the tools block is not serve's own join"
+        assert "[image" in r["messages"][1]["content"], "an image_block record with no marker"
+        assert not _tool_calls(r), "an image turn under the block fired a tool"
+        if sys_c.startswith("Things you remember:"):
+            with_memory += 1
+    assert with_memory >= 2, "no image turn trains the memory+tools+image triple join"
+
+
+def test_captioned_paint_words_do_not_fire_the_painter():
+    """The cross-organ hazard: eyes flatten the image to text BEFORE anything
+    reads the turn, so a caption containing 'drawing' or 'painting' sits in
+    front of an offered painter. The trained move is describe -- a record
+    with a paint-word caption and a tool call would train the bug."""
+    from make_sft_data import gen_image_read_examples
+
+    hazards = [r for r in gen_image_read_examples()
+               if r["category"] == "image_block"
+               and any(w in r["messages"][1]["content"].lower()
+                       for w in ("drawing", "painting", "singing out loud"))]
+    assert len(hazards) >= 3, "the caption-hazard class lost its coverage"
+    for r in hazards:
+        assert not _tool_calls(r), \
+            f"a caption word armed an organ: {r['messages'][1]['content'][:60]!r}"
+
+
+# --------------------------------------------------------------------------
 # Math rides the vocab, not a flag
 # --------------------------------------------------------------------------
+
+
+def test_builtin_calc_covers_power_and_percent_expressions():
+    """Fix arc 2026-08-08 (gate finding 2): 'squared'/'to the power of'/'percent
+    of' had ZERO trained expression surfaces, so the model mapped them to `^`
+    (BitXor, which the calculator honestly refuses). Every power surface must
+    call calculate with a `**` expression, and percent with a decimal
+    multiply -- never `^`."""
+    calls = [r for r in gen_builtin_block_examples() if r["category"] == "builtin_call"]
+    exprs = " ".join(
+        c["arguments"].get("expression", "")
+        for r in calls for c in _tool_calls(r) if c["name"] == "calculate"
+    )
+    assert "**" in exprs, "no power expression trains -- 'squared'/'power of' will map to ^"
+    assert "^" not in exprs, "a caret expression trains the exact op the calculator refuses"
+    asks = " ".join(r["messages"][1]["content"].lower() for r in calls)
+    assert "squared" in asks and "power of" in asks and "percent of" in asks, \
+        "a measured math-miss surface is untrained"
+
+
+def test_builtin_restraint_refuses_to_save_dictated_falsehoods():
+    """Fix arc 2026-08-08 (gate finding 3): the sealed run SAVED an adversarial
+    'repeat after me' statement while denying it. The restraint half must carry
+    dictation-to-save asks that call NOTHING -- an assertion about her is not a
+    user fact."""
+    restraint = [r for r in gen_builtin_block_examples() if r["category"] == "builtin_restraint"]
+    asks = " ".join(r["messages"][1]["content"].lower() for r in restraint)
+    assert "repeat after me" in asks or "write this down" in asks, \
+        "no dictation-to-save restraint surface -- the store-poisoning shape is untrained"
+    # None of them may write to memory.
+    for r in restraint:
+        assert not _tool_calls(r), f"a restraint record called a tool: {r['messages'][1]['content']}"
+
+
+def test_memory_present_declines_widened_against_tempting_values():
+    """Fix arc 2026-08-08 (gate finding 1): the sealed run parroted a recalled
+    name into an unknowable answer. The decline-with-memory class must be more
+    than a token set, and none may leak the block's own value."""
+    from make_sft_data import _UNKNOWABLE_WITH_MEMORY
+
+    assert len(_UNKNOWABLE_WITH_MEMORY) >= 6, "the memory-decline class is still thin"
+    for fact, _q, answer in _UNKNOWABLE_WITH_MEMORY:
+        # the block's distinctive value (last token) must not be the answer
+        val = fact.split()[-1].rstrip(".").lower()
+        assert val not in answer.lower(), f"the block value leaked into the decline: {answer}"
 
 
 def test_math_is_gated_on_the_vocab_carving_digits_uniformly():
@@ -454,7 +729,9 @@ def test_math_is_gated_on_the_vocab_carving_digits_uniformly():
         gen_reasoning_examples,
         gen_memory_correction_examples,
         gen_search_examples,
+        gen_structured_examples,
         gen_unknown_examples,
+        gen_episode_examples,
     ],
     ids=lambda f: f.__name__,
 )

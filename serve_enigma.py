@@ -76,19 +76,28 @@ MODEL_ID = "enigma"
 _p = argparse.ArgumentParser()
 _p.add_argument(
     "--model",
-    # The ADOPTED instruct/DPO model -- same posture as every launcher. The old
-    # default was the raw pretrain checkpoint, so a bare `enigma` console
-    # script served the wrong brain (audit 2026-07-17).
-    default=str(ROOT / "models" / "enigma_dpo" / "model.pth"),
-    help="Enigma checkpoint (.pth with model_state_dict + config); default = the adopted instruct/DPO model",
+    # The ADOPTED model -- same posture as every launcher. The old default was
+    # the raw pretrain checkpoint, so a bare `enigma` console script served the
+    # wrong brain (audit 2026-07-17). ADOPTED 2026-08-08 (Gate D): the v2
+    # lineage's SFT-2 checkpoint (67/120 vs v8 56, paired p=0.0433 -- the first
+    # candidate the sealed gate could distinguish). enigma_dpo (v8) stays on
+    # disk as the byte-identical rollback.
+    default=str(ROOT / "models" / "enigma_v2_sft2" / "model.pth"),
+    help="Enigma checkpoint (.pth with model_state_dict + config); default = the adopted v2 model",
 )
 _p.add_argument("--host", default="127.0.0.1")
 _p.add_argument("--port", type=int, default=8000)
 _p.add_argument(
     "--max-context",
     type=int,
-    default=1024,
-    help="prompt+generation token budget; she trains at block 1024 -- longer is mechanically possible but untested",
+    # SUNSET at Gate D adoption 2026-08-08: the adopted v2 lineage trains at
+    # block 2048, so the default follows it. Safe for any checkpoint -- boot()
+    # caps this down to the model's own KV-cache capacity with a WARN when a
+    # smaller model is served, so a 1024-trained checkpoint still serves at
+    # 1024. The old 1024 default silently truncated the v2 context win.
+    default=2048,
+    help="prompt+generation token budget; the adopted v2 model trains at block 2048 "
+    "(capped down to a smaller model's KV-cache capacity with a WARN)",
 )
 _p.add_argument(
     "--memory-dir",
@@ -2608,6 +2617,12 @@ def capabilities():
         "image_gen": PAINTER is not None,
         "search": SEARCHER is not None,
         "instruct": INSTRUCT,
+        # The serving context budget. An eval transcript that omits this
+        # cannot prove two runs shared conditions (audit 2026-08-08: the v2
+        # gate run served at 2048 against a baseline presumed 1024, and the
+        # transcripts could not say). ARGS is None until boot() parses argv --
+        # the bare-import test harness reaches this endpoint with no ARGS.
+        "max_context": ARGS.max_context if ARGS is not None else None,
         # The built-ins that can actually run right now. The model is offered a
         # subset of these per request, by intent.
         "builtins": sorted(
