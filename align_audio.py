@@ -43,7 +43,9 @@ ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Align the distilled audio encoder to the adopted text model")
-    p.add_argument("--model", default=str(ROOT / "models" / "enigma_dpo" / "model.pth"))
+    # Follows ADOPTION (v2 SFT-2 since 2026-08-09) -- same reason as
+    # align_vision: the projection targets the SERVED model's embedding space.
+    p.add_argument("--model", default=str(ROOT / "models" / "enigma_v2_sft2" / "model.pth"))
     p.add_argument("--encoder", default=str(ROOT / "models" / "enigma_audio_distill" / "model.pth"))
     p.add_argument("--pairs", default=str(ROOT / "data" / "audio" / "librispeech.jsonl"))
     p.add_argument("--out", default=str(ROOT / "models" / "enigma_audio_align"))

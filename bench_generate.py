@@ -4,7 +4,7 @@ At 182M the decode loop is launch-bound, not compute-bound, so the number that
 matters is milliseconds per token at batch 1 -- and the thing that inflates it
 is host synchronization inside the loop (every .item() drains the GPU queue).
 
-    python bench_generate.py --model models/enigma_dpo/model.pth --tokens 64
+    python bench_generate.py --model models/enigma_v2_sft2/model.pth --tokens 64
     python bench_generate.py --tiny --device cpu          # no checkpoint needed
     python bench_generate.py --model ... --count-syncs    # locate the syncs
 
@@ -126,7 +126,8 @@ def timed_serve_path(model, input_ids, n_tokens, device, repeats):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--model", default=str(ROOT / "models" / "enigma_dpo" / "model.pth"))
+    # Follows ADOPTION: a serving benchmark must measure what is served.
+    ap.add_argument("--model", default=str(ROOT / "models" / "enigma_v2_sft2" / "model.pth"))
     ap.add_argument("--tiny", action="store_true", help="use an untrained tiny preset instead of a checkpoint")
     ap.add_argument("--tokens", type=int, default=64, help="tokens to decode per repeat")
     ap.add_argument("--prompt-len", type=int, default=32, help="synthetic prompt length in tokens")

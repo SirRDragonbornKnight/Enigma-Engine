@@ -21,15 +21,17 @@ Other extras enable organs: `voice`, `ears`, `eyes`, `imagegen`
 ## Serve
 
 ```bash
-python serve_enigma.py --model models/enigma_dpo/model.pth
+python serve_enigma.py --model models/enigma_v2_sft2/model.pth
 ```
 
 (or just `enigma ...` -- the console script installed by pip.)
 
 This starts an OpenAI-compatible API at `http://127.0.0.1:8000/v1`.
-`models/enigma_dpo/model.pth` is the checkpoint of record, and since
-2026-07-17 it is also the `--model` default -- a bare serve command
-serves the adopted model.
+`models/enigma_v2_sft2/model.pth` is the checkpoint of record (the v2
+lineage, adopted at Gate D on 2026-08-09) and is also the `--model`
+default -- a bare serve command serves the adopted model. The previous
+adopted model (v8) stays at `models/enigma_dpo/model.pth` as the
+rollback; serve it by passing `--model` explicitly.
 
 | Flag | What it does |
 |------|-------------|
@@ -60,7 +62,7 @@ print(r.choices[0].message.content)
 
 | Path | Contents |
 |------|----------|
-| `models/` | Checkpoints (`enigma_dpo/model.pth` is the served one) |
+| `models/` | Checkpoints (`enigma_v2_sft2/model.pth` is the served one; `enigma_dpo/model.pth` is the v8 rollback) |
 | `data/` | Training data (`pretrain/`, `sft/`), memory stores |
 | `enigma_engine/` | The package: model, tokenizer, chat format, organs |
 | `~/.enigma_engine/images/` | PNGs from the `imagine` tool |

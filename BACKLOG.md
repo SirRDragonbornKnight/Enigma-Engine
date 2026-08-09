@@ -1400,13 +1400,16 @@ The block, in execution order:
       (`serve_enigma.py` / `finetune_enigma.py`), which is exactly why v1 and
       v2 models coexist in one checkout. Nothing to switch; delete this from
       the mental model.
-    - `Start-Enigma.ps1` hardcodes `models\enigma_dpo\model.pth`. Adoption
-      means backing up the v8 checkpoint (receipted, alongside v5/v8 in
-      `Enigma Backups`) and putting the v2 export at that path, or editing
-      the launcher. Decide which, in writing, before the swap.
-    - serve's `--max-context` still defaults to **1024**. A model trained at
-      block 2048 and served at 1024 silently throws away the context win the
-      whole lineage was for — raise it at adoption and re-check VRAM.
+    - ~~`Start-Enigma.ps1` hardcodes `models\enigma_dpo\model.pth`~~
+      **DONE 2026-08-09 in `42ba346b`: the launcher was EDITED (the third
+      option), not overwritten — `--model models\enigma_v2_sft2\model.pth`.
+      The v8 checkpoint stays in place at `models\enigma_dpo\model.pth` as
+      the rollback, verified byte-identical to
+      `Enigma Backups\enigma_dpo_v8_adopted` before the swap.**
+    - ~~serve's `--max-context` still defaults to **1024**~~ **DONE
+      2026-08-09: default SUNSET to 2048 (the adopted model's trained
+      block); boot() caps it down with a WARN for smaller checkpoints, so
+      the flip is safe for every model.**
     - The launcher gains `--search` at adoption too (complete-by-default,
       ruled 2026-07-27: the user-facing chain boots ALL organs). It is NOT
       added today because v8's vocab carries no tag ids — the flag would

@@ -2,18 +2,19 @@
 """Serve the REAL Enigma -- the from-scratch transformer -- as an OpenAI-compatible
 /v1 endpoint, so Odysseus (or any OpenAI client) can talk to her.
 
-  python serve_enigma.py                       # models/enigma_dpo/model.pth (the adopted model)
-  python serve_enigma.py --model models/enigma_pretrain_base_v2/latest.pth
+  python serve_enigma.py                       # models/enigma_v2_sft2/model.pth (the adopted model)
+  python serve_enigma.py --model models/enigma_dpo/model.pth   # the v8 rollback
   # then, in Odysseus chat:  /setup local http://127.0.0.1:8000/v1
 
-She is a BASE model (mid-pretraining): no chat template and no tool tokens yet --
-those arrive with the instruct pass (special-token IDs 4718-4735 are reserved in
-the padded embedding). /v1/chat/completions therefore bridges by rendering the
-conversation as a plain-text transcript she continues; /v1/completions is her
-native shape.
+She is an INSTRUCT model: the adopted v2 checkpoint carries the chat template and
+the tool/think/image token ids, so /v1/chat/completions renders the real
+conversation shape (chat_format.render_chat) and the built-in tool loop runs.
+A BASE checkpoint still serves -- INSTRUCT is read off the checkpoint, and the
+chat path degrades to a plain-text transcript when it is absent.
 
-Replaces the rejected Qwen-wrapper server (the "Muppet"; its <tool_call>
-parsing lives in git history and returns with the instruct pass).
+Adopted 2026-08-09 (Gate D): the v2 lineage's SFT-2 checkpoint, which is why the
+--model default and the --max-context default (2048, its trained block) point
+where they do. Replaces the rejected Qwen-wrapper server (the "Muppet").
 """
 
 from __future__ import annotations

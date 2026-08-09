@@ -45,7 +45,9 @@ missing NEOX permute).
 
 - Format: `.pth` containing `model_state_dict` + architecture config,
   written atomically (`.tmp` then rename).
-- Served checkpoint of record: `models/enigma_dpo/model.pth`.
+- Served checkpoint of record: `models/enigma_v2_sft2/model.pth` (the v2
+  lineage, adopted 2026-08-09); `models/enigma_dpo/model.pth` is the v8
+  rollback.
 - All training scripts (`pretrain_enigma.py`, `finetune_enigma.py`,
   `dpo_enigma.py`) read and write this format and nothing else.
 

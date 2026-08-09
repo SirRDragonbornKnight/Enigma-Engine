@@ -43,7 +43,10 @@ ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Align the distilled vision encoder to the adopted text model")
-    p.add_argument("--model", default=str(ROOT / "models" / "enigma_dpo" / "model.pth"))
+    # Follows ADOPTION (v2 SFT-2 since 2026-08-09): the projection is trained
+    # INTO the served model's embedding space, so a default left on the v8
+    # rollback would silently align the eyes to a model nothing serves.
+    p.add_argument("--model", default=str(ROOT / "models" / "enigma_v2_sft2" / "model.pth"))
     p.add_argument("--encoder", default=str(ROOT / "models" / "enigma_vision_distill" / "model.pth"))
     p.add_argument("--data", default=str(ROOT / "data" / "vision" / "llava_pretrain.jsonl"))
     p.add_argument("--out", default=str(ROOT / "models" / "enigma_vision_align"))

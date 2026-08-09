@@ -151,10 +151,19 @@ Deleted after a three-agent adversarial audit verified every claim
 
 1. **Verify importers before deleting** — including exec-string imports and
    launcher/doc references (the 2026-07-18 audit caught both kinds).
-2. **Fingerprint before/after** any edit near the live model code
-   (`_verify_ckpt.py`: PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`).
+2. **Fingerprint before/after** any edit near the live model code. **BOTH
+   lineages, since v2 was adopted 2026-08-09 — a v1-only fingerprint would
+   pass a change that broke loading the model actually being served:**
+   - v2 SERVED (`models/enigma_v2_sft2/model.pth`, step 480):
+     PARAMS 238,374,400 / MODEL_KEYS 263 / KEYHASH `d9babe5af0f77dcf`,
+     MISSING and UNEXPECTED both empty (measured 2026-08-09, CPU load-only).
+   - v1 ROLLBACK (`_verify_ckpt.py`'s hardcoded
+     `models/enigma_pretrain_large/latest.pth`):
+     PARAMS 182,094,848 / KEYHASH `12edc0bc1ded383d`.
+   `_verify_ckpt.py` still points at the v1 path only; point it at a
+   checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **929 passed (2026-08-07)** — THE live number; other docs
+4. Suite baseline: **945 passed (2026-08-09, paired with `42ba346b`)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -164,7 +173,10 @@ Deleted after a three-agent adversarial audit verified every claim
    867 → 895 is the T4 regen shapes (`test_sft_regen_shapes.py` 23, plus 5
    teachings-route tests in `test_facts_pretrain_data.py`); 895 → 929 is the
    search organ + epistemics wave (`test_search_organ.py` 22, and the shape
-   file grew to 36 with the search/unknown corpora).
+   file grew to 36 with the search/unknown corpora); **929 → 945 is the
+   T4→T6 arc in `42ba346b`** (13 structured-output/episodic/image-block
+   tests in the drafting wave, plus 3 fix-arc tests for the power-expression,
+   dictation-restraint and widened memory-decline shapes).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —
