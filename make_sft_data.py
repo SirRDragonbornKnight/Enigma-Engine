@@ -771,6 +771,12 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
                     {"role": "assistant", "content": answers[i % len(answers)]},
                 ],
                 "category": "memory_read",
+                # WHICH line the question is about. The block's lines are
+                # shuffled, so it cannot be read back off position -- and a
+                # consumer that guesses "line 0 is the target" builds a
+                # distractor set containing the right answer (caught while
+                # deriving the DPO memory counterweights, 2026-08-10).
+                "fact": fact,
             })
     # Off-topic: memory present but irrelevant -> normal answer, no parroting.
     for q, a in [
@@ -786,6 +792,7 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
                 {"role": "assistant", "content": a},
             ],
             "category": "memory_read",
+            "fact": None,  # off-topic: the block answers nothing here
         })
     rng.shuffle(out)
     return out

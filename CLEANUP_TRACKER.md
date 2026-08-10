@@ -163,7 +163,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **945 passed (2026-08-09, paired with `42ba346b`)** — THE live number; other docs
+4. Suite baseline: **961 passed (2026-08-10, paired with the Stage-C epistemics commit)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -176,7 +176,11 @@ Deleted after a three-agent adversarial audit verified every claim
    file grew to 36 with the search/unknown corpora); **929 → 945 is the
    T4→T6 arc in `42ba346b`** (13 structured-output/episodic/image-block
    tests in the drafting wave, plus 3 fix-arc tests for the power-expression,
-   dictation-restraint and widened memory-decline shapes).
+   dictation-restraint and widened memory-decline shapes); 945 → 961 is the
+   Stage-C epistemics wave (`test_eval_grading.py` grew 4 decline-then-guess
+   guard classes, and `test_dpo_focused_pairs.py` 12 pins the focused corpus:
+   probe-screen clearance, grader-vocabulary coverage, counterweight
+   invariants, and the trainer's system-slot render).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

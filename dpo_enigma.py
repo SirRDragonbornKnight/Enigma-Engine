@@ -42,11 +42,17 @@ from eval_leak_guard import refuse_if_leaky
 PAD = 0  # padding id for batching; padded positions are never scored
 
 
-def _render(tokenizer, prompt: str, answer: str, block: int):
+def _render(tokenizer, prompt: str, answer: str, block: int, system: str | None = None):
     """(ids, target_mask) for one prompt->answer, or None if it can't fit.
     target_mask marks positions whose TOKEN is an assistant target (the DPO-
-    scored positions), shifted for next-token prediction at scoring time."""
-    msgs = [
+    scored positions), shifted for next-token prediction at scoring time.
+
+    ``system`` renders a leading system turn. Serve folds retrieved memories
+    and the tool preamble into exactly that slot (_with_context), so a
+    preference about reading an injected memory block can only be trained in
+    the shape it is served in -- a bare user turn is a shape she never sees
+    with a memory hit. Pairs without the field render as before."""
+    msgs = ([{"role": "system", "content": system}] if system else []) + [
         {"role": "user", "content": prompt},
         {"role": "assistant", "content": answer},
     ]
@@ -186,12 +192,17 @@ def main() -> None:
         # The graded sides are advisory, not blocking: an answer legitimately
         # shares a question's content words (see refuse_if_leaky).
         answers += [x for x in (p.get("chosen"), p.get("rejected")) if x]
-        c = _render(tokenizer, p["prompt"], p["chosen"], args.block)
-        r = _render(tokenizer, p["prompt"], p["rejected"], args.block)
+        sysblk = p.get("system") or None
+        c = _render(tokenizer, p["prompt"], p["chosen"], args.block, sysblk)
+        r = _render(tokenizer, p["prompt"], p["rejected"], args.block, sysblk)
         if c is None or r is None:
             n_skip += 1
             continue
-        pairs.append((p["prompt"], c, r))
+        # Group by the RENDERED prompt side: the same question under two
+        # different memory blocks is two different preferences, and collapsing
+        # them into one group would put a block she must read on the train side
+        # and its twin on val (the group_split leak, in a new dress).
+        pairs.append(((sysblk or "") + "\n" + p["prompt"], c, r))
     refuse_if_leaky(prompts, Path(args.data), advisory=answers)
     if not pairs:
         raise SystemExit("no usable preference pairs")
