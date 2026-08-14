@@ -12,10 +12,11 @@ Pretraining takes a preset name via `--size`:
 python pretrain_enigma.py --size large
 ```
 
-The production Enigma (182M params, the model behind
-`models/enigma_dpo/model.pth`) was pretrained with the `large` preset.
-SFT and DPO inherit the architecture from the checkpoint passed via
-`--init`, so size is only chosen at pretrain time.
+The serving Enigma (`models/enigma_v2_sft2/model.pth`, 238M-class, adopted
+2026-08-09) was pretrained with the `v2_deep_238m` preset; the previous
+production model (182M, now the rollback at `models/enigma_dpo/model.pth`)
+used the `large` preset. SFT and DPO inherit the architecture from the
+checkpoint passed via `--init`, so size is only chosen at pretrain time.
 
 ---
 

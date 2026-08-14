@@ -37,7 +37,7 @@ rollback; serve it by passing `--model` explicitly.
 |------|-------------|
 | `--model PATH` | Enigma checkpoint (.pth) to serve |
 | `--host` / `--port` | Bind address (default 127.0.0.1:8000) |
-| `--max-context N` | Context window in tokens (default 1024) |
+| `--max-context N` | Context window in tokens (default 2048; capped down to the model's trained context with a WARN) |
 | `--memory-dir DIR` | Enable the memory store (JSONL + BM25); memories are injected into her context |
 | `--voice` | Voice organ: `speak` tool + `/v1/audio/speech` (local Kokoro-82M TTS) |
 | `--ears` | Ears organ: `/v1/audio/transcriptions` (local faster-whisper) |

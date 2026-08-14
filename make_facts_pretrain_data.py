@@ -9,11 +9,16 @@ the ~914 plain-text fact lines from knowledge_corpus.gen_knowledge_pretrain_text
 from the real pretrain corpus, so a short low-LR continued-pretrain pass
 learns the facts without forgetting the language:
 
-    python make_facts_pretrain_data.py                     # 60M tokens, 2% facts
-    python pretrain_enigma.py --tokens-bin data/pretrain/facts_tokens.bin \\
-        --init-from models/enigma_pretrain_large/latest.pth \\
-        --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50 \\
+    python make_facts_pretrain_data.py --out data/pretrain/<new>.bin   # 60M tokens, 2% facts
+    python pretrain_enigma.py --tokens-bin data/pretrain/<new>.bin \\
+        --init-from models/enigma_v2_238m/model.pth \\
+        --out models/<new_run_dir> --tokens 60e6 --lr 1e-4 --warmup 50 \\
         --val-general-end 0
+
+(THIS builder refuses an existing --out at startup -- facts_tokens_v2.bin
+is the T4 receipt. pretrain_enigma carries NO such guard on ITS --out, and
+models/enigma_v2_238m_facts is the live facts CPT the SFT default inits
+from -- name a genuinely NEW run dir yourself.)
 
 The output is a standard ETOK file (same header/layout as tokens.bin, doc
 layout <bos> content <eos> <eos>). The LAST --val-reserve tokens are pure
@@ -40,8 +45,13 @@ from eval_leak_guard import LockedProbeGuard
 from knowledge_corpus import gen_knowledge_pretrain_text
 
 ROOT = Path(__file__).resolve().parent
-SOURCE_BIN = ROOT / "data" / "pretrain" / "tokens.bin"
-OUT_BIN = ROOT / "data" / "pretrain" / "facts_tokens.bin"
+# The v2c corpus -- the one the SERVING lineage trained on. These defaults
+# were the last stragglers of the adoption SUNSET (2026-08-09): ac163b1f
+# re-aimed align_vision/align_audio/bench_generate off the rollback lineage,
+# but a default facts build here still replayed the dead v1 tokens.bin into
+# a corpus the v2 model cannot read (caught 2026-08-10, full-codebase review).
+SOURCE_BIN = ROOT / "data" / "pretrain" / "tokens_v2c.bin"
+OUT_BIN = ROOT / "data" / "pretrain" / "facts_tokens_v2.bin"
 HEADER_SIZE = 256
 # Fallback only: the real eos id follows the replay corpus's sidecar (set in
 # main), never this constant -- a hardcoded 2 was a second source of truth
@@ -239,8 +249,39 @@ def interleave(fact_docs: list[list[int]], replay, target_tokens: int,
     return out[:pos]
 
 
+def refuse_existing_output(out_bin: Path) -> None:
+    """Same rule as pretokenize_data (test-pinned there): corpora are
+    VERSIONED, never rebuilt in place. This mattered the day the defaults
+    flipped to the v2 names (2026-08-10): --out now lands on the T4 run's
+    actual training artifact, and a default rebuild would have silently
+    destroyed that receipt -- knowledge_corpus has changed since T4, so the
+    rebuilt bytes would NOT be the ones the served model trained on.
+
+    The SIDECAR counts as the artifact too: a bin moved aside leaves a .json
+    whose dtype/vocab/eos receipt would be silently overwritten. And this
+    runs at STARTUP as well as inside write_etok -- the write-time guard
+    alone let a default run burn the whole interleave before refusing
+    (audit 2026-08-13)."""
+    out_bin = Path(out_bin)
+    # Shape first: --out '' resolved to '.' and died as a raw ValueError in
+    # with_suffix, and a dotted stem (facts_v2.1) silently RENAMED its
+    # sidecar to facts_v2.json (audit 2026-08-13).
+    if not out_bin.name or out_bin.suffix != ".bin":
+        raise SystemExit(
+            f"REFUSED: --out {out_bin} must name a NEW .bin file -- any "
+            f"other shape scatters or clobbers the sidecar .json."
+        )
+    for p in (out_bin, out_bin.with_suffix(".json")):
+        if p.exists():
+            raise SystemExit(
+                f"REFUSED: {p} already exists -- corpora are versioned, never "
+                "rebuilt in place. Pick a new --out or move the old artifact aside."
+            )
+
+
 def write_etok(tokens: np.ndarray, out_bin: Path, vocab_size: int, n_docs: int,
                eos_id: int = EOS_ID) -> None:
+    refuse_existing_output(out_bin)
     bpt = tokens.dtype.itemsize  # must match the array, not a hardcoded width
     header = struct.pack("<4sIIQII", b"ETOK", 1, bpt, len(tokens), vocab_size, eos_id)
     tmp = out_bin.with_suffix(".bin.tmp")
@@ -281,9 +322,12 @@ def main() -> None:
     ap.add_argument(
         "--source-bin",
         default=str(SOURCE_BIN),
-        help="replay corpus (its sidecar sets dtype + vocab). Default: the v1 tokens.bin",
+        help="replay corpus (its sidecar sets dtype + vocab). Default: tokens_v2c.bin, the serving lineage's trained corpus",
     )
     args = ap.parse_args()
+    # Before ANY corpus work: the write-time guard alone let a default run
+    # build the full 60M-token interleave and then refuse (audit 2026-08-13).
+    refuse_existing_output(Path(args.out))
 
     source_bin = Path(args.source_bin)
     if not source_bin.exists():

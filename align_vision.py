@@ -7,11 +7,15 @@ own weights end to end):
 
   encoder init = models/enigma_vision_distill/model.pth  (her ViT, distilled
                  from DINOv2-S on 2026-07-17; sees [-1,1] inputs)
-  text model   = the ADOPTED checkpoint (models/enigma_dpo, v8) with
-                 vision_hidden_size enabled; every text weight FROZEN
-                 (freeze_text_io=True -- the projection must target v8's
-                 exact embedding space so serve can later load
-                 encoder+projection onto the pristine served weights)
+  text model   = the --model checkpoint (default: models/enigma_v2_sft2,
+                 the ADOPTED v2 lineage) with vision_hidden_size enabled;
+                 every text weight FROZEN (freeze_text_io=True -- the
+                 projection must target the served model's exact embedding
+                 space so serve can later load encoder+projection onto the
+                 pristine served weights). The EXISTING align artifact was
+                 trained against v8's space pre-adoption: it boots on v2
+                 but captions degrade (measured 2026-08-09) -- the v2
+                 re-align is the open item.
   data         = data/vision/llava_pretrain.jsonl (558,128 pairs)
 
     python align_vision.py --sanity

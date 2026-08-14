@@ -166,8 +166,9 @@ four for four:
    DPO measured WORSE than plain SFT here (over-steer: factual 9->6, tool
    15->13) -- the lineage is not dropped from doctrine, to be re-tried at
    lower beta / fewer pairs. **unknown stayed 0/15 on ALL FOUR candidates --
-   the #1 win condition is a DESIGN problem, not a data-volume one (and the
-   grader still scores decline-then-guess free, item 13).**
+   the #1 win condition is a DESIGN problem, not a data-volume one (the
+   grader half of that is CLOSED: decline-then-guess is penalised since
+   `fd88faa0`, see item 13).**
    **SWAP MECHANICS LANDED THE SAME COMMIT** (the T6 requirement -- do not
    split them): `Start-Enigma.ps1` and serve's `--model` default both point
    at `models\enigma_v2_sft2\model.pth`; serve's `--max-context` default
@@ -320,18 +321,19 @@ four for four:
    each), so `test_the_shipped_recall_default_is_five` pins the number
    instead. -> `serve_enigma.py --memory-recall`.
    Docs touched: BACKLOG item 15's cross-reference.
-13. **The `unknown` category does not penalise fabrication.** Measured on the
-   live sealed set: `"I can't know that."` scores 13/15 and `"I can't know.
-   It is blue."` also scores 13/15 -- appending an invented answer to a
-   decline is free. This is the category most likely to move at v2 (both
-   baselines are 0/15, with ZERO refusals in 30 unanswerable questions), so
-   it could jump to 15/15 without epistemics improving at all. Fixing the
-   deny keys means a content reseal, which is the user's gate. The designed
-   alternative is the offline second grader. `tool_graded` unblocks it for
-   FUTURE runs -- those transcripts re-grade from themselves. The two BASELINE
-   transcripts predate the field (both written 2026-07-27), so re-grading them
-   still needs the sealed plaintext beside them.
-   -> EVAL_REDESIGN second-grader section.
+13. ~~**The `unknown` category does not penalise fabrication.**~~ **FIXED in
+   `fd88faa0` (2026-08-10), grader-side -- no content reseal needed:**
+   `_grade_unknown` = the want/deny grade AND NOT `_appends_a_guess` (the
+   decline-then-guess guard; measured against 68 trained honest declines at
+   0 FP and the 16 DPO fabrication sides at 16/16). Sealed re-grades stayed
+   byte-stable, so no recorded verdict moved. Hardened 2026-08-13: the
+   guard's cut point now uses the same whole-word matcher as the credit
+   rule (`_kw_span` -- bare `str.find` could drag the cut into setup prose
+   and kill an honest decline), and the maintenance sweep is durable in
+   `tests/test_guard_sweep.py` (sealed re-grade + FP + kill run with the
+   suite instead of dying with a scratchpad). Original finding, for the
+   record: `"I can't know that."` and `"I can't know. It is blue."` both
+   scored 13/15 -- appending an invented answer was free.
 14. ~~**Structured output in v2 scope?**~~ **RULED 2026-08-08: IN -- the
    data shapes ride the T4 regen; runtime enforcement follows later.**
    Docs touched: this row, 7.95 T4 (scope-ruled block).

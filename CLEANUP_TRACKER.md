@@ -163,7 +163,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **961 passed (2026-08-10, paired with the Stage-C epistemics commit)** — THE live number; other docs
+4. Suite baseline: **992 passed on ENIGMAPC (2026-08-13, paired with the Round-1 hardening commit; 4 tests read external inputs — Enigma Backups transcripts + the gitignored focused corpus — and SKIP on any other machine)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -176,11 +176,26 @@ Deleted after a three-agent adversarial audit verified every claim
    file grew to 36 with the search/unknown corpora); **929 → 945 is the
    T4→T6 arc in `42ba346b`** (13 structured-output/episodic/image-block
    tests in the drafting wave, plus 3 fix-arc tests for the power-expression,
-   dictation-restraint and widened memory-decline shapes); 945 → 961 is the
-   Stage-C epistemics wave (`test_eval_grading.py` grew 4 decline-then-guess
-   guard classes, and `test_dpo_focused_pairs.py` 12 pins the focused corpus:
-   probe-screen clearance, grader-vocabulary coverage, counterweight
-   invariants, and the trainer's system-slot render).
+   dictation-restraint and widened memory-decline shapes); **945 → 961 is the
+   Stage-C epistemics wave in `fd88faa0`** (`test_eval_grading.py` grew 4
+   decline-then-guess guard tests, and `test_dpo_focused_pairs.py` 12 pins
+   the focused corpus: probe-screen clearance, grader-vocabulary coverage,
+   counterweight invariants, and the trainer's system-slot render); 961 →
+   992 is the review wave + Round-1 hardening + its ordered audit
+   (2026-08-13): `test_dpo_trainer.py` 15 (collision detector with
+   threshold-honest fixtures, tail coverage, required --out + startup
+   artifact refusal incl. file-typo and prev.pth cases, --sanity exempt,
+   main-wiring pin, dark-instrument warning, triageable advisory with a
+   discriminating 6-hit fixture, save-before-report with uniqueness pins,
+   payload shape + call-site pin), `test_facts_output_guard.py` 5
+   (write_etok + STARTUP refusal, sidecar guard, .bin shape check),
+   `test_eval_grading.py` +1 (the guess-guard cut point matches whole
+   words -- constructed case; parity 174 sealed + 126 corpus rows, 0
+   diffs), `test_guard_sweep.py` 4 (sealed re-grade + FP + corpus kill +
+   the guard-specific decline-then-guess kill that keeps the sweep
+   non-vacuous), and `test_finetune_out_guard.py` 6 (--out required +
+   refusal, resume exempt ONLY into its own dir, sanity exempt and
+   mkdir-after-sanity pinned, main-wiring pin).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

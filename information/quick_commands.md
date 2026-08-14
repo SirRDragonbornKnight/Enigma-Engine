@@ -14,7 +14,7 @@ Run everything from the Enigma Engine folder (venv activated).
 | `python serve_enigma.py --model models/enigma_dpo/model.pth` | Serve the v8 rollback instead |
 | `python serve_enigma.py --port 8123` | Serve on a specific port |
 | `python serve_enigma.py --host 0.0.0.0` | Listen on all interfaces |
-| `python serve_enigma.py --max-context 1024` | Set the context window (tokens) |
+| `python serve_enigma.py --max-context 2048` | Set the context window (tokens; 2048 is the default and the v2 training block) |
 | `python serve_enigma.py --memory-dir data/memory` | Enable the memory store (JSONL + BM25) + /v1/memory API |
 | `python serve_enigma.py --voice` | Voice organ: `speak` tool + /v1/audio/speech (Kokoro-82M; run under the repo `venv/`) |
 | `python serve_enigma.py --ears` | Ears organ: /v1/audio/transcriptions (faster-whisper) |
@@ -32,13 +32,13 @@ Organ flags combine freely, e.g. `python serve_enigma.py --voice --ears --eyes -
 |---------|-------------|
 | `python pretrain_enigma.py` | Pretrain from scratch on `data/pretrain/tokens.bin` |
 | `python pretrain_enigma.py --sanity` | One forward/backward step, then exit (smoke test) |
-| `python make_facts_pretrain_data.py` | Build the facts continued-pretrain stream -> `data/pretrain/facts_tokens.bin` (knowledge install; see training_guide.md Stage 1.5) |
-| `python pretrain_enigma.py --tokens-bin data/pretrain/facts_tokens.bin --init-from models/enigma_pretrain_large/latest.pth --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50 --val-general-end 0` | Low-LR continued pretrain that installs the knowledge corpus in weights |
+| `python make_facts_pretrain_data.py --out data/pretrain/<new>.bin` | Build the facts continued-pretrain stream (knowledge install; see training_guide.md Stage 1.5; refuses an existing output) |
+| `python pretrain_enigma.py --tokens-bin data/pretrain/<new>.bin --init-from models/enigma_v2_238m/model.pth --out models/<new_run_dir> --tokens 60e6 --lr 1e-4 --warmup 50 --val-general-end 0` | Low-LR continued pretrain that installs the knowledge corpus in weights (pretrain has NO existing-artifact guard -- name a genuinely new out dir) |
 | `python make_sft_data.py` | Build SFT data -> `data/sft/{tool_calls,identity,mix}.jsonl` |
-| `python finetune_enigma.py --data data/sft/mix.jsonl --out models/enigma_sft` | SFT the pretrained model into an instruct/tool model |
+| `python finetune_enigma.py --data data/sft/mix.jsonl --out models/<new_run_dir>` | SFT the pretrained model into an instruct/tool model |
 | `python make_dpo_data.py` | Build DPO preference pairs -> `data/sft/dpo_pairs.jsonl` |
-| `python dpo_enigma.py --init models/enigma_sft/model.pth --out models/enigma_dpo` | DPO alignment pass (default lr 5e-7 is the adopted setting) |
-| `python sample_enigma.py --ckpt models/enigma_pretrain_large/model.pth` | Sample raw text from a checkpoint |
+| `python dpo_enigma.py --init models/enigma_v2_sft2/model.pth --out models/<new_run_dir>` | DPO alignment pass (default lr 5e-7 is the adopted setting; --out refuses an existing artifact) |
+| `python sample_enigma.py --ckpt models/enigma_v2_238m/model.pth` | Sample raw text from a checkpoint (the v2 base; any .pth works) |
 
 ---
 
@@ -48,7 +48,7 @@ Serve the candidate on its own port with an isolated memory dir, then run the ha
 
 | Command | What It Does |
 |---------|-------------|
-| `python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth --memory-dir data/memory_eval` | Serve the model under test |
+| `python serve_enigma.py --port 8123 --model models/<candidate>/model.pth --max-context 2048 --memory-dir data/memory_eval` | Serve the model under test |
 | `python eval_behavior.py --base-url http://127.0.0.1:8123` | Behavior eval against the running server (in another shell) |
 
 ---

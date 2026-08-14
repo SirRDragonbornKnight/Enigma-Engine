@@ -30,8 +30,12 @@ assistant tokens (only assistant tokens are in the loss mask).
 
 **How to use:**
 ```
-python finetune_enigma.py --data data/sft/mix.jsonl --out models/enigma_sft
+python finetune_enigma.py --data data/sft/mix.jsonl --out models/<new_run_dir>
 ```
+
+(`--out` is required and refuses a dir that already holds a checkpoint;
+`models/enigma_sft` is the v8 lineage's SFT receipt -- never aim a run at
+it. `--resume`/`--sanity` are exempt from the refusal.)
 
 **Parameters (defaults):**
 | Parameter | Default | Description |
@@ -50,8 +54,12 @@ policy vs frozen reference, no reward model.
 
 **How to use:**
 ```
-python dpo_enigma.py --init models/enigma_sft/model.pth --out models/enigma_dpo
+python dpo_enigma.py --init models/enigma_v2_sft2/model.pth --out models/<new_run_dir>
 ```
+
+(`--out` is required and refuses a dir that already holds a checkpoint --
+model.pth, latest.pth, or prev.pth; `--sanity` is exempt, it never writes.
+`models/enigma_dpo` is the v8 rollback -- never aim a run at it.)
 
 Default lr 5e-7 is the adopted setting; higher rates over-optimized in
 measured runs.

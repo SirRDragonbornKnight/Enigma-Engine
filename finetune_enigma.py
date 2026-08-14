@@ -8,7 +8,7 @@ shares its arsenal from ``enigma_engine.core.optim`` (``build_optimizer``/
 ``get_lr`` — so ``--optimizer muon`` and ``--schedule wsd`` work here too).
 
   python finetune_enigma.py --data data/sft/mix.jsonl \
-      --init models/enigma_pretrain_large/latest.pth --out models/enigma_sft
+      --init models/enigma_v2_238m_facts/model.pth --out models/<new_run_dir>
 
 Data: JSONL; each record either ``{"messages": [{role, content, ...}]}`` or a
 ``{"prompt", "completion"}`` pair (``response``/``answer``/``output`` keys are
@@ -43,6 +43,7 @@ except Exception:
     pass
 
 from enigma_engine.core.optim import build_optimizer, get_lr  # the shared arsenal
+from enigma_engine.core.safe_save import refuse_existing_artifact
 from eval_leak_guard import last_verdict, refuse_if_leaky
 
 ROOT = Path(__file__).resolve().parent
@@ -180,13 +181,18 @@ def reinit_chat_rows(model: torch.nn.Module, tokenizer) -> list[int]:
     return rows
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, help="chat JSONL (messages or prompt/completion)")
     ap.add_argument(
         "--init",
-        default=str(ROOT / "models" / "enigma_pretrain_large" / "latest.pth"),
-        help="BASE checkpoint to start the instruct pass from",
+        # The serving lineage's facts checkpoint -- what SFT-2 actually
+        # started from. The old default was the V1 pretrain, which post-
+        # adoption meant a default SFT run silently rebuilt the ROLLBACK
+        # lineage (the same straggler class ac163b1f fixed for align_*;
+        # caught 2026-08-10, full-codebase review).
+        default=str(ROOT / "models" / "enigma_v2_238m_facts" / "model.pth"),
+        help="checkpoint to start the instruct pass from (default: the v2 facts CPT)",
     )
     ap.add_argument("--resume", default=None, help="resume a previous SFT run's latest.pth")
     ap.add_argument(
@@ -194,7 +200,12 @@ def main() -> None:
         action="store_true",
         help="on resume, let CLI schedule args override the recorded schedule",
     )
-    ap.add_argument("--out", default=str(ROOT / "models" / "enigma_sft"))
+    # REQUIRED, no default: the old default was models/enigma_sft -- the v8
+    # lineage's SFT receipt (the dpo_from provenance chain) -- so a bare run
+    # overwrote it with a v2-inited model (review 2026-08-13). Every
+    # artifact dir is somebody's receipt; name one.
+    ap.add_argument("--out", required=True,
+                    help="NEW output dir for this run's artifact (refused if it already holds a checkpoint; --resume/--sanity exempt)")
     ap.add_argument("--block", type=int, default=1024)
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--micro-batch", type=int, default=8)
@@ -213,7 +224,26 @@ def main() -> None:
     ap.add_argument("--eval-every", type=int, default=100)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--sanity", action="store_true", help="one fwd/bwd step then exit")
-    args = ap.parse_args()
+    return ap
+
+
+def startup_artifact_guard(args) -> None:
+    """Refuse at STARTUP if --out already holds a checkpoint (the DPO
+    treatment, fourth writer; review 2026-08-13). The resume exemption is
+    derived from the DIR RELATIONSHIP, not the flag: exempting any --resume
+    let a stale copy-pasted --out rotate over whatever artifact it named
+    (audit 2026-08-13). --sanity never writes to --out (the mkdir sits
+    below the sanity return)."""
+    if args.sanity:
+        return
+    if args.resume and Path(args.out).resolve() == Path(args.resume).resolve().parent:
+        return  # continuing its OWN dir -- the one sanctioned in-place write
+    refuse_existing_artifact(Path(args.out))
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    startup_artifact_guard(args)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -416,7 +446,6 @@ def main() -> None:
     }
 
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
 
     def save(tag: str, step: int):
         from enigma_engine.core.safe_save import atomic_torch_save
@@ -467,6 +496,11 @@ def main() -> None:
             flush=True,
         )
         return
+
+    # mkdir AFTER the sanity return: --sanity must never write to --out.
+    # It used to create the dir, which then tripped the launchers' own
+    # first-launch Test-Path guard on the real run (audit 2026-08-13).
+    out.mkdir(parents=True, exist_ok=True)
 
     print(
         f"sft: {total_steps} steps ({args.epochs} epochs x {steps_per_epoch}) | "

@@ -7,11 +7,14 @@ over mel spectrograms, on her own weights end to end):
 
   encoder init = models/enigma_audio_distill/model.pth  (her Whisper-style
                  encoder, distilled via distill_audio_encoder.py)
-  text model   = the ADOPTED checkpoint (models/enigma_dpo, v8) with
-                 audio_hidden_size enabled; every text weight FROZEN
-                 (freeze_text_io=True -- the projection must target v8's
-                 exact embedding space so serve can later load
-                 encoder+projection onto the pristine served weights)
+  text model   = the --model checkpoint (default: models/enigma_v2_sft2,
+                 the ADOPTED v2 lineage) with audio_hidden_size enabled;
+                 every text weight FROZEN (freeze_text_io=True -- the
+                 projection must target the served model's exact embedding
+                 space so serve can later load encoder+projection onto the
+                 pristine served weights; an align run against one lineage
+                 does not transfer to another -- the vision arc measured
+                 that the hard way at v2 adoption)
   data         = data/audio/librispeech.jsonl (collect_audio_data.py output)
 
     python align_audio.py --sanity

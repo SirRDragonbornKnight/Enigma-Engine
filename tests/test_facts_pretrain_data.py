@@ -92,8 +92,12 @@ def test_sidecar_vocab_and_dtype_refuse_hand_edits(monkeypatch, tmp_path):
 
     def run_with(meta):
         (tmp_path / "replay.json").write_text(_json.dumps(meta), encoding="utf-8")
+        # a fresh --out per run: the default target exists on this machine and
+        # the startup guard (audit 2026-08-13) would refuse before the sidecar
+        # checks this test exists to reach
         monkeypatch.setattr(_sys, "argv",
-                            ["make_facts_pretrain_data.py", "--source-bin", str(bin_path)])
+                            ["make_facts_pretrain_data.py", "--source-bin", str(bin_path),
+                             "--out", str(tmp_path / "out.bin")])
         mf.main()
 
     for bad_vocab in (None, "16366", 16366.0, True, 0, -5):
@@ -166,7 +170,7 @@ def test_screen_does_not_empty_a_corpus_of_unrelated_facts():
     assert screen_locked_probes(unrelated, LockedProbeGuard(seal(LOCKED))) == unrelated
 
 
-def test_the_build_screens_before_it_tokenizes(monkeypatch):
+def test_the_build_screens_before_it_tokenizes(monkeypatch, tmp_path):
     """The screen being correct is worthless if main() does not call it, or
     calls it after the fact lines are already tokenized into the corpus."""
     order = []
@@ -181,7 +185,8 @@ def test_the_build_screens_before_it_tokenizes(monkeypatch):
 
     monkeypatch.setattr(make_facts_pretrain_data, "screen_locked_probes", spy_screen)
     monkeypatch.setattr(make_facts_pretrain_data, "tokenize_fact_docs", spy_tokenize)
-    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
+    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py",
+                                     "--out", str(tmp_path / "out.bin")])
 
     with pytest.raises(SystemExit):
         make_facts_pretrain_data.main()
@@ -189,12 +194,13 @@ def test_the_build_screens_before_it_tokenizes(monkeypatch):
     assert order == ["screen", "tokenize"]
 
 
-def test_an_empty_knowledge_corpus_is_not_blamed_on_the_screen(monkeypatch):
+def test_an_empty_knowledge_corpus_is_not_blamed_on_the_screen(monkeypatch, tmp_path):
     """The 'everything was screened out' error used to fire when the corpus was
     simply empty, pointing the operator at a guard that never ran."""
     monkeypatch.setattr(make_facts_pretrain_data, "gen_knowledge_pretrain_text", lambda: [])
     monkeypatch.setattr(make_facts_pretrain_data, "gen_teaching_pretrain_text", lambda: [])
-    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
+    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py",
+                                     "--out", str(tmp_path / "out.bin")])
 
     with pytest.raises(SystemExit) as exc:
         make_facts_pretrain_data.main()
@@ -273,7 +279,8 @@ def test_teaching_lines_reach_the_build(monkeypatch, tmp_path):
         raise SystemExit("stop here")
 
     monkeypatch.setattr(make_facts_pretrain_data, "screen_locked_probes", spy_screen)
-    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py"])
+    monkeypatch.setattr("sys.argv", ["make_facts_pretrain_data.py",
+                                     "--out", str(tmp_path / "out.bin")])
 
     with pytest.raises(SystemExit):
         make_facts_pretrain_data.main()

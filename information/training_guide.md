@@ -46,17 +46,20 @@ QA / cloze / in-context) into replay chunks from the real corpus, so the
 model learns the facts without forgetting the language:
 
 ```
-python make_facts_pretrain_data.py                 # -> data/pretrain/facts_tokens.bin (60M tokens, ~2% facts)
-python pretrain_enigma.py --tokens-bin data/pretrain/facts_tokens.bin \
-    --init-from models/enigma_pretrain_large/latest.pth \
-    --out models/enigma_pretrain_facts --tokens 60e6 --lr 1e-4 --warmup 50 \
+python make_facts_pretrain_data.py --out data/pretrain/<new>.bin   # 60M tokens, ~2% facts
+python pretrain_enigma.py --tokens-bin data/pretrain/<new>.bin \
+    --init-from models/enigma_v2_238m/model.pth \
+    --out models/<new_run_dir> --tokens 60e6 --lr 1e-4 --warmup 50 \
     --val-general-end 0
 ```
 
-Then point SFT at the facts base instead of the raw one:
-`python finetune_enigma.py --init models/enigma_pretrain_facts/latest.pth ...`.
+(The data builder REFUSES an existing `--out` at startup --
+`facts_tokens_v2.bin` is the T4 receipt. NOTE: `pretrain_enigma` carries NO
+such guard on its `--out`; `models/enigma_v2_238m_facts` is the live facts
+CPT the SFT default inits from, so name a genuinely NEW run dir yourself.)
+Then point SFT at the new facts base via `--init`.
 Measured effect on the 90-probe gate: factual 13/20 -> 19/20 (v6 lineage);
-the adopted v8 sits on this base.
+both adopted lineages (v8, v2 SFT-2) sit on a facts base built this way.
 
 ---
 
@@ -67,11 +70,14 @@ format and calls tools.
 
 ```
 python make_sft_data.py                            # -> data/sft/{tool_calls,identity,mix}.jsonl
-python finetune_enigma.py --data data/sft/mix.jsonl --out models/enigma_sft
+python finetune_enigma.py --data data/sft/mix.jsonl --out models/<new_run_dir>
 ```
 
-`--init` defaults to `models/enigma_pretrain_large/latest.pth`.
-Defaults: 2 epochs, lr 2e-5 (~peak/30 of pretraining), block 1024.
+`--init` defaults to `models/enigma_v2_238m_facts/model.pth` (the v2 facts
+CPT). `--out` is required and refuses a dir that already holds a checkpoint
+(`--resume`/`--sanity` exempt). Defaults: 2 epochs, lr 2e-5 (~peak/30 of
+pretraining), block 1024 -- RAISE `--block` to the model's trained context
+at any regen (1024 silently skips over-length records).
 
 The general-conversation side of the mix comes from
 `collect_finetuning_data.py`. `--all` downloads every source EXCEPT
@@ -105,8 +111,13 @@ integrity, not new knowledge.
 
 ```
 python make_dpo_data.py                            # -> data/sft/dpo_pairs.jsonl
-python dpo_enigma.py --init models/enigma_sft/model.pth --out models/enigma_dpo
+python dpo_enigma.py --init models/enigma_v2_sft2/model.pth --out models/<new_run_dir>
 ```
+
+`--out` is required and refuses a dir that already holds a checkpoint
+(model.pth, latest.pth, or prev.pth; `--sanity` is exempt -- it never
+writes) -- the old documented target (`models/enigma_dpo`) is the v8
+ROLLBACK checkpoint, and a copy-pasted run would have overwritten it.
 
 **Data format** -- each line has three fields:
 
@@ -127,7 +138,7 @@ Every SFT/DPO candidate is graded against a *running* server -- the real
 production path, not an in-process approximation:
 
 ```
-python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth --memory-dir data/memory_eval
+python serve_enigma.py --port 8123 --model models/<candidate>/model.pth --max-context 2048 --memory-dir data/memory_eval
 python eval_behavior.py --base-url http://127.0.0.1:8123     # in another shell
 ```
 
@@ -162,7 +173,9 @@ lineage", not as "the tokenizer never changes".
   crashes and power loss.
 - `--resume` continues an interrupted run; `--sanity` smoke-tests the
   full forward/backward path in one step.
-- The served checkpoint of record is `models/enigma_dpo/model.pth`.
+- The served checkpoint of record is `models/enigma_v2_sft2/model.pth`
+  (v2, adopted 2026-08-09); `models/enigma_dpo/model.pth` is the v8
+  ROLLBACK -- never aim a training run at either dir.
 
 ---
 

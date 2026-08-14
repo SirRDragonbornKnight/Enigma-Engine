@@ -24,6 +24,36 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def refuse_existing_artifact(out_dir: str | Path) -> None:
+    """Refuse to aim a trainer at a dir that already holds a checkpoint.
+
+    Model artifacts are VERSIONED, never rebuilt in place (pretokenize's
+    corpus rule, applied to the checkpoint writers 2026-08-13 after the DPO
+    trainer's --out default was found pointing at the v8 ROLLBACK dir). All
+    three rotation names count: an interrupted run leaves latest.pth or
+    prev.pth with no model.pth, and those are receipts too. Callers decide
+    the sanctioned exceptions (--resume, --sanity) BEFORE calling.
+    """
+    out_dir = Path(out_dir)
+    # --out naming a FILE is the model.pth-typo class: <file>/model.pth
+    # never exists, so the dir check alone passed and a DPO run trained to
+    # completion before dying at the post-training mkdir (audit 2026-08-13).
+    # A .pth name is the same typo even when nothing exists there yet.
+    if out_dir.is_file() or out_dir.suffix == ".pth":
+        raise SystemExit(
+            f"REFUSED: --out {out_dir} names a checkpoint FILE, not a run "
+            f"directory. Pass a NEW run dir instead."
+        )
+    for name in ("model.pth", "latest.pth", "prev.pth"):
+        target = out_dir / name
+        if target.exists():
+            raise SystemExit(
+                f"REFUSED: {target} already exists -- model artifacts are "
+                f"versioned, never rebuilt in place. Name a NEW --out dir, "
+                f"or delete the old artifact deliberately first."
+            )
+
+
 def atomic_torch_save(data: dict, path: str | Path, rotate_to: str | Path | None = None) -> None:
     """Save a PyTorch checkpoint atomically.
 

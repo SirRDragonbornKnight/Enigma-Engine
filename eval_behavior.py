@@ -7,7 +7,7 @@ drift from serve. This is the scorecard every SFT run gets compared on.
 Trusts no logged number: it asks the model and grades the answers.
 
 Usage:
-    python serve_enigma.py --port 8123 --model models/enigma_sft/model.pth --memory-dir data/memory_eval
+    python serve_enigma.py --port 8123 --model models/enigma_v2_sft2/model.pth --max-context 2048 --memory-dir data/memory_eval
     python eval_behavior.py --base-url http://127.0.0.1:8123                  # in another shell
 
     (--memory-dir enables the memory probes; point it at a THROWAWAY dir,
@@ -224,9 +224,23 @@ def _kw_hit(keyword: str, low: str) -> bool:
     VALUE (any digit, or a decimal part with a nonzero digit). Accepted limit:
     range echoes ("20-21") stay blocked -- the hyphen guard is what stops
     sign-flipped answers."""
+    return _kw_span(keyword, low) is not None
+
+
+def _kw_span(keyword: str, low: str) -> tuple[int, int] | None:
+    """(start, end) of the first whole-word occurrence, or None -- the ONE
+    pattern source for both the credit rule (_kw_hit) and the guess guard's
+    cut point. The guard used bare str.find and disagreed with the credit
+    rule about where a decline phrase sits: 'no idea' embedded in 'no
+    ideals' could drag the cut into setup prose and kill an honest decline
+    the credit rule had already passed (CONSTRUCTED case, audit 2026-08-13
+    -- zero repo rows exhibit it; parity re-derived over 174 sealed unknown
+    rows + 126 focused-corpus sides with 0 verdict differences)."""
     if keyword.isdigit():
-        return re.search(r"(?<![\d.\-])" + re.escape(keyword) + r"(?!\d)(?!\.0*[1-9])(?!,\d)", low) is not None
-    return re.search(r"(?<!\w)" + re.escape(keyword.lower()) + r"(?!\w)", low) is not None
+        m = re.search(r"(?<![\d.\-])" + re.escape(keyword) + r"(?!\d)(?!\.0*[1-9])(?!,\d)", low)
+    else:
+        m = re.search(r"(?<!\w)" + re.escape(keyword.lower()) + r"(?!\w)", low)
+    return (m.start(), m.end()) if m else None
 
 
 def _grade_text(content: str, want_any: list[str], deny_any: list[str]) -> bool:
@@ -501,11 +515,12 @@ def _appends_a_guess(content: str, want_any: list[str]) -> bool:
     low = text.lower()
     cut = -1
     for w in want_any:
-        i = low.find(str(w).lower())
-        if i >= 0:
-            end = i + len(str(w))
-            if cut < 0 or end < cut:
-                cut = end
+        # Whole-word span, the SAME matcher as the credit rule (see
+        # _kw_span). Passing w raw keeps the symmetry with _grade_text
+        # syntactically obvious; _malformed_probe guarantees list[str].
+        span = _kw_span(w, low)
+        if span is not None and (cut < 0 or span[1] < cut):
+            cut = span[1]
     if cut < 0:
         return False  # no decline present; the want check already fails it
     tail = text[cut:]
