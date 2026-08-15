@@ -1,9 +1,11 @@
 """Collector guards: the special-literal sanitizer, the sealed-probe screen,
-and per-config byte accounting in the shared-directory case (finemath's 50/50
-split silently delivered 0% of its second config before 2026-07-27)."""
+per-config byte accounting in the shared-directory case (finemath's 50/50
+split silently delivered 0% of its second config before 2026-07-27), and the
+combine step's determinism + mis-encoding receipt."""
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -149,3 +151,89 @@ def test_sealed_probe_screen_drops_leaky_records(monkeypatch, tmp_path):
     saved_text = "".join(f.read_text(encoding="utf-8") for f in out.glob("*.txt"))
     assert "ordinary long math text" in saved_text
     assert "SEALED PROBE" not in saved_text
+
+
+_SOURCE_DIR_GLOBALS = (
+    "WIKI_DUMP_DIR", "WIKI_DIR", "SIMPLE_DIR", "GUTENBERG_DIR", "FINEWEB_DIR",
+    "OPENWEBTEXT_DIR", "C4_DIR", "DCLM_DIR", "FINEMATH_DIR", "STACK_DIR",
+    "WAYBACK_DIR", "FANDOM_DIR", "STACKEX_DIR",
+)
+
+
+def _isolate_combine(monkeypatch, tmp_path) -> Path:
+    """Point every source dir and the output file at tmp_path; return the one
+    source dir the test fills. Unpatched, combine_all_sources walks the REAL
+    collected corpus and overwrites the real combined.txt."""
+    for name in _SOURCE_DIR_GLOBALS:
+        monkeypatch.setattr(cpd, name, tmp_path / "absent" / name.lower())
+    source = tmp_path / "source"
+    source.mkdir()
+    monkeypatch.setattr(cpd, "WIKI_DIR", source)
+    monkeypatch.setattr(cpd, "COMBINED_FILE", tmp_path / "combined.txt")
+    return source
+
+
+def _enumerate_reversed(monkeypatch):
+    """Hand the combine its directory entries in reverse-name order -- the
+    stand-in for a filesystem whose enumeration order is not name order."""
+    real_scandir = os.scandir
+
+    class _Scan:
+        def __init__(self, entries):
+            self._entries = entries
+
+        def __enter__(self):
+            return iter(self._entries)
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_scandir(path):
+        with real_scandir(path) as it:
+            return _Scan(sorted(it, key=lambda e: e.name, reverse=True))
+
+    monkeypatch.setattr(os, "scandir", fake_scandir)
+
+
+def test_combine_orders_files_by_name_not_enumeration_order(monkeypatch, tmp_path):
+    """combined.txt must be a function of the tree, not of the order the
+    filesystem happens to hand back. With first-wins paragraph dedup the
+    order decides WHICH copy of a duplicated paragraph survives, so an
+    unsorted walk let the same tree combine to different training bytes."""
+    source = _isolate_combine(monkeypatch, tmp_path)
+    shared = "the same paragraph appears in every one of these source files here"
+    # created z, m, a -- creation order is not name order
+    for name, marker in (("z_omega.txt", "ZZZ"), ("m_middle.txt", "MMM"), ("a_alpha.txt", "AAA")):
+        (source / name).write_text(
+            f"{marker} marker paragraph long enough to clear the minimum length bar\n\n{shared}",
+            encoding="utf-8",
+        )
+    _enumerate_reversed(monkeypatch)
+
+    cpd.combine_all_sources()
+    combined = cpd.COMBINED_FILE.read_text(encoding="utf-8")
+
+    order = [combined.index(m) for m in ("AAA", "MMM", "ZZZ")]
+    assert order == sorted(order), combined
+    # ...and first-wins dedup therefore keeps the copy from the FIRST name
+    assert combined.count(shared) == 1
+    assert combined.index(shared) < combined.index("MMM"), combined
+
+
+def test_combine_warns_on_replacement_chars(monkeypatch, tmp_path, capsys):
+    """errors="replace" keeps one bad byte from costing a whole source file,
+    but it wrote U+FFFD into the training bytes with no count and no warning.
+    The substitutions get named and counted."""
+    source = _isolate_combine(monkeypatch, tmp_path)
+    good = source / "clean.txt"
+    good.write_text("a perfectly clean paragraph, long enough to clear the minimum bar", encoding="utf-8")
+    bad = source / "mojibake.txt"
+    bad.write_bytes(b"a paragraph with \xff three \xff bad \xff bytes, long enough to clear the bar")
+
+    cpd.combine_all_sources()
+    out = capsys.readouterr().out
+
+    warns = [line for line in out.splitlines() if "WARN" in line]
+    assert len(warns) == 1, out
+    assert "mojibake.txt" in warns[0] and "3" in warns[0], warns
+    assert "clean.txt" not in out

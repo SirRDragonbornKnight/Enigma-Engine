@@ -523,3 +523,39 @@ class TestCombineAllText:
         assert any("text file is 0 bytes" in r.getMessage() for r in warnings), (
             f"Expected WARNING about empty text yield. Got: {[r.getMessage() for r in warnings]}"
         )
+
+
+# ── Round-2 review (2026-08-13): the diet is the default, combine leaves a receipt ──
+
+
+def test_the_recorded_diet_is_the_default(cf_module):
+    """--all must reproduce the recorded 2026-07-15 diet: the smoltalk2 cap
+    defaults to 600 (the one knob driving completion cap + prompt cap +
+    think-split skip -- None streamed exactly the long-trace class
+    OpenThoughts3 is excluded for), and SlimOrca -- never in the 105,203-row
+    live build, no length filter at all -- is NOT swept in by --all."""
+    assert cf_module._DIET_SMOLTALK2_CAP == 600
+    src = Path(cf_module.__file__).read_text(encoding="utf-8")
+    assert "default=_DIET_SMOLTALK2_CAP" in src, "the smoltalk2 cap default left the diet"
+    assert "if args.slimorca is not None or args.all" not in src, \
+        "SlimOrca is back in --all"
+
+
+def test_combine_is_atomic_and_leaves_a_manifest(cf_module, tmp_path):
+    """combine_all truncated the LIVE combined corpus on open, and nothing
+    recorded which files fed it (synthetic_search_seed.jsonl once rode into
+    the mix that way, silently)."""
+    import json as _json
+
+    (tmp_path / "a.jsonl").write_text('{"prompt": "p1", "completion": "c1"}\n',
+                                      encoding="utf-8")
+    (tmp_path / "b.jsonl").write_text('{"prompt": "p2", "completion": "c2"}\n'
+                                      '{"prompt": "p2", "completion": "c2"}\n',
+                                      encoding="utf-8")
+    cf_module.combine_all(tmp_path)
+
+    man = _json.loads((tmp_path / "combined_finetune.manifest.json")
+                      .read_text(encoding="utf-8"))
+    assert man["sources"] == {"a.jsonl": 1, "b.jsonl": 2}
+    assert man["combined_records"] == 2  # the duplicate deduped
+    assert not list(tmp_path.glob("*.jsonl.tmp")), "atomic write left droppings"

@@ -293,6 +293,10 @@ def test_the_page_shows_a_sense_control_only_when_its_organ_exists(monkeypatch):
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr(serve, "_BOOTED", True)
+    # builtins are also INSTRUCT-gated now (a base checkpoint's path never
+    # reaches the tool loop, review 2026-08-13); this test is about ORGAN
+    # gating, so pin the instruct side on.
+    monkeypatch.setattr(serve, "INSTRUCT", True)
     for organ in ("MEMORY", "SPEAKER", "EARS", "EYES", "PAINTER"):
         monkeypatch.setattr(serve, organ, None)
     client = TestClient(serve.app)
@@ -800,6 +804,30 @@ def test_memory_list_refuses_a_negative_k(monkeypatch, tmp_path):
     assert len(serve.memory_list(q="pet", k=2)["results"]) == 2
 
 
+def test_memory_post_writes_the_same_kind_as_the_tool_door(monkeypatch, tmp_path):
+    """The endpoint's docstring claims it mirrors the remember TOOL, which
+    writes kind "user_fact" -- but its default was "fact", so the same fact
+    landed under two kinds depending on which door it came through."""
+    monkeypatch.setattr(serve, "MEMORY", MemoryStore(str(tmp_path / "mem")))
+    posted = serve.memory_add(serve.MemReq(text="User likes tea."))["memory"]
+    tooled = serve._execute_builtin("remember", {"text": "User likes coffee."})
+    assert tooled.startswith("saved: ")
+    assert posted["kind"] == serve.MEMORY.all()[-1]["kind"] == "user_fact"
+
+
+def test_memory_post_refuses_a_reserved_kind(monkeypatch, tmp_path):
+    """kind "episode" is the store's session-memory reserve: a client minting
+    one through the HTTP door would forge a session summary into recall."""
+    monkeypatch.setattr(serve, "MEMORY", MemoryStore(str(tmp_path / "mem")))
+    for bad in ("episode", "note", ""):
+        with pytest.raises(serve.HTTPException) as exc:
+            serve.memory_add(serve.MemReq(text="User likes tea.", kind=bad))
+        assert exc.value.status_code == 400
+        assert "user_fact" in exc.value.detail and "fact" in exc.value.detail
+    assert serve.MEMORY.all() == []  # nothing written by a refused kind
+    assert serve.memory_add(serve.MemReq(text="User likes tea.", kind="fact"))["memory"]["kind"] == "fact"
+
+
 # ---------------------------------------------------------------------------
 # stream vs non-stream byte parity (ultrareview #31 + re-audit 2026-07-17).
 # The whitespace shapes are exactly the class that broke the first fix.
@@ -860,6 +888,60 @@ def test_stream_and_nonstream_content_byte_identical(monkeypatch, tok, gen_text)
     nonstream = resp["choices"][0]["message"]["content"] or ""
     stream = _drain_stream(serve._chat_instruct(_req(stream=True)))
     assert stream == nonstream
+
+
+def test_stream_reports_the_same_enigma_extension_as_nonstream(monkeypatch, tok):
+    """A looped built-in is consumed by the hop that runs it, so `enigma`
+    (spoke + tools_run) is the ONLY report that it fired. The stream path
+    carried no such report at all: an eval or a page driving the server with
+    stream=true could not tell a speak that fired from one that never did,
+    and the page would double-voice a reply she already said out loud."""
+    from enigma_engine.core.chat_format import TOOL_CALL, TOOL_CALL_END
+
+    class _Speaker:
+        last_error = None
+
+        def speak(self, text):
+            return None
+
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "EOS_ID", tok.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tok.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512))
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+    monkeypatch.setattr(serve, "MUTED", False)
+    monkeypatch.setattr(serve, "SPEAKER", _Speaker())
+
+    payload = json.dumps({"name": "speak", "arguments": {"text": "Hello there."}})
+    hops = [[TOOL_CALL] + tok.encode(payload, add_special_tokens=False) + [TOOL_CALL_END],
+            tok.encode("Said it out loud.", add_special_tokens=False)]
+    seq = {"it": iter(hops)}
+
+    def fake_gen(ids, max_tokens, *a, **k):
+        yield from next(seq["it"], hops[-1])
+
+    monkeypatch.setattr(serve, "_gen_ids", fake_gen)
+
+    def _req(stream: bool) -> serve.ChatReq:
+        return serve.ChatReq(
+            messages=[serve.Msg(role="user", content="Say hello out loud.")],
+            stream=stream,
+            max_tokens=64,
+        )
+
+    seq["it"] = iter(hops)
+    nonstream = serve._chat_instruct(_req(stream=False))
+    assert nonstream["enigma"] == {"spoke": True, "tools_run": ["speak"]}
+
+    seq["it"] = iter(hops)
+    chunks = _stream_chunks(serve._chat_instruct(_req(stream=True)))
+    terminal = chunks[-1]
+    assert terminal["choices"][0]["finish_reason"] is not None  # the frame before [DONE]
+    assert terminal["enigma"] == nonstream["enigma"]
+    # content frames stay byte-identical to the non-stream join: the extension
+    # rides the terminal frame ONLY
+    assert not any("enigma" in c for c in chunks[:-1])
 
 
 # ---------------------------------------------------------------------------
@@ -946,7 +1028,7 @@ def test_mute_roundtrip_persists_and_gates(monkeypatch, tmp_path):
     monkeypatch.setattr(serve, "MUTED", False)
     monkeypatch.setattr(serve, "SPEAKER", object())
 
-    assert serve.set_mute(serve.MuteReq(muted=True)) == {"muted": True}
+    assert serve.set_mute(serve.MuteReq(muted=True)) == {"muted": True, "persisted": True}
     assert serve.MUTED is True
     assert json.loads(state.read_text(encoding="utf-8")) == {"muted": True}
     assert serve.get_mute() == {"muted": True}
@@ -957,7 +1039,7 @@ def test_mute_roundtrip_persists_and_gates(monkeypatch, tmp_path):
     # muted speak TOOL: honest "muted:" result string, not an exception
     assert serve._execute_builtin("speak", {"text": "hi"}).startswith("muted:")
 
-    assert serve.set_mute(serve.MuteReq(muted=False)) == {"muted": False}
+    assert serve.set_mute(serve.MuteReq(muted=False)) == {"muted": False, "persisted": True}
     assert json.loads(state.read_text(encoding="utf-8")) == {"muted": False}
 
 
@@ -994,10 +1076,36 @@ def test_talk_mode_roundtrip_persists(monkeypatch, tmp_path):
     monkeypatch.setattr(serve, "_TALK_STATE", state)
     monkeypatch.setattr(serve, "TALK_MODE", False)
     assert serve.get_talk_mode() == {"enabled": False}
-    assert serve.set_talk_mode(serve.TalkReq(enabled=True)) == {"enabled": True}
+    assert serve.set_talk_mode(serve.TalkReq(enabled=True)) == {"enabled": True, "persisted": True}
     assert serve.TALK_MODE is True
     assert json.loads(state.read_text(encoding="utf-8")) == {"enabled": True}
     assert serve.get_talk_mode() == {"enabled": True}
+
+
+def test_a_failed_state_write_is_reported_not_swallowed(monkeypatch, tmp_path, capsys):
+    """Persistence is what the mute comment PROMISES (a crash-relaunch must
+    not silently unmute a muted gaming session). A swallowed OSError answered
+    200 claiming durability the disk never got, so the next boot would quietly
+    hand back the old state. The switch still flips for this run -- it just
+    stops lying about surviving a restart."""
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(serve.os, "replace", _boom)
+    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    monkeypatch.setattr(serve, "MUTED", False)
+    monkeypatch.setattr(serve, "TALK_MODE", False)
+
+    assert serve.set_mute(serve.MuteReq(muted=True)) == {"muted": True, "persisted": False}
+    assert serve.MUTED is True  # in-memory truth still changed
+    assert serve.set_talk_mode(serve.TalkReq(enabled=True)) == {"enabled": True, "persisted": False}
+    assert serve.TALK_MODE is True
+
+    out = capsys.readouterr().out
+    assert out.count("WARN: could not persist") == 2
+    assert "mute_state.json" in out and "talk_mode.json" in out
+    assert "disk full" in out
 
 
 def test_stop_bumps_generation_and_aborts_speaker(monkeypatch):
@@ -1257,10 +1365,14 @@ def test_load_eyes_guards_and_happy_path(tmp_path):
 # boot() end to end on a tiny checkpoint (CPU-forced; every global restored)
 # ---------------------------------------------------------------------------
 
+# Every name boot() declares `global` -- a name boot writes but this list
+# misses is never restored, so it leaks into every later test in the session.
 _RUNTIME_GLOBALS = [
     "ARGS", "CONFIG", "model", "tokenizer", "DEVICE", "_BF16_GEN", "STEP", "META",
-    "INSTRUCT", "MEMORY", "SPEAKER", "MUTED", "EARS", "EYES", "PAINTER", "EOS_ID", "BOS_ID",
-    "_BOOTED", "MODEL_PATH", "MODEL_SHA256",
+    "MODEL_PATH", "MODEL_SHA256",
+    "INSTRUCT", "MEMORY", "MEMORY_RECALL", "SPEAKER", "MUTED", "TALK_MODE", "EARS",
+    "EYES", "PAINTER", "SEARCHER", "EOS_ID", "BOS_ID",
+    "_BOOTED", "PERSONA", "_VOICE_STATE", "IMAGES_DIR", "_STOP_TEXTS",
 ]
 
 
@@ -1277,13 +1389,15 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
     entered either branch); the second, flagless boot must RESTORE the
     offline default despite the first boot's leftover "0" (the double-boot
     hole, re-audit 2026-07-18); legs C/D pin the operator-export semantics.
-    CUDA is masked off so this never touches the GPU; mute state and env are
-    patched hermetic and restored."""
+    CUDA is masked off so this never touches the GPU; mute + talk state and
+    env are patched hermetic and restored (unpatched, boot() reads the
+    developer's own data/talk_mode.json)."""
     import os
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)  # no operator values in play
@@ -1390,6 +1504,7 @@ def test_boot_declares_the_chat_specials_decodable(monkeypatch, tmp_path, capsys
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
     real_vocab = len(get_tokenizer("bpe").token_to_id)
     cfg = ForgeConfig(
         vocab_size=real_vocab, dim=32, n_layers=2, n_heads=2,
@@ -1489,6 +1604,7 @@ def test_boot_brings_real_organs_up(monkeypatch, tmp_path):
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1546,6 +1662,7 @@ def test_boot_survives_an_unusable_memory_dir(monkeypatch, tmp_path):
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1577,6 +1694,7 @@ def test_boot_survives_eyes_construction_failure(monkeypatch, tmp_path):
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1618,6 +1736,7 @@ def test_boot_max_context_follows_long_config(monkeypatch, tmp_path):
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
+    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)

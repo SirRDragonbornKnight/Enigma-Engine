@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import logging
+import re
 import tarfile
 import time
 import urllib.request
@@ -42,6 +43,21 @@ logger = logging.getLogger(__name__)
 OUTPUT_DIR = Path("data/audio")
 LIBRISPEECH_URL = "https://www.openslr.org/resources/12/train-clean-100.tar.gz"
 SUBSET = "train-clean-100"
+
+# first-person I and its contractions: the one casing that is CERTAIN in
+# English regardless of context
+_I_FORMS = re.compile(r"\bi(?=['\s]|$)")
+
+
+def _prose(text: str) -> str:
+    """ALL-CAPS transcript -> readable prose. True casing is UNRECOVERABLE
+    from the source (proper nouns and acronyms stay lowercase); the old
+    str.capitalize() additionally destroyed standalone "I" and its
+    contractions across ~28.5k utterances (review 2026-08-13). This keeps
+    the sentence-initial capital and restores the one certain case."""
+    low = text.strip().lower()
+    low = _I_FORMS.sub("I", low)
+    return low[:1].upper() + low[1:]
 
 
 def _download(url: str, dest: Path) -> None:
@@ -92,28 +108,45 @@ def collect_librispeech(output_dir: Path, skip_download: bool = False) -> int:
 
     pairs = 0
     missing = 0
+    empty = 0
     out_path = output_dir / "librispeech.jsonl"
-    with open(out_path, "w", encoding="utf-8") as out:
+    # tmp + rename: the old code truncated a good librispeech.jsonl on open,
+    # so an interrupted or empty walk replaced the corpus with a stub
+    # (review 2026-08-13).
+    tmp_path = out_path.with_suffix(".jsonl.tmp")
+    with open(tmp_path, "w", encoding="utf-8", newline="") as out:
         for trans in sorted(root.rglob("*.trans.txt")):
             for line in trans.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 utt_id, _, text = line.partition(" ")
+                text = text.strip()
+                if not text:
+                    empty += 1
+                    continue
                 flac = trans.parent / f"{utt_id}.flac"
                 if not flac.exists():
                     missing += 1
                     continue
-                # Transcripts ship ALL-CAPS; her text is normal prose.
                 out.write(
                     json.dumps(
-                        {"audio": str(flac.resolve()), "text": text.strip().capitalize()},
+                        {"audio": str(flac.resolve()), "text": _prose(text)},
                         ensure_ascii=False,
                     )
                     + "\n"
                 )
                 pairs += 1
+    if pairs == 0:
+        tmp_path.unlink(missing_ok=True)
+        raise SystemExit(
+            f"REFUSED: the transcript walk under {root} produced zero pairs -- "
+            f"not replacing {out_path.name} with an empty file"
+        )
+    tmp_path.replace(out_path)
     if missing:
         logger.warning(f"{missing} transcript lines had no matching .flac (skipped)")
+    if empty:
+        logger.warning(f"{empty} transcript lines carried no text (skipped)")
     logger.info(f"LibriSpeech: {pairs} audio-text pairs -> {out_path}")
     return pairs
 

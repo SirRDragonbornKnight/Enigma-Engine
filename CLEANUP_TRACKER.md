@@ -163,7 +163,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **992 passed on ENIGMAPC (2026-08-13, paired with the Round-1 hardening commit; 4 tests read external inputs — Enigma Backups transcripts + the gitignored focused corpus — and SKIP on any other machine)** — THE live number; other docs
+4. Suite baseline: **1051 passed on ENIGMAPC (2026-08-15, paired with the Round-2 review commit; 15 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -196,6 +196,36 @@ Deleted after a three-agent adversarial audit verified every claim
    non-vacuous), and `test_finetune_out_guard.py` 6 (--out required +
    refusal, resume exempt ONLY into its own dir, sanity exempt and
    mkdir-after-sanity pinned, main-wiring pin).
+   **992 → 1051 is the Round-2 review arc (2026-08-14/15)** -- the
+   seven-lens sweep (make_sft_data, knowledge_corpus, identity, the eval
+   stack, core, serve, collectors), its five fix waves, the arc's ordered
+   audit and the ledger tail. Five new files: `test_safe_save.py` 4 (a
+   rotation exception leaves the .tmp on disk instead of eating the save),
+   `test_identity_generators.py` 6 (the identity machinery + its collision
+   screens), `test_collect_audio_data.py` 3 (transcript mangling + atomic
+   write, de-vacuumed), `test_eval_scratch_gate.py` 5 (the memory-wipe
+   gate's fail-closed shapes) and `test_sft_writer_guard.py` 3 (the
+   artifacts land together after fit_mix). Growth elsewhere:
+   `test_chat_format.py` +7 (the parser trio + abandoned-tool-span
+   hardening), `test_knowledge_data.py` +6 (cloze guards, degenerate
+   census 4 → 0, fail-closed probe screen), `test_sft_regen_shapes.py`
+   52 → 61 collected, +9 (seven new defs -- six screens print their
+   held-out count, the dev screen reads the whole prompt, tool records
+   never take the ASCII fast path -- one dropped verbatim duplicate of
+   `test_memory_present_declines_do_not_parrot_the_distractor`, which now
+   carries its width assertion, and the widened determinism parametrize
+   adds 3 cases, no new def), `test_serve_enigma.py` +4 (renderer-parity
+   extraction behind the shadowing 400, persist-failure WARNs, stream
+   terminal-frame parity, /v1/memory kinds), `test_eval_transcript.py` +3
+   (a zero-n baseline is refused a verdict, a torn write leaves the
+   previous transcript intact), `test_memory_store.py` +3 (measure-key
+   collapse, forget(None), supersede-persist ordering), and the three
+   `test_collect_*.py` +2 each (recorded-diet reproduction, per-source
+   manifests, atomic combine). Three more hardened INSIDE existing tests
+   with no count change: `test_eval_leak_guard.py` (the FLAT tool-call
+   args shape the builder actually emits now reaches the screen),
+   `test_search_organ.py` (search is INSTRUCT-gated) and
+   `test_eval_grading.py` (three probe phrasings re-cut).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

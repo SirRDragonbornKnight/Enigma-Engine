@@ -421,7 +421,17 @@ def _message_chunks(tokenizer, messages: list[dict[str, Any]]):
         role = m.get("role", "")
         if role not in ROLES:
             raise ValueError(f"unknown chat role {role!r} (need one of {ROLES})")
-        content = (m.get("content") or "").strip()
+        raw_content = m.get("content") or ""
+        if not isinstance(raw_content, str):
+            # Same honesty as the role check one line up: a list content
+            # (the OpenAI image form, un-flattened) used to surface as an
+            # AttributeError -- a 500 shape -- instead of the ValueError
+            # serve turns into a clean 400 (review 2026-08-13).
+            raise ValueError(
+                f"message content must be a string, got {type(raw_content).__name__} "
+                f"(image/list content must be flattened before rendering)"
+            )
+        content = raw_content.strip()
         header = [im_start] + _enc(tokenizer, role + "\n")
         body: list[int] = _enc_content(tokenizer, content, allow_think=(role == "assistant")) if content else []
         if role == "tool":
@@ -492,6 +502,12 @@ def render_training(
         parts = ([sys_chunk] if sys_chunk else []) + rest
         while len(rest) > 1 and total(parts) > max_ids:
             rest.pop(0)  # drop the oldest non-system turn
+            # ...and its tool RESULTS with it: a tool turn heading the
+            # window renders an orphan <|tool_result|> the model never saw
+            # in training (review 2026-08-13). The newest turn still always
+            # survives, even when it is itself a tool result.
+            while len(rest) > 1 and rest[0][0] == "tool":
+                rest.pop(0)
             parts = ([sys_chunk] if sys_chunk else []) + rest
         if total(parts) > max_ids and rest:
             role, ids_c, mask_c = rest[-1]
@@ -517,9 +533,16 @@ def render_training(
         # shrinks it. The budget is a HARD promise: past it the ids walk off
         # the trained block / RoPE table. Keep BOS + the tail (newest turn
         # and any generation prompt live there).
-        keep = max(1, max_ids - 1)
-        ids = ids[:1] + ids[-keep:]
-        mask = mask[:1] + mask[-keep:]
+        if max_ids <= 1:
+            # BOS + tail would emit TWO ids for a budget of one -- the
+            # promise is HARD, so a degenerate budget keeps BOS alone
+            # (audit 2026-08-14; reachable at max_context = MIN_GEN + 1).
+            ids = ids[:max_ids]
+            mask = mask[:max_ids]
+        else:
+            keep = max_ids - 1
+            ids = ids[:1] + ids[-keep:]
+            mask = mask[:1] + mask[-keep:]
     return ids, mask
 
 
@@ -565,6 +588,16 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
                 content_ids.extend(span)
         else:
             raw = tokenizer.decode(span, skip_special_tokens=True).strip()
+            if not closed:
+                # A tool span the model never closed -- reopened over,
+                # ended by a MISMATCHED closer, or cut by the token budget
+                # -- is a truncated INTENT. Parsing it into a named call
+                # would execute something half-said (an abandoned `forget`
+                # ran for real, audit 2026-08-14); same contract as search.
+                # Kept visible as raw so callers can surface the attempt.
+                if raw:
+                    tool_calls.append({"name": None, "raw": raw})
+                return
             try:
                 call = json.loads(raw)
                 name = call.get("name")
@@ -582,17 +615,31 @@ def parse_assistant_ids(tokenizer, ids: list[int]) -> dict[str, Any]:
             except (json.JSONDecodeError, AttributeError):
                 tool_calls.append({"name": None, "raw": raw})
 
+    # Closer id -> the kind it closes: a closer only closes ITS OWN kind.
+    # '<search>q</think>' used to flush q as a CLOSED search and execute a
+    # lookup the model never closed (review 2026-08-13); a mismatched or
+    # stray closer now truncates whatever is open instead.
+    closers = {think_end: "think", tool_call_end: "tool"}
+    if search_end is not None:
+        closers[search_end] = "search"
+
     for t in ids:
         if t in (im_end, eos):
             break
         if t == think:
+            # An opener while a span is open used to DISCARD the open span
+            # (a <think> interrupted by a tool call lost the reasoning,
+            # review 2026-08-13); an interrupted span is truncated output.
+            flush_span(closed=False)
             span, span_kind = [], "think"
         elif t == tool_call:
+            flush_span(closed=False)
             span, span_kind = [], "tool"
         elif search_start is not None and t == search_start:
+            flush_span(closed=False)
             span, span_kind = [], "search"
-        elif t in (think_end, tool_call_end) or (search_end is not None and t == search_end):
-            flush_span()
+        elif t in closers:
+            flush_span(closed=(span is not None and span_kind == closers[t]))
             span = None
         elif span is not None:
             span.append(t)

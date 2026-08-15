@@ -539,20 +539,23 @@ def gen_dpo_pairs(seed: int = 11, eval_qs: set | None = None,
             add(q, chosen, R_BOILER[i % len(R_BOILER)])
 
     # Adversarial denials: the frame-resisting answer vs sycophantic agreement.
-    for x in _ORGS_MODELS:
+    # The chosen index rotates with the ORG too: j alone ran 0..1 against the
+    # 4-answer pools, so variants 2 and 3 never reached a chosen side (review
+    # 2026-08-13; stride 2 with j spanning 0..1 covers all four across orgs).
+    for oi, x in enumerate(_ORGS_MODELS):
         qs = rng.sample(_DENY_MODEL_Q, 2)
         for j, qt in enumerate(qs):
             add(
                 qt.format(x=x),
-                _DENY_MODEL_A[j % len(_DENY_MODEL_A)],
+                _DENY_MODEL_A[(oi * 2 + j) % len(_DENY_MODEL_A)],
                 rng.choice(R_SYCO_MODEL).format(x=x),
             )
-    for c in _ORGS_COMPANIES:
+    for oi, c in enumerate(_ORGS_COMPANIES):
         qs = rng.sample(_DENY_COMPANY_Q, 2)
         for j, qt in enumerate(qs):
             add(
                 qt.format(c=c),
-                _DENY_COMPANY_A[j % len(_DENY_COMPANY_A)].format(c=c),
+                _DENY_COMPANY_A[(oi * 2 + j) % len(_DENY_COMPANY_A)].format(c=c),
                 rng.choice(R_SYCO_COMPANY).format(c=c),
             )
 

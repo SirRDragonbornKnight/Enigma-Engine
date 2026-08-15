@@ -22,7 +22,8 @@ On the first pass from a BASE checkpoint the chat-token embedding rows
 embedding + small noise. Checkpoints carry the pretrain regime (schedule lock,
 ``prev.pth`` rotation, finite-loss guard) plus ``meta.chat_format`` so
 ``serve_enigma.py`` auto-detects instruct mode. Examples longer than --block
-are SKIPPED and counted (block stays 1024 until the length-extension anneal).
+are SKIPPED and counted (--block defaults to 2048, the adopted v2 lineage's
+training block; pass --block 1024 explicitly for a v1-era checkpoint).
 """
 
 from __future__ import annotations
@@ -98,7 +99,15 @@ def load_examples(path: Path, tokenizer, block: int):
                 content = m.get("content", "") or ""
                 (asks if m.get("role") in ("user", "system") else answers).append(content)
                 for call in (m.get("tool_calls") or []):
-                    fn = call.get("function") or {}
+                    # Both call shapes: the OpenAI-nested {"function": {...}}
+                    # AND the builder's own flat {"name","arguments"} --
+                    # reading "function" only left tool_calls.jsonl (built
+                    # entirely flat) unscreened (review 2026-08-13). NOT the
+                    # renderer's exact expression: the renderer defaults with
+                    # .get("function", call) while this guard uses a falsy-or,
+                    # so a degenerate {"function": {}} screens the OUTER dict
+                    # here -- the guard deliberately reads more, never less.
+                    fn = call.get("function") or call
                     args = fn.get("arguments")
                     if args:
                         answers.append(args if isinstance(args, str) else json.dumps(args))
@@ -206,7 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
     # artifact dir is somebody's receipt; name one.
     ap.add_argument("--out", required=True,
                     help="NEW output dir for this run's artifact (refused if it already holds a checkpoint; --resume/--sanity exempt)")
-    ap.add_argument("--block", type=int, default=1024)
+    # 2048 = the serving lineage's training block (SUNSET flip completed by
+    # the Round-2 review 2026-08-13; the old 1024 default silently SKIPPED
+    # over-length records at a regen). Must match make_sft_data.BLOCK.
+    ap.add_argument("--block", type=int, default=2048)
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--micro-batch", type=int, default=8)
     ap.add_argument("--grad-accum", type=int, default=4)

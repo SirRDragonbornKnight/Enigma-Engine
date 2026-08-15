@@ -15,7 +15,10 @@ Authoring rules:
   sentences over character).
 - Numbers are written as words where natural ("seven days") -- the BPE
   tokenizer splits digit strings inconsistently, so word-numbers recall
-  better at 182M. Digits appear only where words would read strangely.
+  better; measured on the 182M lineage, and the tokenizer behaviour it
+  rests on is unchanged at 238M. Digits appear only where words would
+  read strangely, or where an eval probe's want key IS the digit (the
+  boiling-point row carries both surfaces on purpose).
 - Answer OPENERS vary across intents (a shared opener lets greedy decoding
   jump rails between intents -- measured 2026-07-15).
 - Eval probes are phrased DIFFERENTLY here on purpose; make_sft_data's
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from pathlib import Path
 
 # (question phrasings, answer variants). Answers vary in wording, never in fact.
@@ -143,8 +147,8 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["How many days are in a year?", "How long is a year in days?"],
-        ["365 days, and 366 in a leap year.",
-         "A year lasts 365 days -- leap years add one more."],
+        ["Three hundred sixty-five days, and three hundred sixty-six in a leap year.",
+         "A year lasts three hundred sixty-five days -- leap years add one more."],
     ),
     (
         ["How many hours are in a day?", "A day has how many hours?"],
@@ -244,8 +248,11 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What's the capital of the United States?", "Which city is the US capital?"],
-        ["Washington, D.C.",
-         "The capital of the United States is Washington, D.C."],
+        # "Washington D.C." without the comma: _lead_fragment cuts at ", ",
+        # and the comma form taught "the capital is Washington." in the cloze
+        # (review 2026-08-13; the comma-less spelling is standard too).
+        ["Washington D.C.",
+         "The capital of the United States is Washington D.C."],
     ),
     (
         ["What's the capital of the United Kingdom?", "Which city is the UK capital?"],
@@ -366,8 +373,16 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["At what temperature does water boil?", "When does water start boiling?"],
-        ["One hundred degrees Celsius at sea level -- that's 212 Fahrenheit.",
-         "Water boils at one hundred Celsius at sea level."],
+        # Both surfaces on purpose: the sealed factual probe's want key is the
+        # DIGIT "100" (whole-word numeric match), and the all-words answers
+        # could never satisfy it -- a permanently unwinnable row (review
+        # 2026-08-13). Word-numbers stay for recall; the digits make the row
+        # winnable.
+        # Digit surface FIRST: the cloze takes the first answer's lead
+        # fragment, and a word-number lead re-created the unwinnable surface
+        # one line down from the fix (audit 2026-08-14).
+        ["100 degrees Celsius -- one hundred -- at sea level, which is 212 Fahrenheit.",
+         "Water boils at 100 degrees Celsius at sea level."],
     ),
     (
         ["What are the states of matter?", "Name the main states of matter."],
@@ -497,8 +512,8 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["How many bones does an adult have?", "What's the number of bones in the human body?"],
-        ["An adult has 206 bones. Babies are born with more, and some fuse as they grow.",
-         "206 in an adult -- children start with around 300 that fuse over time."],
+        ["An adult has two hundred six bones. Babies are born with more, and some fuse as they grow.",
+         "Two hundred six in an adult -- children start with around three hundred that fuse over time."],
     ),
     (
         ["What's the largest organ of the body?", "Which human organ is the biggest?"],
@@ -833,22 +848,22 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     (
         ["What's the capital of Argentina?", "Which city is Argentina's capital?"],
         ["Buenos Aires.",
-         "Buenos Aires."],
+         "Buenos Aires -- Argentina's capital and largest city."],
     ),
     (
         ["What's the capital of Kenya?", "Which city is Kenya's capital?"],
         ["Nairobi.",
-         "Nairobi."],
+         "Nairobi -- Kenya's capital."],
     ),
     (
         ["What's the capital of Thailand?", "Which city is Thailand's capital?"],
         ["Bangkok.",
-         "Bangkok."],
+         "Bangkok -- Thailand's capital."],
     ),
     (
         ["What's the capital of Poland?", "Which city is Poland's capital?"],
         ["Warsaw.",
-         "Warsaw."],
+         "Warsaw -- Poland's capital, on the Vistula."],
     ),
     (
         ["What's the capital of Sweden?", "Which city is Sweden's capital?"],
@@ -858,7 +873,7 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     (
         ["What's the capital of Norway?", "Which city is Norway's capital?"],
         ["Oslo.",
-         "Oslo."],
+         "Oslo -- Norway's capital, at the head of the Oslofjord."],
     ),
     (
         ["What's the Great Barrier Reef?", "Where is the biggest coral reef?"],
@@ -922,7 +937,11 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
          "Only certain metals -- iron above all. Most materials don't respond to a magnet at all."],
     ),
     (
-        ["How does a battery work?", "What's inside a battery?"],
+        # Second phrasing asks what makes it WORK, not what is inside it:
+        # the cloze shifted here when how-does joined the skip list, and
+        # "inside a battery" answered with "Chemistry" named the wrong
+        # thing -- inside is electrodes and electrolyte (audit 2026-08-14).
+        ["How does a battery work?", "What makes a battery work?"],
         ["A battery stores energy in chemicals and releases it as electricity when the circuit closes.",
          "Chemistry -- two different materials and a reaction between them that pushes electrons through a wire."],
     ),
@@ -1251,7 +1270,9 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     (
         ["Can Enigma speak out loud?", "Does Enigma have a voice organ?",
          "Is Enigma silent by default?", "How does Enigma's talk mode work?"],
-        ["Yes -- with talk mode on it speaks its answers aloud. It starts silent by default.",
+        # No yes/no opener: 4 questions rotate over 3 answers, and "Yes --"
+        # landed on "How does Enigma's talk mode work?" (review 2026-08-13).
+        ["With talk mode on it speaks its answers aloud -- and it starts silent by default.",
          "It has a voice; talk mode turns it on, and it boots silent on purpose.",
          "Talk mode is the switch: off means text only, on means it speaks its answers."],
     ),
@@ -1340,6 +1361,10 @@ _KEY_STOP_TOKENS = frozenset({
     "walks", "controls", "filter", "filters", "evaporates", "lasts", "fields",
     "wins", "in", "not", "yes", "no", "it", "it's", "they", "they're",
     "that", "that's", "this", "we",
+    # clause leads that slipped the net and produced clause-shaped "terms"
+    # ("Because the planet rotates", "Computers use binary", "Muscles only
+    # pull") -- review 2026-08-13
+    "because", "use", "uses", "only",
 })
 
 # Answer openers that wrap the key term -- strip before extracting it.
@@ -1351,17 +1376,32 @@ _FRAGMENT_SEPS = (" -- ", ": ", ". ", "; ", ", ")
 
 # First words safe to lowercase when the key term lands mid-sentence
 # ("...is twenty-four hours."); everything else is treated as a proper noun.
+# Number-words are matched by RULE below, not enumerated -- the hand list
+# drifted behind every floor widening ("is Three." vs "is seven." in one
+# corpus, 33 lines, review 2026-08-13).
 _MID_LOWER_FIRST = frozenset({
     "a", "an", "the", "about", "roughly", "mostly", "every", "once", "with",
-    "zero", "one", "two", "five", "six", "seven", "eight", "ten", "twelve",
-    "fifty", "sixty", "twenty-four", "twenty-six", "sixty-four",
-    "eighty-eight", "moving", "molten", "nuclear", "fat", "green", "pink",
+    "moving", "molten", "nuclear", "fat", "green", "pink",
     "temperature", "volume", "oxygen", "nitrogen", "hydrogen", "sodium",
     "atoms", "cells", "photosynthesis", "diamond", "gravity", "electricity",
 })
 
-# Yes/no and why questions make "The answer to ... is <term>." read wrong.
-_CLOZE_Q_SKIP = ("is ", "are ", "do ", "does ", "can ", "why ", "name ")
+_NUMBER_WORD = re.compile(
+    r"^(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+    r"twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|"
+    r"thousand|million|billion)(?:-[a-z]+)?$"
+)
+
+# Yes/no, why, and how-mechanism questions make "The answer to ... is
+# <term>." read wrong. The auxiliary family was half-covered (was/did/will/
+# have/should/could missing) and produced 'The answer to "Was Enigma built
+# from another model?" is None.' -- an ambiguous-polarity SELF fact (review
+# 2026-08-13).
+_CLOZE_Q_SKIP = ("is ", "are ", "do ", "does ", "can ", "why ", "name ",
+                 "was ", "were ", "did ", "will ", "has ", "have ",
+                 "should ", "could ", "would ", "how do ", "how does ",
+                 "who can ")
 
 # Subjects that are stand-ins, not terms -- never invert around them.
 _INVERT_X_STOP = frozenset({"it", "that", "this", "there", "he", "she"})
@@ -1381,18 +1421,28 @@ _CONTEXT_LEADS = (
 def _probe_strings() -> list[str]:
     """Lowercased eval-probe questions (and memory teach lines). Generated
     text must never carry one verbatim -- same dodge discipline as the
-    KNOWLEDGE phrasings themselves and make_sft_data's _norm_q backstop."""
+    KNOWLEDGE phrasings themselves and make_sft_data's _norm_q backstop.
+
+    FAIL CLOSED: a missing probes file used to silently disable the screen
+    (changing the facts stream's bytes with no error), and one empty q/teach
+    string would have matched EVERY line and zeroed the stream, surfacing
+    downstream as make_facts' misleading "produced no fact lines" (review
+    2026-08-13)."""
     if not _EVAL_PROBES.exists():
-        return []
+        raise SystemExit(
+            f"REFUSED: {_EVAL_PROBES} is missing -- generating the facts "
+            f"stream without the probe screen would silently change its bytes"
+        )
     probes: list[str] = []
     for line in _EVAL_PROBES.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         rec = json.loads(line)
-        probes.append(rec["q"].strip().lower())
-        for fact in rec.get("teach", []):
-            probes.append(fact.strip().lower())
+        for s in [rec.get("q", "")] + list(rec.get("teach") or []):
+            s = str(s).strip().lower()
+            if s:  # an empty string is a match-everything poison, never a probe
+                probes.append(s)
     return probes
 
 
@@ -1440,9 +1490,19 @@ def _key_term(answers: list[str]) -> str:
 
 
 def _mid_case(term: str) -> str:
-    """Case a key term for mid-sentence use: common first words lowercase,
-    proper nouns keep their capital."""
-    if term.split()[0].lower() in _MID_LOWER_FIRST:
+    """Case a key term for mid-sentence use: common first words and
+    number-words lowercase, proper nouns keep their capital.
+
+    A number-word leading a TITLE ("Ten Commandments", "One Direction" --
+    every following word capitalized) is a name, not a quantity: folding it
+    destroys a proper noun, the opposite error of the cosmetic capital the
+    fold fixes (audit 2026-08-14). Mixed-case tails ("Zero degrees Celsius")
+    are quantities carrying a unit's proper noun and still fold."""
+    words = term.split()
+    first = words[0].lower()
+    if len(words) > 1 and all(w[:1].isupper() for w in words[1:]):
+        return term
+    if first in _MID_LOWER_FIRST or _NUMBER_WORD.match(first):
         return term[0].lower() + term[1:]
     return term
 
@@ -1478,7 +1538,23 @@ def gen_knowledge_pretrain_text(seed: int = 77) -> list[str]:
         key = _key_term(answers)
         q = _cloze_question(questions)
         if key and q:
-            lines.append(f'The answer to "{q}" is {_mid_case(key)}.')
+            # Two degenerate shapes the skip-list widening CREATED by
+            # shifting clozes onto later questions (audit 2026-08-14):
+            # a tautology whose term already sits in the question ('The
+            # answer to "What is photosynthesis?" is photosynthesis.'),
+            # and a connector-led term that breaks the copula ('... is
+            # Through its memory store.'). Both skip -- the other forms
+            # still cover the intent.
+            q_words = {w.strip('.,?!"\'').lower() for w in q.split()}
+            key_words = {w.strip('.,?!"\'').lower() for w in key.split()}
+            # A which-question OFFERS its options, so an answer quoted from
+            # them is a real pick ("Which is longer, a mile or a kilometer?"
+            # is a mile.), not a tautology.
+            tautology = key_words <= q_words and not q.lower().startswith("which")
+            connector_led = key.split()[0].lower() in {
+                "through", "with", "by", "via", "using", "because", "from"}
+            if not tautology and not connector_led:
+                lines.append(f'The answer to "{q}" is {_mid_case(key)}.')
         # Cloze, inverted: "Mercury is the smallest planet ..." becomes
         # "The smallest planet ... is Mercury." -- key term LAST, gated hard
         # so only clean single-subject "X is Y" sentences flip.
@@ -1491,10 +1567,17 @@ def gen_knowledge_pretrain_text(seed: int = 77) -> list[str]:
                     and len(y.split()) >= 3 and "," not in y
                     and y.lower().startswith(("the ", "a ", "an "))):
                 lines.append(f"{y[0].upper()}{y[1:]} is {_mid_case(x)}.")
-        # Fact-in-context: the fact inside a longer natural line.
+        # Fact-in-context: the fact inside a longer natural line. Same bar
+        # as the declarative form: a sub-4-word payload after an
+        # authoritative lead is a confident non-answer ("As any reference
+        # book will confirm: 1945." -- 47 such lines measured against this
+        # corpus, review 2026-08-13/audit 2026-08-14).
         for j in range(2):
+            ctx = answers[(idx + j) % len(answers)]
+            if len(ctx.split()) < 4:
+                continue
             lead = _CONTEXT_LEADS[(idx + j) % len(_CONTEXT_LEADS)]
-            lines.append(lead + answers[(idx + j) % len(answers)])
+            lines.append(lead + ctx)
     seen: set[str] = set()
     uniq: list[str] = []
     for line in lines:

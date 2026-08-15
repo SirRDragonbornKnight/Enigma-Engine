@@ -851,8 +851,10 @@ Method rules this produced, for any future capacity search:
   carries ~1444 words (~4,945 v1-token-equivalents), inside the researched
   4k-8k target band, at full speed. Block 8192 overshoots the band (~19.8k
   equivalents) and pays 30-40% for the checkpointing it would then require.
-- `--block` defaults to **1024**: a launch that omits it trains at 1024 no
-  matter what the preset's `max_seq_len` says.
+- `--block` defaults to **2048** (flipped at the v2 adoption sunset,
+  2026-08-13): a bare launch now trains at the recommended shape above. A
+  v1-era 1024-context checkpoint needs `--block 1024` passed explicitly --
+  the trainer hard-refuses a block larger than the model's `max_seq_len`.
 
 ### Launch commands, BRANCHED on the size call
 

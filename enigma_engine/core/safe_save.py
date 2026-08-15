@@ -59,19 +59,22 @@ def atomic_torch_save(data: dict, path: str | Path, rotate_to: str | Path | None
 
     Writes to ``<path>.tmp`` first, then replaces the target via
     ``os.replace`` (atomic on both Windows NTFS and Linux ext4).
-    On failure the temp file is cleaned up and the original is
-    left untouched.
+    On failure BEFORE rotation the temp file is cleaned up and the
+    original is left untouched.
 
     When *rotate_to* is given and *path* already exists, the current
     file is renamed to *rotate_to* after the new data is fully written
     and immediately before promotion — keeping one previous generation
-    as a fallback. The only crash window (between the two renames)
-    leaves *rotate_to* (old data) plus the complete ``.tmp``.
+    as a fallback. A failure AFTER rotation (the crash window between
+    the two renames, or a promotion that raises) leaves *rotate_to*
+    (old data) plus the complete ``.tmp`` — nothing at *path* itself;
+    recovery is renaming the ``.tmp`` into place by hand.
     """
     import torch
 
     path = Path(path)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
+    rotated = False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # fsync before the renames: without it a power loss can commit the
@@ -83,13 +86,19 @@ def atomic_torch_save(data: dict, path: str | Path, rotate_to: str | Path | None
             os.fsync(f.fileno())
         if rotate_to is not None and path.exists():
             os.replace(path, Path(rotate_to))
+            rotated = True
         os.replace(tmp_path, path)
     except BaseException:
-        # Clean up partial temp file on any failure
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # Clean up the partial temp file -- UNLESS the rotation already
+        # happened, at which point the .tmp is the ONLY complete copy of the
+        # new data and deleting it would leave nothing at the target at all
+        # (review 2026-08-13; the docstring's crash-window promise now holds
+        # for exceptions too, not just hard kills).
+        if not rotated:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise
 
 

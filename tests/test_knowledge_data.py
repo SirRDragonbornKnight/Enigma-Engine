@@ -63,12 +63,119 @@ def test_pretrain_text_lines_are_clean():
 
 def test_pretrain_text_count_bounds():
     # Corridor re-based 2026-08-08 for the ruled floor widening (138 -> 240
-    # intents incl. the Enigma self/capability section): measured 1573 lines.
-    # The corridor is a sanity band -- several forms per fact, no runaway
-    # generator -- not a pin on the exact count.
+    # intents incl. the Enigma self/capability section). Measured 1570 lines
+    # on 2026-08-14 after the audit's cloze guards (1574 on 2026-08-13; the
+    # earlier "1573" receipt never reproduced against any tree -- a
+    # phantom). The corridor is a sanity band -- several forms per fact, no
+    # runaway generator -- not a pin on the exact count.
     n = len(gen_knowledge_pretrain_text())
     assert 1200 <= n <= 2400, n
     assert n >= 4 * len(KNOWLEDGE), n  # several textual forms per fact
+
+
+def test_answer_variants_are_distinct():
+    """Five intents shipped twin answers ("Nairobi." / "Nairobi."), which the
+    picks-then-dedup path silently collapsed to HALF the intended records
+    (review 2026-08-13). The module rule is the pin: answers vary in
+    wording, never in fact."""
+    for questions, answers in KNOWLEDGE:
+        assert len(set(answers)) == len(answers), questions[0]
+
+
+def test_cloze_lines_never_quote_auxiliary_questions():
+    """'The answer to "Was Enigma built from another model?" is None.' -- an
+    ambiguous-polarity SELF fact (review 2026-08-13). The full auxiliary
+    family skips the cloze form."""
+    import re
+
+    for line in gen_knowledge_pretrain_text():
+        if line.startswith("The answer to"):
+            assert not re.search(
+                r'"(Is|Are|Do|Does|Can|Why|Was|Were|Did|Will|Has|Have|Should|Could|Would|How do|How does|Who can)\b',
+                line), line
+
+
+def test_context_lines_carry_a_real_payload():
+    """52 authoritative leads carried a sub-4-word payload ("As any
+    reference book will confirm: 1945.") -- the confident-non-answer shape
+    the restraint work suppresses (review 2026-08-13)."""
+    from knowledge_corpus import _CONTEXT_LEADS
+
+    for line in gen_knowledge_pretrain_text():
+        for lead in _CONTEXT_LEADS:
+            if line.startswith(lead):
+                assert len(line[len(lead):].split()) >= 4, line
+
+
+def test_number_words_lowercase_mid_sentence_by_rule():
+    """The hand allowlist drifted behind every widening ("is Three." vs
+    "is seven." in one corpus, 33 lines); number-words now match by RULE
+    (review 2026-08-13)."""
+    import re
+
+    from knowledge_corpus import _NUMBER_WORD, _mid_case
+
+    assert _mid_case("Three") == "three"
+    assert _mid_case("Fifty-two") == "fifty-two"
+    assert _mid_case("Twenty-four hours") == "twenty-four hours"
+    assert _mid_case("Jupiter") == "Jupiter"  # proper nouns keep their capital
+    # a number-word leading a TITLE is a name, not a quantity (audit
+    # 2026-08-14: the bare regex pre-committed 'one Direction'); a
+    # mixed-case tail is a quantity with a unit's proper noun inside
+    assert _mid_case("Ten Commandments") == "Ten Commandments"
+    assert _mid_case("One Direction") == "One Direction"
+    assert _mid_case("Zero degrees Celsius") == "zero degrees Celsius"
+    for line in gen_knowledge_pretrain_text():
+        m = re.search(r" is ([A-Z][a-z]+(?:-[a-z]+)?)[ .]", line)
+        if m:
+            assert not _NUMBER_WORD.match(m.group(1).lower()), line
+
+
+def test_the_probe_screen_fails_closed(monkeypatch, tmp_path):
+    """A missing probes file used to silently DISABLE the screen (changing
+    the facts stream's bytes with no error); an empty q/teach string would
+    have matched every line and zeroed the stream (review 2026-08-13)."""
+    import json
+
+    import pytest
+
+    import knowledge_corpus as kc
+
+    monkeypatch.setattr(kc, "_EVAL_PROBES", tmp_path / "absent.jsonl")
+    with pytest.raises(SystemExit, match="probe screen"):
+        kc.gen_knowledge_pretrain_text()
+
+    poisoned = tmp_path / "probes.jsonl"
+    poisoned.write_text(json.dumps({"category": "unknown", "q": "  ",
+                                    "teach": ["", "a real teach line"]}) + "\n",
+                        encoding="utf-8")
+    monkeypatch.setattr(kc, "_EVAL_PROBES", poisoned)
+    lines = kc.gen_knowledge_pretrain_text()
+    assert len(lines) > 1000, "an empty probe string zeroed the facts stream"
+
+
+def test_clozes_are_never_tautologies_or_broken_copulas():
+    """The skip-list widening SHIFTED clozes onto later questions and
+    created 'The answer to "What is photosynthesis?" is photosynthesis.'
+    plus '... is Through its memory store.' -- a self-answer and a broken
+    copula (audit 2026-08-14). Guarded by RULE; which-questions keep their
+    option-picks ("Which is longer, a mile or a kilometer?" is a mile.)."""
+    lines = gen_knowledge_pretrain_text()
+    clozes = [l for l in lines if l.startswith('The answer to "')]
+    assert clozes
+    for line in clozes:
+        q = line.split('"')[1]
+        ans = line.rsplit('" is ', 1)[1].rstrip(".")
+        aw = {w.strip('.,?!\'"').lower() for w in ans.split()}
+        qw = {w.strip('.,?!\'"').lower() for w in q.split()}
+        if not q.lower().startswith("which"):
+            assert not aw <= qw, line
+        assert ans.split()[0].lower() not in (
+            "through", "with", "by", "via", "using", "because", "from"), line
+    # ...and the sealed boil row's DIGIT surface is the cloze surface (the
+    # first fix re-created the word-number-only line one step downstream)
+    assert any("is 100 degrees Celsius." in l for l in clozes), \
+        "the boil cloze lost its digit surface again"
 
 
 def test_pretrain_text_covers_jupiter_in_multiple_forms():

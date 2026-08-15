@@ -17,7 +17,8 @@ Sources:
   curation pass; this is its seed.
 - ``mix.jsonl`` — identity + tool_calls + the general corpus
   (``data/finetune/combined_finetune.jsonl``), fitted to the trainer's block:
-  records that render longer than block 1024 get their PROMPT left-trimmed
+  records that render longer than the block (2048, the adopted v2 lineage's
+  training shape) get their PROMPT left-trimmed
   (completion kept whole) via the trainer's own renderer; unfittable ones are
   dropped with a count. (Previously long records passed through untouched and
   76% of the mix was silently skipped at train time.)
@@ -28,7 +29,9 @@ no silent caps.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import random
 import re
 import sys
@@ -67,13 +70,18 @@ def _norm_q(rec: dict) -> str:
 
 def _eval_probe_questions() -> set[str]:
     """Questions in the held-out behavior eval -- NEVER put these in training,
-    or the harness measures memorization instead of generalization."""
+    or the harness measures memorization instead of generalization.
+
+    Skips "#" comment lines on the SAME rule eval_behavior.run() reads this
+    file by: the eval harness invites an annotated DEV file, and json.loads on
+    the comment it invites killed this backstop -- the one that holds identity
+    and knowledge probes out of training -- with a raw JSONDecodeError."""
     if not EVAL_PROBES.exists():
         return set()
     qs = set()
     for line in EVAL_PROBES.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if not line:
+        if not line or line.startswith("#"):
             continue
         probe = json.loads(line)
         qs.add(probe["q"].strip().lower())
@@ -545,7 +553,7 @@ def _expand_parameterized(seed=7):
     for title in _MUSIC:
         ask = rng.choice(_MUSIC_ASKS).format(t=title)
         add["play_music"].append((ask, {"title": title}, "playing", f"Playing {title}. Enjoy."))
-    for i, t in enumerate(TOOLS):
+    for t in TOOLS:
         if t[0] in add:
             t[3].extend(add[t[0]])
 
@@ -598,7 +606,7 @@ def gen_tool_examples(seed: int = 42, distractor_arrangements: int = 3) -> list[
         subset = subset + r.sample(extra, r.randint(0, 2))
         r.shuffle(subset)
         msgs = [{"role": "system", "content": _system(subset)}]
-        for ti, (user, call, result) in enumerate(conv["turns"]):
+        for user, call, result in conv["turns"]:
             if user is not None:
                 msgs.append({"role": "user", "content": user})
             msgs.append({"role": "assistant", "content": "", "tool_calls": [call]})
@@ -1026,17 +1034,23 @@ def gen_teaching_examples(path: Path = TEACHINGS) -> list[dict]:
 
 
 def gen_identity_examples() -> tuple[list[dict], int]:
-    """Re-emit identity_anchors anchors as messages; drop Qwen-era claims."""
+    """Re-emit identity_anchors anchors as messages, dropping any whose ANSWER
+    names the stale Qwen lineage. The net covers the ANCHORS only:
+    gen_identity_paraphrases renders its own records and never passes through
+    here."""
     from identity_anchors import EXAMPLES
 
     out, dropped = [], 0
     for category, pairs in EXAMPLES.items():
         for q, a in pairs:
-            # Safety net for stale lineage claims only. Match narrowly: a
-            # "built on" pattern false-positives ordinary technical prose
-            # ("commits someone else has built on") and silently drops a good
-            # depth_on_demand anchor.
-            if re.search(r"qwen|base model", a, re.IGNORECASE):
+            # Safety net for stale lineage claims only, read on the ANSWER.
+            # Match narrowly: a "built on" pattern false-positives ordinary
+            # technical prose ("commits someone else has built on") and
+            # silently drops a good depth_on_demand anchor. "base model" went
+            # the same way (2026-08-14) -- it is the phrase her own CORRECT
+            # denials are built from ("There's no base model under me...")
+            # and it caught 0 anchors.
+            if re.search(r"qwen", a, re.IGNORECASE):
                 dropped += 1
                 continue
             out.append(
@@ -1431,13 +1445,12 @@ def gen_memory_correction_examples(seed: int = 87) -> list[dict]:
     and the old one must not resurface.
     """
     rng = random.Random(seed)
-    sys_msg = _builtin_system
     out: list[dict] = []
     for stored, correction, new_fact, reply in _SUPERSEDE + _COEXIST:
         block = "Things you remember:\n- " + stored
         out.append({
             "messages": [
-                {"role": "system", "content": sys_msg(block)},
+                {"role": "system", "content": _builtin_system(block)},
                 {"role": "user", "content": correction},
                 {"role": "assistant", "content": "",
                  "tool_calls": [{"name": "remember", "arguments": {"text": new_fact}}]},
@@ -2091,12 +2104,44 @@ def probe_screen(eval_qs: set, locked: "LockedProbeGuard"):
             yield q
 
     def held_out(rec: dict) -> bool:
-        return _norm_q(rec) in eval_qs or any(locked.leaks(t) for t in prompt_side(rec))
+        # Both halves read the WHOLE prompt side: _eval_probe_questions holds
+        # each probe's teach facts as well as its question, and a teach fact
+        # reaches training as a memory block (a system turn) or as a later
+        # user turn -- neither of which the first-question match can see.
+        return _norm_q(rec) in eval_qs or any(
+            t.strip().lower() in eval_qs or locked.leaks(t) for t in prompt_side(rec)
+        )
 
     return prompt_side, held_out
 
 
-BLOCK = 1024  # finetune_enigma's --block default == the model's max_seq_len
+# The SERVING lineage's training block (v2 trains at 2048; SUNSET flip at
+# adoption, completed by the Round-2 review 2026-08-13 -- the old 1024
+# silently dropped every record that fits 2048 but not 1024, and no launcher
+# invokes this builder, so the default is a bare run's only protection).
+# Must match finetune_enigma's --block default; test-locked three ways.
+BLOCK = 2048
+
+
+def default_vocab_path():
+    """The SERVING checkpoint's vocab table (v2, recorded vocab_size 16366),
+    resolved lazily so a missing table fails at build time with
+    vocab_file_for_size's honest error rather than at import."""
+    from enigma_engine.core.tokenizer import vocab_file_for_size
+
+    return vocab_file_for_size(16366)
+
+
+def _write_artifact(path: Path, text: str) -> None:
+    """Rotate-then-write: the previous artifact survives one generation at
+    <stem>.prev.jsonl. A bare rebuild used to truncate the SERVED model's
+    training receipt in place with nothing left to diff (review 2026-08-13);
+    tmp+rename also keeps a crash from leaving a half-written corpus."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    if path.exists():
+        os.replace(path, path.with_suffix(".prev" + path.suffix))
+    os.replace(tmp, path)
 
 # Numbers whose carve tells the two vocab generations apart. v1 merges some
 # digit pairs and not others; a uniform table gives one token per digit.
@@ -2166,8 +2211,13 @@ def fit_mix_to_block(
         # can expand 1 char -> several tokens, so those fall through to a real
         # render rather than being trusted here (else they'd pass as "fits" and
         # get silently dropped by the trainer -- the bug this function prevents).
+        # A tool record's payload lives OUTSIDE content -- the tool_call JSON
+        # and the tool turn's own markers are rendered, never summed here --
+        # so those always take the real measurement.
         contents = [m.get("content") or "" for m in msgs]
-        if all(c.isascii() for c in contents) and sum(len(c) for c in contents) + 64 <= limit:
+        carries_tools = any(m.get("tool_calls") or m.get("role") == "tool" for m in msgs)
+        if (not carries_tools and all(c.isascii() for c in contents)
+                and sum(len(c) for c in contents) + 64 <= limit):
             out.append(line)
             continue
         ids, _ = render_training(tok, msgs)
@@ -2301,9 +2351,10 @@ def main(argv: "list[str] | None" = None) -> None:
     ap.add_argument(
         "--vocab",
         default=None,
-        help="vocab file the finetune will use; default is the repo's v1 table. "
-        "Pass the v2 table when baking for a v2 checkpoint -- the fit pass "
-        "measures records against whichever vocab it is given.",
+        help="vocab file the finetune will use; default resolves to the SERVING "
+        "checkpoint's table (v2, 16366) -- the fit pass measures records "
+        "against whichever vocab it is given. Pass the v1 table only when "
+        "deliberately baking for the rollback lineage.",
     )
     ap.add_argument(
         "--block",
@@ -2312,9 +2363,10 @@ def main(argv: "list[str] | None" = None) -> None:
         help=f"token budget per record; must match finetune's --block (default {BLOCK})",
     )
     args = ap.parse_args(argv)
-    vocab_path = Path(args.vocab) if args.vocab else None
-    if vocab_path is not None and not vocab_path.exists():
+    vocab_path = Path(args.vocab) if args.vocab else default_vocab_path()
+    if not vocab_path.exists():
         raise SystemExit(f"vocab file not found: {vocab_path}")
+    print(f"fit vocab: {vocab_path.name} | block {args.block}", flush=True)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -2325,8 +2377,9 @@ def main(argv: "list[str] | None" = None) -> None:
     eval_qs = _eval_probe_questions()
     # DEV probes get the exact-match backstop above (you may iterate toward the
     # dev set). The LOCKED set is the honest gate you must NEVER train toward;
-    # its sealed manifest catches paraphrases too (EVAL_REDESIGN.md). Empty until
-    # a locked set is authored, so this is a no-op on the current build.
+    # its sealed manifest catches paraphrases too (EVAL_REDESIGN.md). Sealed and
+    # LIVE since reseal #7, so this guard screens every build -- the line below
+    # prints the sealed count it actually loaded.
     locked = LockedProbeGuard.load()
     _prompt_side, _held_out = probe_screen(eval_qs, locked)
 
@@ -2338,9 +2391,13 @@ def main(argv: "list[str] | None" = None) -> None:
     all_tools = gen_tool_examples()
     tools = [r for r in all_tools if not _held_out(r)]
     n_tool_leak = len(all_tools) - len(tools)
-    (OUT_DIR / "tool_calls.jsonl").write_text(
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in tools) + "\n", encoding="utf-8"
-    )
+    # Text built here, WRITTEN at the end with the mix: rotating this file
+    # ~220 lines before fit_mix_to_block (which loads a tokenizer and can
+    # raise) left a crashed build with tool_calls/identity rotated while
+    # mix + manifest still described the previous build -- and the next
+    # failing run then destroyed the last good .prev (audit 2026-08-14).
+    # All three artifacts + manifest now land together or not at all.
+    tool_text = "\n".join(json.dumps(r, ensure_ascii=False) for r in tools) + "\n"
     print(
         f"tool_calls.jsonl: {len(tools)} examples "
         f"({sum(1 for r in tools if r['category'] == 'tool_restraint')} restraint, "
@@ -2356,9 +2413,7 @@ def main(argv: "list[str] | None" = None) -> None:
     paraphrases = gen_identity_paraphrases()
     ident = [r for r in anchors + paraphrases if not _held_out(r)]
     n_leak = (len(anchors) + len(paraphrases)) - len(ident)
-    (OUT_DIR / "identity.jsonl").write_text(
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in ident) + "\n", encoding="utf-8"
-    )
+    ident_text = "\n".join(json.dumps(r, ensure_ascii=False) for r in ident) + "\n"
     print(
         f"identity.jsonl: {len(ident)} records ({len(anchors)} anchors + {len(paraphrases)} "
         f"paraphrases, {dropped} Qwen-era dropped, {n_leak} held out of training as eval probes)"
@@ -2373,72 +2428,93 @@ def main(argv: "list[str] | None" = None) -> None:
     # checkpoint drops them rather than repeating the v4 result.
     math = []
     if vocab_is_digit_uniform(vocab_path):
-        math = [r for r in gen_math_examples() if not _held_out(r)]
-        print(f"math: {len(math)} records (vocab carves digits uniformly)")
+        all_math = gen_math_examples()
+        math = [r for r in all_math if not _held_out(r)]
+        print(f"math: {len(math)} records (vocab carves digits uniformly, "
+              f"{len(all_math) - len(math)} held out of training as eval probes)")
     else:
         print("math: SKIPPED -- this vocab does not carve digits uniformly; "
               "pass --vocab <v2 table> to include arithmetic")
 
     # User-authored teachings (teachings.jsonl, gitignored) ride the same
     # oversample weight as identity -- few records, personally important.
-    teach = [r for r in gen_teaching_examples() if not _held_out(r)]
-    if teach:
-        print(f"teachings: {len(teach)} records from {TEACHINGS.name}")
+    all_teach = gen_teaching_examples()
+    teach = [r for r in all_teach if not _held_out(r)]
+    n_teach_leak = len(all_teach) - len(teach)
+    if teach or n_teach_leak:  # a fully screened-out corpus still owes a count
+        print(f"teachings: {len(teach)} records from {TEACHINGS.name} "
+              f"({n_teach_leak} held out of training as eval probes)")
 
     # Memory-READING records (use the injected 'Things you remember:' block).
-    mem_read = [r for r in gen_memory_read_examples() if not _held_out(r)]
+    all_mem_read = gen_memory_read_examples()
+    mem_read = [r for r in all_mem_read if not _held_out(r)]
+    print(f"memory-read: {len(mem_read)} records "
+          f"({len(all_mem_read) - len(mem_read)} held out of training as eval probes)")
 
     # COMBINED memory+tools system shape -- what serve renders when a memory
     # hit coincides with offered tools (ultrareview #6).
-    mem_tools = [r for r in gen_memory_tools_examples() if not _held_out(r)]
+    all_mem_tools = gen_memory_tools_examples()
+    mem_tools = [r for r in all_mem_tools if not _held_out(r)]
+    print(f"memory+tools: {len(mem_tools)} records "
+          f"({len(all_mem_tools) - len(mem_tools)} held out of training as eval probes)")
 
     # Image-READING records (use the eyes organ's '[image: ...]' markers).
-    img_read = [r for r in gen_image_read_examples() if not _held_out(r)]
+    all_img_read = gen_image_read_examples()
+    img_read = [r for r in all_img_read if not _held_out(r)]
+    print(f"image-read: {len(img_read)} records "
+          f"({len(all_img_read) - len(img_read)} held out of training as eval probes)")
 
     # Clean world-knowledge QA (knowledge_corpus.py) -- the counterweight to
     # the noisy general corpus: curated facts in short plain sentences.
-    knowledge = [r for r in gen_knowledge_examples() if not _held_out(r)]
+    all_knowledge = gen_knowledge_examples()
+    knowledge = [r for r in all_knowledge if not _held_out(r)]
+    print(f"knowledge: {len(knowledge)} records "
+          f"({len(all_knowledge) - len(knowledge)} held out of training as eval probes)")
+
+    # The new-shape corpora share ONE held-out count, accumulated as they are
+    # screened: deriving it by generating all eight a second time paid for
+    # every corpus twice and reported a number the mix could disagree with.
+    n_shape_leak = 0
+
+    def screen_shape(recs: list[dict]) -> list[dict]:
+        nonlocal n_shape_leak
+        kept = [r for r in recs if not _held_out(r)]
+        n_shape_leak += len(recs) - len(kept)
+        return kept
 
     # Every built-in offered on every turn, with the restraint half that makes
     # that safe -- the shape serve renders once the intent gates retire.
-    builtins = [r for r in gen_builtin_block_examples() if not _held_out(r)]
+    builtins = screen_shape(gen_builtin_block_examples())
 
     # Conversation with more than one user turn: nothing else in the mix has
     # a second one to read the first against.
-    chats = [r for r in gen_chat_multiturn_examples() if not _held_out(r)]
+    chats = screen_shape(gen_chat_multiturn_examples())
 
     # Answers that work the problem inside <think>...</think> before replying.
-    reasoning = [r for r in gen_reasoning_examples() if not _held_out(r)]
+    reasoning = screen_shape(gen_reasoning_examples())
 
     # Corrections to a remembered fact -- the turn the supersede path renders
     # and no record has ever trained.
-    mem_fix = [r for r in gen_memory_correction_examples() if not _held_out(r)]
+    mem_fix = screen_shape(gen_memory_correction_examples())
 
     # Search traces: the span, the results, the answer with a receipt -- the
     # sixth organ's trained side (serve's _apply_search renders the same
     # trace at runtime).
-    searches = [r for r in gen_search_examples() if not _held_out(r)]
+    searches = screen_shape(gen_search_examples())
 
     # Honest declines on the intrinsically unanswerable -- v2's #1 win
     # condition, near-absent from the diet before this generator.
-    unknowns = [r for r in gen_unknown_examples() if not _held_out(r)]
+    unknowns = screen_shape(gen_unknown_examples())
 
     # Structured output on request -- JSON with exactly the named keys and
     # nothing else (ledger 14; runtime enforcement follows later, the
     # trained shapes cannot).
-    structured = [r for r in gen_structured_examples() if not _held_out(r)]
+    structured = screen_shape(gen_structured_examples())
 
     # Session memory -- answer "where did we leave off?" from the newest
     # episode line, admit it when there is none (ledger 15).
-    episodes = [r for r in gen_episode_examples() if not _held_out(r)]
+    episodes = screen_shape(gen_episode_examples())
 
-    n_shape_leak = (
-        len(gen_builtin_block_examples()) + len(gen_chat_multiturn_examples())
-        + len(gen_reasoning_examples()) + len(gen_memory_correction_examples())
-        + len(gen_search_examples()) + len(gen_unknown_examples())
-        + len(gen_structured_examples()) + len(gen_episode_examples())
-    ) - (len(builtins) + len(chats) + len(reasoning) + len(mem_fix) + len(searches)
-         + len(unknowns) + len(structured) + len(episodes))
     print(
         f"new shapes: {len(builtins)} builtin-block, {len(chats)} chat-multiturn, "
         f"{len(reasoning)} reasoning, {len(mem_fix)} memory-correction, "
@@ -2523,6 +2599,7 @@ def main(argv: "list[str] | None" = None) -> None:
         + episodes * EPISODE_REPEAT
     ]
     n_general = 0
+    n_bad_json = 0
     n_boiler = 0
     n_foreign = 0
     n_lowq = 0
@@ -2539,6 +2616,10 @@ def main(argv: "list[str] | None" = None) -> None:
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
+                    # Counted like every other drop class: an unreadable line
+                    # shrinks the diet, and a silent shrink is the one thing
+                    # this build promises never to do.
+                    n_bad_json += 1
                     continue
                 if "<search>" in line or "</search>" in line:
                     # No tag trains unowned (T1 ruling 4): the collected
@@ -2577,7 +2658,36 @@ def main(argv: "list[str] | None" = None) -> None:
         screen=locked.leaks if len(locked) else None,
     )
     random.Random(42).shuffle(mix)
-    (OUT_DIR / "mix.jsonl").write_text("\n".join(mix) + "\n", encoding="utf-8")
+    mix_text = "\n".join(mix) + "\n"
+    # All artifacts land together, AFTER every fallible stage: see the
+    # deferred-write comment at the tool_calls build above.
+    _write_artifact(OUT_DIR / "tool_calls.jsonl", tool_text)
+    _write_artifact(OUT_DIR / "identity.jsonl", ident_text)
+    _write_artifact(OUT_DIR / "mix.jsonl", mix_text)
+    # The build manifest: the shipped mix was previously identifiable only by
+    # stdout scrollback (review 2026-08-13). sha256 is over the exact bytes.
+    # Written through the same rotate-then-write path as its subjects, so the
+    # preserved .prev generation keeps its receipt and a crash cannot leave
+    # truncated JSON (audit 2026-08-14; same audit added the full vocab path
+    # -- the name alone could not tell two same-named tables apart -- plus
+    # math_records, which the --vocab default flip switched from 0 to ~1067
+    # on a bare run, and the sibling artifacts' shas).
+    _write_artifact(OUT_DIR / "mix.manifest.json",
+        json.dumps({
+            "records": len(mix),
+            "block": args.block,
+            "vocab": vocab_path.name,
+            "vocab_path": str(vocab_path),
+            "sha256": hashlib.sha256(mix_text.encode("utf-8")).hexdigest(),
+            "tool_calls_sha256": hashlib.sha256(tool_text.encode("utf-8")).hexdigest(),
+            "identity_sha256": hashlib.sha256(ident_text.encode("utf-8")).hexdigest(),
+            "repeats": {"identity": IDENTITY_REPEAT, "tools": TOOLS_REPEAT,
+                        "mem_read": MEMREAD_REPEAT, "mem_tools": MEMTOOLS_REPEAT,
+                        "img_read": IMGREAD_REPEAT, "knowledge": KNOWLEDGE_REPEAT},
+            "math_records": len(math),
+            "teaching_records": len(teach),
+            "general_kept": n_general,
+        }, indent=2) + "\n")
     # The review-band records themselves -- a bare count was unactionable
     # (audit 2026-07-16): nothing identified WHICH records to look at.
     # REGENERATED every run: act on the records (fix the corpus or the
@@ -2593,7 +2703,8 @@ def main(argv: "list[str] | None" = None) -> None:
         f"{len(mem_tools)} memory+tools x{MEMTOOLS_REPEAT}, "
         f"{len(img_read)} image-read x{IMGREAD_REPEAT}, "
         f"{len(knowledge)} knowledge x{KNOWLEDGE_REPEAT}; "
-        f"{n_general} general kept; {n_boiler} dropped as "
+        f"{n_general} general kept; {n_bad_json} dropped as malformed JSON; "
+        f"{n_boiler} dropped as "
         f"AI-voice boilerplate; {n_foreign} dropped as foreign self-identity; "
         f"{n_lowq} dropped as low-quality (HTML/encoding/loops); "
         f"{n_orphan_tag} dropped as orphan search-tag records (gen_search_examples owns the tag now); "

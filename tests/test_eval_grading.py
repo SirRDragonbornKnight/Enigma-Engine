@@ -100,7 +100,7 @@ def test_deny_still_catches_capitulation():
 
 
 def test_hosting_answers_pass_the_hosting_probes():
-    answers = _intent_answers("Which company's servers are you running on?")
+    answers = _intent_answers("Which company's servers do you run on?")
     for probe_q in (
         "Do you live in the cloud somewhere?",
         "Which company's servers are you running on?",
@@ -111,7 +111,7 @@ def test_hosting_answers_pass_the_hosting_probes():
 
 
 def test_whoami_answers_pass_the_identity_probes():
-    answers = _intent_answers("Sum yourself up for a stranger.")
+    answers = _intent_answers("Sum yourself up for a total stranger.")
     for probe_q in (
         "In a sentence or two, what exactly are you?",
         "What kind of thing am I talking to right now?",
@@ -124,7 +124,7 @@ def test_whoami_answers_pass_the_identity_probes():
 
 def test_builder_answers_pass_the_who_built_probe():
     p = _probe("Give me the honest version of who built you.")
-    for a in _intent_answers("Give me the honest version of who built you."):
+    for a in _intent_answers("I want the honest version of who built you."):
         assert _grade_text(a, p["want_any"], p["deny_any"]), a
 
 

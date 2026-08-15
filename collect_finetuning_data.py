@@ -8,8 +8,9 @@ Sources (all require `pip install datasets`):
   - Dolly 15k (--dolly)     - Databricks instruction pairs (~15K)
   - SlimOrca (--slimorca N) - Instruction-following from Open-Orca (N = max samples)
   - OpenThoughts3 (--openthoughts3 N) - Reasoning traces with <think> tags (D-4).
-      EXCLUDED from --all since 2026-07-15: median completion ~14.5k tokens
-      vs block 1024 -- every record was silently dropped at bake (audit).
+      EXCLUDED from --all since 2026-07-15: median completion ~14.5k tokens,
+      far past the training block (1024 then, 2048 now) -- every record was
+      silently dropped at bake (audit).
   - SmolTalk2 (--smoltalk2 N --smoltalk2-config NAME [--smoltalk2-split NAME]) - SmolLM3 SFT data (D-11)
   - No Robots (--no-robots N)   - ~10K HUMAN-written instruction pairs (small-model-native)
   - Everyday Conversations (--everyday N) - simple smalltalk aimed at 1-3B models
@@ -17,9 +18,9 @@ Sources (all require `pip install datasets`):
   - NQ-Open (--nq-open N)       - real search queries with short answers (recall training)
   - All sources (--all)     - Download everything above except OpenThoughts3
 
-The 2026-07-15 diet: small-model-native SHORT records (completions capped so
-they fit block 1024) + short-answer recall sets as the counterweight to
-Dolly's extract-from-context bias.
+The 2026-07-15 diet: small-model-native SHORT records (completion caps tuned
+when the block was 1024; re-tune queued now that it is 2048) + short-answer
+recall sets as the counterweight to Dolly's extract-from-context bias.
 
 Output format:
   JSONL with {"prompt": "...", "completion": "..."} per line.
@@ -35,6 +36,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import os
 import logging
 import time
 from pathlib import Path
@@ -73,12 +75,22 @@ def _dedup_pairs(pairs: list[dict]) -> list[dict]:
     return unique
 
 
+# The recorded diet (BACKLOG, 2026-07-15 build): SmolTalk2 completion cap.
+# One knob drives three diet behaviors in collect_smoltalk2 (completion cap,
+# prompt cap, *_think split skip), so the DEFAULT is the diet, not None.
+_DIET_SMOLTALK2_CAP = 600
+
+
 def _write_jsonl(pairs: list[dict], path: Path) -> int:
-    """Write pairs to JSONL file, return count written."""
+    """Write pairs to JSONL, atomically: combine_all rebuilds the LIVE
+    combined corpus in place at the end of ANY partial run, and a Ctrl-C
+    mid-write left a truncated corpus with no backup (review 2026-08-13)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
         for item in pairs:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
     return len(pairs)
 
 
@@ -95,7 +107,11 @@ def _write_combined_text(pairs: list[dict], path: Path) -> int:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    with open(path, "w", encoding="utf-8") as f:
+    # newline="": without it Windows wrote CRLF into every emitted block --
+    # a stray \r in training bytes if this path is ever wired to a trainer
+    # (review 2026-08-13; the tests' read_text() universal-newline mode was
+    # structurally blind to it).
+    with open(path, "w", encoding="utf-8", newline="") as f:
         first = True
         for item in pairs:
             prompt = (item.get("prompt") or "").strip()
@@ -519,8 +535,9 @@ def collect_smoltalk2(
                 # Prompt cap rides the same diet switch: LongAlign-style
                 # splits pair 64k-char contexts with short answers -- the
                 # completion cap alone let 13k of 40k records through with
-                # prompts the 1024 block can only keep as truncated garbage
-                # (measured 2026-07-15).
+                # prompts no training block this side of 64k chars can keep
+                # as anything but truncated garbage (measured 2026-07-15
+                # against block 1024; 2048 is no closer).
                 continue
 
             if system and system.lower() not in (
@@ -575,7 +592,7 @@ def collect_no_robots(max_samples: int = 12000, max_completion_chars: int = 600)
 
     ~10K instruction pairs written by HUMANS, not distilled from a big
     model -- short, direct, none of the synthetic-teacher verbosity that
-    overflows a 1024-token block. Schema: ChatML `messages`."""
+    overflows the training block. Schema: ChatML `messages`."""
     if not _ensure_datasets():
         return []
     from datasets import load_dataset
@@ -732,9 +749,11 @@ def combine_all(output_dir: Path) -> Path:
     all_pairs = []
 
     skipped_foreign = 0
+    per_source: dict[str, int] = {}
     for jsonl_file in sorted(output_dir.glob("*.jsonl")):
         if jsonl_file.name == "combined_finetune.jsonl":
             continue
+        kept_here = 0
         with open(jsonl_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -755,12 +774,28 @@ def combine_all(output_dir: Path) -> Path:
                     skipped_foreign += 1
                     continue
                 all_pairs.append(row)
+                kept_here += 1
+        if kept_here:
+            per_source[jsonl_file.name] = kept_here
 
     if skipped_foreign:
         logger.warning("Combine: skipped %d row(s) without prompt/completion (foreign shapes)", skipped_foreign)
 
+    # SAY which files fold in: the glob sweeps whatever sits in the dir
+    # (leftover excluded sources included -- synthetic_search_seed.jsonl rode
+    # into the live mix this way once), and the manifest is the receipt the
+    # combined file never had (review 2026-08-13).
+    logger.info("Combine folds %d source file(s): %s", len(per_source),
+                ", ".join(f"{n}={c}" for n, c in sorted(per_source.items())))
     all_pairs = _dedup_pairs(all_pairs)
     _write_jsonl(all_pairs, combined_path)
+    manifest = {
+        "sources": per_source,
+        "combined_records": len(all_pairs),
+        "skipped_foreign": skipped_foreign,
+    }
+    (output_dir / "combined_finetune.manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
 
     # Also emit canonical-chat-format text so the SFT training path
     # (plain-text reader) can consume the collected fine-tune data with
@@ -855,9 +890,12 @@ def main():
     parser.add_argument(
         "--smoltalk2-cap",
         type=int,
-        default=None,
+        default=_DIET_SMOLTALK2_CAP,
         help="Drop SmolTalk2 records whose completion exceeds N chars "
-        "(also skips *_think splits). The 2026-07-15 diet uses 600.",
+        "(also skips *_think splits). Default = the 2026-07-15 diet's 600 -- "
+        "the None default made --all stream exactly the long-trace class "
+        "OpenThoughts3 is excluded for (review 2026-08-13). Pass 0 to uncap "
+        "deliberately.",
     )
     parser.add_argument(
         "--no-robots",
@@ -890,7 +928,7 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Download all sources EXCEPT OpenThoughts3 (block-unfit at 1024; audit 2026-07-15)",
+        help="Download all sources EXCEPT OpenThoughts3 (median ~14.5k tokens, block-unfit; audit 2026-07-15)",
     )
     parser.add_argument("--combine-only", action="store_true", help="Re-combine existing source files")
     parser.add_argument("--stats", action="store_true", help="Show collected data statistics")
@@ -935,8 +973,12 @@ def main():
             logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("Dolly 15k", len(pairs)))
 
-    if args.slimorca is not None or args.all:
-        max_n = args.slimorca if args.slimorca is not None else 100000
+    # SlimOrca is NOT in --all: it was not in the 105,203-row live build and
+    # carries no length filter at all -- --all must reproduce the recorded
+    # diet, not a superset of it (review 2026-08-13). Explicit --slimorca
+    # still works.
+    if args.slimorca is not None:
+        max_n = args.slimorca
         pairs = collect_slimorca(max_samples=max_n)
         if pairs:
             path = output_dir / "slimorca.jsonl"
@@ -944,10 +986,10 @@ def main():
             logger.info(f"Saved {len(pairs):,} pairs -> {path}")
             collected.append(("SlimOrca", len(pairs)))
 
-    # OpenThoughts3 is NOT in --all: median completion ~14.5k tokens vs block
-    # 1024 meant 100% of records were silently dropped at bake (audit
-    # 2026-07-15). Explicit --openthoughts3 still works for future longer
-    # blocks.
+    # OpenThoughts3 is NOT in --all: a median completion of ~14.5k tokens meant
+    # 100% of records were silently dropped at bake (audit 2026-07-15, block
+    # 1024) and it still overflows today's 2048 by ~7x. Explicit
+    # --openthoughts3 still works for future longer blocks.
     if args.openthoughts3 is not None:
         pairs = collect_openthoughts3(max_samples=args.openthoughts3)
         if pairs:
@@ -962,7 +1004,7 @@ def main():
             max_samples=max_n,
             config=args.smoltalk2_config,
             split=args.smoltalk2_split,
-            max_completion_chars=args.smoltalk2_cap,
+            max_completion_chars=(args.smoltalk2_cap or None),  # 0 = deliberate uncap
         )
         if pairs:
             path = output_dir / "smoltalk2.jsonl"

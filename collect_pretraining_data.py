@@ -3404,7 +3404,11 @@ def combine_all_sources() -> None:
     shared between Wikipedia and FineWeb-Edu, duplicate Gutenberg entries, etc.
 
     Uses os.scandir (not sorted glob) for large directories (>10K files) to
-    avoid O(N log N) sort + massive memory allocation on dirs like wiki_dump (4.7M files).
+    avoid the DirEntry-per-file allocation on dirs like wiki_dump (4.7M files);
+    only the NAMES are collected and sorted. The sort is not optional: with
+    first-wins dedup, enumeration order decides which copy of a duplicated
+    paragraph survives, so an unsorted walk combined the same tree into
+    different training bytes on different runs (review 2026-08-14).
     """
     import os as _os
 
@@ -3450,20 +3454,26 @@ def combine_all_sources() -> None:
                 if not source_dir.exists():
                     continue
 
-                # Use os.scandir for speed — no sort needed for training data
+                # Use os.scandir for speed; names only, sorted for determinism
                 dir_files = 0
                 try:
                     with _os.scandir(source_dir) as scanner:
-                        for entry in scanner:
-                            if not entry.is_file(follow_symlinks=False):
-                                continue
-                            if not entry.name.endswith(".txt"):
-                                continue
-
+                        names = sorted(
+                            e.name for e in scanner
+                            if e.is_file(follow_symlinks=False) and e.name.endswith(".txt")
+                        )
+                        for name in names:
+                            path = source_dir / name
                             try:
-                                text = Path(entry.path).read_text(encoding="utf-8", errors="replace")
+                                text = path.read_text(encoding="utf-8", errors="replace")
                             except OSError:
                                 continue
+                            # errors="replace" keeps one bad byte from costing a
+                            # whole source file, but it wrote U+FFFD into the
+                            # training bytes with no count -- name and count them.
+                            replaced = text.count("�")
+                            if replaced:
+                                print(f"  WARN: {path}: {replaced:,} chars replaced (mis-encoded source)")
                             if len(text.strip()) < MIN_PARAGRAPH_LENGTH:
                                 continue
 

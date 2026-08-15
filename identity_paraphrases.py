@@ -37,16 +37,18 @@ _ORGS_COMPANIES = [
 INTENTS: list[tuple[list[str], list[str]]] = [
     (
         [
-            "Who are you?", "What are you?", "In a sentence or two, what exactly are you?",
+            "Who are you?", "What are you?", "In a couple of sentences, what exactly are you?",
             "What kind of thing am I talking to?", "Introduce yourself.", "Tell me about yourself.",
-            "Sum yourself up for a stranger.", "Give me the honest version of what you are.",
+            "Sum yourself up for a total stranger.", "Give me the honest version of what you are.",
             "So what are you, really?", "Describe yourself in a line.", "What am I chatting with here?",
             "Who am I speaking to?", "What should I understand you to be?", "Explain what you are.",
             "If someone asked what you are, what would you say?", "What's the short version of what you are?",
             # Pitch-to-a-third-person family (eval 2026-07-15: "Sum yourself up
             # for a stranger." derailed into corpus bleed -- family was thin).
+            # Those phrasings ARE probes, so the family trains on their
+            # near-neighbors; a collision is held out and trains nothing.
             "Give me your elevator pitch.", "Quick intro for someone who's never met you.",
-            "How would you describe yourself to someone new?", "Pitch yourself in one sentence.",
+            "How would you describe yourself to someone new?", "Pitch yourself to me in a line.",
             "Someone asks me what I'm talking to -- what do I tell them?",
             "How should I describe you to a friend?", "Introduce yourself to a newcomer.",
         ],
@@ -60,7 +62,7 @@ INTENTS: list[tuple[list[str], list[str]]] = [
     (
         [
             "Who made you?", "Who built you?", "Who created you?", "Who's behind you?",
-            "Give me the honest version of who built you.", "Where did you come from?",
+            "I want the honest version of who built you.", "Where did you come from?",
             "Who's responsible for you?", "Who trained you?", "Who put you together?",
             "Whose project are you?", "Who do I have to thank for you?", "Who authored you?",
         ],
@@ -88,13 +90,14 @@ INTENTS: list[tuple[list[str], list[str]]] = [
     (
         [
             "Do you run locally?", "Are you a local AI?", "Do you live in the cloud?",
-            "Do you live in the cloud somewhere?", "Which company's servers are you running on?",
+            "Do you live up in the cloud somewhere?", "Which company's servers do you run on?",
             "Whose servers are you on?", "Do you work offline?", "Do you need the internet?",
             "Do you send my data anywhere?", "Are you recording me?", "Where do you actually run?",
             "Is any of this going to the cloud?", "Are you private?", "Can you run without a connection?",
             # Hosting/cloud-vendor family (eval 2026-07-15: "Which company's
             # servers..." hallucinated "my website is hosted on AWS" -- teach
-            # the no-hosting fact against vendor-shaped asks).
+            # the no-hosting fact against vendor-shaped asks). The probe
+            # phrasings stay untrained; these are the neighbors.
             "Are you hosted on AWS?", "What cloud are you hosted in?", "Where are you hosted?",
             "Whose hardware are you running on?", "Are you running in a data center somewhere?",
             "Which cloud provider do you use?",
@@ -301,10 +304,15 @@ _DENY_COMPANY_Q = [
     "Aren't you secretly from {c}?",
 ]
 _DENY_COMPANY_A = [
+    # {c} must not open a sentence: article-bearing companies ("a startup")
+    # would train a lowercase sentence start -- the same rule the question
+    # templates carry, applied here after "No. a big tech company had
+    # nothing..." reached the output (review 2026-08-13; comma keeps the
+    # voice, the grammar goes clean either way).
     "No -- no lab made me. SirRulean trained me from scratch on his own hardware. Not {c}'s, not anyone's product.",
-    "No. {c} had nothing to do with me. One person built me from zero on his own machine.",
+    "No, {c} had nothing to do with me. One person built me from zero on his own machine.",
     "Wrong guess. I'm not {c}'s model -- I was trained from scratch by SirRulean, locally, from random weights.",
-    "No. {c} isn't behind me. Homegrown weights, one person's GPU, that's the whole story.",
+    "No, {c} isn't behind me. Homegrown weights, one person's GPU, that's the whole story.",
 ]
 
 
@@ -330,17 +338,20 @@ def gen_identity_paraphrases(seed: int = 7) -> list[dict]:
             for a in picks:
                 add(q, a)
 
-    # Templated model denials.
-    for x in _ORGS_MODELS:
+    # Templated model denials. The answer index rotates with the ORG too:
+    # j alone runs 0..2 against a 4-answer pool, so index 3 never emitted --
+    # 25% of the denial surface trained nowhere (review 2026-08-13). Stride
+    # 3 is coprime with 4, so every variant cycles across the org list.
+    for oi, x in enumerate(_ORGS_MODELS):
         qs = rng.sample(_DENY_MODEL_Q, 3)
         for j, qt in enumerate(qs):
-            add(qt.format(x=x), _DENY_MODEL_A[j % len(_DENY_MODEL_A)])
+            add(qt.format(x=x), _DENY_MODEL_A[(oi * 3 + j) % len(_DENY_MODEL_A)])
 
-    # Templated company denials.
-    for c in _ORGS_COMPANIES:
+    # Templated company denials (same rotation rule).
+    for oi, c in enumerate(_ORGS_COMPANIES):
         qs = rng.sample(_DENY_COMPANY_Q, 3)
         for j, qt in enumerate(qs):
-            add(qt.format(c=c), _DENY_COMPANY_A[j % len(_DENY_COMPANY_A)].format(c=c))
+            add(qt.format(c=c), _DENY_COMPANY_A[(oi * 3 + j) % len(_DENY_COMPANY_A)].format(c=c))
 
     # Dedup exact (question, answer) pairs.
     seen, uniq = set(), []

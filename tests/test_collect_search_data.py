@@ -63,6 +63,46 @@ def test_validate_examples_rejects_negative_with_search_tag(
         csd._validate_examples()
 
 
+def test_validate_examples_rejects_a_prompt_in_both_classes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Class purity is per-list and cannot see the worst contradiction: the
+    SAME question taught both ways teaches opposite behaviour on identical
+    input.  Both halves are individually well-formed, so only a cross-list
+    check catches it."""
+    monkeypatch.setattr(
+        csd,
+        "_POSITIVE_EXAMPLES",
+        [("What is the capital of France?", "<search>capital of France</search>")],
+    )
+    monkeypatch.setattr(
+        csd,
+        "_NEGATIVE_EXAMPLES",
+        [("what is the capital of France?  ", "The capital of France is Paris.")],
+    )
+    with pytest.raises(RuntimeError, match="BOTH classes"):
+        csd._validate_examples()
+    # and the offending prompt is named, not just counted
+    with pytest.raises(RuntimeError, match="capital of France"):
+        csd._validate_examples()
+
+
+def test_shipped_corpus_has_no_contradictory_prompt() -> None:
+    """The real corpus (31 positive + 29 negative, 2026-08-14) carries no
+    prompt in both classes.  The lists grow by appending, so this is the
+    guard on future rows, not a pin on today's counts."""
+    csd._validate_examples()  # includes the cross-list check
+    pos = {p.strip().lower() for p, _ in csd._POSITIVE_EXAMPLES}
+    neg = {p.strip().lower() for p, _ in csd._NEGATIVE_EXAMPLES}
+    assert not pos & neg
+    # ...and the emitted corpus agrees: one class per prompt, end to end
+    emitted: dict[str, bool] = {}
+    for row in csd.build_corpus():
+        key = row["prompt"].strip().lower()
+        emits = "<search>" in row["completion"]
+        assert emitted.setdefault(key, emits) == emits, row["prompt"]
+
+
 # ── build_corpus ─────────────────────────────────────────────────────
 
 

@@ -76,8 +76,9 @@ python finetune_enigma.py --data data/sft/mix.jsonl --out models/<new_run_dir>
 `--init` defaults to `models/enigma_v2_238m_facts/model.pth` (the v2 facts
 CPT). `--out` is required and refuses a dir that already holds a checkpoint
 (`--resume`/`--sanity` exempt). Defaults: 2 epochs, lr 2e-5 (~peak/30 of
-pretraining), block 1024 -- RAISE `--block` to the model's trained context
-at any regen (1024 silently skips over-length records).
+pretraining), block 2048 (the adopted v2 lineage's training shape; pass
+`--block 1024` explicitly for a v1-era checkpoint -- the trainer refuses a
+block larger than the model's `max_seq_len`).
 
 The general-conversation side of the mix comes from
 `collect_finetuning_data.py`. `--all` downloads every source EXCEPT

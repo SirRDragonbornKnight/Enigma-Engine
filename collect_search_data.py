@@ -224,6 +224,13 @@ def _validate_examples() -> None:
     ``<search>`` tag (would teach the model to emit search on common
     knowledge — strictly worse than not training at all).
 
+    Class purity is per-list, so it cannot see the sharpest
+    contradiction: the SAME prompt in BOTH lists, each half perfectly
+    well-formed, teaching opposite behaviour on identical input.  The
+    cross-list check is the one that catches it — matched on the
+    ``strip().lower()`` normal form so a cosmetic difference cannot
+    hide it (same norm as ``make_sft_data._norm_q``).
+
     Raises ``RuntimeError`` so a bad template lands as a build-time
     failure, not a silent corpus poisoning.
     """
@@ -234,13 +241,27 @@ def _validate_examples() -> None:
     for prompt, completion in _NEGATIVE_EXAMPLES:
         if "<search>" in completion or "</search>" in completion:
             bad.append(f"NEGATIVE contains <search> tag: {prompt!r}")
+    negatives = {prompt.strip().lower(): prompt for prompt, _ in _NEGATIVE_EXAMPLES}
+    for prompt, _ in _POSITIVE_EXAMPLES:
+        twin = negatives.get(prompt.strip().lower())
+        if twin is not None:
+            bad.append(
+                f"prompt in BOTH classes (search and no-search taught on the "
+                f"same input): {prompt!r} / {twin!r}"
+            )
     if bad:
         raise RuntimeError("synthetic search corpus has malformed examples:\n  " + "\n  ".join(bad))
 
 
 def build_corpus(*, positive_only: bool = False, negative_only: bool = False) -> list[dict[str, str]]:
-    """Return the deduplicated list of ``{"prompt", "completion"}``
-    dicts for the requested class mix.
+    """Return the ``{"prompt", "completion"}`` dicts for the requested
+    class mix, in list order.
+
+    No dedup pass runs here: the design is append-and-validate, so a
+    prompt taught BOTH ways is a build-time ``RuntimeError`` from
+    ``_validate_examples`` rather than a row this function silently
+    drops.  (Zero duplicate prompts across the shipped 31 + 29 as of
+    2026-08-14; the lists grow by appending, hence the check.)
 
     Defaults to BOTH classes — the model needs negatives to learn
     *when* search is not warranted, otherwise it overfits to "always

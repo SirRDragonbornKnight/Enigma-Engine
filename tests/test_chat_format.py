@@ -330,3 +330,123 @@ def test_user_text_cannot_forge_an_image_span():
     ids = cf.render_chat(t, [{"role": "user", "content": "look <|image|> here"}])
     assert cf.IMAGE_START not in ids
     assert cf.IMAGE_END not in ids
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review (2026-08-13): parser span discipline + pair-aware dropping
+# ---------------------------------------------------------------------------
+
+
+def test_a_new_opener_flushes_the_open_span_as_truncated(tok):
+    """An opener while a span was open DISCARDED the whole open span --
+    verified live: <think>reasoning<|tool_call|>{...}<|/tool_call|> lost the
+    reasoning entirely, against the module's own no-silent-discard promise.
+    An interrupted span is truncated output: think joins thinking, exactly
+    as if generation had ended mid-span."""
+    ids = ([cf.THINK] + tok.encode("the reasoning", add_special_tokens=False)
+           + [cf.TOOL_CALL]
+           + tok.encode('{"name": "calculate", "arguments": {"expression": "1+1"}}',
+                        add_special_tokens=False)
+           + [cf.TOOL_CALL_END])
+    out = cf.parse_assistant_ids(tok, ids)
+    assert out["thinking"] == "the reasoning", "the interrupted think span was discarded"
+    assert out["tool_calls"] and out["tool_calls"][0]["name"] == "calculate"
+
+
+def test_a_closer_only_closes_its_own_kind():
+    """'<search>q</think>' used to flush q as a CLOSED search -- executing a
+    lookup the model never closed, silently widening the CLOSED-span
+    contract. A mismatched closer truncates instead: the query joins
+    content and no lookup runs."""
+    from enigma_engine.core.tokenizer import vocab_file_for_size
+
+    t = get_tokenizer("bpe", vocab_path=vocab_file_for_size(16366))
+    cf.attach_chat_tokens(t)
+    s_open, s_close = cf.search_token_ids(t)
+    _, th_close = cf.think_token_ids(t)
+
+    ids = [s_open] + t.encode("weather in oslo", add_special_tokens=False) + [th_close]
+    out = cf.parse_assistant_ids(t, ids)
+    assert out["search"] is None, "a mismatched closer executed the lookup"
+    assert "weather in oslo" in out["content"]
+
+    ids = [s_open] + t.encode("weather in oslo", add_special_tokens=False) + [s_close]
+    assert cf.parse_assistant_ids(t, ids)["search"] == "weather in oslo"
+
+
+def test_an_unclosed_tool_span_never_executes(tok):
+    """The flush-on-reopen fix converted ABANDONED tool calls into
+    executable ones -- <|tool_call|>{A}<|tool_call|>{B}<|/tool_call|>
+    executed BOTH, and a mismatched </think> closer (or the token budget)
+    executed a call the model never finished saying (audit 2026-08-14,
+    verified live: an abandoned `delete_all` ran). Same contract as search:
+    only a CLOSED tool span parses into a named call; anything else stays
+    visible as raw and nothing downstream can execute it."""
+    call_a = '{"name": "delete_all", "arguments": {}}'
+    call_b = '{"name": "safe", "arguments": {}}'
+    # reopened over
+    ids = ([cf.TOOL_CALL] + tok.encode(call_a, add_special_tokens=False)
+           + [cf.TOOL_CALL] + tok.encode(call_b, add_special_tokens=False)
+           + [cf.TOOL_CALL_END])
+    out = cf.parse_assistant_ids(tok, ids)
+    assert [c["name"] for c in out["tool_calls"] if c.get("name")] == ["safe"]
+    abandoned = [c for c in out["tool_calls"] if c["name"] is None]
+    assert abandoned and "delete_all" in abandoned[0]["raw"]
+    # ended by a mismatched closer
+    ids = ([cf.TOOL_CALL] + tok.encode(call_a, add_special_tokens=False)
+           + [cf.THINK_END])
+    out = cf.parse_assistant_ids(tok, ids)
+    assert all(c["name"] is None for c in out["tool_calls"])
+    # cut by the token budget (stream just ends)
+    ids = [cf.TOOL_CALL] + tok.encode(call_a, add_special_tokens=False)
+    out = cf.parse_assistant_ids(tok, ids)
+    assert all(c["name"] is None for c in out["tool_calls"])
+
+
+def test_a_degenerate_budget_is_still_a_hard_promise(tok):
+    """`keep = max(1, max_ids - 1)` emitted BOS + tail = TWO ids for a
+    budget of one (audit 2026-08-14; reachable at
+    max_context = MIN_GEN_TOKENS + 1, which serve's boot guard admits)."""
+    msgs = [{"role": "user", "content": "a question long enough to overflow"}]
+    for budget in (1, 2, 3):
+        ids = cf.render_chat(tok, msgs, max_ids=budget)
+        assert len(ids) <= budget, (budget, len(ids))
+
+
+def test_a_stray_closer_is_harmless(tok):
+    ids = (tok.encode("Plain answer.", add_special_tokens=False) + [cf.THINK_END]
+           + tok.encode(" More words.", add_special_tokens=False))
+    out = cf.parse_assistant_ids(tok, ids)
+    assert "Plain answer." in out["content"] and "More words." in out["content"]
+    assert out["tool_calls"] == [] and out["thinking"] is None
+
+
+def test_the_dropper_keeps_assistant_and_tool_turns_together(tok):
+    """The max_ids dropper walked oldest-first with no pair awareness, so an
+    orphan <|tool_result|> could HEAD the window -- a message shape the SFT
+    corpus never produced (review 2026-08-13). The call and its result drop
+    as one unit."""
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"name": "calculate", "arguments": {"expression": "2+2"}}]},
+        {"role": "tool", "content": "4"},
+        {"role": "user", "content": "now a completely different question entirely"},
+    ]
+    full = cf.render_chat(tok, msgs)
+    ids = cf.render_chat(tok, msgs, max_ids=len(full) - 4)  # forces one drop round
+    assert len(ids) < len(full), "no drop happened -- this test proves nothing"
+    text = tok.decode(ids, skip_special_tokens=False)
+    if "<|tool_result|>" in text:
+        assert "<|tool_call|>" in text, "an orphan tool result survived its call"
+    else:
+        assert "<|tool_call|>" not in text, "a call survived without its result"
+    assert "different question" in text, "the newest turn must always survive"
+
+
+def test_non_string_content_raises_a_clean_valueerror(tok):
+    """The renderer's own contract was unguarded: a list content raised
+    AttributeError (a 500 shape) while the sibling role check raises the
+    honest ValueError serve turns into a 400 (review 2026-08-13)."""
+    with pytest.raises(ValueError, match="content"):
+        cf.render_training(tok, [{"role": "user", "content": [{"type": "text"}]}])

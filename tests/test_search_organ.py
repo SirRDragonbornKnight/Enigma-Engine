@@ -369,7 +369,14 @@ def test_stream_and_non_stream_agree_and_the_query_never_streams(monkeypatch, to
 
 
 def test_capabilities_reports_search(monkeypatch):
+    # search is also INSTRUCT-gated now: a base checkpoint's path never
+    # reaches the hop loop (review 2026-08-13). This test's subject is the
+    # ORGAN flag, so pin instruct on.
+    monkeypatch.setattr(serve, "INSTRUCT", True)
     monkeypatch.setattr(serve, "SEARCHER", None)
     assert serve.capabilities()["search"] is False
     monkeypatch.setattr(serve, "SEARCHER", _FakeSearcher())
     assert serve.capabilities()["search"] is True
+    monkeypatch.setattr(serve, "INSTRUCT", False)
+    assert serve.capabilities()["search"] is False, \
+        "a base checkpoint cannot execute a search span"

@@ -82,6 +82,13 @@ class Painter:
             except Exception as exc:
                 raise ImageGenError(f"generation failed: {exc}") from exc
         out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(out_path)
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(out_path)
+        except OSError as exc:
+            # A full disk / unwritable home leaked a bare OSError past the
+            # organ's error type -- serve's narrow except turned an `imagine`
+            # into a 500 mid-conversation, the one thing the builtin contract
+            # promises never happens (review 2026-08-13).
+            raise ImageGenError(f"could not write the image: {exc}") from exc
         return out_path

@@ -24,6 +24,56 @@ def _two(tmp_path, first, second):
     return _two_store(tmp_path, first, second).all()
 
 
+def test_distinct_measures_about_one_subject_coexist(tmp_path):
+    """Round-2 review 2026-08-13, verified live before the fix: the dog's
+    WEIGHT silently deleted the dog's AGE -- any two digit-bearing values
+    about one subject shared the coarse {subject, kind:measure} key and
+    REPLACED. The ruling licenses 'a measure replaces THAT measure', never
+    'any number replaces any other number about the subject'."""
+    kept = [r["text"] for r in _two(tmp_path, "User's dog is 3 years old.",
+                                    "User's dog is 40 pounds.")]
+    assert "User's dog is 3 years old." in kept
+    assert "User's dog is 40 pounds." in kept
+
+    # ...while an UPDATE of the same measure still replaces.
+    kept = [r["text"] for r in _two(tmp_path, "User's dog is 3 years old.",
+                                    "User's dog is 4 years old.")]
+    assert kept == ["User's dog is 4 years old."]
+
+
+def test_forget_none_deletes_nothing(tmp_path):
+    """forget(None) coerced to the literal query "None", whose single term
+    subset-matched ANY record containing the word "none" -- verified live:
+    it deleted "User's allergies are none." (review 2026-08-13)."""
+    m = _two_store(tmp_path, "User likes tea.", "User's allergies are none.")
+    assert m.forget(None) == []
+    assert len(m.all()) == 2
+
+
+def test_a_failed_supersede_write_leaves_the_store_exactly_as_it_was(tmp_path, monkeypatch):
+    """The supersede path mutated in memory BEFORE persisting -- the rule
+    delete()/forget()/clear() already follow and _rewrite's own docstring
+    states. Verified live: a failed write reported an error while the live
+    session behaved as if the update landed, then reverted at restart."""
+    import enigma_engine.core.memory_store as ms
+
+    m = MemoryStore(tmp_path)
+    m.remember("User's dog is named Rex.")
+
+    def _boom(*a, **k):
+        raise OSError("disk says no")
+
+    monkeypatch.setattr(ms, "atomic_write_text", _boom)
+    with pytest.raises(OSError):
+        m.remember("User's dog is named Bruno.")
+    monkeypatch.undo()
+
+    assert [r["text"] for r in m.all()] == ["User's dog is named Rex."], \
+        "memory diverged from disk"
+    m2 = MemoryStore(tmp_path)
+    assert [r["text"] for r in m2.all()] == ["User's dog is named Rex."]
+
+
 def test_add_search_relevance(tmp_path):
     m = MemoryStore(tmp_path)
     m.add("The user's cat is named Miso and sleeps on the GPU box.")

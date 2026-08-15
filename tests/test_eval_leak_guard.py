@@ -384,6 +384,21 @@ def test_the_trainer_sees_tool_call_arguments_and_system_turns(tmp_path, monkeyp
     assert any(probe in s for s in got["asks"] + got["answers"]), \
         "tool-call arguments are trained on but reach no screen"
 
+    # The FLAT shape -- what make_sft_data actually emits ({"name","arguments"}
+    # with no "function" wrapper; chat_format accepts both) -- reached no
+    # screen: the extractor read call["function"] only, so the one corpus that
+    # teaches tool use was the one the guard could not read (review 2026-08-13).
+    got = load([
+        {"role": "user", "content": "How do I change a tyre?"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"name": "search_notes",
+                         "arguments": json.dumps({"query": probe})}]},
+        {"role": "tool", "content": "(results)"},
+        {"role": "assistant", "content": "Paris."},
+    ])
+    assert any(probe in s for s in got["asks"] + got["answers"]), \
+        "FLAT tool-call arguments (the builder's own shape) reach no screen"
+
     got = load([{"role": "system", "content": probe},
                 {"role": "user", "content": "Hello."},
                 {"role": "assistant", "content": "Hi."}])

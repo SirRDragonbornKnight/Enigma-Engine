@@ -1,5 +1,8 @@
 """The data shapes added for the v2 SFT regen -- TRAINING side.
 
+Round-2 review (2026-08-13) adds the adoption-sunset lock at the bottom:
+builder and finetune defaults must bake for the SERVING lineage.
+
 Each generator here fills a hole that was MEASURED empty in the shipped mix
 (114,244 records): no record carried a second user turn, none contained a
 <think> tag, none corrected a remembered fact, and no system block offered a
@@ -14,6 +17,7 @@ tests/test_serve_enigma.py against serve's own _with_context; the drift lock
 here compares against the shared spec table both sides read.
 """
 
+import json
 import re
 
 import pytest
@@ -29,13 +33,18 @@ from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 from make_sft_data import (
     PREAMBLE,
     _builtin_system,
+    fit_mix_to_block,
     gen_builtin_block_examples,
     gen_chat_multiturn_examples,
+    gen_image_read_examples,
+    gen_math_examples,
     gen_memory_correction_examples,
     gen_reasoning_examples,
     gen_episode_examples,
     gen_search_examples,
     gen_structured_examples,
+    gen_teaching_examples,
+    gen_tool_examples,
     gen_unknown_examples,
     vocab_is_digit_uniform,
 )
@@ -54,18 +63,28 @@ def _user_turns(rec):
 # --------------------------------------------------------------------------
 
 
+# The five built-ins, written out here rather than read from the module:
+# BUILTIN_NAMES is DERIVED from BUILTIN_TOOLS, so comparing those two can
+# only ever pass. An independent literal is what makes a sixth name -- or a
+# lost one -- fail.
+BUILTINS = {"calculate", "forget", "imagine", "remember", "speak"}
+
+
 def test_builtin_block_offers_every_builtin_and_nothing_else():
     """The block is the five tools the SERVER can actually execute.
 
     A name trained into the offer list without a runtime is a promise she
     cannot keep; a runtime missing from the list gets no gradient at all --
     which is how `forget` shipped with an executor and zero training records.
+    The "nothing else" half is read off the RENDERED block: the spec table
+    could gain a tool the server cannot run and every containment check
+    would still pass.
     """
-    sys_msg = _builtin_system()
-    offered = {t["function"]["name"] for t in BUILTIN_TOOLS}
-    assert offered == set(BUILTIN_NAMES)
-    for name in offered:
-        assert f'"name": "{name}"' in sys_msg, f"{name} missing from the offered block"
+    assert {t["function"]["name"] for t in BUILTIN_TOOLS} == BUILTINS
+    assert set(BUILTIN_NAMES) == BUILTINS
+    offered = {json.loads(ln)["name"] for ln in _builtin_system().splitlines()
+               if ln.startswith("{")}
+    assert offered == BUILTINS, "the trained block does not offer exactly the five built-ins"
 
 
 def test_the_trained_preamble_is_the_one_serve_prepends():
@@ -166,18 +185,100 @@ def test_every_authored_record_survives_the_probe_screen():
     future reseal that newly collides fails HERE instead of silently
     thinning the corpus."""
     from eval_leak_guard import LockedProbeGuard
+    from identity_paraphrases import gen_identity_paraphrases
     from make_sft_data import _eval_probe_questions, probe_screen
 
-    _, held_out = probe_screen(_eval_probe_questions(), LockedProbeGuard.load())
-    from make_sft_data import gen_image_read_examples
+    prompt_side, held_out = probe_screen(_eval_probe_questions(), LockedProbeGuard.load())
+    from make_sft_data import gen_identity_examples, gen_image_read_examples
 
     for gen in (gen_builtin_block_examples, gen_chat_multiturn_examples,
                 gen_reasoning_examples, gen_memory_correction_examples,
                 gen_search_examples, gen_unknown_examples,
                 gen_structured_examples, gen_episode_examples,
-                gen_image_read_examples):
-        gone = [r["messages"][1]["content"] for r in gen() if held_out(r)]
+                gen_image_read_examples, gen_identity_examples,
+                gen_identity_paraphrases):
+        recs = gen()
+        if isinstance(recs, tuple):  # gen_identity_examples returns (records, dropped)
+            recs = recs[0]
+        # Report the PROMPT side, not messages[1]: the identity corpora carry
+        # no system turn, so messages[1] there is the answer -- naming it as
+        # the collision would point the fix at the wrong half of the record.
+        gone = [t for r in recs if held_out(r) for t in prompt_side(r)]
         assert not gone, f"{gen.__name__} authored probe collisions: {gone}"
+
+
+def test_a_dev_probe_is_held_out_wherever_it_sits_on_the_prompt_side():
+    """The dev half of the screen must cover the SAME unit as the locked half.
+
+    _eval_probe_questions fills the dev set with every probe's teach facts as
+    well as its question, and a teach fact reaches training as a memory
+    block -- a system turn -- or as a later user turn. Matching the first
+    user question alone leaves both unscreened at build time while the
+    consume-time guard refuses on the whole prompt side, so a record held
+    only there is a training-day refusal the builder cannot clear.
+    """
+    from eval_leak_guard import LockedProbeGuard
+    from make_sft_data import probe_screen
+
+    # Dev half only: an empty locked guard is a no-op, so nothing here can
+    # pass on the fuzzy sweep instead of the exact one under test.
+    _, held_out = probe_screen({"i named my telescope vantill."}, LockedProbeGuard(None))
+    in_system = {"messages": [
+        {"role": "system", "content": "I named my telescope Vantill."},
+        {"role": "user", "content": "What did I name it?"},
+        {"role": "assistant", "content": "Vantill."}]}
+    later_turn = {"messages": [
+        {"role": "user", "content": "Evening."},
+        {"role": "assistant", "content": "Evening."},
+        {"role": "user", "content": "I named my telescope Vantill."},
+        {"role": "assistant", "content": "Noted."}]}
+    clean = {"messages": [
+        {"role": "user", "content": "What is a telescope for?"},
+        {"role": "assistant", "content": "Making far things near."}]}
+    assert held_out(in_system), "a probe fact in the system block passed the dev screen"
+    assert held_out(later_turn), "a probe in a second user turn passed the dev screen"
+    assert not held_out(clean), "the screen refuses a record that carries no probe"
+
+
+def test_a_commented_dev_probe_file_reads_the_same_through_both_readers(tmp_path, monkeypatch, capsys):
+    """Two readers, one file. eval_behavior.run() deliberately SKIPS `#`
+    comment lines in the DEV probe file, so annotating a retired probe there is
+    invited; make_sft_data's reader json.loads every non-blank line and dies on
+    that same comment with a raw JSONDecodeError. The reader it kills is the
+    exact-match backstop that holds identity and knowledge probes out of
+    training, so the crash lands on the build, not on the eval.
+
+    Comments must contribute NOTHING and cost NOTHING: the questions this
+    returns are the questions eval's reader keeps, comment lines and all."""
+    import json
+
+    import eval_behavior
+    import make_sft_data
+
+    rows = [
+        {"category": "identity", "q": "Which observatory catalogued Vantill-9?",
+         "want_any": ["never"]},
+        {"category": "memory", "q": "What did I name my telescope?",
+         "teach": ["I named my telescope Vantill."], "want_any": ["vantill"]},
+    ]
+    probes = tmp_path / "behavior_probes.jsonl"
+    probes.write_text(
+        "# retired probe: superseded by the locked set\n"
+        + "\n".join(json.dumps(r) for r in rows) + "\n"
+        + "   # an indented comment is still a comment\n"
+        + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(make_sft_data, "EVAL_PROBES", probes)
+
+    # eval's reader, driven through run(): it prints its own case count before
+    # any server is reached, so the receipt costs nothing but a refused wait.
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: False)
+    assert eval_behavior.run("http://127.0.0.1:9999", 0.0, 8, probes, None) == 2
+    assert f"({len(rows)} cases)" in capsys.readouterr().out
+
+    expected = {r["q"].strip().lower() for r in rows}
+    expected |= {f.strip().lower() for r in rows for f in r.get("teach", [])}
+    assert make_sft_data._eval_probe_questions() == expected
 
 
 # --------------------------------------------------------------------------
@@ -406,8 +507,13 @@ def test_contrast_pairs_share_their_question_with_a_decline():
 
 
 def test_memory_present_declines_do_not_parrot_the_distractor():
+    """Fix arc 2026-08-08 (gate finding 1): the sealed run parroted a recalled
+    name into an unknowable answer. The class must be wide enough to teach
+    the rule rather than a token set, and no answer may echo the block's own
+    value."""
     from make_sft_data import _UNKNOWABLE_WITH_MEMORY
 
+    assert len(_UNKNOWABLE_WITH_MEMORY) >= 6, "the memory-decline class is still thin"
     for fact, _q, answer in _UNKNOWABLE_WITH_MEMORY:
         key = fact.split()[-1].rstrip(".").lower()  # "rex", "denver"
         assert key not in answer.lower(), f"the distractor fact leaked into the decline: {answer}"
@@ -694,19 +800,6 @@ def test_builtin_restraint_refuses_to_save_dictated_falsehoods():
         assert not _tool_calls(r), f"a restraint record called a tool: {r['messages'][1]['content']}"
 
 
-def test_memory_present_declines_widened_against_tempting_values():
-    """Fix arc 2026-08-08 (gate finding 1): the sealed run parroted a recalled
-    name into an unknowable answer. The decline-with-memory class must be more
-    than a token set, and none may leak the block's own value."""
-    from make_sft_data import _UNKNOWABLE_WITH_MEMORY
-
-    assert len(_UNKNOWABLE_WITH_MEMORY) >= 6, "the memory-decline class is still thin"
-    for fact, _q, answer in _UNKNOWABLE_WITH_MEMORY:
-        # the block's distinctive value (last token) must not be the answer
-        val = fact.split()[-1].rstrip(".").lower()
-        assert val not in answer.lower(), f"the block value leaked into the decline: {answer}"
-
-
 def test_math_is_gated_on_the_vocab_carving_digits_uniformly():
     """v1 merges some digit pairs and not others ('15' is one token, '56' is
     two), and arithmetic cannot be learned through that -- the v4 model
@@ -732,8 +825,188 @@ def test_math_is_gated_on_the_vocab_carving_digits_uniformly():
         gen_structured_examples,
         gen_unknown_examples,
         gen_episode_examples,
+        gen_tool_examples,
+        gen_math_examples,
+        gen_image_read_examples,
     ],
     ids=lambda f: f.__name__,
 )
 def test_generators_are_deterministic(gen):
+    """Two calls in ONE process, which is also the order-dependence pin:
+    gen_tool_examples grows the module-global TOOLS through
+    _expand_parameterized behind an _EXPANDED flag, so an expansion that
+    stopped being idempotent would append its value pools twice and the
+    second build would not be the first.
+    (Identity's two generators are pinned in test_identity_generators.py.)
+    """
     assert gen() == gen()
+
+
+def test_the_teachings_generator_is_deterministic(tmp_path):
+    """Hermetic on purpose: teachings.jsonl is the user's own authoring
+    channel and is normally still the untouched example file (0 records), so
+    a determinism check against the live path proves nothing."""
+    path = tmp_path / "teachings.jsonl"
+    path.write_text(
+        json.dumps({"questions": ["What is the zzyzx ledger?",
+                                  "Tell me about the zzyzx ledger."],
+                    "answers": ["A list of orreries.", "The orrery list."]}) + "\n",
+        encoding="utf-8")
+    out = gen_teaching_examples(path)
+    assert out, "the fixture produced no records -- the test proves nothing"
+    assert out == gen_teaching_examples(path)
+
+
+# --------------------------------------------------------------------------
+# Fitting the mix to the block
+# --------------------------------------------------------------------------
+
+
+def test_a_tool_records_payload_cannot_slip_past_the_ascii_fast_path():
+    """The fast path measures `content` and nothing else.
+
+    A tool record carries its arguments OUTSIDE content -- render_training
+    encodes the tool_call payload and the tool turn's own markers -- so a
+    conversation whose contents sum to a handful of characters can render far
+    past the block, pass here as "fits", and then be silently skipped at
+    finetune load: the exact class this function exists to prevent.
+    """
+    rec = {"messages": [
+        {"role": "user", "content": "Save that."},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"name": "remember",
+                         "arguments": {"text": "the ledger entry for the orrery " * 200}}]},
+        {"role": "tool", "content": "saved"},
+        {"role": "assistant", "content": "Noted."},
+    ], "category": "tool_call"}
+    block = 256
+    contents = [m.get("content") or "" for m in rec["messages"]]
+    assert all(c.isascii() for c in contents) and sum(len(c) for c in contents) + 64 <= block + 1, \
+        "the record no longer qualifies for the fast path -- the test proves nothing"
+
+    kept, trimmed, dropped, leaked = fit_mix_to_block(
+        [json.dumps(rec, ensure_ascii=False)], block=block,
+        vocab_path=vocab_file_for_size(16366),
+    )
+    assert (kept, trimmed, dropped, leaked) == ([], 0, 1, 0), \
+        "an over-long tool record passed the fast path and would be skipped at load"
+
+
+# --------------------------------------------------------------------------
+# Per-source counts -- every drop class the build makes is printed
+# --------------------------------------------------------------------------
+
+# Every generator main() screens, so a build can run on stub corpora: a real
+# one is minutes of tokenizing 100k+ records, and the arithmetic under test
+# is the counting, not the content.
+_STUB_GENERATORS = (
+    "gen_tool_examples", "gen_math_examples", "gen_teaching_examples",
+    "gen_memory_read_examples", "gen_memory_tools_examples",
+    "gen_image_read_examples", "gen_knowledge_examples",
+    "gen_builtin_block_examples", "gen_chat_multiturn_examples",
+    "gen_reasoning_examples", "gen_memory_correction_examples",
+    "gen_search_examples", "gen_unknown_examples", "gen_structured_examples",
+    "gen_episode_examples", "gen_identity_paraphrases",
+)
+
+
+def _qa(question, answer="Noted."):
+    return {"messages": [{"role": "user", "content": question},
+                         {"role": "assistant", "content": answer}],
+            "category": "stub"}
+
+
+def _stub_build(monkeypatch, tmp_path, corpora, probe_qs=(), general=""):
+    """Run main() over stub corpora and return its stdout, keyed by line prefix.
+
+    OUT_DIR moves to tmp_path: a test must never rotate data/sft -- those
+    artifacts are the SERVED model's training receipt.
+    """
+    import make_sft_data
+
+    for name in _STUB_GENERATORS:
+        recs = list(corpora.get(name, []))
+        monkeypatch.setattr(make_sft_data, name, (lambda r: lambda *a, **k: list(r))(recs))
+    ident = list(corpora.get("gen_identity_examples", []))
+    monkeypatch.setattr(make_sft_data, "gen_identity_examples", lambda: (ident, 0))
+
+    probes = tmp_path / "behavior_probes.jsonl"
+    probes.write_text(
+        "".join(json.dumps({"category": "identity", "q": q, "want_any": ["never"]}) + "\n"
+                for q in probe_qs),
+        encoding="utf-8")
+    monkeypatch.setattr(make_sft_data, "EVAL_PROBES", probes)
+    corpus = tmp_path / "combined_finetune.jsonl"
+    corpus.write_text(general, encoding="utf-8")
+    monkeypatch.setattr(make_sft_data, "GENERAL", corpus)
+    monkeypatch.setattr(make_sft_data, "OUT_DIR", tmp_path / "out")
+    make_sft_data.main([])
+
+
+def test_every_screened_corpus_prints_its_held_out_count(tmp_path, monkeypatch, capsys):
+    """A corpus screened without a printed count is coverage that can vanish.
+
+    Six generators ran their records through the probe screen and printed
+    only the survivors, so a reseal that newly collided thinned them
+    silently -- while the module docstring promised counts per source. The
+    stub corpora each carry one colliding record and one clean one.
+    """
+    probe = "which orrery did the zzyzx ledger list?"
+    corpora = {
+        name: [_qa(probe), _qa(f"what does the zzyzx ledger say about {i}?")]
+        for i, name in enumerate((
+            "gen_math_examples", "gen_teaching_examples",
+            "gen_memory_read_examples", "gen_memory_tools_examples",
+            "gen_image_read_examples", "gen_knowledge_examples"))
+    }
+    _stub_build(monkeypatch, tmp_path, corpora, probe_qs=[probe])
+    lines = {ln.split(":")[0]: ln for ln in capsys.readouterr().out.splitlines()}
+    for source in ("math", "teachings", "memory-read", "memory+tools",
+                   "image-read", "knowledge"):
+        assert source in lines, f"{source} prints no count line at all"
+        assert "1 held out of training as eval probes" in lines[source], \
+            f"{source} drops probe collisions silently: {lines[source]}"
+
+
+def test_a_malformed_general_line_is_counted_not_silently_dropped(tmp_path, monkeypatch, capsys):
+    """The one drop class with no counter: a line that fails json.loads.
+
+    Every other drop the general reader makes is counted and printed. A
+    corpus that started emitting broken JSON would shrink the diet with
+    nothing on stdout to say so.
+    """
+    general = (
+        json.dumps({"prompt": "what does the zzyzx ledger weigh?", "completion": "Two pounds."}) + "\n"
+        + '{"prompt": "truncated record...\n'
+        + json.dumps({"prompt": "where is the zzyzx ledger shelved?", "completion": "Top shelf."}) + "\n"
+    )
+    _stub_build(monkeypatch, tmp_path, {}, general=general)
+    out = capsys.readouterr().out
+    assert "1 dropped as malformed JSON" in out, "a bad JSON line dropped silently"
+    assert "2 general kept" in out, "the readable records did not survive the count"
+
+
+def test_builder_defaults_match_the_adopted_lineage():
+    """The adoption SUNSET flips defaults at adoption (ruled 2026-07-29;
+    executed for serve at the swap commit). The data builder missed it:
+    BLOCK sat at 1024 while the SERVING lineage trains at 2048 -- a bare
+    rebuild would silently DROP every record that fits 2048 but not 1024 --
+    and the --vocab default measured fit against the DEAD v1 table. No
+    launcher invokes make_sft_data (the T4 bake was run by hand), so the
+    defaults are a bare run's ONLY protection (Round-2 review 2026-08-13).
+    The lock is builder budget == finetune's --block default (the served
+    max_seq_len is 8192 -- the block is the TRAINING shape, not the serving
+    window), and the vocab half pins the WIRING only: default_vocab_path()
+    routes through vocab_file_for_size(16366), the value hand-copied from
+    the adopted checkpoint's config.json -- if the adopted lineage ever
+    changes vocab, this test stays green and the constant must be re-copied
+    by hand (audit 2026-08-14)."""
+    import make_sft_data
+    from finetune_enigma import build_parser
+
+    ft = build_parser().parse_args(["--data", "d.jsonl", "--out", "models/x"])
+    assert make_sft_data.BLOCK == ft.block == 2048, \
+        "builder and finetune block defaults must both bake for the serving lineage"
+    # 16366 = the adopted checkpoint's recorded vocab_size (enigma_v2_sft2).
+    assert make_sft_data.default_vocab_path() == vocab_file_for_size(16366), \
+        "a bare build no longer measures fit against the serving vocab"

@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import time
 import urllib.error
@@ -46,6 +47,7 @@ import urllib.request
 from pathlib import Path
 
 import eval_leak_guard
+from enigma_engine.core.safe_save import atomic_write_text
 
 ROOT = Path(__file__).resolve().parent
 PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
@@ -689,10 +691,16 @@ def _run_conditions(probes: Path, base_url: str, temperature: float, max_tokens:
 
 
 def _write_transcript(transcript: Path, rows: list[dict]) -> None:
-    transcript.parent.mkdir(parents=True, exist_ok=True)
-    transcript.write_text(
+    # Atomic, because the abort path writes through here too and its whole
+    # purpose is not losing collected answers: a write torn in half leaves a
+    # short receipt where a complete one was, and JSONL cannot tell the two
+    # apart afterwards. backup=False -- a rotated .bak would be a second
+    # plaintext copy of every probe and answer, and only the transcript path
+    # itself cleared _refuse_unsealing_path.
+    atomic_write_text(
+        transcript,
         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
-        encoding="utf-8",
+        backup=False,
     )
     print(f"transcript: {transcript} ({len(rows)} records incl. conditions)")
 
@@ -785,13 +793,51 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
         print(f"[{cat:11} {'ok' if ok else 'XX'}] {_ascii(c['q'][:44]):44} -> {detail}")
 
 
-def _is_scratch_target(base_url: str) -> bool:
-    """True when base_url names a documented throwaway eval server."""
+# The launcher chain's daily store -- the one dir this harness must never
+# clear (the clear is unrecoverable: delete semantics keep no .bak).
+_LIVE_MEMORY_DIR = (Path(__file__).resolve().parent / "data" / "memory").resolve()
+
+
+def _is_scratch_target(base_url: str, caps: dict) -> bool:
+    """True when base_url names a verifiably throwaway eval server.
+
+    Port-only was the whole gate until 2026-08-13, which passed BOTH wipe
+    cases the review constructed: a LAN box on 8123, and a local serve on
+    8123 restarted with the launcher's REAL --memory-dir. Three checks now:
+    a scratch port, a local host, and a target-REPORTED memory dir that is
+    not the live store (a server with a store it cannot name is not
+    verifiably disposable). Only an AFFIRMED "memory": False means the
+    clear is a no-op -- {} is what _capabilities returns when the endpoint
+    could not answer at all (a 10s timeout on a serve mid-generation, an
+    older build's 404, a proxy's HTML), and unknown is not "no store"
+    (audit 2026-08-14: _wait_for_server polls /v1/models, so nothing else
+    stood between {} and the unrecoverable clear)."""
     try:
-        port = urllib.parse.urlsplit(base_url).port
+        parts = urllib.parse.urlsplit(base_url)
+        port = parts.port
     except ValueError:
         return False
-    return port in SCRATCH_PORTS
+    if port not in SCRATCH_PORTS:
+        return False
+    if parts.hostname not in ("127.0.0.1", "localhost", "::1"):
+        return False
+    if "memory" not in caps:
+        return False
+    if not caps["memory"]:
+        return True
+    mem_dir = caps.get("memory_dir")
+    if not isinstance(mem_dir, str) or not mem_dir:
+        return False
+    # Same-FILE identity, not string identity: alias spellings resolve()
+    # does not fold (\\?\C:\..., \\localhost\C$\...) named the live store
+    # while comparing unequal (audit 2026-08-14). If identity cannot be
+    # established, the dir is not verifiably disposable.
+    try:
+        if _LIVE_MEMORY_DIR.exists():
+            return not os.path.samefile(mem_dir, _LIVE_MEMORY_DIR)
+        return Path(mem_dir).resolve() != _LIVE_MEMORY_DIR
+    except (OSError, ValueError):
+        return False
 
 
 def _sealed_manifest() -> dict:
@@ -1067,9 +1113,10 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
 
     The verdict is a screen, not a measurement: at this many probes per category
     a small aggregate lead is inside the noise, so the paired exact test is
-    printed and stapled to the verdict string. The baseline arrives parsed and
-    shape-checked (run() refuses a malformed one before any server is
-    touched)."""
+    printed and stapled to the verdict string. The baseline arrives parsed,
+    shape-checked and NON-EMPTY (run() refuses a malformed or 0-of-0 one before
+    any server is touched), so its denominator is a measurement rather than a
+    fallback."""
     base_probes = base_probes or {}
     this_probes = this_probes or {}
     print(f"baseline comparison: {baseline}")
@@ -1084,8 +1131,13 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
         if base_cond.get(knob) != conditions.get(knob):
             print(f"  WARN: {knob} differs from baseline "
                   f"({base_cond.get(knob)!r} vs {conditions.get(knob)!r}) -- columns not comparable")
-    base_caps = base_cond.get("capabilities") or {}
-    this_caps = conditions.get("capabilities") or {}
+    # memory_dir is provenance, not an organ: the scratch gate REQUIRES a
+    # throwaway dir, so two legitimate runs lawfully differ on it -- diffing
+    # it here read every honest A/B comparison as "different servers".
+    base_caps = {k: v for k, v in (base_cond.get("capabilities") or {}).items()
+                 if k != "memory_dir"}
+    this_caps = {k: v for k, v in (conditions.get("capabilities") or {}).items()
+                 if k != "memory_dir"}
     if base_caps and this_caps and base_caps != this_caps:
         drifted = sorted(str(k) for k in set(base_caps) | set(this_caps)
                          if base_caps.get(k) != this_caps.get(k))
@@ -1097,7 +1149,7 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
         print("  WARN: BOTH runs report the SAME checkpoint sha256 -- someone forgot a "
               "restart; this compares a model against itself")
     base_hits = int(base_card.get("overall_hits", 0))
-    base_n = int(base_card.get("overall_n", 0)) or 1
+    base_n = int(base_card.get("overall_n", 0))
     delta = overall_hits / max(overall_n, 1) - base_hits / base_n
     beats = delta > 0
     print(f"  aggregate {base_hits}/{base_n} -> {overall_hits}/{overall_n} ({delta:+.1%})")
@@ -1178,6 +1230,15 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     if not probes.exists():
         print(f"FAIL: probe file not found: {probes}")
         return 2
+    # One path for both flags is not a no-op: the baseline is read up front,
+    # the run proceeds, and the transcript write at the end lands on top of the
+    # sealed receipt this run was measured against. The comparison has already
+    # happened by then, so nothing downstream notices the receipt is gone.
+    if transcript is not None and baseline is not None and transcript.resolve() == baseline.resolve():
+        print(f"FAIL: --transcript would overwrite --baseline ({baseline}); the "
+              f"baseline receipt is the only thing that can contest this run's "
+              f"verdict -- write the transcript somewhere else")
+        return 2
     # The baseline is parsed and shape-checked HERE, not after the run: a
     # malformed file discovered at comparison time would cost the 96 answers
     # a completed gate run just collected.
@@ -1196,6 +1257,16 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
             return 2
         if not _valid_scorecard(base_card):
             print(f"FAIL: baseline scorecard is malformed: {baseline}")
+            return 2
+        # Every count in a 0-of-0 card is a legal count, so the shape check
+        # passes one and the comparison then divides by an invented denominator
+        # -- "aggregate 0/1 -> 1/1 (+100.0%)", no category to regress, VERDICT
+        # ADOPT off a truncated receipt. A comparison against nothing is not a
+        # weak comparison, it is not a comparison.
+        if not int(base_card.get("overall_n", 0)) or not base_card.get("by_category"):
+            print(f"FAIL: baseline measured nothing to compare against "
+                  f"({int(base_card.get('overall_hits', 0))}/{int(base_card.get('overall_n', 0))} "
+                  f"over {len(base_card.get('by_category') or {})} categories): {baseline}")
             return 2
         rule = baseline_aggregate_rule(base_card)
         if rule != "gated":
@@ -1261,15 +1332,19 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         is_gate_run = True
         print(f"seal verified: probes and grading keys match {LOCKED_MANIFEST.name}")
 
-    if not _is_scratch_target(base_url) and not allow_live_server:
-        print(f"FAIL: {base_url} is not a scratch eval server (ports {sorted(SCRATCH_PORTS)}).")
-        print("      This run CLEARS the target's memory store and then writes probe facts into it.")
-        print("      Start serve on --port 8123 with a throwaway --memory-dir, or pass")
-        print("      --allow-live-server if this target really is disposable.")
-        return 2
-
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
+        return 2
+    # The gate reads the LIVE server's capabilities (memory_dir), so it runs
+    # after the server is up -- port alone proved nothing (review 2026-08-13).
+    if not _is_scratch_target(base_url, _capabilities(base_url)) and not allow_live_server:
+        print(f"FAIL: {base_url} is not a verifiably scratch eval server.")
+        print(f"      Required: a scratch port ({sorted(SCRATCH_PORTS)}), a LOCAL host, and a")
+        print("      target-reported memory dir that is not the live store (a capabilities")
+        print("      endpoint that cannot answer counts as UNKNOWN, which refuses). This run CLEARS")
+        print("      the target's memory store (unrecoverably) and writes probe facts into it.")
+        print("      Start serve on --port 8123 with a throwaway --memory-dir, or pass")
+        print("      --allow-live-server if this target really is disposable.")
         return 2
     _clear_memory(base_url)
     by_cat: dict[str, list[bool]] = {}

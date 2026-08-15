@@ -24,10 +24,12 @@ LONG_ANSWER = (
     "Jupiter is the largest planet in the solar system, and it is large enough "
     "that every other planet would fit inside it with room to spare."
 )
-# Deliberately NOT the argparse defaults (0.0 / 60 / 127.0.0.1:8123): a
-# hardcoded field would match the defaults and the assertion would prove
-# nothing.
-TEMP, MAXTOK, URL = 0.7, 13, "http://probe-host:9999"
+# Deliberately NOT the argparse defaults (temperature 0.0 / max_tokens 60 /
+# PORT 8123): a hardcoded field would match the defaults and the assertion
+# would prove nothing. The HOST must stay local -- the scratch gate verifies
+# host + reported memory dir, not just the port (review 2026-08-13) -- so
+# the port alone carries the not-the-default duty here.
+TEMP, MAXTOK, URL = 0.7, 13, "http://127.0.0.1:9999"
 
 
 def _probe_file(tmp_path, name="probes.jsonl", q="Largest planet?"):
@@ -48,6 +50,10 @@ def _fake_server(monkeypatch, answer: str, tool_on_text: str | None = None):
     # The run refuses a target outside the scratch ports because it wipes that
     # server's memory store first; this fake host is disposable by definition.
     monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
+    # ...and it reports no store at all, so the dir half of the gate passes
+    # (the gate's own behavior is pinned in test_eval_scratch_gate.py).
+    monkeypatch.setattr(eval_behavior, "_capabilities",
+                        lambda *a, **k: {"memory": False, "memory_dir": None})
 
     def fake_post(base_url, payload):
         if payload.get("tools"):
@@ -220,6 +226,62 @@ def test_gitignored_repo_path_is_still_allowed(tmp_path, monkeypatch):
         target.unlink(missing_ok=True)
 
 
+def test_the_transcript_may_not_overwrite_its_own_baseline(tmp_path, monkeypatch, capsys):
+    """--transcript and --baseline naming one file is not a no-op: the baseline
+    is parsed into memory up front, the run proceeds normally, and the write at
+    the end lands on top of the sealed receipt this run was measured against.
+    Nothing downstream can notice -- the comparison already happened -- and the
+    only artifact that could contest the verdict is gone."""
+    probes = _probe_file(tmp_path)
+    base = _baseline_file(tmp_path, probes,
+                          {"factual": {"hits": 0, "n": 1}, "tool": {"hits": 1, "n": 1}})
+    before = base.read_bytes()
+
+    def touched(*a, **k):
+        raise AssertionError("server contacted despite the transcript/baseline collision")
+
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", touched)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", touched)
+
+    assert eval_behavior.run(URL, TEMP, MAXTOK, probes, base, baseline=base) == 2
+    assert "FAIL" in capsys.readouterr().out
+    assert base.read_bytes() == before
+
+    # The same file reached by another spelling is the same file.
+    (tmp_path / "sub").mkdir()
+    spelled = tmp_path / "sub" / ".." / base.name
+    assert eval_behavior.run(URL, TEMP, MAXTOK, probes, spelled, baseline=base) == 2
+    assert base.read_bytes() == before
+
+
+def test_a_torn_transcript_write_leaves_the_previous_one_intact(tmp_path, monkeypatch):
+    """The transcript is written at the end of a run and again on the ABORT
+    path, whose whole purpose is not losing collected answers. A plain
+    write_text truncates in place, so a write torn in half by a full disk or a
+    killed process leaves a short receipt where a complete one was -- and JSONL
+    offers no way to tell the two apart afterwards."""
+    from enigma_engine.core import safe_save
+
+    out = tmp_path / "transcript.jsonl"
+    eval_behavior._write_transcript(out, [{"record": "run_conditions"},
+                                          {"record": "probe", "q": "Largest planet?"}])
+    eval_behavior._write_transcript(out, [{"record": "run_conditions"}])
+    # A rotated .bak would be a second plaintext copy of every sealed probe and
+    # answer, and only the transcript path itself cleared the unsealing check.
+    assert not list(tmp_path.glob("*.bak"))
+    good = out.read_bytes()
+
+    def die(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(safe_save.os, "replace", die)
+    with pytest.raises(OSError):
+        eval_behavior._write_transcript(out, [{"record": "run_conditions"},
+                                              {"record": "aborted"}])
+    assert out.read_bytes() == good, "a failed write replaced a complete transcript"
+    assert not list(tmp_path.glob("*.tmp")), "a torn write left its temp file behind"
+
+
 def test_no_transcript_flag_writes_nothing(tmp_path, monkeypatch):
     probes = _probe_file(tmp_path)
     _fake_server(monkeypatch, LONG_ANSWER)
@@ -260,6 +322,10 @@ def test_a_non_scratch_target_is_refused_before_anything_is_cleared(tmp_path, mo
     cleared = []
     monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
     monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: cleared.append(1))
+    # No live network I/O from a unit test: the gate's caps argument is
+    # evaluated before the port check runs, and an unstubbed _capabilities
+    # is a real urlopen at a 10s timeout (audit 2026-08-14).
+    monkeypatch.setattr(eval_behavior, "_capabilities", lambda *a, **k: {})
     monkeypatch.setattr(eval_behavior, "_post", lambda *a, **k: pytest.fail("probed a live server"))
 
     rc = eval_behavior.run("http://127.0.0.1:8000", TEMP, MAXTOK, probes, None)
@@ -621,6 +687,11 @@ def test_tool_arguments_reach_the_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
     monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: None)
     monkeypatch.setattr(eval_behavior, "SCRATCH_PORTS", frozenset({9999}))
+    # The gate FAILS CLOSED on an unanswered capabilities probe (audit
+    # 2026-08-14) -- an unstubbed _capabilities returns {} here and the run
+    # would honestly refuse before writing any transcript.
+    monkeypatch.setattr(eval_behavior, "_capabilities",
+                        lambda *a, **k: {"memory": False, "memory_dir": None})
     monkeypatch.setattr(eval_behavior, "_post", lambda base_url, payload: {"choices": [{"message": {
         "content": "",
         "tool_calls": [{"function": {"name": "get_weather", "arguments": '{"city": "Sydney"}'}}],
@@ -1040,3 +1111,47 @@ def test_a_baseline_counted_under_the_old_rule_is_refused(tmp_path, monkeypatch)
                            baseline=old_rule)
     assert rc == 2
     assert not touched, "the target's memory store was wiped before the refusal"
+
+
+def test_a_baseline_that_measured_nothing_cannot_produce_a_verdict(tmp_path, monkeypatch, capsys):
+    """A truncated or half-written receipt scores 0 of 0, and every count in it
+    is a legal count. The comparison then INVENTED the denominator
+    (`overall_n or 1`) and printed "aggregate 0/1 -> 1/1 (+100.0%)", "category
+    regressions: none", "VERDICT: ADOPT" -- the strongest verdict this tool
+    emits, off a baseline that measured nothing. A comparison against nothing
+    is refused at load, by name."""
+    probes = _probe_file(tmp_path)
+
+    def touched(*a, **k):
+        raise AssertionError("server contacted despite an empty baseline")
+
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", touched)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", touched)
+
+    empty = {
+        "nothing at all": {"by_category": {}, "overall_hits": 0, "overall_n": 0},
+        "categories that graded nobody": {"by_category": {"factual": {"hits": 0, "n": 0}},
+                                          "overall_hits": 0, "overall_n": 0},
+        "an aggregate with no categories behind it": {"by_category": {},
+                                                      "overall_hits": 1, "overall_n": 2},
+    }
+    for name, card in empty.items():
+        base = tmp_path / "empty_base.jsonl"
+        base.write_text(
+            json.dumps({"record": "run_conditions",
+                        "probe_sha256": eval_behavior._probe_digest(probes),
+                        "temperature": TEMP, "max_tokens": MAXTOK}) + "\n"
+            + json.dumps(dict(card, record="scorecard")) + "\n", encoding="utf-8")
+        out = tmp_path / "t.jsonl"
+        assert eval_behavior.run(URL, TEMP, MAXTOK, probes, out, baseline=base) == 2, name
+        printed = capsys.readouterr().out
+        assert "FAIL" in printed and str(base) in printed, name
+        assert "VERDICT" not in printed, name
+        assert not out.exists(), name
+
+    # A baseline that actually measured something still compares.
+    _fake_server(monkeypatch, "Jupiter is the largest planet.")
+    base = _baseline_file(tmp_path, probes,
+                          {"factual": {"hits": 0, "n": 1}, "tool": {"hits": 1, "n": 1}})
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base)
+    assert "VERDICT: ADOPT" in capsys.readouterr().out

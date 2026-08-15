@@ -306,20 +306,26 @@ TALK_MODE = False
 _STOP_GEN = 0
 
 
-def _write_state_atomic(path: Path, obj: dict) -> None:
+def _write_state_atomic(path: Path, obj: dict) -> bool:
     """Persist a small state file so a crash mid-write can never leave a corrupt
     file that loads as the wrong default on the next boot -- the exact case the
     mute-state comment promises against (a half-written mute_state.json must not
     silently unmute a muted gaming session). Write-temp + os.replace is atomic
-    on the same volume; a failed write is swallowed (state still holds this run).
-    """
+    on the same volume.
+
+    Returns whether the state reached disk. A failed write leaves the in-memory
+    state changed for this run, but the promise the caller answers with is
+    DURABILITY -- a swallowed OSError answered 200 claiming a restart would
+    remember, so the failure is said out loud and reported to the caller."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(obj), encoding="utf-8")
         os.replace(tmp, path)
-    except OSError:
-        pass
+        return True
+    except OSError as exc:
+        print(f"WARN: could not persist state to {path}: {exc}", flush=True)
+        return False
 
 # Where the imagine tool and /v1/images/generations drop their PNGs: the
 # engine's data home, not the repo checkout.
@@ -602,41 +608,40 @@ def boot(argv: list[str] | None = None) -> None:
     # reply -- tools, built-ins and clean turn endings all die silently.
     _live_vocab = max(chat_token_ids(tokenizer).values()) + 1
     _head_width = model.output.weight.shape[0]
-    if not INSTRUCT:
-        # A BASE checkpoint never trained those rows -- they are random-init,
-        # exactly what the pad-row guard exists to keep out of argmax, and the
-        # base decode path renders specials literally. Only an instruct
-        # lineage has earned the declaration. (T2/T3 produce this class.)
-        pass
-    elif _live_vocab <= _head_width:
-        # Declare what the tokenizer can actually decode, ALWAYS -- including
-        # when that is below config.vocab_size. Skipping the declaration there
-        # looked harmless (the default mask "already keeps" the specials) but
-        # the default masks at config.vocab_size, so on a checkpoint whose
-        # vocab is a multiple of 64 it masks nothing at all and every
-        # undecodable row becomes samplable.
-        model.set_live_vocab_size(_live_vocab)
-        if _live_vocab < CONFIG.vocab_size:
-            # The chat ids are landing on rows this checkpoint calls REAL
-            # vocab: the tokenizer table is smaller than the checkpoint
-            # declares, so <|im_start|> and friends ALIAS learned tokens
-            # (chat_format records the measured case: id 4718 decoded as
-            # ' crashes' on a 5,996-row vocab). Turn boundaries and tool-call
-            # parsing will fire on ordinary text. Say so loudly.
+    # Only an INSTRUCT lineage has earned the declaration. A base checkpoint
+    # never trained those rows -- they are random-init, exactly what the
+    # pad-row guard exists to keep out of argmax, and the base decode path
+    # renders specials literally. (T2/T3 produce that class.)
+    if INSTRUCT:
+        if _live_vocab <= _head_width:
+            # Declare what the tokenizer can actually decode, ALWAYS --
+            # including when that is below config.vocab_size. Skipping the
+            # declaration there looked harmless (the default mask "already
+            # keeps" the specials) but the default masks at config.vocab_size,
+            # so on a checkpoint whose vocab is a multiple of 64 it masks
+            # nothing at all and every undecodable row becomes samplable.
+            model.set_live_vocab_size(_live_vocab)
+            if _live_vocab < CONFIG.vocab_size:
+                # The chat ids are landing on rows this checkpoint calls REAL
+                # vocab: the tokenizer table is smaller than the checkpoint
+                # declares, so <|im_start|> and friends ALIAS learned tokens
+                # (chat_format records the measured case: id 4718 decoded as
+                # ' crashes' on a 5,996-row vocab). Turn boundaries and
+                # tool-call parsing will fire on ordinary text. Say so loudly.
+                print(
+                    f"WARN: tokenizer table ends at {_live_vocab} but the checkpoint declares "
+                    f"{CONFIG.vocab_size} rows; chat/tool tokens ALIAS trained vocab -- "
+                    "turn boundaries and tool parsing are unreliable on this pairing",
+                    flush=True,
+                )
+        else:
+            # The chat ids sit outside the head entirely -- the model cannot
+            # emit them at all. Say so rather than crashing the boot over it.
             print(
-                f"WARN: tokenizer table ends at {_live_vocab} but the checkpoint declares "
-                f"{CONFIG.vocab_size} rows; chat/tool tokens ALIAS trained vocab -- "
-                "turn boundaries and tool parsing are unreliable on this pairing",
+                f"WARN: chat tokens need {_live_vocab} rows but the model head has {_head_width}; "
+                "tool calls and <|im_end|> are unavailable on this checkpoint",
                 flush=True,
             )
-    else:
-        # The chat ids sit outside the head entirely -- the model cannot emit
-        # them at all. Say so rather than crashing the boot over it.
-        print(
-            f"WARN: chat tokens need {_live_vocab} rows but the model head has {_head_width}; "
-            "tool calls and <|im_end|> are unavailable on this checkpoint",
-            flush=True,
-        )
 
     MEMORY = None
     MEMORY_RECALL = max(0, ARGS.memory_recall)
@@ -812,8 +817,9 @@ class Msg(BaseModel):
 class ChatReq(BaseModel):
     model: str = MODEL_ID
     messages: list[Msg]
-    # Clarity defaults for a 182M model (2026-07-15): 0.8/no-min_p read as
-    # rambling; 0.3 + min_p keeps her coherent while staying non-greedy.
+    # Clarity defaults, measured on the 182M lineage (2026-07-15) and carried
+    # to the adopted 238M-class model: 0.8/no-min_p read as rambling; 0.3 +
+    # min_p keeps her coherent while staying non-greedy.
     temperature: float = 0.3
     top_p: float = 0.9
     min_p: float = 0.05  # 0 = off; prunes tokens below min_p * max_prob
@@ -958,16 +964,19 @@ def _generate_text(
     ids = tokenizer.encode(prompt)
     if ids and ids[-1] == EOS_ID:
         ids = ids[:-1]
-    # Clamp the GENERATION side too: she trains at block 1024, and the RoPE
-    # table ends at 2x max_seq_len -- an unclamped client max_tokens could walk
-    # past both. (2026-06-11 audit finding.)
+    # Clamp the GENERATION side too: the RoPE table ends at 2x the model's
+    # max_seq_len -- an unclamped client max_tokens could walk past it.
+    # (2026-06-11 audit finding; the serving lineage trains at block 2048.)
     # Reserve the prompt first, generation second: keep the most recent
     # prompt context (up to max_context - MIN_GEN_TOKENS ids, leaving 1 for
-    # BOS), then give generation whatever room is left. Prompt + generation
-    # always fit in max_context; the prompt is never squeezed to a stub.
+    # BOS), then give generation whatever room is left. max(1, ...): at
+    # max_context == MIN_GEN_TOKENS + 1 the old slice was ids[-0:] -- a
+    # NO-OP that fed the whole prompt into the tiny window (review
+    # 2026-08-13); the boot guard admits that value.
     prompt_cap = ARGS.max_context - MIN_GEN_TOKENS
-    if len(ids) > prompt_cap - 1:
-        ids = ids[-(prompt_cap - 1) :]  # keep the most recent context
+    keep = max(1, prompt_cap - 1)
+    if len(ids) > keep:
+        ids = ids[-keep:]  # keep the most recent context
     if not ids or ids[0] != BOS_ID:
         ids = [BOS_ID] + ids
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
@@ -1105,10 +1114,11 @@ def _recent_user_text(messages: list[Msg], n: int = 3) -> str:
 
 # Built-in tools serve executes ITSELF (no client round-trip), in the same
 # spec shape make_sft_data trains on (flat params). calculate: a from-scratch
-# 182M model can't compute arithmetic in-weights (tokenizer splits numbers
-# inconsistently). remember: the ChatGPT-bio-tool pattern -- she calls it when
-# the user states a fact worth keeping, serve writes it to the MemoryStore,
-# and render_context injects it back on every future relevant ask.
+# model at her scale (238M-class) can't compute arithmetic in-weights
+# (tokenizer splits numbers inconsistently). remember: the ChatGPT-bio-tool
+# pattern -- she calls it when the user states a fact worth keeping, serve
+# writes it to the MemoryStore, and render_context injects it back on every
+# future relevant ask.
 _CALC_TOOL = builtin_tool("calculate")
 _REMEMBER_TOOL = builtin_tool("remember")
 _SPEAK_TOOL = builtin_tool("speak")
@@ -1202,8 +1212,9 @@ _FORGET_NOT_A_REQUEST = re.compile(
 # explicit remember ask, a first-person fact/preference, or a factual
 # correction. Same rationale as the calculate gate -- an ever-present tool
 # prompt degrades normal chat, so this stays intent-gated; she still decides
-# whether to call. (At the v2 regen the gate retires for an always-offered
-# built-in block -- ruled 2026-07-24 -- but the live v8 lineage keeps it.)
+# whether to call. (Ruled 2026-07-24: the gate retires for an always-offered
+# built-in block at the v2 regen -- not executed on this side yet, so the
+# served enigma_v2_sft2 lineage still runs on the gate.)
 _MEMORABLE = re.compile(
     # The negated-forget family is a SAVE cue, spelled ONCE above.
     r"\b(remember|" + _NEGATED_FORGET_SRC + r"|note (that|this)|keep in mind|save (this|that)|"
@@ -1329,8 +1340,6 @@ def _answering_a_forget_question(messages: list[Msg]) -> bool:
             # (2026-07-25 fix-arc audit): the next ordinary user turn was then
             # read as naming a memory to delete.
             return _renders_forget_pending(m.content)
-        if m.role == "user":
-            continue
     return False
 
 
@@ -1381,7 +1390,7 @@ def _surfaced_forget_refusal(name: str, result: str) -> str | None:
     The "N memories match that" refusal is a QUESTION: serve re-arms the
     forget tool on the next request by finding its marker in her last
     assistant turn -- which lives in the client's own history. Feeding the
-    refusal to the model as a tool result was not enough: a 182M paraphrase
+    refusal to the model as a tool result was not enough: her paraphrase of it
     loses the ids and exact wordings the user must answer with, and the
     marker never reached the client, so the handshake armed in tests and
     never once on the live path (round-7 audit, 2026-07-25). The refusal is
@@ -1495,6 +1504,10 @@ def _execute_builtin(name: str, arguments: dict) -> str:
         except ImageGenError as exc:
             return f"error: {exc}"
         return f"image saved to {path}"
+    # Unreachable from the hop loop -- _apply_builtins only dispatches names
+    # already in _BUILTIN_NAMES. It answers DIRECT callers (tests, and any
+    # future caller that has not filtered), which is exactly when a silent
+    # None would be the hard bug to find.
     return f"error: unknown tool {name!r}"
 
 
@@ -1637,6 +1650,13 @@ def _chat_instruct(req: ChatReq):
             # emitting the same separator here keeps the two paths returning
             # byte-identical content for the same request (ultrareview #31).
             emitted_any = False
+            # The same execution trace the non-stream path reports as its
+            # `enigma` extension: a looped built-in is consumed by the hop that
+            # runs it, so the terminal frame is the only place a stream client
+            # can learn it fired (and the only thing stopping the page from
+            # re-voicing a reply the speak tool already said out loud).
+            spoke_server_side = False
+            tools_run: list[str] = []
             for hop in range(_MAX_TOOL_HOPS + 1):
                 prompt_ids, hop_max = _hop(cur_msgs)
                 gen = _gen_ids(
@@ -1715,11 +1735,18 @@ def _chat_instruct(req: ChatReq):
                 if _loop_on_search(out, parsed, hop):
                     # The query never streams (the span is depth-suppressed
                     # above); the next hop answers from the spliced results.
-                    cur_msgs = _apply_search(cur_msgs, out)
+                    search_results: list = []
+                    cur_msgs = _apply_search(cur_msgs, out, search_results)
+                    tools_run += [name for name, _ in search_results]
                     continue
                 if _loop_on_builtins(parsed, hop):
                     tool_results: list = []
                     cur_msgs = _apply_builtins(cur_msgs, out, parsed, tool_results)
+                    tools_run += [name for name, _ in tool_results]
+                    # Flag on the EXECUTED result, not the intent -- same rule
+                    # the non-stream path follows.
+                    if any(name == "speak" and result == "speaking" for name, result in tool_results):
+                        spoke_server_side = True
                     for _name, _result in tool_results:
                         surfaced = _surfaced_forget_refusal(_name, _result)
                         if not surfaced:
@@ -1780,19 +1807,18 @@ def _chat_instruct(req: ChatReq):
                         + "\n\n"
                     )
                 finish = "tool_calls" if calls else ("length" if len(all_ids) >= hop_max else "stop")
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "id": cid,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": MODEL_ID,
-                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
-                        }
-                    )
-                    + "\n\n"
-                )
+                final = {
+                    "id": cid,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": MODEL_ID,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+                }
+                if spoke_server_side or tools_run:
+                    # Rides the TERMINAL frame only: the content chunks are
+                    # byte-identical to the non-stream join by contract.
+                    final["enigma"] = {"spoke": spoke_server_side, "tools_run": tools_run}
+                yield "data: " + json.dumps(final) + "\n\n"
                 break
             yield "data: [DONE]\n\n"
 
@@ -2258,6 +2284,31 @@ def chat(req: ChatReq):
     bad = sorted({m.role for m in req.messages if m.role not in ROLES})
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown chat role(s) {bad}; need one of {list(ROLES)}")
+    # Dispatch is by NAME alone: a client tool shadowing a built-in would be
+    # consumed by the server-side loop (a client `forget` DELETING a real
+    # memory), while the client's own tool never runs and cannot tell
+    # (review 2026-08-13). Refuse before anything executes. Names are read
+    # with the SAME extraction the renderer uses (chat_format accepts flat
+    # specs via t.get("function", t)) -- reading only the nested key let a
+    # flat {"name": "forget"} sail past this check and execute server-side
+    # (audit 2026-08-14).
+    names = set()
+    for t in (req.tools or []):
+        fn = t.get("function", t)
+        if not isinstance(fn, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="malformed tool spec: 'function' must be an object",
+            )
+        names.add(fn.get("name") or "")
+    shadowed = sorted(names & set(_BUILTIN_NAMES))
+    if shadowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"client tool name(s) {shadowed} shadow server built-ins; "
+                   f"rename them -- dispatch is by name, so the built-in would "
+                   f"execute server-side instead of your tool",
+        )
     # Eyes organ: caption multimodal content into plain text BEFORE the tool
     # gates, memory retrieval, or either render path sees the messages.
     for m in req.messages:
@@ -2403,9 +2454,19 @@ def completions(req: CompletionReq):
     }
 
 
+# What a CLIENT may file a memory as. The store's third kind, "episode", is
+# session memory (memory_store.episode_text) -- reserved for the session
+# writer, and a client minting one through this door would plant a forged
+# dated session summary among the records recall answers from.
+_USER_WRITABLE_KINDS = ("user_fact", "fact")
+
+
 class MemReq(BaseModel):
     text: str
-    kind: str = "fact"
+    # The tool door is MEMORY.remember(text, source="chat"), whose default is
+    # "user_fact". This door mirrors it, so the same fact does not land under
+    # two different kinds depending on which way in it took.
+    kind: str = "user_fact"
 
 
 def _organ_off(what: str) -> HTTPException:
@@ -2420,6 +2481,12 @@ def _organ_off(what: str) -> HTTPException:
 def memory_add(req: MemReq):
     if MEMORY is None:
         raise _organ_off("memory disabled -- start with --memory-dir")
+    if req.kind not in _USER_WRITABLE_KINDS:
+        # Named, not just refused: the client cannot see the store's kinds.
+        raise HTTPException(
+            status_code=400,
+            detail=f"kind must be one of: {', '.join(_USER_WRITABLE_KINDS)}",
+        )
     try:
         # remember(), not add(): the HTTP door gets the same dedup/supersede/
         # date semantics as the tool door, so posting a fact twice does not
@@ -2515,11 +2582,12 @@ def get_mute():
 def set_mute(req: MuteReq):
     """The mute switch (chat page button + tray icon). Gates the server-side
     speak TOOL and turns /v1/audio/speech into 204s; persisted so a restart
-    cannot silently unmute."""
+    cannot silently unmute. `persisted` false = the switch holds for this run
+    only, so a caller relying on the restart promise learns it did not hold."""
     global MUTED
     MUTED = bool(req.muted)
-    _write_state_atomic(_MUTE_STATE, {"muted": MUTED})
-    return {"muted": MUTED}
+    persisted = _write_state_atomic(_MUTE_STATE, {"muted": MUTED})
+    return {"muted": MUTED, "persisted": persisted}
 
 
 @app.post("/v1/audio/stop")
@@ -2550,11 +2618,12 @@ def get_talk_mode():
 def set_talk_mode(req: TalkReq):
     """Toggle conversation mode: when ON, the window speaks every reply out
     loud. Server-owned + persisted so it survives a restart and any open
-    window adopts it within the poll interval."""
+    window adopts it within the poll interval; `persisted` reports whether the
+    restart half of that actually reached disk."""
     global TALK_MODE
     TALK_MODE = bool(req.enabled)
-    _write_state_atomic(_TALK_STATE, {"enabled": TALK_MODE})
-    return {"enabled": TALK_MODE}
+    persisted = _write_state_atomic(_TALK_STATE, {"enabled": TALK_MODE})
+    return {"enabled": TALK_MODE, "persisted": persisted}
 
 
 @app.get("/v1/audio/status")
@@ -2612,11 +2681,20 @@ def capabilities():
     Read-only and cheap: no organ is touched, only whether one was built."""
     return {
         "memory": MEMORY is not None,
+        # WHERE the store lives, so the eval harness can verify the store it
+        # is about to clear is disposable -- port alone proved nothing
+        # (review 2026-08-13; the clear is unrecoverable by design).
+        "memory_dir": str(MEMORY.dir.resolve()) if MEMORY is not None else None,
         "voice": SPEAKER is not None,
         "ears": EARS is not None,
         "eyes": EYES is not None,
         "image_gen": PAINTER is not None,
-        "search": SEARCHER is not None,
+        # A BASE checkpoint routes to the transcript path where the tool loop
+        # and the search hop are unreachable -- reporting them there is a
+        # self-report any reader would act on as if the surface were live
+        # (review 2026-08-13; the chat page builds its controls from this
+        # dict, and no other consumer should have to know the routing).
+        "search": SEARCHER is not None and INSTRUCT,
         "instruct": INSTRUCT,
         # The serving context budget. An eval transcript that omits this
         # cannot prove two runs shared conditions (audit 2026-08-08: the v2
@@ -2625,13 +2703,14 @@ def capabilities():
         # the bare-import test harness reaches this endpoint with no ARGS.
         "max_context": ARGS.max_context if ARGS is not None else None,
         # The built-ins that can actually run right now. The model is offered a
-        # subset of these per request, by intent.
+        # subset of these per request, by intent -- and NONE of them on a base
+        # checkpoint, whose path never reaches the loop.
         "builtins": sorted(
             n for n in _BUILTIN_NAMES
             if not (n in ("remember", "forget") and MEMORY is None)
             and not (n == "speak" and SPEAKER is None)
             and not (n == "imagine" and PAINTER is None)
-        ),
+        ) if INSTRUCT else [],
     }
 
 

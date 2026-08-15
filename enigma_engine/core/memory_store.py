@@ -100,10 +100,16 @@ def _content_terms(text: str) -> set[str]:
 # identity -- "dog is named Rex" and "dog is 3 years old" share the subject
 # and are two different facts (audit 2026-07-22: keying on the subject made
 # them delete each other). The key is subject + the KIND of value: a naming,
-# a measurement, or other -- a rename replaces a name and an age update
-# replaces an age, while plain values about one subject COEXIST ("car is
-# red" and "car is electric" are two facts; the shared coarse kind is not
-# proof of a correction, and a wrong supersede destroys a fact).
+# a measurement, or other -- a rename replaces a name, while plain values
+# about one subject COEXIST ("car is red" and "car is electric" are two
+# facts; the shared coarse kind is not proof of a correction, and a wrong
+# supersede destroys a fact). For a MEASUREMENT the value's non-digit terms
+# also join the key (review 2026-08-13: the dog's weight ate the dog's age),
+# so an age update replaces an age only while the unit wording matches --
+# "4 years" replaces "3 years", but "175 pounds" and "180 lbs" COEXIST and
+# the stale one is outranked at retrieval, never destroyed. That narrows the
+# 2026-07-24 measures-replace ruling in the direction its own tiebreak
+# prefers; the width is queued for the user's word (audit 2026-08-14).
 _FACT = re.compile(
     r"^\s*(?:the\s+)?(?:user's|users|user|my)\s+(?P<attr>[^.]{1,60}?)"
     r"\s+(?:is|are|was|were)\s+(?P<val>[^.]+?)\s*\.?\s*$",
@@ -281,7 +287,18 @@ def _fact_key(text: str) -> frozenset[str] | None:
     if match:
         key = _content_terms(match.group("attr"))
         if key:
-            return frozenset(key | {f"kind:{_value_kind(match.group('val'))}"})
+            kind = _value_kind(match.group("val"))
+            if kind == "measure":
+                # The value's non-numeric terms name WHICH measure ("3 years
+                # old" vs "40 pounds"): without them any two digit-bearing
+                # values about one subject shared a key and the second
+                # DELETED the first (review 2026-08-13, the dog's weight ate
+                # the dog's age). An update of the same measure shares these
+                # terms and still replaces; an all-digit value ("rent is
+                # 1200") contributes none, and same-measure replacement is
+                # exactly right there.
+                key |= {t for t in _content_terms(match.group("val")) if not t.isdigit()}
+            return frozenset(key | {f"kind:{kind}"})
         return None
     # "User is Sam." -- a self copula with a NAME value is an identity fact;
     # measures ("User is 30 years old") are left to the verb parse, where age
@@ -313,7 +330,9 @@ def _relation_is_single_valued(key: frozenset[str]) -> bool:
     verb = next((k[5:] for k in key if k.startswith("verb:")), None)
     if verb is None:
         # Copula subject+kind key. A naming or a measurement is one-per-
-        # attribute, so a new value replaces; a naming is proven by the VALUE
+        # attribute, so a new value replaces -- for measures "one attribute"
+        # means the key's unit terms match too (see _fact_key), so replacement
+        # reaches same-unit-wording updates only; a naming is proven by the VALUE
         # ("dog is named Rex") or by the ATTRIBUTE ("User's name is Sam" --
         # the value 'Sam' carries no naming head, the attribute does). A
         # plain ("other") value is NOT provably single-valued: "my car is
@@ -503,9 +522,14 @@ class MemoryStore:
                 rec["source"] = source
             if superseded is not None:
                 rec["superseded"] = superseded["text"]
-                self._records.remove(superseded)
-                self._records.append(rec)
-                self._rewrite()
+                # Persist FIRST, swap after -- the rule delete()/forget()/
+                # clear() follow and _rewrite's docstring states. Mutating
+                # first meant a failed write told the user the update failed
+                # while the live store already carried it, silently reverting
+                # at restart (review 2026-08-13).
+                keep = [r for r in self._records if r is not superseded] + [rec]
+                self._rewrite(keep)
+                self._records = keep
             else:
                 self._records.append(rec)
                 with open(self.file, "a", encoding="utf-8") as f:
@@ -562,8 +586,11 @@ class MemoryStore:
         an id that is not among them deletes nothing, so an id she invented --
         and she has no honest source for one outside a refusal -- cannot reach a
         record the ask never named."""
-        query = str(query) if isinstance(query, str) or query is None else ""
-        query = query or ""
+        # None coerced through str() became the literal query "None", whose
+        # single term subset-matched any record containing the word "none"
+        # and DELETED it (review 2026-08-13). Non-strings of every kind mean
+        # "no query".
+        query = query if isinstance(query, str) else ""
         if not query.strip():
             return []
         q_terms = _forget_terms(query)
