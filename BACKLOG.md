@@ -1505,8 +1505,39 @@ Recorded because it existed only in conversation:
   `identity_paraphrases.py` (15), `make_sft_data.py` (14) and `teach_enigma.py`
   (9) still hold literals; the tray mutex `Local\EnigmaTray` and the fixed
   serve port are the remaining one-AI-per-machine guards; the `--name` spawn
-  scaffold itself is unwritten. `personas_dir` in `config/defaults.py:145` is
-  still the vestigial hook it always was.
+  scaffold itself is unwritten. The vestigial `personas_dir` hook outlived the
+  file this entry cited it in -- `config/defaults.py:145` went with the dead
+  config package in `0fe97b16`; it now sits in `forge_config.json:11`, with
+  zero readers and no such directory on disk.
+  **Wave 1 -- mechanical convergence -- landed 2026-08-15**: the remaining
+  hardcoded-Enigma drift points collapsed onto the seam, with no pack still
+  byte-identical. `make_sft_data.PREAMBLE` IS `Persona.load().tools_preamble`
+  now rather than a copy of it (that site drops off the literals list above,
+  and the shape test flipped to pinning the default sentence -- what a trained
+  tool block must not drift away from). Serve's persona-facing strings read
+  `PERSONA.name`: the load line, the boot banner, the API line, the chat page
+  title + header (substituted at render time, escaped -- a pack is data), and
+  `app.title`, so `--persona` reports the right AI in the OpenAPI metadata.
+  The checkpoint strings ("not an Enigma checkpoint") stay put; they name the
+  FORMAT, not the AI. Mute and talk-mode state moved off the repo checkout
+  into `PERSONA.home`, so two AIs on this box stop fighting over one mute
+  truth; first boot COPIES the legacy `data/*.json` across and names both
+  paths out loud (a move would have unmuted a muted machine, and the legacy
+  file is what a rollback looks for). `_SAFE_NAME` needed no tightening -- its
+  ranges were ASCII-only already -- and now has the test that says so, which
+  matters because the name reaches console prints.
+  ~~**TWO items flagged NOT done -- each wants a ruling, not a refactor:**~~
+  **RULED 2026-08-15: BOTH DELETED.** (a) ~~`persona.ACTIVE` + `set_active()`
+  are dead code, zero callers~~ -- cut from `core/persona.py`; serve keeps its
+  own module global and rebinds it at boot, so nothing ever read the seam they
+  offered. (b) ~~`profiles/*.json` is a SECOND orphaned persona schema (five
+  packs, zero code readers)~~ -- all five deleted and the directory with them;
+  `profiles/assistant.json` had carried a stale "You are Enigma, a helpful AI
+  assistant..." system prompt with a `[CMD]` syntax nothing serves. Prior art
+  is what git history is for.
+  **Wave 2 rulings 2026-08-15:** Enigma stays IN-CODE (option A) -- the pack
+  asymmetry is deliberate, this repo IS her and a pack is the other case; all
+  future packs state SirRulean as creator.
 
 Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
 REJECTED -- her serving path is our own code. Consequence executed: the

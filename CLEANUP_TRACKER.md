@@ -163,7 +163,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1051 passed on ENIGMAPC (2026-08-15, paired with the Round-2 review commit; 15 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine)** — THE live number; other docs
+4. Suite baseline: **1059 passed on ENIGMAPC (2026-08-15, paired with the Stage-7 wave-1 persona commit; 15 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -226,6 +226,18 @@ Deleted after a three-agent adversarial audit verified every claim
    args shape the builder actually emits now reaches the screen),
    `test_search_organ.py` (search is INSTRUCT-gated) and
    `test_eval_grading.py` (three probe phrasings re-cut).
+   **1051 → 1059 is Stage-7 wave 1 (2026-08-15)** -- persona convergence.
+   `test_serve_enigma.py` +4 (the legacy-state migration trio: a
+   default-persona boot copies the repo's mute/talk truth into her home
+   ONCE and says both paths, a later boot reads her home rather than
+   re-seeding from the stale copy, and a second persona inherits none of
+   her state; plus a pack boot adopts no legacy state at all -- the gate
+   is the persona, not the order of boots), `test_persona.py` +4
+   collected (one new def -- the chat page is titled with whoever is
+   served, placeholder never reaching a browser -- and 3 new
+   `test_an_unsafe_pack_is_refused` parametrize cases pinning the
+   printable-ASCII property: a cp1252-hostile accent, a Cyrillic homoglyph
+   of "E", and a tab).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

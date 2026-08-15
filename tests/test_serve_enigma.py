@@ -1373,6 +1373,7 @@ _RUNTIME_GLOBALS = [
     "INSTRUCT", "MEMORY", "MEMORY_RECALL", "SPEAKER", "MUTED", "TALK_MODE", "EARS",
     "EYES", "PAINTER", "SEARCHER", "EOS_ID", "BOS_ID",
     "_BOOTED", "PERSONA", "_VOICE_STATE", "IMAGES_DIR", "_STOP_TEXTS",
+    "_MUTE_STATE", "_TALK_STATE",
 ]
 
 
@@ -1382,6 +1383,22 @@ _HF_ENV_KEYS = (
 )
 
 
+def _hermetic_state(monkeypatch, tmp_path):
+    """Point everything boot() derives from PERSONA.home at tmp, and return it.
+
+    Patching serve._MUTE_STATE / serve._TALK_STATE is no longer enough: boot
+    REBINDS both from the persona's home, so an unpatched home would have a
+    test run read -- and migrate the repo's data/mute_state.json into -- the
+    developer's own ~/.enigma_engine. The home itself is the seam, so the
+    legacy migration sources are pointed at absent tmp files too: a boot test
+    must not depend on whether this checkout happens to carry one."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(serve.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(serve, "_LEGACY_MUTE_STATE", tmp_path / "legacy" / "mute_state.json")
+    monkeypatch.setattr(serve, "_LEGACY_TALK_STATE", tmp_path / "legacy" / "talk_mode.json")
+    return home
+
+
 def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
     """The full startup path on a 2-layer toy model, SIX boots: the first
     exercises the --allow-downloads env branch AND the KV-cache clamp
@@ -1389,15 +1406,14 @@ def test_boot_tiny_checkpoint(monkeypatch, tmp_path):
     entered either branch); the second, flagless boot must RESTORE the
     offline default despite the first boot's leftover "0" (the double-boot
     hole, re-audit 2026-07-18); legs C/D pin the operator-export semantics.
-    CUDA is masked off so this never touches the GPU; mute + talk state and
+    CUDA is masked off so this never touches the GPU; the persona home and
     env are patched hermetic and restored (unpatched, boot() reads the
-    developer's own data/talk_mode.json)."""
+    developer's own ~/.enigma_engine/talk_mode.json)."""
     import os
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
-    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    _hermetic_state(monkeypatch, tmp_path)
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)  # no operator values in play
@@ -1503,8 +1519,7 @@ def test_boot_declares_the_chat_specials_decodable(monkeypatch, tmp_path, capsys
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
-    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    _hermetic_state(monkeypatch, tmp_path)
     real_vocab = len(get_tokenizer("bpe").token_to_id)
     cfg = ForgeConfig(
         vocab_size=real_vocab, dim=32, n_layers=2, n_heads=2,
@@ -1603,8 +1618,7 @@ def test_boot_brings_real_organs_up(monkeypatch, tmp_path):
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
-    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    _hermetic_state(monkeypatch, tmp_path)
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1661,8 +1675,7 @@ def test_boot_survives_an_unusable_memory_dir(monkeypatch, tmp_path):
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
-    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    _hermetic_state(monkeypatch, tmp_path)
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1693,8 +1706,7 @@ def test_boot_survives_eyes_construction_failure(monkeypatch, tmp_path):
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
-    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    _hermetic_state(monkeypatch, tmp_path)
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1735,8 +1747,7 @@ def test_boot_max_context_follows_long_config(monkeypatch, tmp_path):
 
     snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
     monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(serve, "_MUTE_STATE", tmp_path / "mute_state.json")
-    monkeypatch.setattr(serve, "_TALK_STATE", tmp_path / "talk_mode.json")
+    _hermetic_state(monkeypatch, tmp_path)
     monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
     for key in _HF_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -1751,6 +1762,160 @@ def test_boot_max_context_follows_long_config(monkeypatch, tmp_path):
     try:
         serve.boot(argv=["--model", str(ckpt), "--max-context", str(long_ctx)])
         assert serve.ARGS.max_context == long_ctx  # not clamped to the fallback
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# Per-persona runtime state (mute + talk-mode) and the one-time migration
+# ---------------------------------------------------------------------------
+
+
+def _legacy_state(tmp_path, muted, enabled):
+    """Write the repo-anchored state files boot() migrates from."""
+    mute = tmp_path / "legacy" / "mute_state.json"
+    talk = tmp_path / "legacy" / "talk_mode.json"
+    mute.parent.mkdir(parents=True, exist_ok=True)
+    mute.write_text(json.dumps({"muted": muted}), encoding="utf-8")
+    talk.write_text(json.dumps({"enabled": enabled}), encoding="utf-8")
+    return mute, talk
+
+
+def test_boot_migrates_legacy_repo_state_into_the_persona_home(monkeypatch, tmp_path, capsys):
+    """Mute and talk-mode moved out of the repo checkout into her data home,
+    and a move that dropped the old truth would silently unmute a muted
+    machine on the next launch -- the one thing the mute state exists to
+    prevent. First boot COPIES, says both paths out loud, and leaves the
+    legacy file for a rollback to find."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    home = _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    legacy_mute, legacy_talk = _legacy_state(tmp_path, muted=True, enabled=True)
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        assert serve._MUTE_STATE == home / ".enigma_engine" / "mute_state.json"
+        assert serve._TALK_STATE == home / ".enigma_engine" / "talk_mode.json"
+        assert serve.MUTED is True and serve.TALK_MODE is True  # the truth crossed over
+        assert json.loads(serve._MUTE_STATE.read_text(encoding="utf-8")) == {"muted": True}
+        assert legacy_mute.exists() and legacy_talk.exists(), "the migration must copy, never move"
+        out = capsys.readouterr().out
+        assert "migrated runtime state" in out
+        assert str(legacy_mute) in out and str(serve._MUTE_STATE) in out
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_persona_home_state_wins_over_the_legacy_copy(monkeypatch, tmp_path, capsys):
+    """The migration is ONE-TIME. A later boot must read her home, not re-seed
+    it from a stale repo file -- otherwise every launch would resurrect the
+    mute truth from before the move."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    home = _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _legacy_state(tmp_path, muted=True, enabled=True)
+    (home / ".enigma_engine").mkdir(parents=True)
+    (home / ".enigma_engine" / "mute_state.json").write_text(
+        json.dumps({"muted": False}), encoding="utf-8")
+    (home / ".enigma_engine" / "talk_mode.json").write_text(
+        json.dumps({"enabled": False}), encoding="utf-8")
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        assert serve.MUTED is False and serve.TALK_MODE is False
+        assert "migrated runtime state" not in capsys.readouterr().out
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_a_pack_does_not_adopt_the_legacy_repo_state(monkeypatch, tmp_path, capsys):
+    """The legacy repo files are ENIGMA's mute and talk-mode truth. Migrating
+    them into whichever persona booted first would hand a brand-new AI the
+    state of the one this checkout has been serving -- and talk-mode ON, when
+    the documented default is that she starts SILENT. The gate is the persona,
+    not the order of boots: her home stays empty and nothing is said."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    home = _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(serve.app, "title", serve.app.title)
+    monkeypatch.setattr(serve.app, "openapi_schema", serve.app.openapi_schema)
+    legacy_mute, legacy_talk = _legacy_state(tmp_path, muted=True, enabled=True)
+    pack = tmp_path / "atlas.json"
+    pack.write_text(json.dumps({"name": "Atlas"}), encoding="utf-8")
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--persona", str(pack)])
+        assert serve._MUTE_STATE == home / ".atlas" / "mute_state.json"
+        assert serve._TALK_STATE == home / ".atlas" / "talk_mode.json"
+        assert not serve._MUTE_STATE.exists() and not serve._TALK_STATE.exists()
+        assert serve.MUTED is False and serve.TALK_MODE is False
+        assert "migrated runtime state" not in capsys.readouterr().out
+        assert legacy_mute.exists() and legacy_talk.exists()
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_a_second_persona_does_not_inherit_her_state(monkeypatch, tmp_path):
+    """One shared state file was a real one-AI-per-machine guard: two AIs
+    served from this checkout would have muted and un-muted each other. State
+    follows PERSONA.home like the voice recipe and the images do."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    home = _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    # boot() writes app.title (and drops the cached schema); monkeypatch
+    # records both so serving Atlas here cannot leak into the rest of the
+    # session -- `app` is a module object, not one of the boot globals the
+    # snapshot restores.
+    monkeypatch.setattr(serve.app, "title", serve.app.title)
+    monkeypatch.setattr(serve.app, "openapi_schema", serve.app.openapi_schema)
+    hers = home / ".enigma_engine"
+    hers.mkdir(parents=True)
+    (hers / "mute_state.json").write_text(json.dumps({"muted": True}), encoding="utf-8")
+    (hers / "talk_mode.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
+    pack = tmp_path / "atlas.json"
+    pack.write_text(json.dumps({"name": "Atlas"}), encoding="utf-8")
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--persona", str(pack)])
+        assert serve._MUTE_STATE == home / ".atlas" / "mute_state.json"
+        assert serve._TALK_STATE == home / ".atlas" / "talk_mode.json"
+        assert serve.MUTED is False and serve.TALK_MODE is False  # her state, not Enigma's
+        assert json.loads((hers / "mute_state.json").read_text(encoding="utf-8")) == {"muted": True}
+        # ...and the API says WHO it serves, down to the OpenAPI metadata
+        assert serve.app.title == "Atlas (from-scratch)"
+        assert serve.app.openapi()["info"]["title"] == "Atlas (from-scratch)"
     finally:
         for name, value in snapshot.items():
             setattr(serve, name, value)

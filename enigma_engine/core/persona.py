@@ -42,6 +42,10 @@ ENIGMA = {
     ),
 }
 
+# Printable ASCII by construction (explicit ranges, so no unicode letter or
+# control character matches): the name reaches a directory name, a stop
+# sequence AND console prints, and a cp1252 console crashes on a unicode
+# print -- the rule the repo's ASCII gate exists to hold.
 _SAFE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9 _-]{0,31}$")
 
 
@@ -55,16 +59,27 @@ class Persona:
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # The name reaches a directory name, a stop-sequence and a system
-        # prompt. A name carrying a path separator or a newline would not be
-        # rejected by any of those on its own.
+        # The name reaches a directory name, a stop-sequence, a system prompt
+        # and the console. A name carrying a path separator, a newline or a
+        # non-ASCII character would not be rejected by any of those on its own.
         if not _SAFE_NAME.fullmatch(self.name or ""):
             raise ValueError(
                 f"persona name {self.name!r} must start with a letter and use only "
-                "letters, digits, spaces, hyphens and underscores (max 32 chars)"
+                "ASCII letters, digits, spaces, hyphens and underscores (max 32 chars)"
             )
         if not self.data_dirname or any(c in self.data_dirname for c in '/\\:*?"<>|' + "\n\r\t"):
             raise ValueError(f"persona data_dirname {self.data_dirname!r} is not a bare directory name")
+
+    @property
+    def is_default(self) -> bool:
+        """Whether this IS Enigma -- what `Persona.load()` with no pack returns.
+
+        Equality against the default is the honest test: the default is a
+        VALUE (the literals this dataclass replaced), not a flag someone
+        passed, so a pack that spells out those same values is her too.
+        Callers use it for the things that are Enigma's alone rather than
+        every persona's -- the legacy repo-anchored runtime state."""
+        return self == Persona()
 
     @property
     def home(self) -> Path:
@@ -118,13 +133,3 @@ class Persona:
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "ai"
-
-
-# The process-wide persona. Set once by a boot path; everything else reads it.
-ACTIVE = Persona()
-
-
-def set_active(persona: Persona) -> Persona:
-    global ACTIVE
-    ACTIVE = persona
-    return ACTIVE

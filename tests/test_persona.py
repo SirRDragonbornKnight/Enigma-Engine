@@ -34,6 +34,21 @@ def test_serve_still_uses_exactly_the_strings_it_had():
     assert serve._STOP_TEXTS == ("\nUser:", "\nEnigma:")
 
 
+def test_the_chat_page_is_titled_with_whoever_is_served(monkeypatch):
+    """The page is a module constant built at import, so the name is
+    substituted at render time -- the placeholder must never reach a
+    browser, and the name is escaped because a pack is data."""
+    page = serve.chat_page()
+    assert "<title>Enigma</title>" in page
+    assert "<h1>Enigma</h1>" in page
+    assert "__PERSONA_NAME__" not in page
+
+    monkeypatch.setattr(serve, "PERSONA", Persona(name="Atlas"))
+    page = serve.chat_page()
+    assert "<title>Atlas</title>" in page
+    assert "<h1>Atlas</h1>" in page
+
+
 def test_another_persona_gets_its_own_home_and_voice(tmp_path):
     """The shared data home was one of the real one-AI-per-machine guards: two
     AIs on this box would have overwritten each other's voice recipe and
@@ -63,8 +78,16 @@ def test_a_pack_carries_name_semantic_content_rather_than_deriving_it(tmp_path):
     {"name": "Bad\nName"},        # ...and a stop sequence
     {"name": ""},
     {"name": "Ok", "data_dirname": "a/b"},
+    {"name": "Enigm" + chr(0xE1)},   # ...and console prints: cp1252 CRASHES
+    {"name": chr(0x415) + "nigma"},  # ...even on a Cyrillic homoglyph of "E"
+    {"name": "Bad\tName"},        # printable only -- a tab is not a name
 ])
 def test_an_unsafe_pack_is_refused(tmp_path, blob):
+    """The name is not just displayed: it becomes a directory, a stop
+    sequence, and console output (the ASCII rule -- a cp1252 console crashes
+    on a unicode print, which is what the repo's ASCII gate exists for). The
+    safe set is printable ASCII, and a pack outside it refuses at load rather
+    than failing somewhere downstream."""
     pack = tmp_path / "bad.json"
     pack.write_text(json.dumps(blob), encoding="utf-8")
     with pytest.raises(SystemExit):

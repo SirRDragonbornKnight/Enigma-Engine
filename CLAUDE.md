@@ -49,8 +49,11 @@ Flags still exist for scratch/eval servers, which stay lean on purpose.
   `/v1/audio/*` endpoints; voices are style tensors that BLEND by weighted sum; the active
   recipe persists to `~/.enigma_engine/voice.json`. **The server must run under the repo
   `venv/`** — it is the only interpreter with kokoro installed, and Start-Enigma points
-  there. Talk-mode PERSISTS in `data/talk_mode.json` and is re-read at boot: turn narration
-  on once and every later launch narrates — no launcher resets it.
+  there. Talk-mode PERSISTS in `~/.enigma_engine/talk_mode.json` (with mute, per persona
+  since 2026-08-15; the old `data/*.json` copies are migrated once at boot — for the DEFAULT
+  persona ONLY, so a pack boots with clean state — and left in
+  place) and is re-read at boot: turn narration on once and every later launch narrates —
+  no launcher resets it.
 - `--ears` → `core/asr.py` (faster-whisper, cuda→cpu fallback): `/v1/audio/transcriptions`.
 - `--eyes` → `core/eyes.py` (**her OWN captioner** — aligned encoder + grafted projection +
   the served model): OpenAI image_url content in chat is captioned to `[image: ...]` text

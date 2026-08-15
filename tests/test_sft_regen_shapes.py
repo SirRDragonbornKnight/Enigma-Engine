@@ -88,16 +88,20 @@ def test_builtin_block_offers_every_builtin_and_nothing_else():
 
 
 def test_the_trained_preamble_is_the_one_serve_prepends():
-    """The preamble must come from the SERVE side, not from a local copy.
+    """The preamble is DERIVED from the persona now, so the drift this catches
+    runs the other way.
 
-    Asserting the block equals PREAMBLE + tools would pass with any string in
-    PREAMBLE, since both halves would move together -- a tautology. The honest
-    comparison is against persona.tools_preamble, which is what serve actually
-    puts in front of a tools block.
+    Comparing PREAMBLE to persona.tools_preamble was the honest test while the
+    two were independent strings; since PREAMBLE is that property, it would be
+    a tautology. What is left to pin is the default itself: this is the exact
+    sentence the trained tool blocks carry, so a change in persona.py's
+    default moves every future SFT block away from what the shipped model was
+    trained under, and fails here first.
     """
-    from enigma_engine.core.persona import Persona
-
-    assert PREAMBLE == Persona.load().tools_preamble
+    assert PREAMBLE == (
+        "You are Enigma. You can use tools when they are needed; "
+        "answer directly when they are not."
+    )
 
 
 def test_builtin_block_is_the_shape_serve_renders():

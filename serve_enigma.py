@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import html
 import json
 import math
 import os
@@ -272,21 +273,27 @@ def _stop_ids() -> tuple[int, int]:
 # generation and share this lock.
 _GEN_LOCK = threading.Lock()
 
+# WHO this server is serving. Identity lives in a persona pack so the trainer
+# can mold a different AI instead of a second Enigma; with no pack this IS
+# Enigma, and every string below is what the literals it replaced already said.
+PERSONA = Persona.load()
+
+# Where the runtime state files USED to live: the repo checkout itself. Kept
+# only as a migration source -- repo-anchored state is shared by every persona
+# served from this checkout, so two AIs on one box would fight over one mute
+# truth. The paths stay anchored to this file's directory, NOT the CWD (the
+# enigma / enigma-ai console scripts can be launched from anywhere).
+_LEGACY_MUTE_STATE = Path(__file__).resolve().parent / "data" / "mute_state.json"
+_LEGACY_TALK_STATE = Path(__file__).resolve().parent / "data" / "talk_mode.json"
+
 # Runtime mute (POST /v1/audio/mute -- the chat page's Mute button and the
 # tray icon): silences the server-side speak TOOL, and /v1/audio/speech
 # answers 204 (no audio) so muting from anywhere silences every open window.
 # The server is the single source of truth; the page polls and adopts it.
 # The truth survives restarts: best-effort persisted to a tiny state file
-# (a crash-relaunch must not silently unmute a muted gaming session).
-# Anchored to the repo (this file's directory), NOT the CWD -- the enigma /
-# enigma-ai console scripts can be launched from anywhere and must still see
-# the same state file (2026-07-17 audit).
-_MUTE_STATE = Path(__file__).resolve().parent / "data" / "mute_state.json"
-
-# WHO this server is serving. Identity lives in a persona pack so the trainer
-# can mold a different AI instead of a second Enigma; with no pack this IS
-# Enigma, and every string below is what the literals it replaced already said.
-PERSONA = Persona.load()
+# (a crash-relaunch must not silently unmute a muted gaming session), in HER
+# data home -- one AI's silence is not another's.
+_MUTE_STATE = PERSONA.home / "mute_state.json"
 
 # The runtime-editable voice recipe (Kokoro blend + speed). Lives in the
 # engine's data home so set_voice edits survive restarts and are shared by any
@@ -297,7 +304,7 @@ _VOICE_STATE = PERSONA.home / "voice.json"
 # mode); when OFF, she stays quiet unless a reply used the speak tool. Distinct
 # from mute (a hard silence). Server-owned + persisted like mute; defaults OFF
 # so enabling the voice organ never surprises the user with narration.
-_TALK_STATE = Path(__file__).resolve().parent / "data" / "talk_mode.json"
+_TALK_STATE = PERSONA.home / "talk_mode.json"
 TALK_MODE = False
 
 # Bumped by POST /v1/audio/stop. An open chat window polls it and hushes its own
@@ -326,6 +333,28 @@ def _write_state_atomic(path: Path, obj: dict) -> bool:
     except OSError as exc:
         print(f"WARN: could not persist state to {path}: {exc}", flush=True)
         return False
+
+
+def _adopt_legacy_state(path: Path, legacy: Path) -> None:
+    """Seed `path` once from the repo-anchored file it replaced.
+
+    An existing install carries its mute / talk-mode truth in the checkout's
+    data/ directory, and a silent move to the persona home would unmute a
+    muted machine on the next launch. COPY, never move or delete: the legacy
+    file is what a rollback to a build that still reads the repo path finds.
+    For the DEFAULT persona only -- the caller gates it, because that truth is
+    Enigma's and adopting it would boot a brand-new persona already muted, or
+    already narrating. Best-effort like every other read of these files --
+    state is not worth a failed boot."""
+    if path.exists() or not legacy.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(legacy.read_bytes())
+        print(f"  WARN: migrated runtime state {legacy} -> {path} (legacy copy left in place)", flush=True)
+    except OSError as exc:
+        print(f"  WARN: could not migrate runtime state {legacy} -> {path}: {exc}", flush=True)
+
 
 # Where the imagine tool and /v1/images/generations drop their PNGs: the
 # engine's data home, not the repo checkout.
@@ -420,7 +449,7 @@ def boot(argv: list[str] | None = None) -> None:
     old import-time startup."""
     global ARGS, CONFIG, model, tokenizer, DEVICE, _BF16_GEN, STEP, META, MODEL_PATH, MODEL_SHA256
     global INSTRUCT, MEMORY, MEMORY_RECALL, SPEAKER, MUTED, TALK_MODE, EARS, EYES, PAINTER, SEARCHER, EOS_ID, BOS_ID
-    global _BOOTED, PERSONA, _VOICE_STATE, IMAGES_DIR, _STOP_TEXTS
+    global _BOOTED, PERSONA, _VOICE_STATE, IMAGES_DIR, _STOP_TEXTS, _MUTE_STATE, _TALK_STATE
 
     _BOOTED = False  # a re-boot is unready until it completes
 
@@ -443,6 +472,19 @@ def boot(argv: list[str] | None = None) -> None:
     _VOICE_STATE = PERSONA.home / "voice.json"
     IMAGES_DIR = PERSONA.home / "images"
     _STOP_TEXTS = ("\nUser:", PERSONA.transcript_label)
+    _MUTE_STATE = PERSONA.home / "mute_state.json"
+    _TALK_STATE = PERSONA.home / "talk_mode.json"
+    # The repo-anchored files are ENIGMA's runtime state, so only she adopts
+    # them. A pack starts with a clean home -- talk-mode OFF, she starts
+    # SILENT -- rather than inheriting the mute and narration truth of the AI
+    # this checkout has been serving all along.
+    if PERSONA.is_default:
+        _adopt_legacy_state(_MUTE_STATE, _LEGACY_MUTE_STATE)
+        _adopt_legacy_state(_TALK_STATE, _LEGACY_TALK_STATE)
+    # The OpenAPI metadata is the one persona-facing string that lives on an
+    # object built at import time, before any pack has been read.
+    app.title = f"{PERSONA.name} (from-scratch)"
+    app.openapi_schema = None  # a re-boot with another pack must re-render it
     if ARGS.persona:
         print(f"  persona: {PERSONA.name} (home {PERSONA.home})", flush=True)
 
@@ -484,7 +526,7 @@ def boot(argv: list[str] | None = None) -> None:
         _own_set("HF_HUB_OFFLINE", "0")
         _own_set("TRANSFORMERS_OFFLINE", "0")
 
-    print(f"Loading Enigma from {ARGS.model} ...", flush=True)
+    print(f"Loading {PERSONA.name} from {ARGS.model} ...", flush=True)
     if not Path(ARGS.model).exists():
         raise SystemExit(
             f"checkpoint not found: {ARGS.model}\n"
@@ -764,7 +806,7 @@ def boot(argv: list[str] | None = None) -> None:
 
     _n_params = sum(p.numel() for p in model.parameters())
     print(
-        f"Enigma loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
+        f"{PERSONA.name} loaded: {_n_params / 1e6:.1f}M params on {DEVICE}"
         + (f", checkpoint step {STEP:,}" if STEP is not None else "")
         + (f" | INSTRUCT ({META.get('chat_format')})" if INSTRUCT else " | base (transcript bridge)")
         + (f" | memory: {len(MEMORY)} entries" if MEMORY is not None else "")
@@ -1923,8 +1965,10 @@ def _chat_instruct(req: ChatReq):
 # volume mixes like any app (fine while gaming). Mute state lives on the
 # SERVER (the tray icon can flip it too); the page polls it every 3 seconds
 # and adopts changes, so a tray mute silences an already-open window.
+# `__PERSONA_NAME__` is filled in by chat_page(): .format() cannot be used on
+# a page this full of CSS and JS braces.
 _CHAT_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Enigma</title>
+<html><head><meta charset="utf-8"><title>__PERSONA_NAME__</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { --bg:#101418; --panel:#1a2129; --me:#2b4a6f; --her:#232d38;
@@ -1962,7 +2006,7 @@ _CHAT_PAGE = """<!doctype html>
   button:disabled { opacity:.5; cursor:default; }
 </style></head><body>
 <header>
-  <h1>Enigma</h1>
+  <h1>__PERSONA_NAME__</h1>
   <span id="voice-state">voice: checking...</span>
   <button id="talk" type="button" title="Speak every reply out loud">Talk: off</button>
   <button id="stop" type="button" title="Stop talking (Esc)">Stop</button>
@@ -2260,7 +2304,10 @@ setInterval(syncStatus, 3000);
 
 @app.get("/", response_class=HTMLResponse)
 def chat_page():
-    return _CHAT_PAGE
+    # WHOSE window this is, substituted at render time: the page is a module
+    # constant built at import, and the persona is only known after boot.
+    # Escaped -- a pack's name is data, and it lands inside markup here.
+    return _CHAT_PAGE.replace("__PERSONA_NAME__", html.escape(PERSONA.name))
 
 
 @app.get("/v1/models")
@@ -2863,7 +2910,7 @@ def main() -> None:
         print_audio_outputs()
         return
     boot()
-    print(f"Enigma OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
+    print(f"{PERSONA.name} OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     print(f"In Odysseus:  /setup local http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     uvicorn.run(app, host=ARGS.host, port=ARGS.port, log_level="warning")
 

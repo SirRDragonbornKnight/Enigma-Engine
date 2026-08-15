@@ -44,6 +44,7 @@ except Exception:
     pass
 
 from enigma_engine.core.chat_format import TOOL_SYNTAX  # ONE syntax, train == serve
+from enigma_engine.core.persona import Persona
 from eval_leak_guard import LockedProbeGuard
 from identity_paraphrases import gen_identity_paraphrases
 from knowledge_corpus import gen_knowledge_examples
@@ -507,9 +508,10 @@ def _tool_spec(name, desc, params):
 
 
 # The line serve prepends to a tools block when the client sent no system
-# message of its own (persona.tools_preamble). Training and serving share the
-# string so the model never meets a tool spec under an unfamiliar preamble.
-PREAMBLE = "You are Enigma. You can use tools when they are needed; answer directly when they are not."
+# message of its own. Derived from the persona rather than copied, so training
+# and serving cannot drift apart and a persona pack trains its own AI's
+# preamble instead of a second Enigma's.
+PREAMBLE = Persona.load().tools_preamble
 
 
 def _system(tool_subset):
