@@ -36,8 +36,10 @@ import random
 import re
 from pathlib import Path
 
+from enigma_engine.core.persona_content import PersonaContent, default_content
+
 # (question phrasings, answer variants). Answers vary in wording, never in fact.
-KNOWLEDGE: list[tuple[list[str], list[str]]] = [
+WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     # ---------------------------------------------------------------- space
     (
         ["Which planet is the biggest one?", "What is the largest planet going around our sun?", "Of all the planets, which is largest?"],
@@ -1210,10 +1212,18 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
         ["A drop of water inside each kernel turns to steam and blows the shell open.",
          "Steam pressure. The sealed kernel holds until the inside boils, then bursts inside out."],
     ),
-    # ------------------------------------------------- Enigma herself (self)
-    # Self/capability facts, ruled into T4 scope 2026-08-08 -- aligned with
-    # the identity-anchor rewrite (same measured numbers) so the two can
-    # never disagree. Facts only; the VOICE lives in identity_anchors.py.
+]
+
+# ----------------------------------------------------- Enigma herself (self)
+# Self/capability facts, ruled into T4 scope 2026-08-08 -- aligned with the
+# identity-anchor rewrite (same measured numbers) so the two can never
+# disagree. Facts only; the VOICE lives in identity_anchors.py.
+#
+# Persona content since wave 2a (2026-08-15): these are the facts a second AI
+# cannot inherit, so the renderers take them from PersonaContent rather than
+# from this list. It stays HERE, beside the world facts it is rendered with --
+# the interface passes it through.
+SELF_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What is Enigma?", "What kind of AI is Enigma?", "Tell me about Enigma.",
          "What sort of AI is Enigma?", "Describe Enigma in a sentence."],
@@ -1313,14 +1323,26 @@ KNOWLEDGE: list[tuple[list[str], list[str]]] = [
     ),
 ]
 
+# The table as authored: world facts, then whoever the AI is. The renderers
+# rebuild it from the persona content instead, so the self half follows the
+# pack; with no pack the two are the same objects in the same order.
+KNOWLEDGE: list[tuple[list[str], list[str]]] = WORLD_FACTS + SELF_FACTS
 
-def gen_knowledge_examples(seed: int = 55) -> list[dict]:
+
+def _table(content: "PersonaContent | None") -> list[tuple[list[str], list[str]]]:
+    """World facts plus the persona's own self-facts, in authored order."""
+    content = default_content() if content is None else content
+    return WORLD_FACTS + list(content.self_facts)
+
+
+def gen_knowledge_examples(seed: int = 55,
+                           content: "PersonaContent | None" = None) -> list[dict]:
     """Emit clean fact-QA records (Q x two rotating answers per intent),
     deduped on the exact (question, answer) pair -- the identity_paraphrases
     rendering pattern applied to world knowledge."""
     rng = random.Random(seed)
     out: list[dict] = []
-    for questions, answers in KNOWLEDGE:
+    for questions, answers in _table(content):
         for i, q in enumerate(questions):
             picks = [answers[i % len(answers)], answers[(i + 1) % len(answers)]]
             for a in picks:
@@ -1515,7 +1537,8 @@ def _cloze_question(questions: list[str]) -> str:
     return ""
 
 
-def gen_knowledge_pretrain_text(seed: int = 77) -> list[str]:
+def gen_knowledge_pretrain_text(seed: int = 77,
+                                content: "PersonaContent | None" = None) -> list[str]:
     """Emit plain-text lines (NOT chat records) for continued pretraining.
 
     Per intent: declarative statements (the curated answers as standalone
@@ -1525,7 +1548,7 @@ def gen_knowledge_pretrain_text(seed: int = 77) -> list[str]:
     rng = random.Random(seed)
     probes = _probe_strings()
     lines: list[str] = []
-    for idx, (questions, answers) in enumerate(KNOWLEDGE):
+    for idx, (questions, answers) in enumerate(_table(content)):
         # Declarative prose: the answers verbatim (one-word answers like
         # "Rome." carry no signal alone -- their full-sentence twin runs).
         for a in answers:

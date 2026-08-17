@@ -14,7 +14,9 @@ is monkeypatched at the _gen_ids/_stream_ids_locked seam, everything else
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1377,6 +1379,21 @@ _RUNTIME_GLOBALS = [
 ]
 
 
+def test_the_runtime_globals_list_mirrors_boots_own_global_statements():
+    """The list above is a MIRROR of boot(), hand-maintained -- and nothing
+    made it track. A global added to boot and forgotten here is written by
+    every boot test and restored by none, so it leaks into the rest of the
+    session as a checkpoint, a persona, or a state path from another test.
+    The source is the authority; read the names out of it."""
+    tree = ast.parse((Path(serve.__file__).read_text(encoding="utf-8")))
+    boot = next(
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "boot"
+    )
+    declared = {name for n in ast.walk(boot) if isinstance(n, ast.Global) for name in n.names}
+    assert declared == set(_RUNTIME_GLOBALS)
+
+
 _HF_ENV_KEYS = (
     "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE",
     "HF_HUB_DISABLE_TELEMETRY", "HF_HUB_DISABLE_IMPLICIT_TOKEN",
@@ -1810,6 +1827,50 @@ def test_boot_migrates_legacy_repo_state_into_the_persona_home(monkeypatch, tmp_
         out = capsys.readouterr().out
         assert "migrated runtime state" in out
         assert str(legacy_mute) in out and str(serve._MUTE_STATE) in out
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_a_corrupt_legacy_state_file_migrates_without_taking_boot_down(monkeypatch, tmp_path, capsys):
+    """The legacy files are whatever a crashed or half-written install left in
+    the checkout, and the migration reads them as BYTES -- it cannot tell a
+    truncated mute_state.json from a good one. So the corrupt case must land
+    the same way the missing one does: boot completes, the copy is made and
+    said out loud, and the unreadable state falls back to the documented
+    defaults (unmuted, silent) instead of a traceback in the middle of
+    startup."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    home = _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    legacy_mute = tmp_path / "legacy" / "mute_state.json"
+    legacy_talk = tmp_path / "legacy" / "talk_mode.json"
+    legacy_mute.parent.mkdir(parents=True, exist_ok=True)
+    # Garbage on both sides of the decode: bytes that are not UTF-8 at all,
+    # and text that decodes fine and is not JSON.
+    legacy_mute.write_bytes(b'\xff\xfe{"muted": tr')
+    legacy_talk.write_bytes(b"not json at all")
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        assert serve._BOOTED is True  # startup survived the unreadable state
+        assert serve.MUTED is False and serve.TALK_MODE is False  # the defaults
+        # The copy is best-effort and byte-faithful: it does not parse, so the
+        # corruption crosses over verbatim and the legacy file stays put.
+        assert serve._MUTE_STATE.read_bytes() == legacy_mute.read_bytes()
+        assert serve._TALK_STATE.read_bytes() == legacy_talk.read_bytes()
+        assert legacy_mute.exists() and legacy_talk.exists()
+        out = capsys.readouterr().out
+        assert "migrated runtime state" in out
+        assert "Traceback" not in out
+        assert serve._MUTE_STATE == home / ".enigma_engine" / "mute_state.json"
     finally:
         for name, value in snapshot.items():
             setattr(serve, name, value)

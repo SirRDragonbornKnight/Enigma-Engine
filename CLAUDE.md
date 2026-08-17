@@ -119,12 +119,14 @@ imagine→png→eyes loops pass. `/v1/capabilities` reports which organs a serve
   `Enigma Backups\`, not beside the checkpoint). Lineage is immutable — the v1 corpus
   (`data/pretrain/tokens.bin` + sidecar) is filesystem read-only AND pretokenize refuses to
   write that path. Forward plan is `ROADMAP.md`; bottleneck is SFT data, not compute.
-- SFT+DPO **ADOPTED**: every entry point serves `models/enigma_dpo/model.pth`; the launcher
-  chain adds `--memory-dir data\memory` (bare console scripts default memory OFF). The
-  user-facing chain is **Talk to Enigma.bat / Enigma Tray.bat / Stop Enigma.bat** (Desktop
-  wrappers → repo scripts → `Start-Enigma.ps1` → serve; her window is `enigma_window.py`).
-  Current adopted weights = **v8** (2026-07-16); the live gate number is the sealed-set
-  baseline in `EVAL_REDESIGN.md`. Adoption receipt, backups and revert targets: `BACKLOG.md`.
+- SFT+DPO **ADOPTED**: every entry point serves `models/enigma_v2_sft2/model.pth` at
+  `--max-context 2048`; the launcher chain adds `--memory-dir data\memory` (bare console
+  scripts default memory OFF). The user-facing chain is **Talk to Enigma.bat / Enigma
+  Tray.bat / Stop Enigma.bat** (Desktop wrappers → repo scripts → `Start-Enigma.ps1` →
+  serve; her window is `enigma_window.py`). Current adopted weights = **v2, 238M-class**
+  (2026-08-09); `models/enigma_dpo/model.pth` still holds **v8** (2026-07-16), kept
+  byte-identical as the ROLLBACK. The live gate number is the sealed-set baseline in
+  `EVAL_REDESIGN.md`. Adoption receipt, backups and revert targets: `BACKLOG.md`.
 - From-scratch ethos: prefer fresh, correct code; engines should fail honestly ("feature
   absent") rather than guess.
 

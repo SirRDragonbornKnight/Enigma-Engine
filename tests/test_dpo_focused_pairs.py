@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 
+from enigma_engine.core.persona_content import default_content
 from eval_behavior import _appends_a_guess
 from eval_leak_guard import LockedProbeGuard
 from make_dpo_data import (
@@ -49,10 +50,13 @@ def test_no_authored_pair_is_held_out_by_the_probe_screen(screen):
     """A held-out record is not trained at all. Authoring must CLEAR the
     screen, and a future reseal that newly collides must fail here rather than
     thin the corpus in silence."""
+    # Resolved, not as authored: a persona-supplied record (Aside) is screened
+    # by the text the generator actually renders, not by its key.
+    content = default_content()
     for name, table in (("DECLINE_PAIRS", DECLINE_PAIRS),
                         ("INJECTION_PAIRS", INJECTION_PAIRS),
                         ("ANSWER_PAIRS", ANSWER_PAIRS)):
-        gone = [q for q, _c, _r in table if _held_out(q, screen)]
+        gone = [q for q, _c, _r in content.resolve(table) if _held_out(q, screen)]
         assert not gone, f"{name} collides with the probe screen: {gone}"
 
 

@@ -8,11 +8,15 @@ for two of them:
   fact (declarative, Q/A, cloze, fact-in-context). Facts install during
   PRETRAINING -- this repo measured that SFT cannot install knowledge -- so
   they belong in the corpus, not only in the instruct bake.
-* **Her own identity.** `identity_anchors` holds her voice as chat pairs, and
-  a chat pair teaches a FORMAT. Who she is should be in the weights as prose
-  before any instruct pass shapes how she says it. Generated from the active
-  PERSONA, so a different persona pack produces a different corpus -- which is
-  what "the trainer can build another AI" has to mean at the pretrain stage.
+* **Her own identity.** The anchors hold her voice as chat pairs, and a chat
+  pair teaches a FORMAT. Who she is should be in the weights as prose before
+  any instruct pass shapes how she says it. Both halves come from the persona
+  seam -- `Persona` for the name, `PersonaContent` for the anchors and the
+  self-facts -- so nothing here reaches into Enigma's own tables. A pack
+  DIRECTORY builds that pack's OWN corpus, its content read by
+  `persona_content.load_content`; a bare pack FILE carries the mechanical
+  fields alone, so there is nothing of its own to render and it refuses
+  rather than pretrain her identity under someone else's name.
 * **Short conversational register.** The v1 corpus is documents; every trace of
   dialogue arrived in SFT. A model that never saw a turn until the instruct
   pass has to learn the shape and the content at once.
@@ -49,8 +53,8 @@ from pathlib import Path
 
 from collect_pretraining_data import DOC_SEP_JOIN, _SPECIAL_TOKEN_LITERALS
 from enigma_engine.core.persona import Persona
+from enigma_engine.core.persona_content import PersonaContent, default_content, load_content
 from eval_leak_guard import LockedProbeGuard
-from identity_anchors import EXAMPLES as IDENTITY_EXAMPLES
 from knowledge_corpus import gen_knowledge_pretrain_text
 from make_sft_data import _is_low_quality
 
@@ -63,15 +67,19 @@ GENERAL = ROOT / "data" / "finetune" / "combined_finetune.jsonl"
 DOCS_PER_SHARD = 2000
 
 
-def identity_lines(persona: Persona) -> list[str]:
+def identity_lines(persona: Persona, content: PersonaContent) -> list[str]:
     """Her identity as PROSE, in both persons.
 
     The anchors are chat pairs, which teach a format. These teach the content:
     the same claims as plain statements a pretrained model can absorb, phrased
-    both as she would say them and as someone would say them about her."""
+    both as she would say them and as someone would say them about her.
+
+    The anchors arrive as CONTENT rather than by import: a direct
+    `identity_anchors` import renders Enigma's words under whatever name the
+    persona carries, which is content-by-import and invisible to a grep."""
     out: list[str] = []
     name = persona.name
-    for _cat, pairs in IDENTITY_EXAMPLES.items():
+    for _cat, pairs in content.anchors.items():
         for _user, said in pairs:
             said = " ".join(said.split())
             if not said:
@@ -146,10 +154,15 @@ def conversational_lines(persona: Persona, limit: int, seed: int = 21) -> list[s
     return [f"User: {q}\n{persona.name}: {a}" for q, a in pairs[:limit]]
 
 
-def build(persona: Persona, conv_limit: int) -> dict[str, list[str]]:
+def build(persona: Persona, content: PersonaContent, conv_limit: int) -> dict[str, list[str]]:
+    """Every group that carries identity reads it from `content`.
+
+    The knowledge renderer's self-section follows the content too -- its world
+    facts do not, being nobody's identity. `conversational_lines` is mechanical
+    (it labels turns with the name), so it takes the persona alone."""
     return {
-        "facts": gen_knowledge_pretrain_text(),
-        "identity": identity_lines(persona),
+        "facts": gen_knowledge_pretrain_text(content=content),
+        "identity": identity_lines(persona, content),
         "conversation": conversational_lines(persona, conv_limit),
     }
 
@@ -198,7 +211,25 @@ def main() -> None:
     ap.add_argument("--stats", action="store_true", help="count only; write nothing")
     args = ap.parse_args()
 
-    persona = Persona.load(Path(args.persona) if args.persona else None)
+    pack = Path(args.persona) if args.persona else None
+    persona = Persona.load(pack)
+    # A pack supplies a NAME, and the content behind it has to come from the
+    # same pack. A bare pack FILE carries the mechanical fields alone, so
+    # building from one would write "<name> says: I'm Enigma..." into the
+    # weights -- the one failure a pretrain pass cannot be talked out of
+    # later. Refuse here, before anything is read or written, and name the
+    # missing piece rather than dying somewhere downstream.
+    if persona.is_default:
+        content = default_content()
+    elif pack is not None and pack.is_dir():
+        content = load_content(pack)
+    else:
+        raise SystemExit(
+            f"persona {persona.name!r}: {pack} is a bare pack file, which carries "
+            "mechanical fields only -- it has no identity content to render. Point "
+            "--persona at a pack DIRECTORY (pack.json beside its content files); "
+            "refusing to pretrain her identity under another AI's name"
+        )
     guard = LockedProbeGuard.load()
     if not len(guard):
         # Same first line every builder prints for this condition, so a log
@@ -207,7 +238,7 @@ def main() -> None:
         print("locked-probe fuzzy guard inactive (no data/eval/locked_probes.manifest.json yet)", flush=True)
         print("WARN: the curated shard would be UNSCREENED -- the pretrain path has no consume-time guard", flush=True)
 
-    groups = build(persona, args.conversation)
+    groups = build(persona, content, args.conversation)
     kept, dropped = screen(groups, guard)
 
     print(f"persona: {persona.name}")
