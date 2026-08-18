@@ -1,15 +1,49 @@
 # Stop-Enigma.ps1 -- shut Enigma down: her chat window (if open) and the
 # hidden server on port 8000. Counterpart to Start-Enigma.ps1; called by
 # "Stop Enigma.bat" or run by hand.
-# Safe by design: the port-8000 process is only killed if its command line
-# really is serve_enigma.py -- anything else holding the port is left alone.
+# Safe by design: the port-8000 process is only killed if the server there says
+# it is Enigma -- another AI, or any other program, is left alone.
+# -Persona stops the AI from THAT pack instead: her port, her window, and
+# nothing of Enigma's. With no -Persona every value is the literal this script
+# carried before it took parameters, which is what -DryRun exists to prove.
 # ASCII-only output (Windows cp1252 console).
+param(
+    # A persona pack DIRECTORY. Empty is Enigma.
+    [string]$Persona = "",
+    # Override the port. 0 = the pack's own `port` field, or 8000 for Enigma.
+    [int]$Port = 0,
+    # Print what this run would kill, and kill nothing.
+    [switch]$DryRun
+)
+
+# WHO this script stops, and everything derived from her. A persona pack
+# serves a DIFFERENT AI out of this same checkout, so "is the process
+# serve_enigma.py" answers the wrong question -- it is true of every AI served
+# from here. Get-ServingPersona lives in the shared file with the rest: the
+# script that starts her and the script that kills her must not drift apart on
+# what counts as hers.
+. (Join-Path $PSScriptRoot "Enigma-Persona.ps1")
+$self = Resolve-EnigmaPersona -EngineDir $PSScriptRoot -PackDir $Persona -Port $Port
+$aiName = $self.Name
+$bindPort = $self.Port
+
+if ($DryRun) {
+    Write-Output "DRYRUN stop: persona=$aiName port=$bindPort"
+    Write-Output "DRYRUN window: match=$($self.WindowMatch) extra=$($self.WindowExtra) exclude=$($self.WindowExclude)"
+    exit 0
+}
 
 # 1) Her chat window (the enigma_window.py shim), if one is open. Matched by
 # COMMAND LINE, not window title -- any other python window that happens to
 # be titled "Enigma" (avatar tooling, a second pywebview app) is not ours.
+# A pack's window carries its pack directory on the line and HERS carries no
+# --persona at all, so stopping one AI leaves the other's window standing.
 $windows = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*enigma_window.py*" })
+    Where-Object {
+        $_.CommandLine -like $self.WindowMatch -and
+        ($self.WindowExtra -eq "" -or $_.CommandLine -like $self.WindowExtra) -and
+        ($self.WindowExclude -eq "" -or $_.CommandLine -notlike $self.WindowExclude)
+    })
 if ($windows.Count -eq 0) {
     Write-Output "window: none open."
 } else {
@@ -24,17 +58,28 @@ if ($windows.Count -eq 0) {
 }
 
 # 2) The server. Verify ownership before killing.
-$conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
+$conn = Get-NetTCPConnection -LocalPort $bindPort -State Listen -ErrorAction SilentlyContinue |
     Select-Object -First 1
 if ($null -eq $conn) {
-    Write-Output "server: nothing on port 8000 -- already stopped."
+    Write-Output "server: nothing on port $bindPort -- already stopped."
 } else {
     $ownerId = $conn.OwningProcess
     $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId" -ErrorAction SilentlyContinue).CommandLine
     $procName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
-    # Ours = serve_enigma.py directly, OR the enigma/enigma-ai console-script
-    # wrappers from pyproject (those run as enigma.exe with no .py on the line).
-    if ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai")) {
+    # Ours = the server on the port SAYS it is this AI. With no answer, the old
+    # process test decides instead: serve_enigma.py directly, OR the
+    # enigma/enigma-ai console-script wrappers from pyproject (those run as
+    # enigma.exe with no .py on the line).
+    $serving = Get-ServingPersona -Port $bindPort
+    if ($serving) {
+        # -ceq, not -eq: PowerShell compares strings case-insensitively, and a
+        # pack named "enigma" is a different AI wearing her spelling. Killing
+        # the wrong AI is the failure this whole check exists to prevent.
+        $ours = ($serving -ceq $aiName)
+    } else {
+        $ours = ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai"))
+    }
+    if ($ours) {
         try {
             Stop-Process -Id $ownerId -Force -ErrorAction Stop
             Write-Output "server: stopped (pid $ownerId)."
@@ -44,7 +89,14 @@ if ($null -eq $conn) {
             Write-Output "server: FAILED to stop pid $ownerId ($($_.Exception.Message)) -- try from an elevated shell."
         }
     } else {
-        Write-Output "server: port 8000 is held by pid $ownerId ($procName), which is NOT Enigma -- left alone."
+        # Another AI answers for itself; anything that cannot is described by
+        # its process, as before.
+        if ($serving) {
+            $who = "$serving (pid $ownerId)"
+        } else {
+            $who = "pid $ownerId ($procName)"
+        }
+        Write-Output "server: port $bindPort is held by $who, which is NOT $aiName -- left alone."
         Write-Output "  command line: $cmd"
     }
 }

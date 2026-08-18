@@ -109,8 +109,11 @@ Deleted after a three-agent adversarial audit verified every claim
   `train_vision` + `train_audio` wrappers for align_vision.py /
   align_audio.py — renamed from `vision_align.py` when audio joined).
 - **LIVE — added since the compression pass:** `core/persona.py` (persona
-  packs; `serve --persona`), `core/barge_in.py` (mic energy VAD),
-  `core/pretokenize.py` (the rust-backed v2 encode path).
+  packs; `serve --persona`), `core/persona_content.py` (the CONTENT half of
+  that seam — anchors, paraphrase intents, denials, self-facts, asides;
+  `default_content()` is Enigma, `load_content()` is a pack directory),
+  `core/barge_in.py` (mic energy VAD), `core/pretokenize.py` (the rust-backed
+  v2 encode path).
 - **KEPT DORMANT BY RULING:** `core/gguf.py` (llama-server export route,
   KNOWN_ISSUES; reachable only via `Enigma.export_to_gguf`). The GGUF SERVING
   pivot was REJECTED 2026-07-24, so the only remaining use for this file is
@@ -163,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1103 passed on ENIGMAPC (2026-08-16, paired with the Stage-7 wave-2 + audit-fix commit; 15 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine)** — THE live number; other docs
+4. Suite baseline: **1206 passed on ENIGMAPC (2026-08-17, paired with the Stage-7 wave-3 + 2026-08-17 audit-fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine, the two new ones being the persona-aware gate and validator run against her real sealed set; 11 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -241,6 +244,17 @@ Deleted after a three-agent adversarial audit verified every claim
    **1059 → 1103 is Stage-7 wave 2 + its ordered audit's fix wave
    (2026-08-16)** -- persona content interface, curated routing, pack
    content loader and seam hardening.
+   **1103 -> 1206 is Stage-7 wave 3 (3a-3d) plus the 2026-08-17 audit-fix
+   wave, the micro-cleanup and the verifier closing sweep** -- serve
+   self-identification, launcher parameterization, per-AI eval and the pack
+   authoring guide. Five new files carry 38 of the 103: `test_launchers.py`
+   17, `test_conftest_guard.py` 7, `test_eval_persona_gate.py` 6,
+   `test_validate_probes.py` 4 and `test_persona_probes.py` 4. The other 65
+   grew in place -- `test_persona.py` +30, `test_persona_content.py` +16,
+   `test_pretrain_curated.py` +8, `test_serve_enigma.py` +6,
+   `test_enigma_window.py` +4, `test_eval_scratch_gate.py` +1 -- while
+   `test_eval_transcript.py` was reworked around the persona-aware gate at
+   the same 42 collected.
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

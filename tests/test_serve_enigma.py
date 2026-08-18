@@ -29,6 +29,7 @@ from enigma_engine.core.eyes import EyesError
 from enigma_engine.core.memory_store import MemoryStore
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
+from enigma_engine.core.persona import PACK_MANIFEST, Persona
 from enigma_engine.core.tokenizer import get_tokenizer
 
 # ---------------------------------------------------------------------------
@@ -944,6 +945,85 @@ def test_stream_reports_the_same_enigma_extension_as_nonstream(monkeypatch, tok)
     # content frames stay byte-identical to the non-stream join: the extension
     # rides the terminal frame ONLY
     assert not any("enigma" in c for c in chunks[:-1])
+
+
+def _drive_chat(monkeypatch, tok) -> tuple[dict, str, list[dict]]:
+    """One chat request answered both ways: (non-stream payload, the raw SSE
+    text, its parsed frames). Generation is scripted, so the only thing that
+    can differ between two calls of this is the identity being served."""
+    monkeypatch.setattr(serve, "tokenizer", tok)
+    monkeypatch.setattr(serve, "EOS_ID", tok.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tok.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512))
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+    scripted = tok.encode("Hello world.", add_special_tokens=False)
+
+    def fake_gen(ids, max_tokens, *a, **k):
+        yield from scripted
+
+    monkeypatch.setattr(serve, "_gen_ids", fake_gen)
+
+    def _req(stream: bool) -> serve.ChatReq:
+        return serve.ChatReq(
+            messages=[serve.Msg(role="user", content="Tell me a story.")],
+            stream=stream,
+            max_tokens=64,
+        )
+
+    nonstream = serve._chat_instruct(_req(stream=False))
+    resp = serve._chat_instruct(_req(stream=True))
+
+    async def _drain():
+        return [c if isinstance(c, str) else c.decode("utf-8") async for c in resp.body_iterator]
+
+    raw = "".join(asyncio.run(_drain()))
+    frames = [json.loads(line[6:]) for line in raw.splitlines()
+              if line.startswith("data: ") and line != "data: [DONE]"]
+    return nonstream, raw, frames
+
+
+def _request_model_defaults() -> list[str]:
+    """The `model` a client that omitted the field gets on every request shape
+    that has one. Class-body defaults are frozen at IMPORT -- before boot()
+    has read a pack -- which is why these are built from a factory."""
+    return [
+        serve.ChatReq(messages=[]).model,
+        serve.CompletionReq(prompt="x").model,
+        serve.SpeechReq(input="hello").model,
+        serve.ImageGenReq(prompt="a cat").model,
+    ]
+
+
+def test_the_default_model_surface_is_still_hers_byte_for_byte(monkeypatch, tok):
+    """Her slug IS "enigma" -- the literal every echo site carried -- so
+    deriving the id from the persona may not move one byte of her payloads.
+    The raw SSE text is asserted, not just the parsed frames: the id rides
+    the wire inside the JSON, and a derivation that renders it differently
+    (spaced, quoted, uppercased) parses the same and serves different bytes."""
+    nonstream, raw, frames = _drive_chat(monkeypatch, tok)
+    assert nonstream["model"] == "enigma"
+    assert frames, "the stream produced no frames"
+    assert [f["model"] for f in frames] == ["enigma"] * len(frames)
+    assert '"model": "enigma"' in raw
+    assert raw.count('"model":') == len(frames)  # every frame names it
+    assert _request_model_defaults() == ["enigma"] * 4
+
+
+def test_a_pack_echoes_its_own_id_through_every_frame(monkeypatch, tok):
+    """The hole this closes: /v1/models published `atlas` while every
+    completion and every streaming chunk the same server sent echoed
+    `"model": "enigma"` -- an OpenAI client asking which model answered was
+    told Enigma had, by the AI that had not."""
+    monkeypatch.setattr(serve, "PERSONA", Persona(name="Atlas", data_dirname=".atlas"))
+    nonstream, raw, frames = _drive_chat(monkeypatch, tok)
+    assert nonstream["model"] == "atlas"
+    assert frames, "the stream produced no frames"
+    assert [f["model"] for f in frames] == ["atlas"] * len(frames)
+    assert "enigma" not in raw
+    assert _request_model_defaults() == ["atlas"] * 4
+    assert serve.list_models()["data"][0]["id"] == "atlas"  # and the one endpoint 3a moved
 
 
 # ---------------------------------------------------------------------------
@@ -1977,6 +2057,163 @@ def test_a_second_persona_does_not_inherit_her_state(monkeypatch, tmp_path):
         # ...and the API says WHO it serves, down to the OpenAPI metadata
         assert serve.app.title == "Atlas (from-scratch)"
         assert serve.app.openapi()["info"]["title"] == "Atlas (from-scratch)"
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_boot_serves_a_pack_DIRECTORY(monkeypatch, tmp_path, write_persona_pack):
+    """`serve --persona <dir>` was the point of the directory format, and
+    nothing here had ever booted one -- the boot tests all pass a bare
+    pack.json, which takes a different branch of Persona.load. The manifest
+    inside the directory has to reach every name boot derives, and the home has
+    to land under the patched profile: a boot reading the real one writes
+    Atlas's runtime state into the developer's own machine."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    home = _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(serve.app, "title", serve.app.title)
+    monkeypatch.setattr(serve.app, "openapi_schema", serve.app.openapi_schema)
+    pack = write_persona_pack()
+    assert pack.is_dir() and (pack / PACK_MANIFEST).is_file(), "a DIRECTORY pack"
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--persona", str(pack)])
+        assert serve.PERSONA.name == "Atlas"
+        assert serve.PERSONA.home == home / ".atlas"
+        assert tmp_path in serve.PERSONA.home.parents  # never the real profile
+        assert serve._VOICE_STATE == home / ".atlas" / "voice.json"
+        assert serve.IMAGES_DIR == home / ".atlas" / "images"
+        assert serve._MUTE_STATE == home / ".atlas" / "mute_state.json"
+        # ...and it is Atlas the user sees, in the page and in the API metadata
+        assert "<title>Atlas</title>" in serve.chat_page()
+        assert "<h1>Atlas</h1>" in serve.chat_page()
+        assert serve.app.title == "Atlas (from-scratch)"
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_boot_carries_a_spaced_persona_name_through_the_turn_machinery(
+        monkeypatch, tmp_path, write_persona_pack):
+    """A space is legal in a name (`_SAFE_NAME` allows it) and it is the shape
+    that splits a label: the transcript marker, the stop text that cuts on it
+    and the tools preamble must all carry BOTH words. A name split at the space
+    prompts her as one AI and stops on another -- the failure that leaves a
+    whole fabricated assistant turn in the reply."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(serve.app, "title", serve.app.title)
+    monkeypatch.setattr(serve.app, "openapi_schema", serve.app.openapi_schema)
+    pack = write_persona_pack({PACK_MANIFEST: json.dumps({
+        "name": "Atlas Prime",
+        "data_dirname": ".atlas_prime",
+        "name_meaning": "the one who carries the weight",
+    })})
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--persona", str(pack)])
+        assert serve.PERSONA.transcript_label == "\nAtlas Prime:"
+        assert serve._STOP_TEXTS == ("\nUser:", "\nAtlas Prime:")
+        # the transcript ends on the marker the stop text cuts on -- one name
+        transcript = serve._render_transcript([serve.Msg(role="user", content="hello")])
+        assert transcript == "User: hello\nAtlas Prime:"
+        fabricated = "Sure.\nAtlas Prime: and a turn nobody asked for"
+        assert serve._find_stop(fabricated, serve._STOP_TEXTS) == len("Sure.")
+
+        # ...and the preamble serve prepends to a tools block, through serve's
+        # own assembly rather than the dataclass property.
+        user = "compute 372 + 519"
+        assert serve._builtin_tools(user, False) == [serve._CALC_TOOL]  # not vacuous
+        req = serve.ChatReq(messages=[serve.Msg(role="user", content=user)])
+        out = serve._with_context([m.model_dump(exclude_none=True) for m in req.messages], req)
+        assert out[0]["content"].startswith("You are Atlas Prime. You can use tools")
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_the_default_boot_says_it_is_HER_and_publishes_her_own_model_id(
+        monkeypatch, tmp_path):
+    """A port can only be asked WHO is serving if the server says so, and the
+    two endpoints an outside reader already polls are the ones that must
+    answer: /v1/capabilities for the launcher deciding whether a listener is
+    Enigma, /v1/models for the client naming the model that replied.
+
+    Her payload is the pin. The model id is derived now, and every field of
+    the default entry is what the endpoint published as literals -- a
+    derivation that renders her as anything but "enigma"/"enigma" has moved
+    her surface, whatever it does for a pack."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(serve.app, "title", serve.app.title)
+    monkeypatch.setattr(serve.app, "openapi_schema", serve.app.openapi_schema)
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128"])
+        caps = serve.capabilities()
+        assert caps["persona"] == "Enigma"
+        assert caps["persona_is_default"] is True
+
+        entry = serve.list_models()["data"][0]
+        assert {k: v for k, v in entry.items() if k != "checkpoint"} == {
+            "id": "enigma", "object": "model", "owned_by": "enigma"}
+    finally:
+        for name, value in snapshot.items():
+            setattr(serve, name, value)
+        for key in _HF_ENV_KEYS:
+            os.environ.pop(key, None)
+
+
+def test_a_pack_boot_answers_with_the_PACKS_identity_on_both_endpoints(
+        monkeypatch, tmp_path, write_persona_pack):
+    """The same serve_enigma.py, the same port, a different AI -- which is
+    exactly why a process name cannot decide ownership. Both self-reports
+    have to follow the pack, and is_default is what tells a reader that the
+    server on this port is not the AI this checkout is named for."""
+    import os
+
+    snapshot = {name: getattr(serve, name) for name in _RUNTIME_GLOBALS}
+    monkeypatch.setattr(serve.torch.cuda, "is_available", lambda: False)
+    _hermetic_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(serve, "_BOOT_ENV_WRITES", {})
+    for key in _HF_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(serve.app, "title", serve.app.title)
+    monkeypatch.setattr(serve.app, "openapi_schema", serve.app.openapi_schema)
+    pack = write_persona_pack()
+    ckpt = _tiny_ckpt(tmp_path)
+    try:
+        serve.boot(argv=["--model", str(ckpt), "--max-context", "128", "--persona", str(pack)])
+        caps = serve.capabilities()
+        assert caps["persona"] == "Atlas"
+        assert caps["persona_is_default"] is False
+
+        entry = serve.list_models()["data"][0]
+        assert entry["id"] == "atlas" and entry["owned_by"] == "atlas"
     finally:
         for name, value in snapshot.items():
             setattr(serve, name, value)

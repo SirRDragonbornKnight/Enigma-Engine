@@ -39,7 +39,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from enigma_engine.core.chat_format import (
     BUILTIN_NAMES,
@@ -73,7 +73,6 @@ except Exception:
     pass
 
 ROOT = Path(__file__).resolve().parent
-MODEL_ID = "enigma"
 
 _p = argparse.ArgumentParser()
 _p.add_argument(
@@ -116,9 +115,11 @@ _p.add_argument(
 _p.add_argument(
     "--persona",
     default=None,
-    help="serve a DIFFERENT AI: a persona pack (JSON) giving her name, data home and "
-    "the meaning of that name. Omitted = Enigma, which is this repo's own identity "
-    "and what every default reproduces exactly",
+    help="serve a DIFFERENT AI: a persona pack DIRECTORY (pack.json beside its "
+    "content files), or that pack.json alone -- serving needs only the mechanical "
+    "fields it carries, the name, data home and the meaning of that name. "
+    "Omitted = Enigma, which is this repo's own identity and what every default "
+    "reproduces exactly",
 )
 _p.add_argument(
     "--voice",
@@ -277,6 +278,20 @@ _GEN_LOCK = threading.Lock()
 # can mold a different AI instead of a second Enigma; with no pack this IS
 # Enigma, and every string below is what the literals it replaced already said.
 PERSONA = Persona.load()
+
+
+def _model_id() -> str:
+    """The id every payload echoes back: WHOSE model answered.
+
+    A FUNCTION, not a constant, and read at request time on purpose. The id
+    was `MODEL_ID = "enigma"` -- frozen at import, which is BEFORE boot() has
+    read the pack, and baked into four pydantic class bodies where a rebind
+    could never reach it. A pack therefore published `id: "atlas"` from
+    /v1/models and echoed `"model": "enigma"` from every completion it
+    served. Her slug IS "enigma", the literal this replaced, so nothing of
+    hers moves."""
+    return PERSONA.slug
+
 
 # Where the runtime state files USED to live: the repo checkout itself. Kept
 # only as a migration source -- repo-anchored state is shared by every persona
@@ -857,7 +872,7 @@ class Msg(BaseModel):
 
 
 class ChatReq(BaseModel):
-    model: str = MODEL_ID
+    model: str = Field(default_factory=_model_id)
     messages: list[Msg]
     # Clarity defaults, measured on the 182M lineage (2026-07-15) and carried
     # to the adopted 238M-class model: 0.8/no-min_p read as rambling; 0.3 +
@@ -873,7 +888,7 @@ class ChatReq(BaseModel):
 
 
 class CompletionReq(BaseModel):
-    model: str = MODEL_ID
+    model: str = Field(default_factory=_model_id)
     prompt: str
     temperature: float = 0.8  # raw continuation keeps the exploratory default
     top_p: float = 0.9
@@ -1110,7 +1125,7 @@ def _sse_role_open(cid: str, created: int) -> str:
                 "id": cid,
                 "object": "chat.completion.chunk",
                 "created": created,
-                "model": MODEL_ID,
+                "model": _model_id(),
                 "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
             }
         )
@@ -1130,7 +1145,7 @@ def _sse_error_end(cid: str, created: int, object_name: str, exc: BaseException)
         choice = {"index": 0, "text": "", "finish_reason": "error"}
     yield (
         "data: "
-        + json.dumps({"id": cid, "object": object_name, "created": created, "model": MODEL_ID, "choices": [choice]})
+        + json.dumps({"id": cid, "object": object_name, "created": created, "model": _model_id(), "choices": [choice]})
         + "\n\n"
     )
     yield "data: [DONE]\n\n"
@@ -1754,7 +1769,7 @@ def _chat_instruct(req: ChatReq):
                                 "id": cid,
                                 "object": "chat.completion.chunk",
                                 "created": created,
-                                "model": MODEL_ID,
+                                "model": _model_id(),
                                 "choices": [
                                     {"index": 0, "delta": {"content": body}, "finish_reason": None}
                                 ],
@@ -1805,7 +1820,7 @@ def _chat_instruct(req: ChatReq):
                                     "id": cid,
                                     "object": "chat.completion.chunk",
                                     "created": created,
-                                    "model": MODEL_ID,
+                                    "model": _model_id(),
                                     "choices": [
                                         {"index": 0, "delta": {"content": body}, "finish_reason": None}
                                     ],
@@ -1826,7 +1841,7 @@ def _chat_instruct(req: ChatReq):
                                 "id": cid,
                                 "object": "chat.completion.chunk",
                                 "created": created,
-                                "model": MODEL_ID,
+                                "model": _model_id(),
                                 "choices": [
                                     {"index": 0, "delta": {"content": raw_text}, "finish_reason": None}
                                 ],
@@ -1842,7 +1857,7 @@ def _chat_instruct(req: ChatReq):
                                 "id": cid,
                                 "object": "chat.completion.chunk",
                                 "created": created,
-                                "model": MODEL_ID,
+                                "model": _model_id(),
                                 "choices": [{"index": 0, "delta": {"tool_calls": calls}, "finish_reason": None}],
                             }
                         )
@@ -1853,7 +1868,7 @@ def _chat_instruct(req: ChatReq):
                     "id": cid,
                     "object": "chat.completion.chunk",
                     "created": created,
-                    "model": MODEL_ID,
+                    "model": _model_id(),
                     "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                 }
                 if spoke_server_side or tools_run:
@@ -1945,7 +1960,7 @@ def _chat_instruct(req: ChatReq):
         "id": cid,
         "object": "chat.completion",
         "created": created,
-        "model": MODEL_ID,
+        "model": _model_id(),
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
@@ -2312,10 +2327,13 @@ def chat_page():
 
 @app.get("/v1/models")
 def list_models():
-    # The static id string cannot distinguish two same-arch checkpoints; the
-    # checkpoint block is what lets an eval transcript prove WHICH weights it
-    # measured. Absent only when tests set the model globals directly.
-    entry: dict = {"id": MODEL_ID, "object": "model", "owned_by": "enigma"}
+    # WHOSE model this is: id and owner come from the persona, so a pack is not
+    # published under Enigma's name to every client that asks. Her slug IS
+    # "enigma" -- the literal both fields carried -- so her surface is unmoved.
+    # The id alone cannot distinguish two same-arch checkpoints; the checkpoint
+    # block is what lets an eval transcript prove WHICH weights it measured.
+    # Absent only when tests set the model globals directly.
+    entry: dict = {"id": PERSONA.slug, "object": "model", "owned_by": PERSONA.slug}
     if MODEL_SHA256:
         entry["checkpoint"] = {"path": MODEL_PATH, "sha256": MODEL_SHA256, "step": STEP}
     return {"object": "list", "data": [entry]}
@@ -2392,7 +2410,7 @@ def chat(req: ChatReq):
                             "id": cid,
                             "object": "chat.completion.chunk",
                             "created": created,
-                            "model": MODEL_ID,
+                            "model": _model_id(),
                             "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
                         }
                     )
@@ -2405,7 +2423,7 @@ def chat(req: ChatReq):
                         "id": cid,
                         "object": "chat.completion.chunk",
                         "created": created,
-                        "model": MODEL_ID,
+                        "model": _model_id(),
                         "choices": [{"index": 0, "delta": {}, "finish_reason": stats.get("finish", "stop")}],
                     }
                 )
@@ -2431,7 +2449,7 @@ def chat(req: ChatReq):
         "id": cid,
         "object": "chat.completion",
         "created": created,
-        "model": MODEL_ID,
+        "model": _model_id(),
         "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": stats["finish"]}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
@@ -2458,7 +2476,7 @@ def completions(req: CompletionReq):
                             "id": cid,
                             "object": "text_completion",
                             "created": created,
-                            "model": MODEL_ID,
+                            "model": _model_id(),
                             "choices": [{"index": 0, "text": delta, "finish_reason": None}],
                         }
                     )
@@ -2471,7 +2489,7 @@ def completions(req: CompletionReq):
                         "id": cid,
                         "object": "text_completion",
                         "created": created,
-                        "model": MODEL_ID,
+                        "model": _model_id(),
                         "choices": [{"index": 0, "text": "", "finish_reason": stats.get("finish", "stop")}],
                     }
                 )
@@ -2495,7 +2513,7 @@ def completions(req: CompletionReq):
         "id": cid,
         "object": "text_completion",
         "created": created,
-        "model": MODEL_ID,
+        "model": _model_id(),
         "choices": [{"index": 0, "text": text, "finish_reason": stats["finish"]}],
         "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_out, "total_tokens": n_prompt + n_out},
     }
@@ -2577,7 +2595,7 @@ class SpeechReq(BaseModel):
     This is the organ's service face -- the avatar requests audio it plays
     itself (lip-sync later); the speak TOOL plays on this machine instead."""
 
-    model: str = MODEL_ID
+    model: str = Field(default_factory=_model_id)
     input: str
     voice: str | None = None  # the active voice is server state; reject per-request picks honestly
 
@@ -2758,6 +2776,14 @@ def capabilities():
             and not (n == "speak" and SPEAKER is None)
             and not (n == "imagine" and PAINTER is None)
         ) if INSTRUCT else [],
+        # WHO is serving, not just what she can do. Every other reader of a
+        # port -- the launchers deciding whether a listener is theirs to claim
+        # or kill, an eval transcript recording which AI answered -- has only
+        # the process name to go on, and a pack runs the same serve_enigma.py
+        # under a different identity. is_default separates HER from a pack
+        # that merely spells her name.
+        "persona": PERSONA.name,
+        "persona_is_default": PERSONA.is_default,
     }
 
 
@@ -2858,7 +2884,7 @@ def images_describe(file: UploadFile = File(...)):
 class ImageGenReq(BaseModel):
     """OpenAI images.generations shape (subset)."""
 
-    model: str = MODEL_ID
+    model: str = Field(default_factory=_model_id)
     prompt: str
     n: int = 1
     size: str = "512x512"

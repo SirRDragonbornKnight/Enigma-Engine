@@ -31,6 +31,57 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 LOCKED_MANIFEST = ROOT / "data" / "eval" / "locked_probes.manifest.json"
+
+
+# What an AI's locked set is CALLED. Enigma's is data/eval/locked_probes.jsonl
+# and a pack's is this same name inside the pack, so "which gate governs this
+# build" is answerable from the pack DIRECTORY alone -- the trainers are handed
+# a persona, never a probe path.
+LOCKED_PROBES_NAME = "locked_probes.jsonl"
+
+
+def manifest_for(probes: Path) -> Path:
+    """The seal manifest belonging to a probe file: X.jsonl -> X.manifest.json
+    beside it.
+
+    ONE owner for the stem rule. The sealer writes the manifest here, every
+    reader derives it here, and a persona pack's gate therefore finds its own
+    manifest by the same arithmetic that produced it. Enigma's locked set
+    derives LOCKED_MANIFEST through this function like any other."""
+    probes = Path(probes)
+    return probes.with_name(probes.stem + ".manifest.json")
+
+
+def persona_manifest(pack_dir: Path | None) -> Path:
+    """The sealed gate that governs the AI being BUILT.
+
+    A build screens against the manifest of the AI whose corpus it is writing:
+    hers when there is no pack, the pack's own otherwise. Screening a pack's
+    content against HER probes drops pack lines for resembling questions that
+    AI will never be asked, while protecting a gate her weights are not being
+    trained for -- the single-AI assumption the training screens carried.
+
+    WHICH AI is the caller's answer (`Persona.is_default`), never this
+    argument's: identity is a VALUE, so an Enigma-SPELLED pack IS her and its
+    build passes None to get her gate.
+
+    `pack_dir` is the pack DIRECTORY or the pack manifest FILE inside it --
+    the two forms `Persona.load` accepts. A file has no children, so the file
+    form spelled straight through would name
+    pack.json\\locked_probes.manifest.json: a path nothing can ever write, and
+    a guard that is INACTIVE for good.
+
+    A pack with no sealed set yet resolves to a path that does not exist, and
+    `LockedProbeGuard.load` reports that as INACTIVE out loud, which is the
+    honest answer: an AI with no gate has nothing to leak into."""
+    if pack_dir is None:
+        return LOCKED_MANIFEST
+    pack = Path(pack_dir)
+    if pack.is_file() or pack.suffix.lower() == ".json":
+        pack = pack.parent
+    return manifest_for(pack / LOCKED_PROBES_NAME)
+
+
 # Mirrors eval_behavior.TOOL_OFFERED_CATEGORIES. Duplicated because
 # eval_behavior imports THIS module, so importing back would be circular; the
 # two are pinned equal by test.
@@ -769,7 +820,7 @@ def _cli_seal(src: str) -> int:
     # after which the live gate file fails its own seal check and only a backup
     # brings it back -- and the pre-seal step (validate_probes) is documented as
     # taking arbitrary paths, so drafts are exactly what gets passed here.
-    out_manifest = src_path.with_name(src_path.stem + ".manifest.json")
+    out_manifest = manifest_for(src_path)
     out_manifest.parent.mkdir(parents=True, exist_ok=True)
     out_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"sealed {len(texts)} locked probe strings -> {out_manifest} "

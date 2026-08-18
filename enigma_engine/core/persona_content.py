@@ -40,7 +40,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from enigma_engine.core.persona import PACK_MANIFEST
+from enigma_engine.core.persona import PACK_MANIFEST, DuplicateJSONKey, read_pack_json
 
 # Who made her. A pack states its own; this is the value her anchors,
 # paraphrases and self-facts already spell out.
@@ -54,6 +54,21 @@ PACK_ANCHORS = "anchors.jsonl"
 PACK_PARAPHRASES = "paraphrases.json"
 PACK_SELF_FACTS = "self_facts.jsonl"
 PACK_ASIDES = "asides.json"
+
+# Lists a generator draws a FIXED-SIZE sample from, and the size it draws.
+# Measured from the call sites, not guessed: `make_dpo_data.gen_dpo_pairs`
+# does `rng.sample(content.deny_model_questions, 2)` and the same for the
+# company side, once per denied org.
+#
+# `random.sample` raises ValueError on a population shorter than k, which
+# surfaces halfway through a build as a traceback naming the sample call --
+# nothing in it says which pack file is too narrow, and the artifacts written
+# before it are already on disk. A width the generators depend on is part of
+# what a pack IS, so it is checked where the pack is read.
+GENERATOR_SAMPLE_WIDTHS = {
+    "deny_model_questions": 2,
+    "deny_company_questions": 2,
+}
 
 # The identity-flavored records that live inside generic tables, keyed so a
 # pack replaces one in place. Values are tuples of the arity their table
@@ -159,7 +174,9 @@ class PersonaContent:
         sets, so it cannot see the second site. And an aside of the wrong
         arity (a 2-tuple in the 3-tuple INJECTION_PAIRS) resolves silently and
         blows up in the caller's unpacking, far from the pack that caused it --
-        so the arity the table's own tuples use is the bar."""
+        so the arity the table's own tuples use is the bar. A table holding
+        nothing BUT Asides has no concrete tuple to read that off, so the first
+        record resolved sets it and every later one is measured against it."""
         arity = next(
             (len(e) for e in table if not isinstance(e, Aside) and isinstance(e, tuple)),
             None,
@@ -174,7 +191,9 @@ class PersonaContent:
                     raise ValueError(f"aside {key!r} is used at two sites in one table")
                 seen.add(key)
                 record = self.asides[key]
-                if arity is not None and len(record) != arity:
+                if arity is None:
+                    arity = len(record)
+                elif len(record) != arity:
                     raise ValueError(
                         f"aside {key!r} has {len(record)} fields; the table's records "
                         f"have {arity}"
@@ -227,6 +246,15 @@ def load_content(pack_dir: Path | str) -> PersonaContent:
                    asides.json        {key: [str, ...]}, carrying EXACTLY the
                                       keys of ENIGMA_ASIDES
 
+    Two things about the denial tables a pack author cannot read off the
+    schema. The templated denials are FORMAT strings on both sides:
+    `{x}` is substituted with a denied MODEL in `deny_model_questions` and
+    `deny_model_answers`, `{c}` with a denied COMPANY in the two company
+    lists -- so a literal brace anywhere in them needs doubling. And the
+    question lists have a minimum WIDTH, because the generators sample a fixed
+    number of them per denied org (`GENERATOR_SAMPLE_WIDTHS`); a pack under it
+    is refused here rather than mid-build.
+
     Module-level, mirroring `default_content()`: the two are the same kind of
     thing seen from two sides, and a classmethod would sit inside the frozen
     dataclass's own machinery for no gain.
@@ -239,8 +267,11 @@ def load_content(pack_dir: Path | str) -> PersonaContent:
     of afterwards.
 
     The aside key set is exact in BOTH directions because the census is the
-    TABLES' to define: a missing key raises at render (`resolve`), and an extra
-    key is a record its author believes is training and which never renders.
+    TABLES' to define: a missing key is a table site with nothing to render,
+    and an extra key is a record its author believes is training and which
+    never renders -- both refuse HERE, at load. What does defer to render
+    (`resolve`) is an aside's ARITY, which only the table being resolved can
+    state.
 
     Content strings are NOT screened for ASCII. The repo's ASCII rule is about
     CONSOLE output, and training text may legitimately carry unicode -- her own
@@ -260,13 +291,19 @@ def load_content(pack_dir: Path | str) -> PersonaContent:
     creator = manifest.get("creator", ENIGMA_CREATOR)
     _as_str(pack_dir, PACK_MANIFEST, creator, "creator")
     if creator != ENIGMA_CREATOR:
-        # Ruled by the user 2026-08-15: every pack built on this machine is
-        # theirs, so a pack claiming someone else is either a mistake or a
-        # decision that is not this loader's to make quietly.
+        # A pack states this machine's own creator or it does not load. The
+        # ruling that put the check here (2026-08-15: every pack built on this
+        # machine is the user's) was RETIRED 2026-08-17 -- people install this
+        # engine on their own machines and author their own AIs, so another
+        # name is ordinary rather than a mistake. The check is kept
+        # deliberately while packs have no real use; removal is DEFERRED, not
+        # forbidden, and is a decision to make when a pack needs it rather
+        # than something to work around here.
         _refuse(pack_dir, PACK_MANIFEST,
-                f"creator is {creator!r}, but every pack on this machine states "
-                f"{ENIGMA_CREATOR!r} (user ruling 2026-08-15). That ruling is the "
-                "user's to revisit -- it is not something to work around here")
+                f"creator is {creator!r}, not {ENIGMA_CREATOR!r}. The ruling behind "
+                "this check was retired 2026-08-17; the hold is kept deliberately "
+                "while packs have no real use, and lifting it is the user's call -- "
+                "ask rather than edit around it here")
 
     anchors: dict[str, list[tuple[str, str]]] = {}
     for line_no, rec in _pack_jsonl(pack_dir, PACK_ANCHORS):
@@ -302,11 +339,11 @@ def load_content(pack_dir: Path | str) -> PersonaContent:
         intents=_intents_at(pack_dir, PACK_PARAPHRASES, para, "intents"),
         denied_models=_str_list_at(pack_dir, PACK_PARAPHRASES, para, "denied_models"),
         denied_companies=_str_list_at(pack_dir, PACK_PARAPHRASES, para, "denied_companies"),
-        deny_model_questions=_str_list_at(
+        deny_model_questions=_sampled_list_at(
             pack_dir, PACK_PARAPHRASES, para, "deny_model_questions"),
         deny_model_answers=_str_list_at(
             pack_dir, PACK_PARAPHRASES, para, "deny_model_answers"),
-        deny_company_questions=_str_list_at(
+        deny_company_questions=_sampled_list_at(
             pack_dir, PACK_PARAPHRASES, para, "deny_company_questions"),
         deny_company_answers=_str_list_at(
             pack_dir, PACK_PARAPHRASES, para, "deny_company_answers"),
@@ -329,7 +366,11 @@ def _pack_json(pack_dir: Path, filename: str) -> dict:
     if not path.is_file():
         _refuse(pack_dir, filename, "is missing")
     try:
-        blob = json.loads(path.read_text(encoding="utf-8"))
+        blob = read_pack_json(path)
+    except DuplicateJSONKey as exc:
+        _refuse(pack_dir, filename,
+                f"names {exc.key!r} twice -- the second value wins and the first "
+                "record never trains")
     except json.JSONDecodeError as exc:
         _refuse(pack_dir, filename, f"is not valid JSON ({exc.msg})")
     if not isinstance(blob, dict):
@@ -341,12 +382,15 @@ def _pack_jsonl(pack_dir: Path, filename: str) -> list[tuple[int, dict]]:
     """(1-based line number, record) per non-blank line.
 
     The number is carried rather than recomputed: it is the only thing that
-    turns "this pack is malformed" into something a pack author can act on."""
+    turns "this pack is malformed" into something a pack author can act on.
+
+    A BOM is tolerated, same as in the JSON files: it would otherwise ride on
+    line 1 and refuse the pack's first record as malformed JSON."""
     path = pack_dir / filename
     if not path.is_file():
         _refuse(pack_dir, filename, "is missing")
     out: list[tuple[int, dict]] = []
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for line_no, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -389,6 +433,22 @@ def _str_list_at(pack_dir: Path, filename: str, blob: dict, key: str,
     if key not in blob:
         _refuse(pack_dir, filename, f"has no {key!r} field", line)
     return _as_str_list(pack_dir, filename, blob[key], key, line)
+
+
+def _sampled_list_at(pack_dir: Path, filename: str, blob: dict, key: str) -> list[str]:
+    """A list the generators random.sample a fixed number of entries from.
+
+    Non-empty is not enough for these: the draw is `sample(list, k)`, and
+    below k it is a ValueError with the pack nowhere in the message. Name the
+    file, the key, what it has and what it needs."""
+    values = _str_list_at(pack_dir, filename, blob, key)
+    need = GENERATOR_SAMPLE_WIDTHS[key]
+    if len(values) < need:
+        _refuse(pack_dir, filename,
+                f"{key!r} has {len(values)} of the {need} entries the generators "
+                f"sample from it (one draw of {need} per denied org) -- a shorter "
+                "list fails the build, not this load")
+    return values
 
 
 def _intents_at(pack_dir: Path, filename: str, blob: dict,

@@ -16,33 +16,52 @@ loop there kept a ghost pythonw alive after the window was closed
 (2026-07-17 audit).
 
 Usage:
-    py -3.12 enigma_window.py [--on-top] [--url URL]
+    py -3.12 enigma_window.py [--on-top] [--url URL] [--persona PACK_DIR]
 
 --on-top keeps the window above a fullscreen-windowed game. If pywebview
 or its WebView2 backend is unavailable, the default browser is opened
 instead (after waiting up to 2 minutes for the server, so it doesn't
 open onto a connection-refused page mid cold-start).
+
+--persona is the pack a generated Talk shim passes: the window is titled
+for whoever it opens onto, and its boot page names HER error log. Omitted
+is Enigma, which is what every value here already said.
 """
 
+import html
 import socket
 import sys
 import threading
 import time
 import urllib.parse
 import webbrowser
+from pathlib import Path
+
+from enigma_engine.core.persona import Persona
 
 DEFAULT_URL = "http://127.0.0.1:8000/"
 
-_BOOT_HTML = """<!doctype html><html><head><title>Enigma</title><style>
+# `__PERSONA_NAME__` and `__ERR_LOG__` are filled in by _boot_html(): the page
+# is a constant and the identity is only known once the arguments are parsed.
+_BOOT_HTML = """<!doctype html><html><head><title>__PERSONA_NAME__</title><style>
 body { background: #1e1e2e; color: #cba6f7; font-family: 'Segoe UI', sans-serif;
        display: flex; align-items: center; justify-content: center; height: 96vh; }
 div { text-align: center; }
 small { color: #6c7086; }
 </style></head><body><div>
-<h2>Waking Enigma up...</h2>
+<h2>Waking __PERSONA_NAME__ up...</h2>
 <p><small>The window switches to her chat the moment the server answers.<br>
-Taking minutes? Check serve_enigma.err.log in the Enigma Engine folder.</small></p>
+Taking minutes? Check __ERR_LOG__ in the Enigma Engine folder.</small></p>
 </div></body></html>"""
+
+
+def _boot_html(persona: Persona) -> str:
+    """The waking-up page, for whoever this window opens onto. The name is
+    escaped because a pack is data -- it lands inside markup here, exactly as
+    it does in the chat page serve renders."""
+    return (_BOOT_HTML
+            .replace("__PERSONA_NAME__", html.escape(persona.name))
+            .replace("__ERR_LOG__", f"serve_{persona.slug}.err.log"))
 
 
 def _valid_url(candidate: str) -> bool:
@@ -62,7 +81,7 @@ def _valid_url(candidate: str) -> bool:
         return False
 
 
-def _parse_args(args: list[str]) -> tuple[str, bool]:
+def _parse_args(args: list[str]) -> tuple[str, bool, Persona]:
     on_top = "--on-top" in args
     url = DEFAULT_URL
     if "--url" in args:
@@ -74,7 +93,17 @@ def _parse_args(args: list[str]) -> tuple[str, bool]:
                 print(f"WARN: --url {args[i + 1]!r} is not a valid http(s) URL; using default {DEFAULT_URL}")
         else:
             print(f"WARN: --url needs a value; using default {DEFAULT_URL}")
-    return url, on_top
+    pack = None
+    if "--persona" in args:
+        i = args.index("--persona")
+        if i + 1 < len(args) and not args[i + 1].startswith("--"):
+            pack = Path(args[i + 1])
+        else:
+            # A bad --url degrades to the default because the window can still
+            # be useful pointed at her; a missing pack DIRECTORY cannot be
+            # guessed, so the window opens as Enigma and says it did.
+            print("WARN: --persona needs a pack directory; opening Enigma's window")
+    return url, on_top, Persona.load(pack)
 
 
 def _host_port(url: str) -> tuple[str, int]:
@@ -124,7 +153,7 @@ def _poll_and_load(window, url: str) -> None:
 
 
 def main() -> int:
-    url, on_top = _parse_args(sys.argv[1:])
+    url, on_top, persona = _parse_args(sys.argv[1:])
     try:
         import webview
     except ImportError:
@@ -135,8 +164,8 @@ def main() -> int:
         return 0
     try:
         window = webview.create_window(
-            "Enigma",
-            html=_BOOT_HTML,
+            persona.name,
+            html=_boot_html(persona),
             width=520,
             height=760,
             min_size=(360, 480),

@@ -534,12 +534,19 @@ def gen_dpo_pairs(seed: int = 11, eval_qs: set | None = None,
     # The chosen index rotates with the ORG too: j alone ran 0..1 against the
     # 4-answer pools, so variants 2 and 3 never reached a chosen side (review
     # 2026-08-13; stride 2 with j spanning 0..1 covers all four across orgs).
+    # Both sides of both templates take their org: the company answers always
+    # did, and the model answers now do too. Enigma's four model answers name
+    # no org and carry no brace, so her rendered pairs are byte-identical --
+    # what changes is that a PACK may write "{x}" in a model answer and get the
+    # model name, instead of training a literal brace the way the company side
+    # never could.
     for oi, x in enumerate(content.denied_models):
         qs = rng.sample(content.deny_model_questions, 2)
         for j, qt in enumerate(qs):
             add(
                 qt.format(x=x),
-                content.deny_model_answers[(oi * 2 + j) % len(content.deny_model_answers)],
+                content.deny_model_answers[
+                    (oi * 2 + j) % len(content.deny_model_answers)].format(x=x),
                 rng.choice(R_SYCO_MODEL).format(x=x),
             )
     for oi, c in enumerate(content.denied_companies):

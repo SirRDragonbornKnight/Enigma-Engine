@@ -48,12 +48,33 @@ def _fingerprint(root: Path) -> dict[str, tuple[int, int] | None]:
     return marks
 
 
+def _diff(
+    before: dict[str, tuple[int, int] | None],
+    after: dict[str, tuple[int, int] | None],
+) -> tuple[list[str], list[str], list[str]]:
+    """(added, removed, changed) between two fingerprints, each sorted.
+
+    A pure function rather than fixture-body arithmetic: the guard's whole
+    value is this comparison, and a fixture that only ever runs at session
+    teardown is the one piece of the suite nothing else can test."""
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(k for k in set(before) & set(after) if before[k] != after[k])
+    return added, removed, changed
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _the_real_data_home_is_never_touched():
     """A suite run must leave ~/.enigma_engine exactly as it found it.
 
     Fingerprint before, fingerprint after, name every path that moved. Zero
     behavior change for a clean suite -- it only ever adds a failure.
+
+    The guard sees LEFTOVER damage, by design: the marks are size plus
+    mtime_ns rather than hashes, so a write that puts the original bytes back
+    at the original mtime_ns is invisible to it. What it exists to catch is a
+    test that reads, migrates or writes the developer's real home and leaves
+    it that way.
 
     ONE known false positive: a live serve on this machine writing its own
     state (mute, talk-mode, voice, a generated image) mid-suite, if the user
@@ -64,9 +85,7 @@ def _the_real_data_home_is_never_touched():
     yield
     after = _fingerprint(home)
 
-    added = sorted(set(after) - set(before))
-    removed = sorted(set(before) - set(after))
-    changed = sorted(k for k in set(before) & set(after) if before[k] != after[k])
+    added, removed, changed = _diff(before, after)
     if added or removed or changed:
         lines = [f"the suite modified the real data home {home}:"]
         for label, paths in (("added", added), ("removed", removed), ("changed", changed)):
@@ -125,11 +144,12 @@ def write_persona_pack(tmp_path):
                 "denied_models": ["Llama"],
                 "denied_companies": ["Initech"],
                 # Two questions minimum per side: the preference builder samples
-                # two of them per denied org.
+                # two of them per denied org, and load_content refuses a pack
+                # under that width.
                 "deny_model_questions": ["Are you {x}?", "You're {x} really, aren't you?"],
-                # NOT format strings: the builder formats the company answers
-                # and leaves the model answers alone, so a {x} here would train
-                # a literal brace.
+                # Format strings on both sides now ({x} = the denied model,
+                # {c} = the denied company). These two name no org, which is
+                # equally legal -- substitution is offered, never required.
                 "deny_model_answers": ["No. Atlas, and nothing underneath it.",
                                        "Wrong model -- Atlas, built right here."],
                 "deny_company_questions": ["Did {c} build you?", "Are you a {c} product?"],

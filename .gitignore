@@ -149,9 +149,13 @@ data/*
 data/eval/locked_probes*
 !data/eval/locked_probes.manifest.json
 !data/eval/LOCKED_PROBES_AUTHORING.md
-!data/personas/
-!data/personas/templates/
 !data/gui_settings.example.json
+
+# Persona packs are USER DATA, never the repo's (ruled 2026-08-17): this
+# engine is software other people install, and the AI someone authors on their
+# own machine -- her content files, her probes, her generated launchers --
+# belongs to them. Wholesale, with no un-ignores.
+personas/
 
 # User-authored teachings hold PERSONAL facts -- never push them to GitHub.
 # The committed template is teachings.example.jsonl.

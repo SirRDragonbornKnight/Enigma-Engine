@@ -37,6 +37,8 @@ both. Oversampling is the tokenizer walk's job:
 
     python make_pretrain_curated.py            # build data/pretrain/curated/
     python make_pretrain_curated.py --stats    # count what it would write
+    python make_pretrain_curated.py --persona personas\\atlas --out <dir>
+                                               # a pack names its OWN out dir
     python pretokenize_data.py --repeat-sources curated=5 ...   # oversample x5
 
 Writing the extra copies HERE would do nothing: pretokenize's paragraph dedup
@@ -54,7 +56,7 @@ from pathlib import Path
 from collect_pretraining_data import DOC_SEP_JOIN, _SPECIAL_TOKEN_LITERALS
 from enigma_engine.core.persona import Persona
 from enigma_engine.core.persona_content import PersonaContent, default_content, load_content
-from eval_leak_guard import LockedProbeGuard
+from eval_leak_guard import LockedProbeGuard, persona_manifest
 from knowledge_corpus import gen_knowledge_pretrain_text
 from make_sft_data import _is_low_quality
 
@@ -207,7 +209,9 @@ def main() -> None:
     ap.add_argument("--persona", default=None, help="persona pack; omitted = Enigma")
     ap.add_argument("--conversation", type=int, default=20_000,
                     help="short dialogue documents to include")
-    ap.add_argument("--out", default=str(OUT_DIR))
+    ap.add_argument("--out", default=None,
+                    help=f"where the shards land; omitted = {OUT_DIR}, which is "
+                         "Enigma's own. A persona pack must name its own")
     ap.add_argument("--stats", action="store_true", help="count only; write nothing")
     args = ap.parse_args()
 
@@ -230,12 +234,40 @@ def main() -> None:
             "--persona at a pack DIRECTORY (pack.json beside its content files); "
             "refusing to pretrain her identity under another AI's name"
         )
-    guard = LockedProbeGuard.load()
+    # An omitted --out is Enigma's own curated directory, and `write_shards`
+    # deletes every curated_*.txt in the directory it is handed before writing
+    # its own. A pack built with that default rotates HER shard away and leaves
+    # another AI's identity in the source pretokenize walks FIRST -- a swap no
+    # later stage rechecks, visible only as a changed corpus at the next
+    # retokenize. A pack names where its own corpus goes. --stats is exempt:
+    # it returns before the writer, so there is no destination to protect and
+    # a pack's counts are readable without inventing a directory for them.
+    if args.out is None and not persona.is_default and not args.stats:
+        raise SystemExit(
+            f"persona {persona.name!r}: --persona with no --out writes into "
+            f"{OUT_DIR}, which is Enigma's curated shard -- this build would "
+            f"rotate it away and leave {persona.name}'s identity there. Give "
+            "--out a directory of this pack's own"
+        )
+    # The gate this BUILD is screened against belongs to the AI being built --
+    # the loaded PERSONA, not the argument that named her. Hers when the
+    # persona is default, which includes an Enigma-SPELLED pack: is_default
+    # wins above, so that build renders HER content and (with no --out) writes
+    # her own curated directory. Keyed on the argument instead, such a build
+    # looks for a manifest inside the pack, finds nothing, and the only screen
+    # on the pretrain path goes inactive over her corpus. The mirror is just
+    # as wrong: a pack screened against HER probes loses lines for resembling
+    # questions it will never be asked, and guards a gate its weights are not
+    # trained for.
+    manifest = persona_manifest(None if persona.is_default else pack)
+    guard = LockedProbeGuard.load(manifest)
     if not len(guard):
-        # Same first line every builder prints for this condition, so a log
-        # grep finds them all -- plus the consequence unique to THIS path:
-        # pretokenize has no screen of its own, so nothing downstream rechecks.
-        print("locked-probe fuzzy guard inactive (no data/eval/locked_probes.manifest.json yet)", flush=True)
+        # Same opening phrase every builder prints for this condition, so one
+        # log grep finds them all -- the path is the run's own now, because
+        # this is the only builder that can be pointed at another AI's gate --
+        # plus the consequence unique to THIS path: pretokenize has no screen
+        # of its own, so nothing downstream rechecks.
+        print(f"locked-probe fuzzy guard inactive (no {manifest} yet)", flush=True)
         print("WARN: the curated shard would be UNSCREENED -- the pretrain path has no consume-time guard", flush=True)
 
     groups = build(persona, content, args.conversation)
@@ -254,7 +286,7 @@ def main() -> None:
     if args.stats:
         print("--stats: nothing written")
         return
-    out_dir = Path(args.out)
+    out_dir = Path(args.out) if args.out else OUT_DIR
     shards = write_shards(kept, out_dir)
     print(f"wrote {shards} shard(s) -> {out_dir}")
     print("one copy on disk; oversample at tokenize time with "

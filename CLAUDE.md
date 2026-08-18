@@ -183,6 +183,7 @@ From here the ONLY coupling is the WebSocket bus (`ws://127.0.0.1:8765`).
 - `PHASE7_GATE.md` — measured ceilings + the remake charter.
 - `TOKENIZER_V2_SPEC.md` — v2 vocab + corpus receipts.
 - `VISION_QUALITY_SPEC.md` — vision data quality; §4 image domain is an open user decision.
+- `PERSONA_PACK_AUTHORING.md` — persona packs: what one holds, what trains from it, and the sharp seams.
 - `KNOWN_ISSUES.md` — honest-gap ledger.
 - `SUGGESTIONS.md` — 2026 landscape research + principles.
 - `CLEANUP_TRACKER.md` — the tree as it stands + suite baseline + deletion records.

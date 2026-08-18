@@ -2,7 +2,18 @@
 # server mute state and flips it; when muting, it ALSO hushes the utterance
 # playing right now (mute alone only gates the NEXT one). Counterpart to the
 # tray Mute item and her window's Mute button. ASCII-only output.
-$base = "http://127.0.0.1:8000/v1/audio"
+# -Persona toggles the AI from THAT pack, on her own port, instead.
+param(
+    # A persona pack DIRECTORY. Empty is Enigma.
+    [string]$Persona = "",
+    # Override the port. 0 = the pack's own `port` field, or 8000 for Enigma.
+    [int]$Port = 0
+)
+
+. (Join-Path $PSScriptRoot "Enigma-Persona.ps1")
+$self = Resolve-EnigmaPersona -EngineDir $PSScriptRoot -PackDir $Persona -Port $Port
+$aiName = $self.Name
+$base = "$($self.BaseUrl)/v1/audio"
 try {
     $cur = Invoke-RestMethod -Uri "$base/mute" -TimeoutSec 2
     $target = -not [bool]$cur.muted
@@ -14,10 +25,10 @@ try {
     $now = Invoke-RestMethod -Uri "$base/mute" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 2
     if ($now.muted) {
         try { Invoke-RestMethod -Uri "$base/stop" -Method Post -TimeoutSec 2 | Out-Null } catch { }
-        Write-Output "Enigma muted."
+        Write-Output "$aiName muted."
     } else {
-        Write-Output "Enigma voice back on."
+        Write-Output "$aiName voice back on."
     }
 } catch {
-    Write-Output "Enigma server is not running -- nothing to toggle."
+    Write-Output "$aiName server is not running -- nothing to toggle."
 }

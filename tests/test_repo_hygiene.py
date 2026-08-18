@@ -273,7 +273,14 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
        WaitForExit() is what actually populates it.
 
     A green LastTaskResult describes the LAUNCHER, never the child -- which is
-    why these are pinned in a test rather than trusted to a task result."""
+    why these are pinned in a test rather than trusted to a task result.
+
+    Start-Enigma.ps1 is checked against trap 1 ONLY, at the end: it detaches a
+    server it never waits for, so traps 3 and 4 (reading a child's ExitCode)
+    have nothing to bite, and serve flushes every print itself rather than
+    relying on PYTHONUNBUFFERED. Trap 1 was live in it -- it passed an ARRAY,
+    and worked only because no serve argument had ever carried a space, which
+    -Persona <pack-dir> ends the first time a pack lives in "My Packs"."""
     launchers = ("run_collect_rebuild.ps1", "run_pretokenize_v2c.ps1", "run_pretrain_t3.ps1")
     for name in launchers:
         launcher = REPO_ROOT / name
@@ -304,4 +311,24 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
         code = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
         assert "Wait-Process" not in code, (
             f"{name}: Wait-Process leaves ExitCode unpopulated"
+        )
+
+    # Trap 1 in the USER-FACING launcher: the same Start-Process call, the same
+    # -ArgumentList, and every path on its line now comes from a persona pack.
+    start = (REPO_ROOT / "Start-Enigma.ps1").read_text(encoding="utf-8")
+    assert "-ArgumentList $argString" in start, (
+        "Start-Enigma.ps1: pass ONE pre-quoted string to -ArgumentList; an "
+        "array is joined without quoting and splits any path containing a space"
+    )
+    start_args = [ln for ln in start.splitlines() if ln.strip().startswith("$argString")]
+    assert start_args, "Start-Enigma.ps1 no longer builds an $argString"
+    assert start_args[0].split("=", 1)[1].strip().startswith('"`"serve_enigma.py`"'), (
+        "Start-Enigma.ps1: the script path must be quoted INSIDE the argument "
+        "string (it stays repo-relative -- -WorkingDirectory is the engine "
+        "dir):\n  " + start_args[0]
+    )
+    for flag in ("--memory-dir", "--persona", "--voice-name"):
+        assert f'{flag} `"' in start, (
+            f"Start-Enigma.ps1: {flag} takes a path or a name from a pack -- "
+            "quote its value or the first space splits it into two arguments"
         )

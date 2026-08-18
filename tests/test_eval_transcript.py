@@ -923,7 +923,7 @@ def test_model_identity_tolerates_foreign_bodies(monkeypatch):
     assert eval_behavior._capabilities("http://h") == {}
 
 
-def test_main_wires_the_transcript_flag(monkeypatch):
+def test_main_wires_the_transcript_flag(monkeypatch, write_persona_pack):
     """run() being correct is worthless if the CLI never passes the flag."""
     import inspect
 
@@ -932,14 +932,16 @@ def test_main_wires_the_transcript_flag(monkeypatch):
     assert "transcript" in inspect.signature(eval_behavior.run).parameters
     assert "allow_live_server" in inspect.signature(eval_behavior.run).parameters
     assert "baseline" in inspect.signature(eval_behavior.run).parameters
+    assert "persona" in inspect.signature(eval_behavior.run).parameters
 
     seen = {}
 
     def fake_run(base_url, temperature, max_tokens, probes, transcript,
-                 allow_live_server=False, baseline=None):
+                 allow_live_server=False, baseline=None, persona=None):
         seen["transcript"] = transcript
         seen["allow_live_server"] = allow_live_server
         seen["baseline"] = baseline
+        seen["persona"] = persona
         return 0
 
     monkeypatch.setattr(eval_behavior, "run", fake_run)
@@ -952,6 +954,10 @@ def test_main_wires_the_transcript_flag(monkeypatch):
     assert seen["transcript"].name == "t.jsonl"
     assert seen["allow_live_server"] is False  # the guard is on unless asked for
     assert seen["baseline"] is None
+    # No --persona is Enigma, and run() resolves that itself -- passing a
+    # Persona here would make the default a CLI decision rather than the
+    # harness's.
+    assert seen["persona"] is None
 
     monkeypatch.setattr("sys.argv", ["eval_behavior.py", "--allow-live-server",
                                      "--baseline", "out/base.jsonl"])
@@ -959,6 +965,15 @@ def test_main_wires_the_transcript_flag(monkeypatch):
         eval_behavior.main()
     assert seen["allow_live_server"] is True
     assert seen["baseline"] is not None and seen["baseline"].name == "base.jsonl"
+
+    # ...and --persona arrives LOADED, so a bad pack is refused by the loader
+    # before any server is touched rather than becoming a path run() must
+    # re-validate.
+    pack = write_persona_pack()
+    monkeypatch.setattr("sys.argv", ["eval_behavior.py", "--persona", str(pack)])
+    with pytest.raises(SystemExit):
+        eval_behavior.main()
+    assert seen["persona"] is not None and seen["persona"].name == "Atlas"
 
 
 def test_transcript_records_which_branch_graded_each_probe(tmp_path, monkeypatch):

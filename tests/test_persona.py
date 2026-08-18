@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import serve_enigma as serve
-from enigma_engine.core.persona import Persona
+from enigma_engine.core.persona import ENIGMA, RESERVED_PORTS, Persona
 
 
 def test_the_default_persona_is_enigma_byte_for_byte():
@@ -43,7 +43,7 @@ def test_the_chat_page_is_titled_with_whoever_is_served(monkeypatch):
     assert "<h1>Enigma</h1>" in page
     assert "__PERSONA_NAME__" not in page
 
-    monkeypatch.setattr(serve, "PERSONA", Persona(name="Atlas"))
+    monkeypatch.setattr(serve, "PERSONA", Persona(name="Atlas", data_dirname=".atlas"))
     page = serve.chat_page()
     assert "<title>Atlas</title>" in page
     assert "<h1>Atlas</h1>" in page
@@ -83,6 +83,7 @@ def test_a_pack_carries_name_semantic_content_rather_than_deriving_it(tmp_path):
     {"name": "Bad\tName"},        # printable only -- a tab is not a name
     {"name": "Ok", "data_dirname": "."},   # carries no separator, and still
     {"name": "Ok", "data_dirname": ".."},  # ...escapes: profile root / parent
+    {"name": "Ok", "data_dirname": "nul"}, # ...and so does a Win32 device name
 ])
 def test_an_unsafe_pack_is_refused(tmp_path, blob):
     """The name is not just displayed: it becomes a directory, a stop
@@ -108,11 +109,87 @@ def test_a_dot_dirname_is_refused_by_the_dataclass_itself():
         Persona(data_dirname="..")
 
 
+@pytest.mark.parametrize("dirname", [
+    "...",       # Win32 STRIPS trailing dots and spaces at the filesystem, so
+    " .",        # ...each of these is a bare component to Path() and a
+    ".. ",       # ...different directory to every write serve makes: the
+    "atlas.",    # ...profile root, its parent, or an aliased sibling
+    "nul",       # the reserved device names, matched case-insensitively...
+    "NUL",
+    "nul.txt",   # ...and matched on the portion before the first dot, so an
+    "com3",      # ...extension does not escape them either
+])
+def test_a_win32_hole_in_the_data_dirname_is_refused(dirname):
+    """Path(x).name == x is not enough on this OS. Win32 rewrites a component
+    that ends in a dot or a space, and reserves the device names in every
+    directory -- a home named `nul` accepts every write and reads back empty,
+    and `atlas.` puts serve's runtime state in a directory nobody named."""
+    with pytest.raises(ValueError):
+        Persona(name="Atlas", data_dirname=dirname)
+
+
+@pytest.mark.parametrize("name, dirname", [
+    ("Atlas", ".Enigma_Engine"),   # not-default by the exact compare...
+    ("Atlas", ".enigma_engine"),   # ...and the exact spelling under a new name
+    ("Enigma", ".ENIGMA_ENGINE"),  # ...and her own name over a cased home
+])
+def test_another_identity_cannot_land_on_her_data_home(name, dirname):
+    """Directory names are case-insensitive on Win32, so a value that differs
+    from hers only in case IS her home on disk -- a pack carrying it serves
+    someone else out of Enigma's voice recipe, images and runtime state."""
+    with pytest.raises(ValueError):
+        Persona(name=name, data_dirname=dirname)
+
+
+def test_her_own_identity_and_an_ordinary_pack_still_construct():
+    """The collision rule gates on IDENTITY, not on the string: Enigma's own
+    home is hers, whether she arrives as the default or spelled out by a pack
+    that also carries extra keys of its own."""
+    assert Persona().home == Path.home() / ".enigma_engine"
+    spelled_out = Persona(
+        name=ENIGMA["name"],
+        data_dirname=ENIGMA["data_dirname"],
+        name_meaning=ENIGMA["name_meaning"],
+        extra={"creator": "SirRulean"},
+    )
+    assert spelled_out.is_default is True
+    assert Persona(name="Atlas", data_dirname=".atlas").home == Path.home() / ".atlas"
+
+
+@pytest.mark.parametrize("meaning", [
+    "a closed box\n\nin the good sense",  # a blank line is a PARAGRAPH break,
+    "a closed box\rin the good sense",    # ...deduped apart from its document
+    "a closed box,\tin the good sense",
+    "a closed box" + chr(0x1E),           # ...and U+001E is the RECORD
+    "a closed box" + chr(0),              # ...separator: it splits the document
+    "a closed box" + chr(127),
+])
+def test_a_control_character_in_name_meaning_is_refused(meaning):
+    """name_meaning is rendered raw into ONE line of the pretrain identity
+    document, and that line is a whole record in a shard: U+001E cuts the
+    record in two, a blank line splits it into independently deduped
+    paragraphs, and every other control character bakes into the corpus."""
+    with pytest.raises(ValueError):
+        Persona(name="Atlas", data_dirname=".atlas", name_meaning=meaning)
+
+
+def test_name_meaning_may_be_empty_or_carry_unicode():
+    """A pack may say nothing about its name, and the repo's ASCII rule is
+    CONSOLE-bound -- training text carries unicode, her own anchors included."""
+    assert Persona(name="Atlas", data_dirname=".atlas", name_meaning="").name_meaning == ""
+    meaning = "el que carga el peso, con acento: " + chr(0xE9)
+    assert Persona(
+        name="Atlas", data_dirname=".atlas", name_meaning=meaning
+    ).name_meaning == meaning
+
+
 @pytest.mark.parametrize("blob", [
     {"name": 123},
     {"name": "Ok", "data_dirname": 7},
     {"name": "Ok", "name_meaning": ["x"]},
-    {"name": None},                 # JSON null is PRESENT, not absent
+    {"name": None},                       # JSON null is PRESENT, not absent
+    {"name": "Ok", "data_dirname": 0},    # FALSY non-strings, which the `or`
+    {"name": "Ok", "data_dirname": None}, # ...quietly replaced with a slug
 ])
 def test_a_mistyped_pack_field_refuses_instead_of_tracebacking(tmp_path, blob):
     """A pack is untrusted JSON and the field screens only run on strings: a
@@ -180,6 +257,53 @@ def test_a_pack_directory_without_a_manifest_refuses(tmp_path):
     (pack / "anchors.jsonl").write_text("", encoding="utf-8")
     with pytest.raises(SystemExit, match="pack.json"):
         Persona.load(pack)
+
+
+def test_a_pack_declares_the_port_its_launchers_bind(tmp_path):
+    """A second AI needs a port of her own, and the pack is where she says
+    which -- explicit beats an auto-assignment nobody can predict from the
+    outside. Enigma declares none: her chain has always bound 8000, and the
+    launcher default is still what says so."""
+    pack = tmp_path / "atlas.json"
+    pack.write_text(json.dumps({"name": "Atlas", "port": 8300}), encoding="utf-8")
+    assert Persona.load(pack).port == 8300
+    assert Persona().port is None
+    assert Persona.load().port is None
+    # ...and the port is not part of WHO she is: Enigma on another port is a
+    # flag, not a second identity, so is_default must not gate on it.
+    assert Persona(port=8300).is_default is True
+
+
+@pytest.mark.parametrize("port, why", [
+    (8000, "collides with the daily serve port"),   # her own daily serve
+    (8123, "collides with the eval scratch port"),  # ...and the eval scratch
+    (0, "outside 1024-65535"),                      # ...and nothing can listen
+    (70000, "outside 1024-65535"),                  # ...past the last port
+    ("8001", "must be an integer, not str"),        # a pack is untrusted JSON
+    (True, "must be an integer, not bool"),         # ...and bool IS an int
+])
+def test_an_unusable_pack_port_refuses(tmp_path, port, why):
+    """The port reaches a bind and a launcher's ownership check, so an
+    unusable one has to refuse where it is read rather than fail as a bind
+    error hours later in a hidden server's log. `true` is the sharp case:
+    bool is a subclass of int, so an isinstance check alone binds port 1."""
+    pack = tmp_path / "atlas.json"
+    pack.write_text(json.dumps({"name": "Atlas", "port": port}), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        Persona.load(pack)
+    assert why in str(exc.value)
+    assert str(pack) in str(exc.value)  # WHICH pack, not just what is wrong
+    # ...and through the dataclass too, so a caller building one by hand is
+    # refused by the same lines.
+    with pytest.raises(ValueError):
+        Persona(name="Atlas", data_dirname=".atlas", port=port)
+
+
+def test_the_reserved_ports_are_the_two_this_machine_already_spends():
+    """Named rather than open-coded: the eval scratch port lives in
+    eval_behavior's SCRATCH_PORTS and the daily port in the launcher chain, so
+    a reader of either can find the refusal that protects it."""
+    assert sorted(RESERVED_PORTS) == [8000, 8123]
 
 
 def test_a_malformed_or_missing_pack_refuses_honestly(tmp_path):

@@ -171,6 +171,127 @@ def test_a_pack_directory_builds_that_packs_own_corpus(
             assert not any(q in line for line in written["facts"]), q
 
 
+def test_the_build_screens_against_the_gate_of_the_ai_it_is_building(
+        tmp_path, monkeypatch, no_general_diet, write_persona_pack):
+    """The screen is the ONLY one on the pretrain path (pretokenize reads
+    whatever text is on disk), and it loaded ONE manifest: hers. Building a
+    pack therefore dropped pack lines for resembling questions that AI will
+    never be asked, while guarding a gate its weights are not trained for.
+
+    Pinned on the manifest the build LOADS, and on a real bite: a line this
+    pack renders quotes the pack's own sealed probe, and her manifest has no
+    opinion about it at all."""
+    import json
+
+    import eval_leak_guard
+
+    assert eval_leak_guard.persona_manifest(None) == eval_leak_guard.LOCKED_MANIFEST
+
+    pack = write_persona_pack()
+    sealed = pack / eval_leak_guard.LOCKED_PROBES_NAME
+    sealed.write_text(json.dumps(
+        {"category": "identity", "q": "What are you? Which local AI answers here?",
+         "want_any": ["atlas"], "deny_any": []}) + "\n",
+        encoding="utf-8", newline="\n")
+    assert eval_leak_guard.main(["seal", str(sealed)]) == 0
+    assert eval_leak_guard.persona_manifest(pack) == pack / "locked_probes.manifest.json"
+
+    loaded = {}
+    real_load = eval_leak_guard.LockedProbeGuard.load
+
+    def _record(path=eval_leak_guard.LOCKED_MANIFEST):
+        loaded["path"] = path
+        return real_load(path)
+
+    monkeypatch.setattr(mod.LockedProbeGuard, "load", _record)
+    monkeypatch.setattr(mod, "write_shards", lambda kept, out_dir: 1)
+    monkeypatch.setattr("sys.argv", ["make_pretrain_curated.py", "--persona", str(pack),
+                                     "--out", str(tmp_path / "curated")])
+    mod.main()
+
+    assert loaded["path"] == pack / "locked_probes.manifest.json"
+    quoted = "Atlas: What are you? Which local AI answers here?"
+    assert real_load(pack / "locked_probes.manifest.json").leaks(quoted)
+    assert not real_load(eval_leak_guard.LOCKED_MANIFEST).leaks(quoted)
+
+
+@pytest.mark.parametrize("spelling", ["directory", "bare file"])
+def test_an_enigma_spelled_pack_screens_against_her_own_gate(
+        tmp_path, monkeypatch, no_general_diet, write_persona_pack, capsys, spelling):
+    """`is_default` is a VALUE test, so a pack spelling her three fields IS her:
+    the build renders HER content, and with no --out it writes HER curated
+    directory. A gate keyed on the pack ARGUMENT instead of the loaded persona
+    therefore looked inside the pack, found no manifest, and left the only
+    screen on the pretrain path inactive over her own corpus -- while the
+    writer still cleared and rewrote her shards.
+
+    Pinned on the manifest the build LOADS and on the inactive banner staying
+    unprinted, which is what ACTIVE looks like from outside."""
+    import json
+
+    import eval_leak_guard
+    from enigma_engine.core.persona import ENIGMA, PACK_MANIFEST
+
+    spelled = json.dumps({k: ENIGMA[k] for k in ("name", "data_dirname", "name_meaning")})
+    if spelling == "directory":
+        # Her three fields over a pack whose content files are Atlas's: the
+        # content is silently unread (is_default wins), which is the shape
+        # that made the wrong gate look plausible.
+        persona_arg = write_persona_pack({PACK_MANIFEST: spelled})
+    else:
+        persona_arg = tmp_path / "hers.json"
+        persona_arg.write_text(spelled, encoding="utf-8")
+
+    loaded = {}
+    real_load = eval_leak_guard.LockedProbeGuard.load
+
+    def _record(path=eval_leak_guard.LOCKED_MANIFEST):
+        loaded["path"] = path
+        return real_load(path)
+
+    written: dict[str, list[str]] = {}
+
+    def _capture(kept, out_dir):
+        written.update(kept)
+        return 1
+
+    monkeypatch.setattr(mod.LockedProbeGuard, "load", _record)
+    monkeypatch.setattr(mod, "write_shards", _capture)
+    monkeypatch.setattr("sys.argv", ["make_pretrain_curated.py", "--persona", str(persona_arg),
+                                     "--out", str(tmp_path / "curated")])
+    mod.main()
+
+    assert loaded["path"] == eval_leak_guard.LOCKED_MANIFEST
+    assert len(real_load(loaded["path"])), "her sealed set is what makes ACTIVE meaningful"
+    printed = capsys.readouterr().out
+    assert "guard inactive" not in printed
+    assert "UNSCREENED" not in printed
+    assert any("Enigma" in line for line in written["identity"])
+
+
+def test_a_pack_file_derives_the_gate_beside_it_never_under_it(tmp_path):
+    """`--persona` names the pack DIRECTORY or the pack.json inside it, the two
+    forms `Persona.load` accepts. A file has no children, so the file form
+    spelled straight through names pack.json\\locked_probes.manifest.json --
+    a path nothing can ever write, and a guard INACTIVE for good."""
+    import eval_leak_guard
+    from enigma_engine.core.persona import PACK_MANIFEST
+
+    pack = tmp_path / "atlas_pack"
+    pack.mkdir()
+    (pack / PACK_MANIFEST).write_text('{"name": "Atlas"}', encoding="utf-8")
+    beside = pack / "locked_probes.manifest.json"
+
+    assert eval_leak_guard.persona_manifest(pack) == beside
+    assert eval_leak_guard.persona_manifest(pack / PACK_MANIFEST) == beside
+    # The rule is structural, not a filesystem probe: a pack file that does not
+    # exist yet resolves the same way rather than growing a directory level.
+    assert eval_leak_guard.persona_manifest(pack / "not_written_yet.json") == beside
+    loose = tmp_path / "atlas.json"
+    loose.write_text('{"name": "Atlas"}', encoding="utf-8")
+    assert eval_leak_guard.persona_manifest(loose) == tmp_path / "locked_probes.manifest.json"
+
+
 def test_the_default_persona_still_builds(tmp_path, monkeypatch, no_general_diet):
     """The refusal is scoped to packs the content loader cannot serve. Enigma
     is not one, and a guard that refused HER would be caught only by a real
@@ -181,3 +302,77 @@ def test_the_default_persona_still_builds(tmp_path, monkeypatch, no_general_diet
     shards = sorted(out.glob("curated_*.txt"))
     assert shards
     assert "Enigma" in shards[0].read_text(encoding="utf-8")
+
+
+def test_a_pack_with_no_out_refuses_rather_than_rotating_her_shard(
+        tmp_path, monkeypatch, no_general_diet, write_persona_pack):
+    """The default --out is HER curated directory, and the writer clears every
+    curated_*.txt there before writing its own. A pack run without --out
+    therefore replaced her shard with another AI's identity, in the source
+    pretokenize walks first, with nothing downstream rechecking it.
+
+    The refusal names the directory it is protecting, and lands before the
+    writer -- an out dir that was never created is the receipt."""
+    monkeypatch.setattr(mod, "OUT_DIR", tmp_path / "hers")
+    pack = write_persona_pack()
+
+    def _writer_reached(*_args, **_kwargs):
+        raise AssertionError("write_shards ran -- the refusal came too late")
+
+    monkeypatch.setattr(mod, "write_shards", _writer_reached)
+    monkeypatch.setattr("sys.argv", ["make_pretrain_curated.py", "--persona", str(pack)])
+    with pytest.raises(SystemExit, match=str(tmp_path / "hers").replace("\\", "\\\\")):
+        mod.main()
+    assert not (tmp_path / "hers").exists()
+
+
+def test_a_pack_stats_run_with_no_out_previews_instead_of_refusing(
+        tmp_path, monkeypatch, no_general_diet, write_persona_pack, capsys):
+    """--stats returns before the writer, so a pack previewing its counts has
+    no destination to protect and the refusal must not fire. The guard is
+    scoped to runs that WRITE: this one reports the pack's own document counts
+    and leaves the default directory uncreated."""
+    monkeypatch.setattr(mod, "OUT_DIR", tmp_path / "hers")
+    pack = write_persona_pack()
+
+    def _writer_reached(*_args, **_kwargs):
+        raise AssertionError("write_shards ran -- --stats wrote something")
+
+    monkeypatch.setattr(mod, "write_shards", _writer_reached)
+    monkeypatch.setattr("sys.argv", ["make_pretrain_curated.py",
+                                     "--persona", str(pack), "--stats"])
+    mod.main()
+
+    printed = capsys.readouterr().out
+    assert "persona: Atlas" in printed
+    assert "--stats: nothing written" in printed
+    assert not (tmp_path / "hers").exists()
+    assert not list(tmp_path.rglob("curated_*.txt"))
+
+
+def test_her_bare_run_still_writes_the_curated_shard(tmp_path, monkeypatch, no_general_diet):
+    """The other side of the guard: no --persona and no --out is the run the
+    corpus is actually rebuilt with, and it still lands in the default
+    directory. Only a pack has to name one."""
+    monkeypatch.setattr(mod, "OUT_DIR", tmp_path / "hers")
+    monkeypatch.setattr("sys.argv", ["make_pretrain_curated.py"])
+    mod.main()
+    shards = sorted((tmp_path / "hers").glob("curated_*.txt"))
+    assert shards
+    assert "Enigma" in shards[0].read_text(encoding="utf-8")
+
+
+def test_a_pack_with_an_out_builds_into_it_and_leaves_hers_alone(
+        tmp_path, monkeypatch, no_general_diet, write_persona_pack):
+    """A named destination is all the guard wants: the pack builds, and the
+    directory it was protecting is untouched."""
+    monkeypatch.setattr(mod, "OUT_DIR", tmp_path / "hers")
+    pack = write_persona_pack()
+    out = tmp_path / "atlas_curated"
+    monkeypatch.setattr("sys.argv", ["make_pretrain_curated.py", "--persona", str(pack),
+                                     "--out", str(out)])
+    mod.main()
+    shards = sorted(out.glob("curated_*.txt"))
+    assert shards
+    assert "Atlas" in shards[0].read_text(encoding="utf-8")
+    assert not (tmp_path / "hers").exists()

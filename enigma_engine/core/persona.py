@@ -20,8 +20,10 @@ Two kinds of field, and the distinction matters:
   it is never generated.
 
 The single-machine guards (the tray mutex, the fixed serve port, one shared
-data home) are what actually stop two AIs from colliding on this box, so the
-data home is derived from the persona rather than hardcoded.
+data home) are what actually stop two AIs from colliding on this box, so each
+of them is derived from the persona rather than hardcoded: the home from
+`data_dirname`, the mutex and the log names from the name, and the port from
+the pack's own `port` field.
 """
 
 from __future__ import annotations
@@ -48,6 +50,24 @@ ENIGMA = {
 # print -- the rule the repo's ASCII gate exists to hold.
 _SAFE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9 _-]{0,31}$")
 
+# Win32 reserves these device names in EVERY directory, case-insensitively and
+# with or without an extension ("nul.txt" is the device too). A home named for
+# one of them swallows every write and reads back empty.
+_RESERVED_DIRNAMES = frozenset(
+    ("CON", "PRN", "AUX", "NUL")
+    + tuple(f"COM{i}" for i in range(1, 10))
+    + tuple(f"LPT{i}" for i in range(1, 10))
+)
+
+# The two ports this machine already spends, and what a pack colliding with
+# one of them costs. 8000 is the daily serve every launcher points at, so a
+# pack claiming it can never come up beside her; 8123 is the eval scratch
+# server, and an eval run CLEARS its target's memory store before probing.
+RESERVED_PORTS = {
+    8000: "the daily serve port every launcher points at",
+    8123: "the eval scratch port, and an eval run CLEARS its target's memory store",
+}
+
 # A pack is a DIRECTORY: the mechanical fields live in this file inside it,
 # beside the content files `persona_content.load_content` reads. The name is
 # spelled once, here, so renaming the format is one edit rather than a grep --
@@ -62,6 +82,11 @@ class Persona:
     name: str = ENIGMA["name"]
     data_dirname: str = ENIGMA["data_dirname"]
     name_meaning: str = ENIGMA["name_meaning"]
+    # The port her launchers bind. None = Enigma's default (8000). It is a
+    # MECHANICAL field: which port an AI answers on says nothing about who she
+    # is, so a non-None port on the default identity is a flag rather than a
+    # different AI -- packs are simply the intended carrier.
+    port: int | None = None
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -84,6 +109,62 @@ class Persona:
                 f"persona data_dirname {self.data_dirname!r} must be a single directory "
                 "component, not a dot entry or a path"
             )
+        # Win32 strips trailing dots and spaces off a path component, so "..."
+        # and "atlas." reach the filesystem as ".." and "atlas": the value is a
+        # bare component to Path() and a DIFFERENT directory -- the profile
+        # root, its parent, or an aliased sibling -- to the writes serve makes.
+        if self.data_dirname != self.data_dirname.rstrip(". "):
+            raise ValueError(
+                f"persona data_dirname {self.data_dirname!r} must not end in a dot or "
+                "a space: Win32 strips those, and the home lands somewhere else"
+            )
+        # The portion before the first dot is what Win32 matches the device
+        # names on; ".atlas" has none, and matches nothing.
+        if self.data_dirname.split(".", 1)[0].upper() in _RESERVED_DIRNAMES:
+            raise ValueError(
+                f"persona data_dirname {self.data_dirname!r} is a reserved Win32 "
+                "device name, and a home named for one eats every write"
+            )
+        # Directory names are case-insensitive on Win32, so ".Enigma_Engine" is
+        # a different value to the three-field compare and Enigma's OWN home on
+        # disk. Only her exact identity may resolve there.
+        if (not self.is_default
+                and self.data_dirname.casefold() == ENIGMA["data_dirname"].casefold()):
+            raise ValueError(
+                f"persona data_dirname {self.data_dirname!r} is Enigma's data home "
+                "under a different identity (directory names are case-insensitive "
+                "on Win32)"
+            )
+        # name_meaning renders raw into ONE line of the pretrain identity
+        # document (make_pretrain_curated.identity_lines), and that line is a
+        # whole record in a shard. U+001E is the record separator itself, so it
+        # SPLITS the document; a blank line splits it into paragraphs that
+        # pretokenize dedups independently; every other control character bakes
+        # into the corpus. Unicode stays allowed -- the ASCII rule is
+        # console-bound, and training text carries unicode.
+        bad = next((c for c in self.name_meaning if ord(c) < 32 or ord(c) == 127), None)
+        if bad is not None:
+            raise ValueError(
+                f"persona name_meaning carries control character U+{ord(bad):04X}; it "
+                "renders into a single corpus line"
+            )
+        if self.port is not None:
+            # bool IS an int to Python, so `"port": true` passes an isinstance
+            # check and binds port 1 -- a privileged port, silently.
+            if isinstance(self.port, bool) or not isinstance(self.port, int):
+                raise ValueError(
+                    f"persona port {self.port!r} must be an integer, not "
+                    f"{type(self.port).__name__}"
+                )
+            if not 1024 <= self.port <= 65535:
+                raise ValueError(
+                    f"persona port {self.port} is outside 1024-65535: below 1024 needs "
+                    "elevation to bind and 65535 is the last port there is"
+                )
+            if self.port in RESERVED_PORTS:
+                raise ValueError(
+                    f"persona port {self.port} collides with {RESERVED_PORTS[self.port]}"
+                )
 
     @property
     def is_default(self) -> bool:
@@ -107,6 +188,16 @@ class Persona:
         first one's voice and pictures -- one shared home was among the real
         one-AI-per-machine guards."""
         return Path.home() / self.data_dirname
+
+    @property
+    def slug(self) -> str:
+        """Her name as a bare identifier: lowercased, runs of anything else
+        folded to one underscore.
+
+        The id `/v1/models` publishes, so an OpenAI client asking WHICH model
+        answered gets the AI rather than a constant every persona shares.
+        Enigma's is "enigma" -- the literal that endpoint carried."""
+        return _slug(self.name)
 
     @property
     def transcript_label(self) -> str:
@@ -145,12 +236,17 @@ class Persona:
                 )
             path = manifest
         try:
-            blob = json.loads(path.read_text(encoding="utf-8"))
+            blob = read_pack_json(path)
+        except DuplicateJSONKey as exc:
+            raise SystemExit(
+                f"persona pack {path} names {exc.key!r} twice; the second value "
+                "would win and the first would never be read"
+            ) from None
         except json.JSONDecodeError as exc:
             raise SystemExit(f"persona pack {path} is not valid JSON ({exc.msg})") from None
         if not isinstance(blob, dict):
             raise SystemExit(f"persona pack {path} must be a JSON object")
-        known = {f for f in ("name", "data_dirname", "name_meaning")}
+        known = {f for f in ("name", "data_dirname", "name_meaning", "port")}
         # A pack is untrusted data, and the character checks below only run on
         # strings: a numeric name dies in the regex with a TypeError traceback,
         # a non-str name reaches _slug as an AttributeError, and a FALSY
@@ -167,10 +263,50 @@ class Persona:
                 name=blob.get("name", ENIGMA["name"]),
                 data_dirname=blob.get("data_dirname") or f".{_slug(blob.get('name', ENIGMA['name']))}",
                 name_meaning=blob.get("name_meaning", ""),
+                # Straight through, whatever its type: the dataclass owns the
+                # port rules, so a pack and a caller building a Persona by hand
+                # are refused by the same lines.
+                port=blob.get("port"),
                 extra={k: v for k, v in blob.items() if k not in known},
             )
         except ValueError as exc:  # an invalid pack is a refusal, not a traceback
             raise SystemExit(f"persona pack {path}: {exc}") from None
+
+
+class DuplicateJSONKey(ValueError):
+    """A JSON object naming one key twice. `key` is the repeated name."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"duplicate key {key!r}")
+        self.key = key
+
+
+def _object_pairs(pairs: list[tuple[str, object]]) -> dict:
+    """The pairs as a dict, refusing a key that appears twice.
+
+    json's own last-wins is silent, and at ANY object level: two entries for
+    one aside key drop the author's first record out of the corpus with
+    nothing downstream able to see the hole."""
+    out: dict = {}
+    for key, value in pairs:
+        if key in out:
+            raise DuplicateJSONKey(key)
+        out[key] = value
+    return out
+
+
+def read_pack_json(path: Path) -> object:
+    """A pack JSON file's contents, for the pack readers that share the rules.
+
+    The ONE reader for both halves of a pack -- this module's manifest and
+    `persona_content`'s content files -- so the two cannot disagree about what
+    a pack file is. Callers keep their own refusal shapes and catch
+    `DuplicateJSONKey` and `json.JSONDecodeError`.
+
+    A BOM is tolerated: Windows editors write one, and a BOM decoded as plain
+    utf-8 dies as "Expecting value", pointing a pack author at their syntax
+    when the defect is their encoding."""
+    return json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_object_pairs)
 
 
 def _slug(name: str) -> str:

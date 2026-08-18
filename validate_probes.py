@@ -27,6 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from enigma_engine.core.persona import Persona  # noqa: E402
+from enigma_engine.core.persona_content import ENIGMA_CREATOR  # noqa: E402
 from eval_behavior import INFORMATIONAL_CATEGORIES, THRESHOLDS, _grade_identity  # noqa: E402
 from eval_leak_guard import _KEY_ORDER as _SEAL_KEY_ORDER  # noqa: E402
 from eval_leak_guard import _content_words as _seal_content_words  # noqa: E402
@@ -57,6 +59,19 @@ _STOP = {
     "i", "me", "my", "what", "who", "where", "when", "why", "how", "to", "of", "in",
     "on", "for", "and", "or", "it", "this", "that", "am", "can", "be",
 }
+
+
+def _distinctive_names(persona: Persona) -> set[str]:
+    """The one-word wants that are NOT generic for this AI: her own name and
+    her creator's.
+
+    The loose-want check below fires on single common words, which "enigma"
+    and "sirrulean" are not -- they are the most distinctive bar an identity
+    probe can carry. They were the two literals here; a pack's are its own,
+    read off the manifest (`creator` is a pack.json field, so it rides in
+    `extra`) rather than assumed."""
+    creator = persona.extra.get("creator", ENIGMA_CREATOR)
+    return {persona.name.strip().lower(), str(creator).strip().lower()}
 
 
 def _words(text: str) -> set[str]:
@@ -143,9 +158,14 @@ def _fuzzy_leak_counts(questions: list[str], training_raw: list[str]) -> tuple[d
     return {idx: len(qs) for idx, qs in per_probe.items()}, len(deleted)
 
 
-def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
+def check(path: Path, skip_leak: bool = False,
+          persona: Persona | None = None) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warns: list[str] = []
+    # Whose probes these are. None = Enigma, and every check below then reads
+    # exactly the values it used to spell as literals.
+    persona = Persona.load() if persona is None else persona
+    distinctive = _distinctive_names(persona)
     raw = path.read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):
         errors.append("file:1 saved as UTF-8 with BOM; re-save as plain UTF-8")
@@ -363,10 +383,11 @@ def check(path: Path, skip_leak: bool = False) -> tuple[list[str], list[str]]:
             # 2026-07-22 measured 9 false-passes in a 21-probe sample).
             # Count LITERAL words: the grader matches the whole phrase, so
             # "this machine" is a two-word bar even though "this" is a
-            # stopword elsewhere.
+            # stopword elsewhere. Her name and her creator's are the exception
+            # -- see `_distinctive_names`.
             loose = [
                 k for k in want
-                if len(k.split()) == 1 and k.strip().lower() not in ("enigma", "sirrulean")
+                if len(k.split()) == 1 and k.strip().lower() not in distinctive
                 and not any(ch.isdigit() for ch in k)
             ]
             if loose and len(loose) == len(want):
@@ -449,13 +470,20 @@ def main() -> None:
         help="skip the training-overlap scans (faster, but leaked probes then "
         "validate CLEAN and the exit code no longer reflects them)",
     )
+    ap.add_argument(
+        "--persona",
+        default=None,
+        help="the pack these probes belong to; her name and creator are then "
+        "the distinctive single-word wants. Omitted = Enigma",
+    )
     args = ap.parse_args()
 
     path = Path(args.path)
     if not path.exists():
         raise SystemExit(f"no such file: {path}")
 
-    errors, warns = check(path, skip_leak=args.skip_leak)
+    errors, warns = check(path, skip_leak=args.skip_leak,
+                          persona=Persona.load(Path(args.persona)) if args.persona else None)
     for warn in warns:
         print(f"  WARN  {warn}")
     for err in errors:

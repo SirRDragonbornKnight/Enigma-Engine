@@ -147,3 +147,45 @@ def test_capabilities_reports_memory_dir_and_base_checkpoint_honesty(tmp_path, m
     monkeypatch.setattr(serve, "MEMORY", None)
     caps = serve.capabilities()
     assert caps["memory_dir"] is None
+
+
+def test_the_persona_fields_are_additive_to_the_gate_that_reads_this_dict(
+        tmp_path, monkeypatch):
+    """capabilities now also says WHO is serving, and this harness is its one
+    machine consumer: the same dict decides whether the store this run is
+    about to clear is disposable. Additive means additive -- every key the
+    gate and the chat page already read is still there, still carrying what
+    it carried, and the verdict is unchanged.
+
+    It is unchanged for a PACK too: a server is judged by the store it
+    reports, never by the name it answers to. A gate that started reading the
+    name would refuse a legitimate scratch server, or bless a live one."""
+    import serve_enigma as serve
+    from enigma_engine.core.persona import Persona
+
+    class _Store:
+        def __init__(self, d: Path):
+            self.dir = d
+
+    scratch = tmp_path / "memory_eval"
+    scratch.mkdir()
+    monkeypatch.setattr(serve, "MEMORY", _Store(scratch))
+
+    caps = serve.capabilities()
+    assert caps["persona"] == "Enigma"
+    assert caps["persona_is_default"] is True
+    assert {"memory", "memory_dir", "voice", "ears", "eyes", "image_gen",
+            "search", "instruct", "max_context", "builtins"} <= set(caps)
+    assert caps["memory_dir"] == str(scratch.resolve())
+    assert _is_scratch_target("http://127.0.0.1:8123", caps) is True
+
+    monkeypatch.setattr(serve, "PERSONA", Persona(name="Atlas", data_dirname=".atlas"))
+    caps = serve.capabilities()
+    assert caps["persona"] == "Atlas"
+    assert caps["persona_is_default"] is False
+    assert caps["memory_dir"] == str(scratch.resolve())
+    assert _is_scratch_target("http://127.0.0.1:8123", caps) is True
+
+    # ...and the live store still refuses, whoever answers for it
+    monkeypatch.setattr(serve, "MEMORY", _Store(eval_behavior._LIVE_MEMORY_DIR))
+    assert _is_scratch_target("http://127.0.0.1:8123", serve.capabilities()) is False

@@ -47,10 +47,15 @@ import urllib.request
 from pathlib import Path
 
 import eval_leak_guard
+from enigma_engine.core.persona import Persona
 from enigma_engine.core.safe_save import atomic_write_text
 
 ROOT = Path(__file__).resolve().parent
 PROBES = ROOT / "data" / "eval" / "behavior_probes.jsonl"
+# The DEFAULT persona's gate. Both are what `eval_leak_guard.manifest_for`
+# derives from her own probe file, so nothing about her run changes by making
+# the pair a per-run value: another AI's gate is the same two names inside her
+# pack, and the harness reads whichever pair the run is actually scoring.
 LOCKED_PROBES = ROOT / "data" / "eval" / "locked_probes.jsonl"
 LOCKED_MANIFEST = ROOT / "data" / "eval" / "locked_probes.manifest.json"
 
@@ -666,14 +671,26 @@ def _refuse_unsealing_path(transcript: Path) -> None:
 
 
 def _run_conditions(probes: Path, base_url: str, temperature: float, max_tokens: int,
-                    n_cases: int) -> dict:
+                    n_cases: int, persona: Persona, manifest: Path) -> dict:
     """The header record of a transcript: everything needed to reproduce or
     contest the run. The probe-file digest is what proves a later re-measure
-    scored the SAME sealed set."""
+    scored the SAME sealed set.
+
+    WHOSE gate it was rides here too. Two AIs have two sealed sets and two
+    scorecards, and a transcript that named neither the persona nor the
+    manifest could be filed against the wrong one -- the receipt has to say
+    which AI answered and which seal governed her."""
     git_sha, git_dirty = _git_state()
     return {
         "record": "run_conditions",
         "schema": "enigma-eval-transcript-v1",
+        "persona": persona.name,
+        "persona_is_default": persona.is_default,
+        "manifest_file": str(manifest),
+        # None from a run that was never gate-shaped -- recorded as such, so
+        # "no manifest" and "a manifest nobody checked" stay distinguishable.
+        "manifest_sha256": (eval_leak_guard.file_digest(manifest)
+                            if manifest.exists() else None),
         "probe_file": str(probes),
         "probe_sha256": _probe_digest(probes),
         "probe_count": n_cases,
@@ -794,11 +811,34 @@ def _score_cases(base_url: str, cases: list[dict], temperature: float, max_token
 
 
 # The launcher chain's daily store -- the one dir this harness must never
-# clear (the clear is unrecoverable: delete semantics keep no .bak).
+# clear (the clear is unrecoverable: delete semantics keep no .bak). The
+# DEFAULT persona's; a pack's daily store is her own, which is what
+# `_scratch_target_rules` derives.
 _LIVE_MEMORY_DIR = (Path(__file__).resolve().parent / "data" / "memory").resolve()
 
 
-def _is_scratch_target(base_url: str, caps: dict) -> bool:
+def _scratch_target_rules(persona: Persona) -> tuple[frozenset, Path]:
+    """(scratch ports, the live store to protect) for the AI being evaluated.
+
+    The port set does NOT widen per persona and that is the design, not an
+    omission: `persona.RESERVED_PORTS` refuses 8123 to every pack precisely so
+    the one scratch port stays free for whichever AI is being measured. It is a
+    per-run value all the same, because the alternative -- a module constant
+    read straight out of the gate -- is what made every other single-AI
+    assumption in this harness invisible.
+
+    The LIVE store does move with the persona: hers is the launcher chain's
+    repo-relative data\\memory, and a pack's is her own home\\memory (the
+    launchers derive exactly that). Judging a pack's eval server against
+    Enigma's store would read the pack's real memories as disposable and clear
+    them unrecoverably."""
+    if persona.is_default:
+        return SCRATCH_PORTS, _LIVE_MEMORY_DIR
+    return SCRATCH_PORTS, (persona.home / "memory").resolve()
+
+
+def _is_scratch_target(base_url: str, caps: dict, scratch_ports: frozenset | None = None,
+                       live_memory_dir: Path | None = None) -> bool:
     """True when base_url names a verifiably throwaway eval server.
 
     Port-only was the whole gate until 2026-08-13, which passed BOTH wipe
@@ -811,13 +851,19 @@ def _is_scratch_target(base_url: str, caps: dict) -> bool:
     could not answer at all (a 10s timeout on a serve mid-generation, an
     older build's 404, a proxy's HTML), and unknown is not "no store"
     (audit 2026-08-14: _wait_for_server polls /v1/models, so nothing else
-    stood between {} and the unrecoverable clear)."""
+    stood between {} and the unrecoverable clear).
+
+    The port set and the live store arrive from the caller (see
+    `_scratch_target_rules`); the module constants are the DEFAULT persona's
+    values and are read here when a caller names neither."""
+    scratch_ports = SCRATCH_PORTS if scratch_ports is None else scratch_ports
+    live_memory_dir = _LIVE_MEMORY_DIR if live_memory_dir is None else live_memory_dir
     try:
         parts = urllib.parse.urlsplit(base_url)
         port = parts.port
     except ValueError:
         return False
-    if port not in SCRATCH_PORTS:
+    if port not in scratch_ports:
         return False
     if parts.hostname not in ("127.0.0.1", "localhost", "::1"):
         return False
@@ -833,33 +879,39 @@ def _is_scratch_target(base_url: str, caps: dict) -> bool:
     # while comparing unequal (audit 2026-08-14). If identity cannot be
     # established, the dir is not verifiably disposable.
     try:
-        if _LIVE_MEMORY_DIR.exists():
-            return not os.path.samefile(mem_dir, _LIVE_MEMORY_DIR)
-        return Path(mem_dir).resolve() != _LIVE_MEMORY_DIR
+        if live_memory_dir.exists():
+            return not os.path.samefile(mem_dir, live_memory_dir)
+        return Path(mem_dir).resolve() != live_memory_dir
     except (OSError, ValueError):
         return False
 
 
-def _sealed_manifest() -> dict:
+def _sealed_manifest(manifest: Path | None = None) -> dict:
     """The manifest, read through the guard that enforces its own rules.
 
     Reading it with a bare `json.loads` meant the `Weakened` check -- which
     makes every TRAINER refuse a manifest whose threshold was raised to admit
     paraphrases -- was not applied by the file whose result decides adoption.
-    The gate blessed a manifest the training scripts would have rejected."""
-    manifest = json.loads(LOCKED_MANIFEST.read_text(encoding="utf-8"))
-    eval_leak_guard.LockedProbeGuard(manifest)  # raises Weakened on a loosened threshold
-    return manifest
+    The gate blessed a manifest the training scripts would have rejected.
+
+    `manifest` is the per-run gate (`run` derives it from the probe stem);
+    None reads the default persona's, which is what every caller outside a run
+    means. Read from the module global at CALL time so the value a test pins
+    is the value this reads."""
+    path = LOCKED_MANIFEST if manifest is None else Path(manifest)
+    blob = json.loads(path.read_text(encoding="utf-8"))
+    eval_leak_guard.LockedProbeGuard(blob)  # raises Weakened on a loosened threshold
+    return blob
 
 
-def _sealed_hashes() -> list[str]:
-    return sorted(p["h"] for p in _sealed_manifest().get("probes", []))
+def _sealed_hashes(manifest: Path | None = None) -> list[str]:
+    return sorted(p["h"] for p in _sealed_manifest(manifest).get("probes", []))
 
 
-def _probe_hashes(cases: list[dict]) -> list[str]:
-    manifest = _sealed_manifest()
+def _probe_hashes(cases: list[dict], manifest: Path | None = None) -> list[str]:
+    sealed = _sealed_manifest(manifest)
     texts = [c.get("q") or "" for c in cases] + [t for c in cases for t in c.get("teach", [])]
-    fresh = eval_leak_guard.seal(texts, manifest.get("jaccard_threshold", 0.6))
+    fresh = eval_leak_guard.seal(texts, sealed.get("jaccard_threshold", 0.6))
     # SORTED LIST, not a set: a set hides a duplicated probe (which inflates a
     # category and shifts its rate) and hides a teach line moved to another
     # question. Counts have to match, not just membership.
@@ -889,7 +941,7 @@ _LOCKED_CONTENT_SHARE = 0.9
 _LOCKED_CONTENT_MIN = 12
 
 
-def _touches_sealed_probes(cases: list[dict]) -> bool:
+def _touches_sealed_probes(cases: list[dict], manifest: Path | None = None) -> bool:
     """True when this file is a copy of the locked set, whatever it is called.
 
     Gate-ness cannot key on the filename: a copy under another name skipped the
@@ -901,10 +953,10 @@ def _touches_sealed_probes(cases: list[dict]) -> bool:
     an evasion when combined: containment falls to trimming one string, share
     falls to padding, and doing both at once defeated the pair. The absolute
     count is the one an attacker cannot lower by adding material."""
-    hashes = _probe_hashes(cases)
+    hashes = _probe_hashes(cases, manifest)
     if not hashes:
         return False
-    sealed = set(_sealed_hashes())
+    sealed = set(_sealed_hashes(manifest))
     if not sealed:
         return False
     if sealed <= set(hashes):  # a full copy, diluted or not
@@ -915,7 +967,7 @@ def _touches_sealed_probes(cases: list[dict]) -> bool:
     return hits / len(hashes) >= _LOCKED_CONTENT_SHARE
 
 
-def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
+def _seal_mismatch(cases: list[dict], probes: Path, manifest: Path | None = None) -> str | None:
     """The reason this file is not the sealed holdout, or None when it is.
 
     Re-sealing the QUESTIONS is not enough. `want_any`, `deny_any`,
@@ -932,7 +984,7 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     able to drop a rigged file could overwrite the reference beside it. All
     three routes ended in the same place -- 'seal verified' printed over
     unverified grading keys."""
-    manifest = _sealed_manifest()
+    sealed_by = _sealed_manifest(manifest)
     # IDENTITY FIRST, and by bytes. Every hash-set test below answers "does
     # this file MEAN the same thing", which is the wrong question for identity
     # and was evaded once per audit round through whichever normalization
@@ -941,14 +993,14 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
     # questions posted to the model. The digest of the file itself has no
     # dimensions left to evade, and the run already computed it for the
     # receipt without comparing it to anything.
-    sealed_file = manifest.get("probe_file_sha256")
+    sealed_file = sealed_by.get("probe_file_sha256")
     if not sealed_file:
         return ("this manifest predates the probe-file seal and cannot prove the file is "
                 "the sealed holdout byte for byte -- re-seal with "
                 "`python eval_leak_guard.py seal <locked file>`")
     if _probe_digest(probes) != sealed_file:
         return "this file is not byte-identical to the sealed holdout"
-    if _probe_hashes(cases) != _sealed_hashes():
+    if _probe_hashes(cases, manifest) != _sealed_hashes(manifest):
         return "the probe set does not match the manifest"
     # FULL payload, not just the exact hashes. The s/n arrays are the
     # trainers' enforcement payload, the trainers cannot verify them (no
@@ -963,11 +1015,11 @@ def _seal_mismatch(cases: list[dict], probes: Path) -> str | None:
             texts.append(q)
         texts.extend(c.get("teach", []) or [])
     fresh = eval_leak_guard.seal(texts)
-    if ([(p["h"], p["s"], p["n"]) for p in manifest.get("probes", [])]
+    if ([(p["h"], p["s"], p["n"]) for p in sealed_by.get("probes", [])]
             != [(p["h"], p["s"], p["n"]) for p in fresh["probes"]]):
         return ("the manifest's sealed arrays (shingles/runs) do not match this "
                 "plaintext -- stripped or edited; re-seal")
-    sealed_digest = manifest.get("grading_digest")
+    sealed_digest = sealed_by.get("grading_digest")
     if not sealed_digest:
         # Fail CLOSED. A manifest predating the grading seal can only prove the
         # questions; treating that as a verified gate is what this whole check
@@ -1222,7 +1274,7 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
 
 def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBES,
         transcript: Path | None = None, allow_live_server: bool = False,
-        baseline: Path | None = None) -> int:
+        baseline: Path | None = None, persona: Persona | None = None) -> int:
     # Load probes and name the run's conditions BEFORE touching the server
     # (EVAL_REDESIGN section D + audit 2026-07-20: a missing probe file used
     # to clear the memory store and then die with a raw traceback, and a down
@@ -1230,6 +1282,24 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     if not probes.exists():
         print(f"FAIL: probe file not found: {probes}")
         return 2
+    persona = Persona.load() if persona is None else persona
+    # The gate that governs a run is the manifest BESIDE its probe file, so a
+    # pack is measured against the pack's own seal. The default persona
+    # derives the same pair from her own locked set -- and her path accepts
+    # NOTHING else: a foreign X.jsonl carrying a sibling X.manifest.json must
+    # never become gate-shaped for her, however it is spelled on the command
+    # line. A pack scored as her would print SEALED GATE RUN over an adoption
+    # verdict about a different AI.
+    manifest = eval_leak_guard.manifest_for(probes)
+    if persona.is_default:
+        if manifest.exists() and manifest.resolve() != LOCKED_MANIFEST.resolve():
+            print(f"FAIL: {probes} is sealed by {manifest}, which is not "
+                  f"{persona.name}'s gate ({LOCKED_MANIFEST}).")
+            print("      A pack's sealed set belongs to the pack: pass --persona "
+                  "<pack-dir> to score it as that AI, or point --probes at her own "
+                  "locked set.")
+            return 2
+        manifest = LOCKED_MANIFEST
     # One path for both flags is not a no-op: the baseline is read up front,
     # the run proceeds, and the transcript write at the end lands on top of the
     # sealed receipt this run was measured against. The comparison has already
@@ -1313,6 +1383,9 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
               "fix the file before any server is touched")
         return 2
     print(f"probes: {probes} ({len(cases)} cases); decode: temperature={temperature}, max_tokens={max_tokens}")
+    print(f"persona: {persona.name}"
+          f"{' (the default)' if persona.is_default else ' (persona pack)'}"
+          f"; gate manifest: {manifest}")
 
     # Gate-ness is decided by CONTENT, not by the filename: a copy under
     # another name used to skip this check completely. The name is still worth
@@ -1321,28 +1394,31 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     # authoring pool, which then failed the seal and could never be run at all.
     named_locked = probes.name == LOCKED_PROBES.name
     is_gate_run = False
-    if named_locked and not LOCKED_MANIFEST.exists():
-        print(f"FAIL: {probes.name} needs its seal manifest ({LOCKED_MANIFEST.name}) to gate anything")
+    if named_locked and not manifest.exists():
+        print(f"FAIL: {probes.name} needs its seal manifest ({manifest.name}) to gate anything")
         return 2
-    if LOCKED_MANIFEST.exists() and (named_locked or _touches_sealed_probes(cases)):
-        reason = _seal_mismatch(cases, probes)
+    if manifest.exists() and (named_locked or _touches_sealed_probes(cases, manifest)):
+        reason = _seal_mismatch(cases, probes, manifest)
         if reason:
             print(f"FAIL: {probes.name} is not the sealed holdout -- {reason}")
             return 2
         is_gate_run = True
-        print(f"seal verified: probes and grading keys match {LOCKED_MANIFEST.name}")
+        print(f"seal verified: probes and grading keys match {manifest.name}")
 
     if not _wait_for_server(base_url):
         print(f"FAIL: no server at {base_url} (start serve_enigma.py first)")
         return 2
     # The gate reads the LIVE server's capabilities (memory_dir), so it runs
     # after the server is up -- port alone proved nothing (review 2026-08-13).
-    if not _is_scratch_target(base_url, _capabilities(base_url)) and not allow_live_server:
+    scratch_ports, live_memory_dir = _scratch_target_rules(persona)
+    if not _is_scratch_target(base_url, _capabilities(base_url), scratch_ports,
+                              live_memory_dir) and not allow_live_server:
         print(f"FAIL: {base_url} is not a verifiably scratch eval server.")
-        print(f"      Required: a scratch port ({sorted(SCRATCH_PORTS)}), a LOCAL host, and a")
-        print("      target-reported memory dir that is not the live store (a capabilities")
-        print("      endpoint that cannot answer counts as UNKNOWN, which refuses). This run CLEARS")
-        print("      the target's memory store (unrecoverably) and writes probe facts into it.")
+        print(f"      Required: a scratch port ({sorted(scratch_ports)}), a LOCAL host, and a")
+        print(f"      target-reported memory dir that is not {persona.name}'s live store")
+        print(f"      ({live_memory_dir}). A capabilities endpoint that cannot answer counts")
+        print("      as UNKNOWN, which refuses. This run CLEARS the target's memory store")
+        print("      (unrecoverably) and writes probe facts into it.")
         print("      Start serve on --port 8123 with a throwaway --memory-dir, or pass")
         print("      --allow-live-server if this target really is disposable.")
         return 2
@@ -1351,7 +1427,8 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     # Every answer in full, not the 60-char console line. Without this a run
     # leaves nothing to re-grade, nothing to hand a second grader, and no way
     # to argue with a verdict after the server is gone (EVAL_REDESIGN).
-    rows: list[dict] = [_run_conditions(probes, base_url, temperature, max_tokens, len(cases))]
+    rows: list[dict] = [_run_conditions(probes, base_url, temperature, max_tokens,
+                                        len(cases), persona, manifest)]
     _mc = rows[0].get("model_checkpoint") or {}
     if _mc.get("sha256"):
         print(f"model under test: sha256 {_mc['sha256'][:16]}... "
@@ -1453,6 +1530,13 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
         print("       SEALED GATE RUN -- this result decides adoption")
     else:
         print("       NOT THE SEALED HOLDOUT -- this result does not decide adoption")
+    # ...and WHOSE adoption. EVAL_REDESIGN's scorecard ledger is the default
+    # persona's locked-baseline history: a pack's numbers filed there would
+    # read as a movement in HER lineage, measured on a different AI answering
+    # different sealed questions. A pack's results live with the pack.
+    if not persona.is_default:
+        print(f"       {persona.name} is a PERSONA PACK -- record this scorecard with the "
+              "pack, never in EVAL_REDESIGN.md")
 
     if baseline is not None and base_pair is not None:
         try:
@@ -1471,6 +1555,11 @@ def run(base_url: str, temperature: float, max_tokens: int, probes: Path = PROBE
     if transcript is not None:
         rows.append({
             "record": "scorecard",
+            # Repeated from run_conditions on purpose: the scorecard row is the
+            # one a reader copies into a ledger, and a row that cannot say whose
+            # numbers these are is a row that lands in the wrong AI's history.
+            "persona": persona.name,
+            "persona_is_default": persona.is_default,
             "by_category": {k: {"hits": sum(v), "n": len(v)} for k, v in by_cat.items()},
             "overall_hits": overall_hits,
             "overall_n": overall_n,
@@ -1505,11 +1594,14 @@ def main() -> None:
     ap.add_argument("--allow-live-server", action="store_true", help="permit a target outside the scratch ports; the run CLEARS that server's memory store first, so only pass this for a disposable one")
     ap.add_argument("--baseline", default=None,
                     help="prior transcript to compare against: prints the adoption verdict (beat the aggregate with no category floor regression = ADOPT, anything else = the user's call) and refuses to compare across different probe sets")
+    ap.add_argument("--persona", default=None,
+                    help="score a DIFFERENT AI from a persona pack: her sealed set gates the run (the manifest beside --probes), her memory home is the store the scratch check protects, and the transcript header records her as whose run it was. Omitted = Enigma, whose gate accepts only her own manifest")
     args = ap.parse_args()
     raise SystemExit(run(args.base_url, args.temperature, args.max_tokens, Path(args.probes),
                          Path(args.transcript) if args.transcript else None,
                          allow_live_server=args.allow_live_server,
-                         baseline=Path(args.baseline) if args.baseline else None))
+                         baseline=Path(args.baseline) if args.baseline else None,
+                         persona=Persona.load(Path(args.persona)) if args.persona else None))
 
 
 if __name__ == "__main__":

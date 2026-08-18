@@ -217,6 +217,32 @@ These are the regex-NLI wall the original design named. The designed escape
 is section C's OPTIONAL second-grader agreement pass (still open); revisit
 it if the locked-set re-measure shows the residuals moving real scores.
 
+## Persona packs: their gate numbers never enter this file (2026-08-17)
+
+Since wave 3c the harness is per-AI: `eval_behavior --persona <pack>` reads
+the sealed manifest BESIDE its `--probes` file (`X.jsonl` ->
+`X.manifest.json`), protects that AI's own memory home instead of
+`data\memory`, and writes her name plus that manifest's path and sha into the
+transcript's `run_conditions` and `scorecard` records. Her own run is
+unchanged: with no `--persona` the derivation lands on the same two paths it
+always used, and that path REFUSES a foreign manifest outright rather than
+letting another AI's sealed set gate a run reported as hers.
+
+**Every scorecard in this file is Enigma's.** A pack's numbers are measured on
+a different model answering different sealed questions, so filed here they
+would read as movement in her lineage -- there is no ledger append in code to
+enforce that, this file is maintained by hand, so the rule is the rule: a pack
+result is recorded WITH THE PACK. The run prints the reminder itself
+(`<Name> is a PERSONA PACK -- record this scorecard with the pack, never in
+EVAL_REDESIGN.md`), and the transcript carries `persona_is_default` so a row
+copied out of one can always be traced back to whose it was.
+
+Pack probe authoring: `make_persona_probes.py <pack>` drafts identity and
+adversarial CANDIDATES from the pack's own content (marked DRAFT, sealed by
+nothing, the user curates); the other six gated categories name nobody and
+carry over. `validate_probes.py --persona <pack>` and
+`eval_leak_guard.py seal` are the same two steps her set went through.
+
 ## P2 BASELINE -- reseal #7 (2026-07-27): 120 probes, 15 per gated category -- THE live scorecard
 
 Reseal #7 executed on the user's order: 5 teach rows re-contented to

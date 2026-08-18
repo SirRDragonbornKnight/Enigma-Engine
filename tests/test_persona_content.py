@@ -31,8 +31,10 @@ import pytest
 from enigma_engine.core.persona import PACK_MANIFEST, Persona
 from enigma_engine.core.persona_content import (
     ENIGMA_ASIDES,
+    GENERATOR_SAMPLE_WIDTHS,
     PACK_ANCHORS,
     PACK_ASIDES,
+    PACK_PARAPHRASES,
     PACK_SELF_FACTS,
     Aside,
     default_content,
@@ -237,6 +239,23 @@ def test_an_aside_of_the_wrong_arity_refuses_rather_than_rendering():
         default_content().resolve(triples)
 
 
+def test_a_table_of_nothing_but_asides_still_measures_its_arities():
+    """No concrete tuple means nothing to read the bar off, and the check used
+    to be skipped entirely -- the pack's own records disagreeing with each
+    other would then resolve silently and die in the caller's unpacking. The
+    first record resolved sets the arity instead.
+
+    Real records at their real arities: who_are_you is a pair, refuse_mode_switch
+    a triple, so the mismatch is the tables' own and not an invented one."""
+    mixed = [Aside("who_are_you"), Aside("refuse_mode_switch")]
+    with pytest.raises(ValueError):
+        default_content().resolve(mixed)
+
+    matched = [Aside("who_are_you"), Aside("greeting_by_name")]
+    assert default_content().resolve(matched) == [
+        ENIGMA_ASIDES["who_are_you"], ENIGMA_ASIDES["greeting_by_name"]]
+
+
 # ---- the generators actually follow the content they are handed ----
 
 
@@ -369,6 +388,68 @@ def test_a_missing_pack_file_refuses_rather_than_loading_a_partial_persona(
         load_content(pack)
 
 
+@pytest.mark.parametrize("filename", [PACK_MANIFEST, PACK_PARAPHRASES, PACK_ASIDES])
+@pytest.mark.parametrize("text, wanted", [
+    (None, "is missing"),
+    ("not JSON, just prose", "is not valid JSON"),
+    ("[]", "must be a JSON object, not list"),
+])
+def test_a_damaged_pack_json_refuses_naming_the_pack_and_the_file(
+        write_persona_pack, filename, text, wanted):
+    """Every JSON file in the layout, every way one can be wrong. A refusal
+    that names only the problem sends a pack author looking through four files,
+    so the pack directory and the filename are part of the contract -- and one
+    file is damaged at a time, so a loader refusing for the wrong reason (a
+    later file it never should have reached) cannot pass this."""
+    pack = write_persona_pack({filename: text})
+    with pytest.raises(SystemExit, match=f"{filename}: {wanted}") as exc:
+        load_content(pack)
+    assert str(pack) in str(exc.value)
+
+
+def test_a_duplicated_key_in_a_pack_file_refuses_and_names_it(write_persona_pack):
+    """json's last-wins is silent: a second entry for one aside key deletes the
+    author's first record from the corpus, and nothing downstream of the build
+    can see that it was ever written. The file says both, so the loader refuses
+    rather than picking."""
+    pack = write_persona_pack()
+    text = (pack / PACK_ASIDES).read_text(encoding="utf-8")
+    doubled = '{"who_are_you": ["Who are you?", "Atlas, the first record."], ' + text[1:]
+    (pack / PACK_ASIDES).write_text(doubled, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="'who_are_you' twice") as exc:
+        load_content(pack)
+    assert PACK_ASIDES in str(exc.value)
+
+
+def test_the_mechanical_half_refuses_a_duplicated_key_too(tmp_path):
+    """ONE reader serves both halves of a pack, so the manifest is not a
+    special case -- a pack.json naming `name` twice would otherwise load
+    whichever value came last while the author read the first."""
+    pack = tmp_path / "twice.json"
+    pack.write_text(
+        '{"name": "Atlas", "data_dirname": ".atlas", "name": "Atlas Prime"}',
+        encoding="utf-8")
+    with pytest.raises(SystemExit, match="'name' twice"):
+        Persona.load(pack)
+
+
+def test_a_pack_written_with_a_byte_order_mark_loads(write_persona_pack):
+    """Windows editors write UTF-8 BOMs. Read as plain utf-8 the BOM lands in
+    front of the first token and the pack dies as "is not valid JSON
+    (Expecting value)" -- a diagnosis pointing at the author's syntax when the
+    defect is their encoding. Both halves tolerate it: the JSON files and the
+    JSONL ones, where the BOM rides on line 1."""
+    pack = write_persona_pack()
+    for name in (PACK_MANIFEST, PACK_ANCHORS, PACK_PARAPHRASES, PACK_SELF_FACTS, PACK_ASIDES):
+        path = pack / name
+        path.write_text(chr(0xFEFF) + path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    content = load_content(pack)
+    assert content.anchors["identity"][0] == ("Who are you?", "Atlas.")
+    assert Persona.load(pack).name == "Atlas"
+
+
 def test_a_malformed_jsonl_line_refuses_naming_the_file_and_the_line(write_persona_pack):
     """The 1-based line is the whole report. "anchors.jsonl is malformed"
     against a few hundred authored records is a bisect, not a diagnosis."""
@@ -414,13 +495,17 @@ def test_a_non_string_content_value_refuses_rather_than_reaching_a_renderer(
 
 
 def test_a_pack_claiming_another_creator_refuses_and_cites_the_ruling(write_persona_pack):
-    """Ruled by the user 2026-08-15: every pack built on this machine states
-    SirRulean. A pack saying otherwise is either a mistake or a decision that
-    is the USER's to make, so it refuses loudly and names the ruling -- being
-    quietly obeyed and being quietly overwritten are equally wrong."""
+    """The check outlives the ruling that put it here (retired 2026-08-17): it
+    is a deliberate hold while packs have no real use, not a claim that another
+    creator is wrong. So the refusal has to say WHY it is still standing --
+    being quietly obeyed and being quietly overwritten are equally wrong, and a
+    message citing a dead ruling sends its reader to argue with the wrong
+    thing."""
     pack = write_persona_pack({PACK_MANIFEST: json.dumps(
         {"name": "Atlas", "creator": "Someone Else"})})
-    with pytest.raises(SystemExit, match="2026-08-15") as exc:
+    with pytest.raises(
+            SystemExit,
+            match="the hold is kept deliberately while packs have no real use") as exc:
         load_content(pack)
     assert "Someone Else" in str(exc.value)
     assert "SirRulean" in str(exc.value)
@@ -430,6 +515,57 @@ def test_a_pack_that_states_no_creator_takes_the_ruled_one(write_persona_pack):
     """Absent is not a refusal -- the ruling makes SirRulean the answer, so the
     field is optional rather than ceremonial."""
     assert load_content(write_persona_pack()).creator == "SirRulean"
+
+
+@pytest.mark.parametrize("key", sorted(GENERATOR_SAMPLE_WIDTHS))
+def test_a_denial_list_too_narrow_for_the_generators_refuses_at_load(
+        write_persona_pack, key):
+    """`random.sample(list, k)` on a shorter list raises ValueError halfway
+    through a build, with the pack named nowhere in the traceback and the
+    artifacts written before it already on disk. A width the generators depend
+    on is part of what a pack IS, so the loader states it.
+
+    The width is MEASURED here, not asserted: the same content one entry short
+    is fed to the real generator, and it must die exactly as claimed."""
+    good = write_persona_pack()
+    blob = json.loads((good / PACK_PARAPHRASES).read_text(encoding="utf-8"))
+    need = GENERATOR_SAMPLE_WIDTHS[key]
+    assert len(blob[key]) >= need, "fixture no longer carries a legal width"
+    # Read BEFORE the pack is damaged: the fixture rewrites files in place.
+    good_content = load_content(good)
+
+    narrow = write_persona_pack({PACK_PARAPHRASES: json.dumps(
+        dict(blob, **{key: blob[key][:need - 1]}))})
+    with pytest.raises(SystemExit, match=key) as exc:
+        load_content(narrow)
+    assert PACK_PARAPHRASES in str(exc.value)
+    assert str(need) in str(exc.value)
+
+    # ...and this is the failure it stands in front of.
+    short = replace(good_content, **{key: blob[key][:need - 1]})
+    with pytest.raises(ValueError, match="larger than population"):
+        gen_dpo_pairs(content=short)
+
+
+def test_a_packs_model_denials_substitute_the_org_on_both_sides(write_persona_pack):
+    """The two templated denial tables were asymmetric: the COMPANY answer was
+    formatted with its org and the MODEL answer was not, so a pack author who
+    wrote "{x}" in a model answer trained a literal brace -- the one shape the
+    company side made look supported.
+
+    Not a corpus change for Enigma: her four model answers name no org and
+    carry no brace, so the substitution is a no-op on her side (pinned below,
+    because that is the claim the fix rests on)."""
+    assert not any("{" in a for a in default_content().deny_model_answers)
+
+    blob = json.loads((write_persona_pack() / PACK_PARAPHRASES).read_text(encoding="utf-8"))
+    pack = write_persona_pack({PACK_PARAPHRASES: json.dumps(dict(
+        blob, deny_model_answers=["No -- I'm Atlas, not {x}.",
+                                  "Not {x}. Atlas, built right here."]))})
+
+    chosen = [p["chosen"] for p in gen_dpo_pairs(content=load_content(pack))]
+    assert any("not Llama" in c for c in chosen), "the denied model never reached an answer"
+    assert not any("{x}" in c for c in chosen), "a literal brace trained instead of the org"
 
 
 def test_the_dictated_engine_refusal_is_an_aside_resolving_to_its_prior_record():

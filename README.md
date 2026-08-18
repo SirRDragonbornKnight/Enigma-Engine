@@ -35,6 +35,26 @@ avatar, and run the avatar against any LLM.
   pretrain is the next GPU spend.
 - User-facing launchers: `Talk to Enigma.bat` / `Enigma Tray.bat`.
 
+## Running a second AI beside her
+
+`serve_enigma.py --persona <pack-dir>` serves a **different AI** out of this same
+checkout — her own identity, memory store, voice recipe and port. The launchers take
+the same pair of flags (`Start-Enigma.ps1 -Persona <pack-dir> -Port <n>`, likewise
+Stop/Tray/Quiet), and `python make_persona_launchers.py <pack-dir>` writes a thin
+Start/Talk `.bat` pair into the pack itself. Packs live in `personas\`, which is
+**gitignored wholesale**: an AI someone authors on their own machine is their data,
+never this repo's.
+
+Two AIs may run **at once** — each binds the port her pack declares (`"port"` in
+`pack.json`, refused on 8000/8123), keeps her memories under her own home, writes her
+own `serve_<slug>.log`, and holds her own tray icon. The **daily posture is one hot
+serve**: a second server double-allocates the GPU (the model plus every organ, eagerly),
+so the second AI is for a smoke run or a side-by-side, not for leaving up.
+
+[`PERSONA_PACK_AUTHORING.md`](PERSONA_PACK_AUTHORING.md) is the authoring ceremony: what a
+pack holds, what training bakes from it, how her gate gets sealed, and where the seams
+are still sharp.
+
 ## Where to look
 
 - **The LLM** — [`CLAUDE.md`](CLAUDE.md) is the authoritative guide: setup, the

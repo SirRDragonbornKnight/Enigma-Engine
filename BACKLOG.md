@@ -1501,14 +1501,24 @@ Recorded because it existed only in conversation:
   **Design finding worth keeping: the identity data is NOT mechanically
   parameterizable.** Her answers explain what the WORD "Enigma" means ("a
   closed box, in the good sense"), so a pack carries `name_meaning` rather than
-  a template deriving it. STILL TO DO: `identity_anchors.py` (26 sites),
-  `identity_paraphrases.py` (15), `make_sft_data.py` (14) and `teach_enigma.py`
-  (9) still hold literals; the tray mutex `Local\EnigmaTray` and the fixed
-  serve port are the remaining one-AI-per-machine guards; the `--name` spawn
-  scaffold itself is unwritten. The vestigial `personas_dir` hook outlived the
-  file this entry cited it in -- `config/defaults.py:145` went with the dead
-  config package in `0fe97b16`; it now sits in `forge_config.json:11`, with
-  zero readers and no such directory on disk.
+  a template deriving it. **The literals census, re-measured 2026-08-17** (the
+  numbers above were wave-1's and wave 2 moved them): `identity_anchors.py`
+  still holds 26 "Enigma" occurrences (24 inside the authored EXAMPLES table)
+  and `identity_paraphrases.py` 15 (14 inside its tables) -- BY DESIGN now,
+  because wave 2 made both of them the hand-authored, collision-screened homes
+  `default_content()` passes THROUGH, and a pack substitutes the whole table
+  rather than editing their strings. `make_sft_data.py` is down from 14 to 4
+  and `teach_enigma.py` from 9 to 4, and every one of those 8 is a comment, a
+  docstring or an argparse description -- neither file carries an identity
+  literal that trains. STILL TO DO: nothing here -- wave 3b below closed all
+  three. The tray mutex is persona-derived (`Local\<Name>Tray` out of
+  `Resolve-EnigmaPersona`; hers still resolves to `Local\EnigmaTray`), the
+  port is the pack's own `port` field, and `make_persona_launchers.py` writes
+  the per-AI launcher shims -- shaped `-Persona <pack-dir>`, not the `--name`
+  this sentence imagined. The vestigial `personas_dir`
+  hook outlived the file this entry cited it in -- `config/defaults.py:145`
+  went with the dead config package in `0fe97b16`; it now sits in
+  `forge_config.json:11`, with zero readers and no such directory on disk.
   **Wave 1 -- mechanical convergence -- landed 2026-08-15**: the remaining
   hardcoded-Enigma drift points collapsed onto the seam, with no pack still
   byte-identical. `make_sft_data.PREAMBLE` IS `Persona.load().tools_preamble`
@@ -1538,6 +1548,89 @@ Recorded because it existed only in conversation:
   **Wave 2 rulings 2026-08-15:** Enigma stays IN-CODE (option A) -- the pack
   asymmetry is deliberate, this repo IS her and a pack is the other case; all
   future packs state SirRulean as creator.
+  **The creator half of that was RETIRED by the user 2026-08-17** ("forget my
+  ruling"): users install the engine on their own machines and author their own
+  AIs, so a pack naming a different creator is ordinary rather than a mistake.
+  The Enigma-stays-in-code half is untouched. The `load_content` refusal
+  nonetheless STAYS IN CODE for now, on the same ruling ("we can just change it
+  when needed") -- packs see no real use yet, so removal is DEFERRED rather
+  than forbidden. This entry is the receipt `PERSONA_PACK_AUTHORING.md`
+  Sharp edges (2) cites.
+  **Wave 2 -- the content half -- LANDED, committed `5a07c9ec` 2026-08-16**
+  (waves 2a/2b/2c). `enigma_engine/core/persona_content.py` is the interface:
+  the anchor pairs, the paraphrase intents and org denials, the self-facts, and
+  the keyed `Aside` records that stand IN PLACE inside otherwise-generic tables
+  (those tables feed seeded shuffles, so a record appended instead of
+  substituted moves every record after it). `default_content()` passes Enigma's
+  authored modules through; `load_content()` reads anyone else out of a pack
+  DIRECTORY -- `pack.json` beside `anchors.jsonl`, `paraphrases.json`,
+  `self_facts.jsonl` and `asides.json`. `make_dpo_data` and
+  `make_pretrain_curated` route their identity content through the seam, and
+  make_dpo no longer imports `identity_paraphrases`' privates at all (six of
+  them -- the tightest coupling in the repo, and the reason the interface
+  exists). `load_content` fails CLOSED: a missing file, a malformed line, a
+  wrong type or an aside key set that does not match the table sites refuses
+  naming the pack, the file and -- for the JSONL tables -- the line, because a
+  pack that trains three of its four tables produces a corpus nobody can read
+  the defect back out of afterwards. The creator ruling is enforced there. An
+  end-to-end Atlas pack is verified through every identity generator. Wave 3 is
+  designed and gated on user decisions.
+  **Wave 3 -- the per-AI half -- LANDED (3a/3b/3c/3d); suite 1206.** Every
+  sub-wave answers the same question: what still assumes there is exactly one
+  AI in this checkout.
+  **3a, serve self-identification.** `/v1/capabilities` reports `persona` and
+  `persona_is_default` -- WHO is serving, not just what she can do, and
+  `is_default` separates her from a pack that merely spells her name.
+  `/v1/models` publishes `Persona.slug` as both id and owner, and the id every
+  payload echoes is `_model_id()` read at REQUEST time: it was a constant
+  frozen at import, before `boot()` had read the pack, baked into four pydantic
+  class bodies where a rebind could not reach it, so one pack server published
+  `id: "atlas"` and echoed `"model": "enigma"`. Her slug IS "enigma", so her
+  surface is unmoved -- pinned by her bytes, not by the claim. The launcher
+  ownership checks now ask the port WHO is serving instead of reading a
+  `serve_enigma.py` command line as proof it is hers, with the process-name
+  fallback kept: an empty answer is UNKNOWN, never "not ours", so a server
+  wedged mid-generation stays killable.
+  **3b, launcher parameterization.** `-Persona`/`-Port` on all four .ps1 and
+  `--persona` on `enigma_window.py`, over one dot-sourced `Enigma-Persona.ps1`
+  holding the single `Resolve-EnigmaPersona`/`Get-ServingPersona` -- the script
+  that decides a port is hers and the script that decides it is hers ENOUGH TO
+  KILL must never disagree, and byte-identical copies are the shape that
+  drifts. A pack declares its own `port`; 8000 and 8123 REFUSE (her daily serve
+  every launcher points at, and the eval scratch port whose target gets its
+  memory store cleared). A pack's memory rides `home\memory` while HERS stays
+  the repo-relative `data\memory` it has always been. `make_persona_launchers`
+  generates a thin per-pack .bat pair that knows the pack and the port and
+  nothing else -- checkpoint, organs, memory and ownership stay in the one .ps1
+  both AIs call, because the stale copy is always the AI that stops booting --
+  and `personas/` is gitignored: packs are user data, never the repo's.
+  **3c, per-AI eval.** One function derives a seal manifest from its probe
+  file's stem, so a pack's gate finds its own manifest by the arithmetic that
+  wrote it, and her gate REFUSES a foreign sealed set rather than scoring it.
+  `--persona` reaches `eval_behavior.py` and `validate_probes.py`; the scratch
+  gate guards the pack's own memory home as well as hers, since a run clears
+  its target's store. `make_persona_probes.py` renders DRAFT candidates from a
+  pack's own content and refuses the default persona outright -- hers is sealed
+  and a generated set is a starting point, not a probe set. `validate_probes`
+  gained the deny-width load checks (a deny key a CORRECT answer can contain is
+  a probe nobody can pass), and `{x}` now substitutes on the model-denial
+  CHOSEN side, so a pack gets its model name where it used to train a literal
+  brace; her four model answers name no org and carry no brace, and her DPO
+  corpus is sha-verified unchanged by the fix.
+  **3d.** `PERSONA_PACK_AUTHORING.md` is the authoring path end to end, and
+  `make_pretrain_curated.py` refuses `--persona` with no `--out` -- a pack
+  would otherwise write its identity corpus into HER curated directory, where
+  the next retokenize would read it as hers. `--stats` is exempt: counting
+  writes nothing.
+  **The adversarial verification pass found one real regression, fixed in the
+  same wave.** Identity is a VALUE, not the presence of a `--persona`
+  argument: an Enigma-SPELLED pack IS her, so its build screens against HER
+  gate. And `persona_manifest` normalizes the pack FILE form to its directory
+  -- spelled straight through it named `pack.json\locked_probes.manifest.json`,
+  a path nothing can write and a guard that is inactive for good.
+  **Wave 4, stated plainly rather than implied done:** `pretokenize_data.py`
+  still hardcodes `SOURCE_DIRS`, so a pack shard never tokenizes without that
+  seam, and the SFT / DPO / facts / collect builders still take no `--persona`.
 
 Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
 REJECTED -- her serving path is our own code. Consequence executed: the
