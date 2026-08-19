@@ -20,6 +20,7 @@ Run everything from the Enigma Engine folder (venv activated).
 | `python serve_enigma.py --ears` | Ears organ: /v1/audio/transcriptions (faster-whisper) |
 | `python serve_enigma.py --eyes` | Eyes organ: image messages captioned into context + /v1/images/describe (her own distilled ViT) |
 | `python serve_enigma.py --image-gen` | Imagination organ: `imagine` tool + /v1/images/generations (Stable Diffusion) |
+| `python serve_enigma.py --search` | Search organ: `<search>query</search>` spans run a lookup through this machine's own SearXNG (WSL2 docker at 127.0.0.1:8888) and the results return to her context (v2 vocab only) |
 | `python serve_enigma.py --eyes --allow-downloads` | First-ever use of an organ on a machine: permit the one-time weight download. Without the flag the server is fully offline (cache only) |
 
 Organ flags combine freely, e.g. `python serve_enigma.py --voice --ears --eyes --memory-dir data/memory`.

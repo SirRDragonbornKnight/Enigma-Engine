@@ -79,7 +79,7 @@ _p.add_argument(
     "--model",
     # The ADOPTED model -- same posture as every launcher. The old default was
     # the raw pretrain checkpoint, so a bare `enigma` console script served the
-    # wrong brain (audit 2026-07-17). ADOPTED 2026-08-08 (Gate D): the v2
+    # wrong brain (audit 2026-07-17). ADOPTED 2026-08-09 (Gate D): the v2
     # lineage's SFT-2 checkpoint (67/120 vs v8 56, paired p=0.0433 -- the first
     # candidate the sealed gate could distinguish). enigma_dpo (v8) stays on
     # disk as the byte-identical rollback.
@@ -91,7 +91,7 @@ _p.add_argument("--port", type=int, default=8000)
 _p.add_argument(
     "--max-context",
     type=int,
-    # SUNSET at Gate D adoption 2026-08-08: the adopted v2 lineage trains at
+    # SUNSET at Gate D adoption 2026-08-09: the adopted v2 lineage trains at
     # block 2048, so the default follows it. Safe for any checkpoint -- boot()
     # caps this down to the model's own KV-cache capacity with a WARN when a
     # smaller model is served, so a 1024-trained checkpoint still serves at

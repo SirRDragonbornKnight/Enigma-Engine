@@ -35,7 +35,7 @@ needs_powershell = pytest.mark.skipif(_POWERSHELL is None, reason="no powershell
 
 # What Start-Enigma.ps1 passed to serve before it took a -Persona, argument for
 # argument. The adopted checkpoint, the 2048 context the v2 lineage needs, all
-# four organs, and data\memory -- her real long-term memory, in the repo, which
+# five organs, and data\memory -- her real long-term memory, in the repo, which
 # this wave does NOT move.
 HER_SERVE_ARGS = [
     "serve_enigma.py",
@@ -43,7 +43,7 @@ HER_SERVE_ARGS = [
     "--model", r"models\enigma_v2_sft2\model.pth",
     "--max-context", "2048",
     "--memory-dir", r"data\memory",
-    "--eyes", "--ears", "--voice", "--image-gen",
+    "--eyes", "--ears", "--voice", "--image-gen", "--search",
 ]
 
 
@@ -138,7 +138,7 @@ def test_a_pack_launch_binds_her_port_and_her_own_memory(tmp_path):
         "--model", r"models\enigma_v2_sft2\model.pth",
         "--max-context", "2048",
         "--memory-dir", str(Path.home() / ".atlas_prime" / "memory"),
-        "--eyes", "--ears", "--voice", "--image-gen",
+        "--eyes", "--ears", "--voice", "--image-gen", "--search",
         "--persona", str(pack),
     ]
     logs = next(ln for ln in lines if ln.startswith("DRYRUN logs: "))

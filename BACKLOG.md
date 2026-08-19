@@ -182,9 +182,11 @@ four for four:
    OPEN residue the user must still weigh: the eyes organ's vision projection
    was aligned against v8's embedding space -- dims match (both 1024) so it
    BOOTS, but caption quality on v2 is unproven and a v2 vision re-align is a
-   separate step; and `--search` is now servable (v2 vocab carries the tags)
+   separate step; and ~~`--search` is now servable (v2 vocab carries the tags)
    but stays OUT of the daily launcher until the WSL SearXNG dependency is
-   ruled in. -> 7.95 T6.
+   ruled in~~ **DONE 2026-08-19: `Start-Enigma.ps1` passes `--search`. The
+   organ degrades per query, so SearXNG reachability is never a boot gate.**
+   -> 7.95 T6.
 9. **Voice live-listen**: the Cortana blend was chosen by documented
    character on 2026-07-23 and has never been HEARD (the user had no audio);
    candidates A-D at `Desktop\Enigma Voice Audition`. Listen, tune or bless.
@@ -1414,10 +1416,13 @@ The block, in execution order:
       2026-08-09: default SUNSET to 2048 (the adopted model's trained
       block); boot() caps it down with a WARN for smaller checkpoints, so
       the flip is safe for every model.**
-    - The launcher gains `--search` at adoption too (complete-by-default,
+    - ~~The launcher gains `--search` at adoption too (complete-by-default,
       ruled 2026-07-27: the user-facing chain boots ALL organs). It is NOT
       added today because v8's vocab carries no tag ids — the flag would
-      WARN on every boot until the v2 checkpoint is the one being served.
+      WARN on every boot until the v2 checkpoint is the one being served.~~
+      **DONE 2026-08-19: `Start-Enigma.ps1` passes `--search` — the v2
+      checkpoint it serves carries the tag ids. The -DryRun argv pins in
+      `tests/test_launchers.py` were extended with the flag.**
     - **The pretrain defaults re-point to the ADOPTED lineage at this gate**
       (ruled 2026-07-29 -- the SUNSET of the never-change-defaults
       guardrail, following the vocab-contract adoption-flip pattern): flip

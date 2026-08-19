@@ -55,7 +55,7 @@ $log = $self.Log
 # Each organ WARNs and text serving continues if its backend is missing, so
 # the flags are always safe; voice loaded stays SILENT until asked (speak is
 # intent-gated; talk-mode persists separately in data\talk_mode.json).
-# ADOPTED 2026-08-08 (Gate D): the v2 lineage's SFT-2 checkpoint. It is the
+# ADOPTED 2026-08-09 (Gate D): the v2 lineage's SFT-2 checkpoint. It is the
 # first candidate the sealed gate could distinguish from v8 (67/120 vs 56,
 # paired p=0.0433) and wins or ties every category but factual. The v8
 # checkpoint stays at models\enigma_dpo\model.pth as the rollback (byte-
@@ -69,7 +69,7 @@ $log = $self.Log
 # traps, pinned in tests/test_repo_hygiene.py). The script path stays
 # repo-relative because -WorkingDirectory below is the engine dir.
 $argString = "`"serve_enigma.py`" --port $bindPort --model models\enigma_v2_sft2\model.pth" `
-    + " --max-context 2048 --memory-dir `"$($self.MemoryDir)`" --eyes --ears --voice --image-gen"
+    + " --max-context 2048 --memory-dir `"$($self.MemoryDir)`" --eyes --ears --voice --image-gen --search"
 if ($VoiceName) { $argString += " --voice-name `"$VoiceName`"" }
 if ($Persona) { $argString += " --persona `"$Persona`"" }
 

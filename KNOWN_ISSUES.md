@@ -79,8 +79,8 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
    dialogue with invented speakers (observed: "Petitioner:"); stop markers
    catch `User:`/`Enigma:` turns only. SFT checkpoints (`meta.chat_format`
    from `finetune_enigma.py`) get the real template + tool calls. SFT
-   checkpoints are live (`models/enigma_sft*`); serve auto-detects per
-   checkpoint.
+   checkpoints are live (the adopted `models/enigma_v2_sft2`); serve
+   auto-detects per checkpoint.
 5. **base_v2 (122M @ step 2,000) was pipeline-validation quality only** —
    barely trained, and RULED DEAD under the 2026-07-29 section-9 reclaim.
    Probe the large 51k checkpoint.

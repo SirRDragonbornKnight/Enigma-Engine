@@ -43,6 +43,7 @@ rollback; serve it by passing `--model` explicitly.
 | `--ears` | Ears organ: `/v1/audio/transcriptions` (local faster-whisper) |
 | `--eyes` | Eyes organ: image messages captioned into her context + `/v1/images/describe` (her own distilled ViT) |
 | `--image-gen` | Imagination organ: `imagine` tool + `/v1/images/generations` (local Stable Diffusion) |
+| `--search` | Search organ: a `<search>query</search>` span in her output runs a lookup through this machine's own SearXNG (WSL2 docker at 127.0.0.1:8888; `--search-url` to point elsewhere) and the results return to her context. Needs the v2 vocab that carves the tags; reachability is per-query, never a boot gate |
 | `--allow-downloads` | Permit the ONE-TIME organ weight download from HuggingFace. Without it the server is fully offline (organs load from local cache only) -- first-ever use of an organ on a machine needs this flag once |
 
 ## Chat

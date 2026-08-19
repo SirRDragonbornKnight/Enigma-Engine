@@ -1,6 +1,9 @@
 #!/usr/bin/env python
-"""Post-hoc checkpoint EMA -- the free win from the v2 recipe (IMU-1: EMA of
-the final ~10 archived checkpoints at beta 0.8 beats the last checkpoint).
+"""Post-hoc checkpoint EMA -- NOT a free win on a WSD run. Measured 2026-08-07
+over the v2 decay tail: the EMA scored WORSE than model.pth on 6 of 6 probes,
+because the decay tail already averages the weights EMA would average. The
+classic win is on runs that never decay to zero -- constant-LR, or cosine to a
+nonzero floor -- and the tool stands for those.
 
 Runs OFFLINE over already-saved checkpoints, so it costs nothing during
 training and can be re-run with any beta. Feed it the archive snapshots of

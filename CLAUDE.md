@@ -61,6 +61,11 @@ Flags still exist for scratch/eval servers, which stay lean on purpose.
   `/v1/images/describe`. The chat page can upload a picture to her.
 - `--image-gen` → `core/imagegen.py` (diffusers sd-turbo, 1-step): intent-gated `imagine`
   built-in (PNGs land in `~/.enigma_engine/images/`) + `/v1/images/generations`.
+- `--search` → `core/search.py` (**SearXNG-backed local metasearch**, the WSL2 docker
+  instance at `127.0.0.1:8888`): she emits a `<search>query</search>` span in her own output
+  (native v2 tag ids 12/13; v1 carves none, so the feature is honestly absent there), serve
+  intercepts the closed tag and splices the results back as a tool turn. Reachability is
+  checked PER QUERY, never a boot gate — SearXNG lives in WSL and may come up after serve.
 Verified end-to-end vs served weights: speak → Kokoro audio; voice→wav→ears and
 imagine→png→eyes loops pass. `/v1/capabilities` reports which organs a server booted with.
 

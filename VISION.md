@@ -57,15 +57,15 @@ Tray, window, voice, memory of you, personas. The Unity avatar body is its
 own active repo (`C:\Users\SirKn\Enigma Avatar\`). Deepens with every other
 destination rather than waiting on any of them.
 
-### 2. The bigger mind — NEXT (the v2 training block)
+### 2. The bigger mind — LANDED (v2 serving since 2026-08-09)
 238M deeper-thinner (`v2_deep_238m`, ruled 2026-07-30), 16k vocab, native
 block 2048, curated corpus with her identity and must-know facts pretrained
 in. This is where the honest weaknesses get attacked: facts (capacity),
 epistemics ("I don't know" is v2's single biggest win condition — 0/15 on
 BOTH baselines at reseal #7, zero refusals across 30 unanswerables; the old
 "0/24" was the 96-probe era's count), research-length context. Owner: `BACKLOG.md` §7.95
-(T1 corpus and the T2 sweep are DONE, Gate B and the rebuild are RULED;
-next the rebuild, then T3-T7).
+(T1-T6 are DONE — pretrain closed 2026-08-06, SFT-2 adopted at Gate D
+2026-08-09; T7, post-adoption organ training, remains).
 Everything below gets easier after this.
 
 ### 3. Her own runtime — "on her own", literally (after v2)

@@ -1,23 +1,29 @@
 # How the AI Works
 
-Enigma is a **fully local, from-scratch** LLM: a 182M-parameter
+Enigma is a **fully local, from-scratch** LLM: the 238M-class v2
 decoder-only transformer with its own architecture, its own BPE
 tokenizer, and its own weights. No cloud, no wrapper around someone
-else's model. Pipeline: pretrain -> SFT -> DPO -> serve.
+else's model. Pipeline: pretrain -> facts continued-pretrain
+(optional) -> SFT -> DPO -> serve.
 
 ---
 
 ## Tokenizer
 
 Enigma uses her own BPE tokenizer (`enigma_engine/core/bpe_tokenizer.py`
-family, vocab in `enigma_engine/vocab_model/`):
+family, vocab in `enigma_engine/vocab_model/`). The LIVE lineage tokenizes
+with the **v2 16,366-row table** (`bpe_vocab_v2_16k.json`) --
+`TOKENIZER_V2_SPEC.md` owns its layout and measurements. The numbers below
+are the **v1 / rollback table**, what the 182M lineage used:
 
-- **Base vocab 4718** (ids 0..4717) -- trained on the pretraining corpus.
-- `<think>` = id 10 and `</think>` = id 11 are **native** tokenizer ids.
+- **v1 base vocab 4718** (ids 0..4717) -- trained on the pretraining corpus.
+- `<think>` = id 10 and `</think>` = id 11 are **native** tokenizer ids (v2
+  carves them at the same ids, plus `<search>`/`</search>` at 12/13).
 - Six chat special tokens live in the padded embedding above the base
-  vocab (`enigma_engine/core/chat_format.py`):
+  vocab (`enigma_engine/core/chat_format.py`); v2 derives the same six at
+  16366..16371:
 
-| Id | Token |
+| Id (v1) | Token |
 |----|-------|
 | 4718 | `<\|im_start\|>` |
 | 4719 | `<\|im_end\|>` |

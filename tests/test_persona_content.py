@@ -123,7 +123,7 @@ def test_the_creator_is_the_name_her_own_answers_already_use():
     substring of every answer, so the containment check alone passes
     vacuously on a creator that was blanked."""
     c = default_content()
-    assert c.creator == "SirRulean"  # ruled 2026-08-15: every pack states one
+    assert c.creator == "SirRulean"  # ruling RETIRED 2026-08-17; held while packs are unused
     answers = [a for _qs, ans in c.intents for a in ans]
     assert any(c.creator in a for a in answers), c.creator
 

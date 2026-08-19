@@ -1,6 +1,7 @@
 # Phase 7 Gate — measured ceilings and the remake charter
 
-**Gate status: OPEN — v2 is IN PROGRESS.** Superseded as a decision
+**Gate status: CLOSED — adoption EXECUTED 2026-08-09** (the v2 lineage's
+SFT-2 checkpoint, 67/120 vs v8's 56 on the sealed set). Superseded as a decision
 2026-07-20 by ROADMAP's Phase 7 section: the v2 prefix landed and the v2
 pretrain is the next GPU spend, ahead of Phases 4/5. The baseline it needed
 is measured (56/120 v8, 55/120 v5 on the sealed locked set, 2026-07-27 —
@@ -18,8 +19,10 @@ The gate's scorecard narration moved to
 `_archive/PHASE7_GATE_SCORECARD_2026-07.md` when EVAL_REDESIGN became the one
 owner of eval numbers.
 
-Current lineage: 182M params, vocab 4718, block 1024, val ppl 3.5
-(pretrain DONE 2026-07-03, 287,882 steps / 56.6B tokens).
+Charter-era lineage (v1, 2026-07) — the baseline every ceiling below was
+measured on: 182M params, vocab 4718, block 1024, val ppl 3.5 (pretrain
+DONE 2026-07-03, 287,882 steps / 56.6B tokens). The ADOPTED lineage is now
+v2 238M-class, vocab 16,366, block 2048 (Gate D, 2026-08-09).
 
 ## Measured ceilings (cannot fix with more SFT data at 182M)
 

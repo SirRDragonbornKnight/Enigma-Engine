@@ -32,7 +32,7 @@ need to describe her tools yourself.
 2. **Set boundaries** -- explain what it should and should not do
 3. **Give examples** -- show the format you expect
 4. **Keep it focused** -- shorter prompts often work better, especially
-   at 182M parameters; every prompt token competes with the conversation
+   at the 238M-class scale; every prompt token competes with the conversation
    for the context window
 
 ---
