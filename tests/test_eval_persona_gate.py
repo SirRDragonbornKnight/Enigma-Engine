@@ -178,6 +178,28 @@ def test_the_scratch_gate_protects_the_store_of_the_ai_being_evaluated(
     assert eval_behavior._is_scratch_target(scratch, caps, her_ports, her_live) is True
 
 
+def test_a_pack_eval_can_never_clear_the_live_data_memory_store(write_persona_pack):
+    """The other half of the scratch rule: a pack's eval server that REPORTS
+    Enigma's real data\\memory must refuse. The evaluated persona's own store
+    is protected AND so is _LIVE_MEMORY_DIR -- the one dir this harness must
+    never clear -- whoever is being measured. It is the union, not a swap: a
+    pack judged only against its own home\\memory would read data\\memory as
+    disposable and clear it unrecoverably."""
+    persona = Persona.load(write_persona_pack())
+    pack_ports, pack_live = eval_behavior._scratch_target_rules(persona)
+    scratch = URL.replace("9999", "8123")
+
+    reports_her_store = {"memory": True,
+                         "memory_dir": str(eval_behavior._LIVE_MEMORY_DIR)}
+    assert eval_behavior._is_scratch_target(
+        scratch, reports_her_store, pack_ports, pack_live) is False
+
+    # ...and her own eval protects data\memory the same way, unchanged.
+    her_ports, her_live = eval_behavior._scratch_target_rules(Persona())
+    assert eval_behavior._is_scratch_target(
+        scratch, reports_her_store, her_ports, her_live) is False
+
+
 def test_her_own_run_is_unchanged_by_the_parameterization(tmp_path, monkeypatch, capsys):
     """The default case, end to end: no --persona, a probe file with no
     manifest of its own, and the gate still reads HER manifest -- so a renamed

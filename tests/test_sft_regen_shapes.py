@@ -932,7 +932,8 @@ def _stub_build(monkeypatch, tmp_path, corpora, probe_qs=(), general=""):
         recs = list(corpora.get(name, []))
         monkeypatch.setattr(make_sft_data, name, (lambda r: lambda *a, **k: list(r))(recs))
     ident = list(corpora.get("gen_identity_examples", []))
-    monkeypatch.setattr(make_sft_data, "gen_identity_examples", lambda: (ident, 0))
+    monkeypatch.setattr(make_sft_data, "gen_identity_examples",
+                        lambda *a, **k: (ident, 0))
 
     probes = tmp_path / "behavior_probes.jsonl"
     probes.write_text(

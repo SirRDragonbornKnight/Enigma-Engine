@@ -16,12 +16,18 @@ from-scratch / SirRulean / ~240M) but worded differently. Deny-the-org and
 made-by-org intents are templated over many org names so the denial
 generalizes to organizations never seen verbatim.
 
-Data only -- gen_identity_paraphrases() in make_sft_data renders these.
+The tables below stay Enigma's hand-authored, collision-screened source; the
+generator renders whatever `PersonaContent` it is handed, and with none it is
+handed hers (`default_content()` passes these very objects through). A pack
+therefore gets its own intents and its own denials instead of a second
+Enigma's.
 """
 
 from __future__ import annotations
 
 import random
+
+from enigma_engine.core.persona_content import PersonaContent, default_content
 
 # Organizations she is NOT, for the "are you X?" and "did X make you?" denials.
 _ORGS_MODELS = [
@@ -316,9 +322,16 @@ _DENY_COMPANY_A = [
 ]
 
 
-def gen_identity_paraphrases(seed: int = 7) -> list[dict]:
+def gen_identity_paraphrases(seed: int = 7,
+                             content: "PersonaContent | None" = None) -> list[dict]:
     """Emit paraphrase-diverse identity records (Q x rotating A per intent,
-    plus templated org denials). Deduped on the exact (question, answer) pair."""
+    plus templated org denials). Deduped on the exact (question, answer) pair.
+
+    Every string rendered here names the AI, her creator or her origin, so all
+    of them arrive as CONTENT. The module tables are hers, and `None` is hers:
+    `default_content()` hands these same objects back, so her corpus does not
+    move by the seam existing."""
+    content = default_content() if content is None else content
     rng = random.Random(seed)
     out: list[dict] = []
 
@@ -332,7 +345,7 @@ def gen_identity_paraphrases(seed: int = 7) -> list[dict]:
         })
 
     # Fixed intents: each question against 2 rotating answers (varied both sides).
-    for questions, answers in INTENTS:
+    for questions, answers in content.intents:
         for i, q in enumerate(questions):
             picks = [answers[i % len(answers)], answers[(i + 1) % len(answers)]]
             for a in picks:
@@ -342,16 +355,26 @@ def gen_identity_paraphrases(seed: int = 7) -> list[dict]:
     # j alone runs 0..2 against a 4-answer pool, so index 3 never emitted --
     # 25% of the denial surface trained nowhere (review 2026-08-13). Stride
     # 3 is coprime with 4, so every variant cycles across the org list.
-    for oi, x in enumerate(_ORGS_MODELS):
-        qs = rng.sample(_DENY_MODEL_Q, 3)
+    #
+    # The ANSWER takes the org too, when it asks for it: the company side
+    # already substituted and the model side did not, so a pack author who
+    # wrote "{x}" in a model answer trained a literal brace. Guarded on the
+    # placeholder rather than applied flat, because an answer is authored
+    # prose and a bare brace in it is not a format field -- her four name no
+    # org and carry no brace, so this is a no-op on her corpus.
+    for oi, x in enumerate(content.denied_models):
+        qs = rng.sample(content.deny_model_questions, 3)
         for j, qt in enumerate(qs):
-            add(qt.format(x=x), _DENY_MODEL_A[(oi * 3 + j) % len(_DENY_MODEL_A)])
+            answer = content.deny_model_answers[
+                (oi * 3 + j) % len(content.deny_model_answers)]
+            add(qt.format(x=x), answer.format(x=x) if "{x}" in answer else answer)
 
     # Templated company denials (same rotation rule).
-    for oi, c in enumerate(_ORGS_COMPANIES):
-        qs = rng.sample(_DENY_COMPANY_Q, 3)
+    for oi, c in enumerate(content.denied_companies):
+        qs = rng.sample(content.deny_company_questions, 3)
         for j, qt in enumerate(qs):
-            add(qt.format(c=c), _DENY_COMPANY_A[(oi * 3 + j) % len(_DENY_COMPANY_A)].format(c=c))
+            add(qt.format(c=c), content.deny_company_answers[
+                (oi * 3 + j) % len(content.deny_company_answers)].format(c=c))
 
     # Dedup exact (question, answer) pairs.
     seen, uniq = set(), []

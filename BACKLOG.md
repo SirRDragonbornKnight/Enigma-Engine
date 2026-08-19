@@ -1611,12 +1611,17 @@ Recorded because it existed only in conversation:
   gate guards the pack's own memory home as well as hers, since a run clears
   its target's store. `make_persona_probes.py` renders DRAFT candidates from a
   pack's own content and refuses the default persona outright -- hers is sealed
-  and a generated set is a starting point, not a probe set. `validate_probes`
-  gained the deny-width load checks (a deny key a CORRECT answer can contain is
-  a probe nobody can pass), and `{x}` now substitutes on the model-denial
-  CHOSEN side, so a pack gets its model name where it used to train a literal
-  brace; her four model answers name no org and carry no brace, and her DPO
-  corpus is sha-verified unchanged by the fix.
+  and a generated set is a starting point, not a probe set. `load_content`
+  gained the deny-width load checks (`GENERATOR_SAMPLE_WIDTHS` in
+  `persona_content.py`: a pack whose deny lists are narrower than the
+  preference builder samples refuses where the pack is read, not with a
+  `random.sample` traceback halfway through a build), and `validate_probes`
+  gained `--persona` and its persona-derived allowlist (`_distinctive_names`),
+  so a pack's probes are checked against its own AI's names rather than hers.
+  `{x}` now substitutes on the model-denial CHOSEN side, so a pack gets its
+  model name where it used to train a literal brace; her four model answers
+  name no org and carry no brace, and her DPO corpus is sha-verified unchanged
+  by the fix.
   **3d.** `PERSONA_PACK_AUTHORING.md` is the authoring path end to end, and
   `make_pretrain_curated.py` refuses `--persona` with no `--out` -- a pack
   would otherwise write its identity corpus into HER curated directory, where
@@ -1628,9 +1633,156 @@ Recorded because it existed only in conversation:
   gate. And `persona_manifest` normalizes the pack FILE form to its directory
   -- spelled straight through it named `pack.json\locked_probes.manifest.json`,
   a path nothing can write and a guard that is inactive for good.
-  **Wave 4, stated plainly rather than implied done:** `pretokenize_data.py`
+  **Wave 4, stated plainly rather than implied done:** ~~`pretokenize_data.py`
   still hardcodes `SOURCE_DIRS`, so a pack shard never tokenizes without that
-  seam, and the SFT / DPO / facts / collect builders still take no `--persona`.
+  seam~~ -- CLOSED by wave 4a below -- and ~~the SFT~~ -- CLOSED by wave 4b
+  below -- / ~~DPO~~ -- CLOSED by wave 4c below -- / facts / collect builders
+  still take no `--persona`.
+  **Wave 4a -- the tokenizer seam -- LANDED; suite 1224.**
+  `pretokenize_data.py` takes two orthogonal flags and nothing else moved.
+  `--curated-dir <dir>` replaces the PATH under the "Curated" entry, label and
+  walk order untouched, so a pack's shard inherits both properties her position
+  buys -- walked FIRST, so never in the val tail, and first-wins on dedup
+  collisions -- and `--repeat-sources` resolves it by the label OR the new
+  directory's basename, because `parse_repeat_sources` keys on both.
+  `--only-curated` restricts the walk to that one entry, no SE expansion: with
+  `--curated-dir` that is the smoke shape, one pack shard and nothing else.
+  Two refusals. An absent or non-directory `--curated-dir` refuses, on the
+  repeat-absent doctrine -- a source named on the command line cannot be absent
+  by intent, and absent it would merely WARN as a skipped dir while the run
+  wrote a corpus carrying no curated shard at all (mutation-checked: with the
+  guard disabled the run prints `1 source dirs ABSENT and skipped: Curated` and
+  completes). `--only-curated` with `--repeat-sources` refuses and says why:
+  one source in the walk means the repeated extent spans the whole bin, so it
+  always reaches the val tail and `refuse_repeated_source_in_val` refuses at
+  pretrain boot -- fail-early honesty, not a new rule. The seam is
+  `build_source_dirs(curated_dir=None, only_curated=False)` still reading the
+  module globals, so the suite's `SOURCE_DIRS`/`SE_DIR` monkeypatch composes
+  and a bare run is byte-identical to before (pinned by its own test). The
+  sidecar records `curated_dir` and `only_curated` as provenance -- a "Curated"
+  extent means a different shard depending on them. Seven new tests, each on
+  real bytes or extents; `PERSONA_PACK_AUTHORING.md` section 2 and sharp edge 8
+  carry the smoke line and the trap that outlives the seam: pass `--vocab` in
+  full or the run silently builds against the v1 4,718-row table.
+  **Wave 4b -- the SFT seam -- LANDED; suite 1236.**
+  `make_sft_data.py` takes `--persona` and `--out`, the curated builder's pair
+  and its doctrine: an omitted `--out` on a pack REFUSES rather than rotating
+  `data/sft`, which is the SERVED model's training receipt, and a second such
+  run would take the `.prev` generation with it. `--out` on HER build is a
+  plain redirect, which is what makes a shadow render possible. Content routes
+  to all four seamed generators, `PREAMBLE` is REBOUND at the top of `main()`
+  the way serve rebinds at boot -- it is read by `_system` and
+  `_builtin_system`, so a pack whose preamble stayed hers would have every
+  tool block saying "You are Enigma" while every identity record said Atlas.
+  `identity_paraphrases.gen_identity_paraphrases()` was the one real PORT (it
+  had no seam at all): intents and all six denial fields now come from
+  `PersonaContent`, the module tables staying Enigma's authored source, and
+  `{x}` substitutes on the model-denial ANSWER when the answer asks for it --
+  the same asymmetry fixed on the DPO side in wave 3c, guarded on the
+  placeholder here because an answer is authored prose. That generator samples
+  THREE denial questions per org where the preference builder samples two, so
+  `GENERATOR_SAMPLE_WIDTHS` goes 2 -> 3: recorded at the narrower draw, a
+  2-wide pack loaded clean and died mid-build. Gate swap on the same rule as
+  the curated builder (`persona_manifest`, keyed on the LOADED persona so an
+  Enigma-spelled pack is still hers), plus the piece that has no curated
+  analogue: the exact-match DEV screen reads the PACK's own
+  `locked_probes.jsonl` instead of her `data/eval/behavior_probes.jsonl`, and
+  says `WARN: <name> has no sealed set` when there is none. `teachings.jsonl`
+  is SKIPPED for a pack out loud -- it is the user's channel into HER weights.
+  Twelve new tests in `tests/test_sft_persona.py`; five mutations checked
+  (`--out` refusal, gate selection, teachings exclusion, preamble rebind,
+  review-file destination) and each killed by a corpus-level assertion, not a
+  print. Her corpus is UNMOVED: a full default build rendered to scratch before
+  and after the wave is byte-identical across all five artifacts
+  (mix.jsonl `df31fd42...`, tool_calls `d5270377...`, identity `9a7c1b9a...`).
+  **Wave 4c -- the DPO seam + the trainers' gate -- LANDED;
+  suite 1254.** `make_dpo_data.py` takes `--persona` and `--out` on 4b's
+  doctrine, with one difference worth naming: its two writers are bare
+  `write_text` OVERWRITES, not the SFT mix's rotating writer, so a pack built
+  without `--out` would leave her preference pairs simply gone rather than
+  demoted to `.prev` -- the refusal says exactly that. Both files follow
+  `--out` (`--focused` included), and each destination defaults to its OWN
+  module global rather than being derived from the other's parent, so the
+  shadow render can move them independently. Content threads into
+  `gen_dpo_pairs`; the gate swaps on `persona_manifest` keyed on the LOADED
+  persona; the exact-match dev screen reads the pack's own
+  `locked_probes.jsonl` with the same `WARN: <name> has no sealed set`; and
+  `teach_pairs.jsonl` -- the `/fix` correction channel, not `teachings.jsonl`
+  -- is SKIPPED for a pack. The lazy `LockedProbeGuard.load()` fallbacks inside
+  the module stay Enigma's on purpose: they answer a caller who passed nothing,
+  and `main` threads its guard explicitly into every generator that screens.
+  **The hardcoded 240M claim is gone from the table.** "all 240 million
+  parameters of it" sat as a literal in `INJECTION_PAIRS` -- a size claim true
+  of her and false of every pack, and the last persona-flavored record there
+  with no aside key covering it. It is now `Aside("refuse_bigger_model")`, a
+  3-arity key whose default renders her exact former string; the census
+  follows automatically into the test fixture (`_atlas_asides` derives from
+  `ENIGMA_ASIDES`) and by hand into the authoring doc's arity table, which
+  states the field's intent -- your own count, or a refusal that names none.
+  **Both trainers grew `--persona`, gate selection ONLY**, via a
+  `screening_manifest()` seam each (the shape `startup_artifact_guard` already
+  duplicates), threaded to `refuse_if_leaky(manifest=...)`. finetune's receipt
+  derives for free -- `meta["leak_guard"]["manifest_sha256"]` comes from the
+  verdict the guard writes -- and dpo, which records nothing today, gained one
+  log line naming the persona and the gate. No data routing: `--data`/`--out`
+  stay the caller's. Eighteen new tests in `tests/test_dpo_persona.py`; five
+  mutations checked (`--out` refusal, gate selection, teach_pairs exclusion,
+  the aside, trainer gate selection) and each killed by a corpus-level
+  assertion. Her corpus is UNMOVED, proved twice over: the rendered files are
+  byte-identical before and after (`dpo_pairs.jsonl` `196d2fe4...`,
+  `dpo_focused.jsonl` `300a42ab...`, 489/153 pairs), and the standing wave-3c
+  digest `f636a6bb...` re-derives by its own method
+  (`sha256(json.dumps(gen_dpo_pairs(), sort_keys=True))`) -- which the suite
+  now PINS, so the next wave cannot move her preference corpus silently.
+  **Wave 4d -- the doc, truthed up -- LANDED; suite 1254.** Docs
+  plus one docstring; no behavior moved. `PERSONA_PACK_AUTHORING.md` gained
+  **section 5, the smoke run** -- the nine-step ceremony from `pack.json` to a
+  served AI scored against her own seal, every command line re-derived from
+  live argparse rather than from the waves' prose, and Sharp edges renumbered
+  to 6. What the recipe adds over the sections it sequences is the arithmetic
+  a TINY run needs and the three places the pipeline lets a wrong one through.
+  **The corpus floor is `100 x (block + 2)` tokens** -- 25,800 at block 256,
+  102,600 at block 1024 -- derived from `val_n = min(--val-tokens, n // 100)`
+  against `randint(train_end, n - block - 1)`, and it surfaces in TWO
+  different shapes, which is the part worth writing down: the periodic `[val]`
+  is unguarded and dies as a raw `ValueError: low >= high` mid-run, while the
+  final val is inside a `try/except` -- so a smoke shorter than one
+  `--eval-every` interval finishes, saves `model.pth`, and prints
+  `[final] val FAILED` as its entire warning. Pretrain is also the ONE writer
+  in the chain with no existing-artifact refusal (the trainers call
+  `refuse_existing_artifact`, pretokenize refuses an existing `--output-bin`,
+  pretrain just `mkdir(exist_ok=True)`s), and `pi_zero` at the v2 vocab
+  measures 1,147,328 params -- the recipe says out loud that it proves plumbing
+  and nothing about quality. Two `--block` couplings the flags do not enforce
+  are stated: `make_sft_data --block` must match finetune's or the mix trains
+  on leftovers (over-length records are SKIPPED with a count), and
+  `dpo_enigma.py` carries no `max_seq_len` refusal of finetune's kind, so its
+  1024 default has to be narrowed by hand against a smaller checkpoint.
+  **The stale-claim sweep found four**, all inside the authoring doc and all
+  written by waves 3-4c: the build-path diagram still pointed at "the gap
+  below"; the gap section was still headed "wave-4 scope, part built"; the
+  collision doctrine still said CONSUME time carries "no persona seam at all"
+  (both trainers thread `manifest=` now, and the real seam is that BUILD time
+  reads the loaded persona while CONSUME time reads the command line); and
+  Sharp edge 7 still said the SFT/DPO builders have no `--persona`. It is now
+  the trap that replaced it -- every stage takes the flag on its own line,
+  nothing carries it forward, and the tell for a forgotten one is the ABSENCE
+  of the `persona: <Name>` banner. One inaccuracy of 4c's own was corrected
+  with them: only finetune stamps `meta["leak_guard"]["manifest_sha256"]` into
+  its artifact, so a DPO run's gate is provable from the console log alone.
+  `make_facts_pretrain_data.py` and `collect_finetuning_data.py` keep their
+  **NO** rows and now carry the reason -- the facts CPT replays HER trained
+  corpus (`--source-bin`, default `tokens_v2c.bin`) and mixes HER
+  `knowledge_corpus`, so a pack has nothing to replay from until it has
+  pretrained for real; the collector's output is persona-neutral and read
+  shared. `BACKLOG.md`, `README.md`, `CLAUDE.md`, `ROADMAP.md` and
+  `KNOWN_ISSUES.md` were swept and needed nothing: BACKLOG's surviving
+  `SOURCE_DIRS` line is about ADDING a source, which `--curated-dir` still does
+  not do. `make_dpo_data.py`'s module docstring (its argparse description) got
+  the `--persona`/`--out` paragraph 4c flagged as a loose end.
+  **Wave 4 code is COMPLETE; the smoke RUN is not.** Every seam in the recipe
+  is test-covered and none of it has been executed end to end -- that costs a
+  GPU and waits on the user's order.
 
 Serving stays FROM-SCRATCH (ruled 2026-07-24): the llama.cpp/GGUF pivot is
 REJECTED -- her serving path is our own code. Consequence executed: the

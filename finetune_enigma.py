@@ -44,14 +44,20 @@ except Exception:
     pass
 
 from enigma_engine.core.optim import build_optimizer, get_lr  # the shared arsenal
+from enigma_engine.core.persona import Persona
 from enigma_engine.core.safe_save import refuse_existing_artifact
-from eval_leak_guard import last_verdict, refuse_if_leaky
+from eval_leak_guard import (
+    LOCKED_MANIFEST,
+    last_verdict,
+    persona_manifest,
+    refuse_if_leaky,
+)
 
 ROOT = Path(__file__).resolve().parent
 IGNORE = -100  # ignore_index for the masked positions
 
 
-def load_examples(path: Path, tokenizer, block: int):
+def load_examples(path: Path, tokenizer, block: int, manifest: Path = LOCKED_MANIFEST):
     """JSONL -> list of (ids, mask) conversations that fit in one block."""
     from enigma_engine.core.chat_format import render_training
 
@@ -131,7 +137,7 @@ def load_examples(path: Path, tokenizer, block: int):
     # The build-time screen cleans data as it is GENERATED; this file may have
     # been generated before the seal existed. The run that touches the weights
     # is the one that has to refuse.
-    refuse_if_leaky(asks, path, advisory=answers)
+    refuse_if_leaky(asks, path, manifest=manifest, advisory=answers)
     return examples
 
 
@@ -236,7 +242,25 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--eval-every", type=int, default=100)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--sanity", action="store_true", help="one fwd/bwd step then exit")
+    # Manifest selection and NOTHING else: --data still says which corpus to
+    # train on. A pack's run screened against HER sealed gate would refuse the
+    # pack for resembling questions its AI is never asked, while recording her
+    # manifest's sha into a checkpoint that is not hers.
+    ap.add_argument("--persona", default=None,
+                    help="persona pack whose sealed gate screens --data; omitted = Enigma's")
     return ap
+
+
+def screening_manifest(persona_arg: str | None) -> Path:
+    """The sealed gate this run screens its data against.
+
+    WHICH gate is the loaded PERSONA's answer, never the argument's: an
+    Enigma-SPELLED pack IS her, so it screens against hers. Split out of
+    `main` because it is the whole behavior of `--persona` here -- the trainers
+    route no data by persona -- and a test can reach it without a GPU."""
+    pack = Path(persona_arg) if persona_arg else None
+    persona = Persona.load(pack)
+    return persona_manifest(None if persona.is_default else pack)
 
 
 def startup_artifact_guard(args) -> None:
@@ -256,6 +280,10 @@ def startup_artifact_guard(args) -> None:
 def main() -> None:
     args = build_parser().parse_args()
     startup_artifact_guard(args)
+    manifest = screening_manifest(args.persona)
+    if args.persona:
+        print(f"persona: {Persona.load(Path(args.persona)).name} | "
+              f"leak gate: {manifest}", flush=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -325,7 +353,7 @@ def main() -> None:
     # torch.randperm's batch order too, not just the python-side shuffle/split
     torch.manual_seed(args.seed)
 
-    examples = load_examples(Path(args.data), tokenizer, args.block)
+    examples = load_examples(Path(args.data), tokenizer, args.block, manifest=manifest)
     if not examples:
         raise SystemExit("no usable training conversations")
     rng = random.Random(args.seed)

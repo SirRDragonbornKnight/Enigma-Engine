@@ -52,10 +52,13 @@ function Get-PersonaSlug {
 # the repo-relative data\memory it has always been: the wave-1 mute/talk move
 # does not extend to her memories.
 #
-# The port is not validated here. A pack declaring 8000 or 8123 is refused by
-# Persona.load when serve reads the same pack, and a port already held is
-# refused by the ownership check in Start-Enigma -- a third copy of the rule
-# in PowerShell would only be a fourth thing to drift.
+# The RESOLVED bind port is validated here for a NON-DEFAULT persona: a pack
+# that resolves to a reserved port (8000 daily, 8123 eval) is refused, whether
+# it came from -Port, the pack's own port field, or the portless fall-through.
+# Persona.load refuses a pack DECLARING a reserved port when serve reads it,
+# but the -Port override and the portless-falls-to-8000 case reach neither that
+# check nor the ownership test -- so the resolve refuses them, in the one place
+# Start and Stop both read.
 function Resolve-EnigmaPersona {
     param(
         [string]$EngineDir,
@@ -84,6 +87,18 @@ function Resolve-EnigmaPersona {
             $bind = [int]$pack.port
         } else {
             $bind = 8000
+        }
+        # A non-default persona binding a reserved port squats the eval scratch
+        # port an eval run CLEARS (8123) or Enigma's own daily serve (8000).
+        # Refuse it at resolve, whichever source produced it, so a pack cannot
+        # reach either port through -Port, its own field, or the fall-through.
+        if ($bind -eq 8000 -or $bind -eq 8123) {
+            if ($bind -eq 8000) {
+                $why = "Enigma's daily serve port"
+            } else {
+                $why = "the eval scratch port, which an eval run CLEARS"
+            }
+            throw "persona pack $PackDir resolves to port $bind, which is $why -- give the pack its own port (1024-65535, not 8000 or 8123)"
         }
         # Her window is enigma_window.py either way, so the pack path on the
         # command line is what tells two windows apart. The shims pass the

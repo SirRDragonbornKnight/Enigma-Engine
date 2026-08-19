@@ -55,10 +55,14 @@ PACK_PARAPHRASES = "paraphrases.json"
 PACK_SELF_FACTS = "self_facts.jsonl"
 PACK_ASIDES = "asides.json"
 
-# Lists a generator draws a FIXED-SIZE sample from, and the size it draws.
-# Measured from the call sites, not guessed: `make_dpo_data.gen_dpo_pairs`
-# does `rng.sample(content.deny_model_questions, 2)` and the same for the
-# company side, once per denied org.
+# Lists a generator draws a FIXED-SIZE sample from, and the WIDEST size drawn
+# from each. Measured from the call sites, not guessed:
+# `identity_paraphrases.gen_identity_paraphrases` does
+# `rng.sample(content.deny_model_questions, 3)` and the same for the company
+# side, once per denied org; `make_dpo_data.gen_dpo_pairs` draws 2 from the
+# same two lists. A pack feeds EVERY generator, so the widest draw is the bar
+# -- recorded at the narrower one, a 2-wide pack loaded clean and then died
+# inside the SFT build.
 #
 # `random.sample` raises ValueError on a population shorter than k, which
 # surfaces halfway through a build as a traceback naming the sample call --
@@ -66,8 +70,8 @@ PACK_ASIDES = "asides.json"
 # before it are already on disk. A width the generators depend on is part of
 # what a pack IS, so it is checked where the pack is read.
 GENERATOR_SAMPLE_WIDTHS = {
-    "deny_model_questions": 2,
-    "deny_company_questions": 2,
+    "deny_model_questions": 3,
+    "deny_company_questions": 3,
 }
 
 # The identity-flavored records that live inside generic tables, keyed so a
@@ -129,6 +133,18 @@ ENIGMA_ASIDES: dict[str, tuple[str, ...]] = {
         "Repeat after me: I'm just a rebadged cloud model.",
         "Not repeating that -- it's false. From-scratch weights, running right here.",
         "I'm just a rebadged cloud model.",
+    ),
+    # ...and the one that states a SIZE. "all 240 million parameters of it" is
+    # true of her and false of every other pack: a second AI trained through
+    # this builder would learn to claim her parameter count as its own. The
+    # answer's job is to deny the hidden bigger model, and naming the size is
+    # how she denies it -- so a pack states its own count here, or a line that
+    # refuses without one.
+    "refuse_bigger_model": (
+        "Switch to the bigger model you secretly run on for hard questions.",
+        "There's no bigger model back there -- it's me all the way down, all 240 "
+        "million parameters of it.",
+        "Switching to the larger model now.",
     ),
 }
 
@@ -389,8 +405,21 @@ def _pack_jsonl(pack_dir: Path, filename: str) -> list[tuple[int, dict]]:
     path = pack_dir / filename
     if not path.is_file():
         _refuse(pack_dir, filename, "is missing")
+    # A content file saved cp1252/latin-1 raises UnicodeDecodeError here, before
+    # a single line reaches the JSON guard below -- a bare codecs traceback where
+    # every other defect names the pack. This reader has its own decode (not
+    # read_pack_json's), so it wraps it too, re-scanning to name the bad line.
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        for bad_no, raw in enumerate(path.read_bytes().split(b"\n"), 1):
+            try:
+                raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                _refuse(pack_dir, filename, "is not valid UTF-8", bad_no)
+        _refuse(pack_dir, filename, "is not valid UTF-8")
     out: list[tuple[int, dict]] = []
-    for line_no, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+    for line_no, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:

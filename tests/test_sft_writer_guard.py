@@ -36,11 +36,16 @@ def test_writer_leaves_no_tmp_droppings(tmp_path):
 def test_main_writes_through_the_rotating_writer():
     """Wiring pin: the three artifact writes must route through
     _write_artifact -- a direct write_text on any of them reopens the
-    clobber. (Source pin; running main() is a full build.)"""
+    clobber. (Source pin; running main() is a full build.)
+
+    `out_dir` is main()'s resolved destination -- `OUT_DIR` unless --out named
+    one. Pinned on that name rather than the constant: a write spelled with
+    the constant would put a pack's artifacts in HER directory, which is the
+    same clobber this file exists for, one argument further out."""
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[1] / "make_sft_data.py").read_text(encoding="utf-8")
     for name in ("tool_calls.jsonl", "identity.jsonl", "mix.jsonl"):
-        assert f'_write_artifact(OUT_DIR / "{name}"' in src, \
+        assert f'_write_artifact(out_dir / "{name}"' in src, \
             f"{name} is no longer written through the rotating writer"
     assert 'mix.manifest.json' in src, "the build manifest write disappeared"

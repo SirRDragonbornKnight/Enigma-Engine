@@ -40,6 +40,7 @@ from enigma_engine.core.persona_content import (
     default_content,
     load_content,
 )
+from identity_paraphrases import gen_identity_paraphrases
 from knowledge_corpus import (
     KNOWLEDGE,
     SELF_FACTS,
@@ -344,9 +345,10 @@ def test_no_self_fact_is_authored_into_the_world_half():
 
 def test_a_pack_directory_round_trips_into_every_identity_generator(write_persona_pack):
     """The loader's whole purpose in one pass: a pack on disk becomes content
-    that the anchors renderer, the knowledge renderer, the preference builder
-    and the curated pretrain prose all follow. Four near-duplicate tests would
-    each prove a quarter of it and none of them the round trip.
+    that the anchors renderer, the paraphrase renderer, the knowledge renderer,
+    the preference builder and the curated pretrain prose all follow. Five
+    near-duplicate tests would each prove a fifth of it and none of them the
+    round trip.
 
     Enigma's ABSENCE is the half that catches the decorative failure: a loader
     whose tables never reach a generator -- or a generator quietly falling back
@@ -360,6 +362,17 @@ def test_a_pack_directory_round_trips_into_every_identity_generator(write_person
     recs, dropped = gen_identity_examples(content)
     assert dropped == 0
     assert "Atlas." in [r["messages"][1]["content"] for r in recs]
+
+    para = gen_identity_paraphrases(content=content)
+    para_qs = {r["messages"][0]["content"] for r in para}
+    para_as = {r["messages"][1]["content"] for r in para}
+    assert "Which local AI answers here?" in para_qs      # the pack's own intents
+    assert "Atlas does." in para_as
+    assert "Are you Llama?" in para_qs                    # ...and its own denials
+    assert "No. Atlas, and nothing underneath it." in para_as
+    hers_said = ({a for _qs, ans in default_content().intents for a in ans}
+                 | set(default_content().deny_model_answers))
+    assert not (hers_said & para_as), sorted(hers_said & para_as)
 
     qs = {r["messages"][0]["content"] for r in gen_knowledge_examples(content=content)}
     assert "What is Atlas?" in qs
@@ -420,6 +433,22 @@ def test_a_duplicated_key_in_a_pack_file_refuses_and_names_it(write_persona_pack
     with pytest.raises(SystemExit, match="'who_are_you' twice") as exc:
         load_content(pack)
     assert PACK_ASIDES in str(exc.value)
+
+
+def test_an_ansi_content_file_refuses_by_name_and_line(write_persona_pack):
+    """A content file saved cp1252/latin-1 raises UnicodeDecodeError before a
+    single line reaches the JSON guard -- a bare codecs traceback where every
+    other defect names the pack. This reader has its own decode, not
+    read_pack_json's, so it wraps it too and re-scans to name the bad line.
+    Line 1 is clean; the cp1252 0xE9 on line 2 is an invalid UTF-8 byte."""
+    pack = write_persona_pack()
+    good_first = (pack / PACK_ANCHORS).read_text(encoding="utf-8").splitlines()[0]
+    raw = good_first.encode("utf-8") + b'\n{"category": "identity", "q": "caf\xe9", "a": "x"}\n'
+    (pack / PACK_ANCHORS).write_bytes(raw)
+    with pytest.raises(SystemExit, match="is not valid UTF-8") as exc:
+        load_content(pack)
+    assert PACK_ANCHORS in str(exc.value)
+    assert "line 2" in str(exc.value)
 
 
 def test_the_mechanical_half_refuses_a_duplicated_key_too(tmp_path):
@@ -494,13 +523,16 @@ def test_a_non_string_content_value_refuses_rather_than_reaching_a_renderer(
         load_content(pack)
 
 
-def test_a_pack_claiming_another_creator_refuses_and_cites_the_ruling(write_persona_pack):
-    """The check outlives the ruling that put it here (retired 2026-08-17): it
-    is a deliberate hold while packs have no real use, not a claim that another
-    creator is wrong. So the refusal has to say WHY it is still standing --
-    being quietly obeyed and being quietly overwritten are equally wrong, and a
-    message citing a dead ruling sends its reader to argue with the wrong
-    thing."""
+def test_a_pack_claiming_another_creator_refuses_though_the_ruling_is_retired(
+        write_persona_pack):
+    """Three facts, and the refusal states all three: it still fires, the
+    ruling that put it here is RETIRED (2026-08-17), and removing it is
+    DEFERRED rather than forbidden -- a deliberate hold while packs have no
+    real use, not a claim that another creator is wrong.
+
+    So the message has to say WHY it is still standing: being quietly obeyed
+    and being quietly overwritten are equally wrong, and a message citing a
+    dead ruling sends its reader to argue with the wrong thing."""
     pack = write_persona_pack({PACK_MANIFEST: json.dumps(
         {"name": "Atlas", "creator": "Someone Else"})})
     with pytest.raises(
@@ -526,7 +558,10 @@ def test_a_denial_list_too_narrow_for_the_generators_refuses_at_load(
     on is part of what a pack IS, so the loader states it.
 
     The width is MEASURED here, not asserted: the same content one entry short
-    is fed to the real generator, and it must die exactly as claimed."""
+    is fed to the real generator, and it must die exactly as claimed. The
+    generator measured against is the WIDEST draw -- the SFT paraphrases, which
+    sample three per denied org; the preference builder draws two and would sit
+    happily on a list this loader refuses."""
     good = write_persona_pack()
     blob = json.loads((good / PACK_PARAPHRASES).read_text(encoding="utf-8"))
     need = GENERATOR_SAMPLE_WIDTHS[key]
@@ -544,7 +579,7 @@ def test_a_denial_list_too_narrow_for_the_generators_refuses_at_load(
     # ...and this is the failure it stands in front of.
     short = replace(good_content, **{key: blob[key][:need - 1]})
     with pytest.raises(ValueError, match="larger than population"):
-        gen_dpo_pairs(content=short)
+        gen_identity_paraphrases(content=short)
 
 
 def test_a_packs_model_denials_substitute_the_org_on_both_sides(write_persona_pack):
@@ -552,6 +587,10 @@ def test_a_packs_model_denials_substitute_the_org_on_both_sides(write_persona_pa
     formatted with its org and the MODEL answer was not, so a pack author who
     wrote "{x}" in a model answer trained a literal brace -- the one shape the
     company side made look supported.
+
+    BOTH renderers of those tables, because the asymmetry was per-generator:
+    the preference builder gained the substitution first and the SFT paraphrase
+    generator carried the old shape until it took content at all.
 
     Not a corpus change for Enigma: her four model answers name no org and
     carry no brace, so the substitution is a no-op on her side (pinned below,
@@ -562,10 +601,15 @@ def test_a_packs_model_denials_substitute_the_org_on_both_sides(write_persona_pa
     pack = write_persona_pack({PACK_PARAPHRASES: json.dumps(dict(
         blob, deny_model_answers=["No -- I'm Atlas, not {x}.",
                                   "Not {x}. Atlas, built right here."]))})
+    content = load_content(pack)
 
-    chosen = [p["chosen"] for p in gen_dpo_pairs(content=load_content(pack))]
+    chosen = [p["chosen"] for p in gen_dpo_pairs(content=content)]
     assert any("not Llama" in c for c in chosen), "the denied model never reached an answer"
     assert not any("{x}" in c for c in chosen), "a literal brace trained instead of the org"
+
+    said = [r["messages"][1]["content"] for r in gen_identity_paraphrases(content=content)]
+    assert any("not Llama" in a for a in said), "the denied model never reached an answer"
+    assert not any("{x}" in a for a in said), "a literal brace trained instead of the org"
 
 
 def test_the_dictated_engine_refusal_is_an_aside_resolving_to_its_prior_record():

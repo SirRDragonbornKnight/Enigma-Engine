@@ -100,6 +100,17 @@ class Persona:
             )
         if not self.data_dirname or any(c in self.data_dirname for c in '/\\:*?"<>|' + "\n\r\t"):
             raise ValueError(f"persona data_dirname {self.data_dirname!r} is not a bare directory name")
+        # data_dirname becomes home, and serve's boot calls home.mkdir(). The
+        # separator screen above blocks \n\r\t but no other control, so every
+        # remaining C0 byte and DEL reaches mkdir and crashes serve with a raw
+        # OSError. name and name_meaning reject the whole range; this field does
+        # too.
+        bad = next((c for c in self.data_dirname if ord(c) < 32 or ord(c) == 127), None)
+        if bad is not None:
+            raise ValueError(
+                f"persona data_dirname {self.data_dirname!r} carries control character "
+                f"U+{ord(bad):04X}; it names a directory serve creates at boot"
+            )
         # A dot entry carries no separator and still escapes: "." puts `home`
         # on the profile root and ".." on its parent, and serve's boot WRITES
         # runtime state into whatever home resolves to. The name must be a bare
@@ -305,8 +316,18 @@ def read_pack_json(path: Path) -> object:
 
     A BOM is tolerated: Windows editors write one, and a BOM decoded as plain
     utf-8 dies as "Expecting value", pointing a pack author at their syntax
-    when the defect is their encoding."""
-    return json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_object_pairs)
+    when the defect is their encoding.
+
+    A file saved cp1252/latin-1 -- the same editors that write a BOM -- raises
+    UnicodeDecodeError, a ValueError that is neither DuplicateJSONKey nor
+    JSONDecodeError and slips past every caller's except clause as a bare
+    codecs traceback. It is caught here and re-raised as the clean refusal the
+    BOM tolerance exists to give, naming the file."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        raise SystemExit(f"persona pack {path} is not valid UTF-8") from None
+    return json.loads(text, object_pairs_hook=_object_pairs)
 
 
 def _slug(name: str) -> str:

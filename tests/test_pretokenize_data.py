@@ -619,3 +619,215 @@ def test_the_repeat_cache_refuses_web_scale_sources(monkeypatch, corpus, tmp_pat
         _run(monkeypatch, sources + [("Big", src)], out, vocab=vocab,
              dtype="uint16", workers=1, extra=("--repeat-sources", "big=2"))
     assert not out.exists() and not out.with_suffix(".bin.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
+# --curated-dir / --only-curated: a persona pack's shard through the SAME walk
+# (Stage 7 wave 4a). The pack pipeline used to stop at a screened shard on
+# disk -- SOURCE_DIRS is hardcoded and its only curated entry is Enigma's, so
+# nothing could tokenize anyone else's. The two flags are orthogonal: swap the
+# PATH under the "Curated" label, and/or restrict the walk to that one entry.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def swap_dirs(corpus, tmp_path):
+    """Her curated shard, a pack's shard, and one other source.
+
+    Deliberately tiny (one document each) rather than the module corpus:
+    these tests decode the whole bin back to text to prove WHICH directory
+    was walked, and the module corpus's 45 heavy documents make that slow
+    without making it stronger."""
+    _root, _sources, vocab = corpus
+    hers = tmp_path / "curated"
+    pack = tmp_path / "curated_atlas"
+    other = tmp_path / "wiki"
+    for d in (hers, pack, other):
+        d.mkdir()
+    (hers / "curated_000.txt").write_text(
+        "Enigma states her own name here in a paragraph long enough to be kept.",
+        encoding="utf-8")
+    (pack / "curated_000.txt").write_text(
+        "Atlas states his own name here in a paragraph long enough to be kept.",
+        encoding="utf-8")
+    (other / "article_000.txt").write_text(
+        "An ordinary web article with nothing to do with either identity at all.",
+        encoding="utf-8")
+    return hers, pack, other, vocab
+
+
+def _decode(out_bin: Path, vocab) -> str:
+    """The corpus read back as text -- the artifact, not the sidecar's claim."""
+    import numpy as np
+
+    from enigma_engine.core.tokenizer import get_tokenizer
+    ids = np.memmap(out_bin, dtype=np.uint16, mode="r", offset=pd.HEADER_SIZE)
+    return get_tokenizer("bpe", vocab_path=str(vocab)).decode([int(i) for i in ids])
+
+
+def test_curated_dir_swaps_the_path_and_keeps_the_label(monkeypatch, swap_dirs, tmp_path):
+    """A pack's shard is walked AS the Curated source: same label, same first
+    position (so it can never land in the val tail and it wins dedup
+    collisions), and every other source untouched."""
+    hers, pack, other, vocab = swap_dirs
+    out, meta_path = _run(monkeypatch, [("Curated", hers), ("Wiki", other)],
+                          tmp_path / "swap.bin", vocab=vocab, dtype="uint16", workers=1,
+                          extra=("--curated-dir", str(pack)))
+    meta = json.loads(meta_path.read_text())
+    assert sorted(meta["source_token_extents"]) == ["Curated", "Wiki"]
+    assert meta["source_token_extents"]["Curated"][0] == 0, "the swap moved the walk"
+    assert meta["sources_absent"] == []
+
+    decoded = _decode(out, vocab)
+    assert "Atlas states his own name" in decoded, "the substitute shard was not walked"
+    assert "Enigma states her own name" not in decoded, "the replaced dir was still walked"
+    assert "ordinary web article" in decoded, "the rest of the walk changed"
+
+
+def test_repeat_sources_resolves_a_swapped_dir_by_label_and_by_basename(
+        monkeypatch, swap_dirs, tmp_path):
+    """parse_repeat_sources keys on label AND directory basename, so a swapped
+    curated dir must answer to both -- 'curated' (the standing line, copied
+    whole) and the pack directory's own name."""
+    hers, pack, other, vocab = swap_dirs
+    for key, tag in (("curated", "label"), ("curated_atlas", "basename")):
+        out, meta_path = _run(monkeypatch, [("Curated", hers), ("Wiki", other)],
+                              tmp_path / f"rep_{tag}.bin", vocab=vocab, dtype="uint16",
+                              workers=1,
+                              extra=("--curated-dir", str(pack), "--repeat-sources", f"{key}=3"))
+        meta = json.loads(meta_path.read_text())
+        assert meta["repeated_sources"] == {"Curated": 3}, f"{key} did not resolve"
+        x0, x1 = meta["source_token_extents"]["Curated"]
+        assert x0 == 0
+        one_pass = (x1 - x0) // 3
+        assert one_pass > 0
+        stream = out.read_bytes()[pd.HEADER_SIZE:]
+        passes = [stream[i * one_pass * 2:(i + 1) * one_pass * 2] for i in range(3)]
+        assert passes[0] == passes[1] == passes[2], "the copies are not byte-identical"
+        assert "Atlas states his own name" in _decode(out, vocab)
+
+
+def test_only_curated_walks_exactly_one_source(monkeypatch, swap_dirs, tmp_path):
+    """The smoke shape: the pack's shard and nothing else. No other
+    SOURCE_DIRS entry, and no SE expansion either."""
+    hers, pack, other, vocab = swap_dirs
+    # _run points SE_DIR at <out dir>/_no_stackexchange; creating it with a
+    # subdir gives the full walk something real to expand, which is the only
+    # way to prove --only-curated drops the expansion rather than finding it
+    # empty.
+    se_sub = tmp_path / "_no_stackexchange" / "askubuntu"
+    se_sub.mkdir(parents=True)
+    (se_sub / "qa_000.txt").write_text(
+        "A stackexchange answer with enough body text to be kept by the cleaner.",
+        encoding="utf-8")
+    sources = [("Curated", hers), ("Wiki", other)]
+
+    full, full_meta = _run(monkeypatch, sources, tmp_path / "full.bin", vocab=vocab,
+                           dtype="uint16", workers=1)
+    assert sorted(json.loads(full_meta.read_text())["source_token_extents"]) == [
+        "Curated", "SE/askubuntu", "Wiki"], "control run did not walk all three"
+
+    out, meta_path = _run(monkeypatch, sources, tmp_path / "only.bin", vocab=vocab,
+                          dtype="uint16", workers=1,
+                          extra=("--only-curated", "--curated-dir", str(pack)))
+    meta = json.loads(meta_path.read_text())
+    assert list(meta["source_token_extents"]) == ["Curated"]
+    assert meta["sources_absent"] == []
+    decoded = _decode(out, vocab)
+    assert "Atlas states his own name" in decoded
+    for stranger in ("Enigma states her own name", "ordinary web article",
+                     "stackexchange answer"):
+        assert stranger not in decoded, f"--only-curated still walked: {stranger}"
+
+
+def test_only_curated_refuses_a_repeat(monkeypatch, swap_dirs, tmp_path):
+    """A one-source corpus with a repeat is untrainable and the refusal must
+    say why: the repeated extent spans the whole bin, so it reaches the val
+    tail and pretrain_enigma.refuse_repeated_source_in_val refuses at boot.
+    Fail here, not after the tokenize."""
+    hers, pack, other, vocab = swap_dirs
+    out = tmp_path / "only_rep.bin"
+    with pytest.raises(SystemExit) as err:
+        _run(monkeypatch, [("Curated", hers), ("Wiki", other)], out, vocab=vocab,
+             dtype="uint16", workers=1,
+             extra=("--only-curated", "--curated-dir", str(pack),
+                    "--repeat-sources", "curated=3"))
+    msg = str(err.value)
+    assert "val tail" in msg and "pretrain_enigma.py" in msg
+    assert not out.exists() and not out.with_suffix(".bin.tmp").exists()
+
+    # without --only-curated the same repeat is the standing, honest line
+    ok, ok_meta = _run(monkeypatch, [("Curated", hers), ("Wiki", other)],
+                       tmp_path / "full_rep.bin", vocab=vocab, dtype="uint16", workers=1,
+                       extra=("--curated-dir", str(pack), "--repeat-sources", "curated=3"))
+    assert json.loads(ok_meta.read_text())["repeated_sources"] == {"Curated": 3}
+
+
+def test_curated_dir_must_name_a_real_directory(monkeypatch, swap_dirs, tmp_path):
+    """A source named on the command line cannot be absent by intent -- absent
+    it would only WARN as a skipped dir and the corpus would carry no curated
+    shard at all. A FILE is the same mistake with a typo."""
+    hers, pack, other, vocab = swap_dirs
+    sources = [("Curated", hers), ("Wiki", other)]
+    ghost = tmp_path / "no_such_shard"
+    not_a_dir = tmp_path / "shard_is_a_file.txt"
+    not_a_dir.write_text("a shard is a directory of .txt files", encoding="utf-8")
+
+    for i, target in enumerate((ghost, not_a_dir)):
+        out = tmp_path / f"absent_{i}.bin"
+        with pytest.raises(SystemExit, match="--curated-dir is not a directory"):
+            _run(monkeypatch, sources, out, vocab=vocab, dtype="uint16", workers=1,
+                 extra=("--curated-dir", str(target)))
+        assert not out.exists() and not out.with_suffix(".bin.tmp").exists()
+        # and with --only-curated, where the walk would otherwise be empty
+        out = tmp_path / f"absent_only_{i}.bin"
+        with pytest.raises(SystemExit, match="--curated-dir is not a directory"):
+            _run(monkeypatch, sources, out, vocab=vocab, dtype="uint16", workers=1,
+                 extra=("--only-curated", "--curated-dir", str(target)))
+        assert not out.exists()
+
+
+def test_sidecar_records_the_walk_shape(monkeypatch, swap_dirs, tmp_path):
+    """Which walk built this corpus is provenance: a "Curated" extent means a
+    different shard depending on these two fields."""
+    hers, pack, other, vocab = swap_dirs
+    sources = [("Curated", hers), ("Wiki", other)]
+    _out, meta_path = _run(monkeypatch, sources, tmp_path / "shape.bin", vocab=vocab,
+                           dtype="uint16", workers=1,
+                           extra=("--curated-dir", str(pack), "--only-curated"))
+    meta = json.loads(meta_path.read_text())
+    assert Path(meta["curated_dir"]) == pack.resolve()
+    assert meta["only_curated"] is True
+
+    _bare, bare_meta = _run(monkeypatch, sources, tmp_path / "shape_bare.bin", vocab=vocab,
+                            dtype="uint16", workers=1)
+    bare = json.loads(bare_meta.read_text())
+    assert bare["curated_dir"] is None and bare["only_curated"] is False
+    # additive only: the fields the trainer and the audits already read
+    for key in ("sources_absent", "repeated_sources", "source_token_extents"):
+        assert key in bare
+
+
+def test_a_bare_walk_is_untouched_by_the_new_knobs(monkeypatch, tmp_path):
+    """The pin. Neither flag may change a run that passes neither: the bare
+    walk is the hardcoded list plus the SE expansion, in that exact order,
+    read from the module globals the whole suite monkeypatches."""
+    hers, wiki = tmp_path / "curated", tmp_path / "wikipedia"
+    se = tmp_path / "stackexchange"
+    for d in (hers, wiki, se / "unix", se / "askubuntu"):
+        d.mkdir(parents=True)
+    patched = [("Curated", hers), ("Wikipedia", wiki)]
+    monkeypatch.setattr(pd, "SOURCE_DIRS", patched)
+    monkeypatch.setattr(pd, "SE_DIR", se)
+
+    expected = patched + [("SE/askubuntu", se / "askubuntu"), ("SE/unix", se / "unix")]
+    assert pd.build_source_dirs() == expected
+    assert pd.build_source_dirs(curated_dir=None, only_curated=False) == expected
+
+    # the knobs change WHICH dirs, never the order, and never the globals
+    swapped = pd.build_source_dirs(curated_dir=tmp_path / "curated_atlas")
+    assert [label for label, _p in swapped] == [label for label, _p in expected]
+    assert swapped[0][1] == tmp_path / "curated_atlas"
+    assert pd.build_source_dirs(curated_dir=tmp_path / "curated_atlas", only_curated=True) == [
+        ("Curated", tmp_path / "curated_atlas")]
+    assert pd.SOURCE_DIRS == patched, "build_source_dirs mutated the module list"

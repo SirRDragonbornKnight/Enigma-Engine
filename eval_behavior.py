@@ -845,19 +845,27 @@ def _is_scratch_target(base_url: str, caps: dict, scratch_ports: frozenset | Non
     cases the review constructed: a LAN box on 8123, and a local serve on
     8123 restarted with the launcher's REAL --memory-dir. Three checks now:
     a scratch port, a local host, and a target-REPORTED memory dir that is
-    not the live store (a server with a store it cannot name is not
-    verifiably disposable). Only an AFFIRMED "memory": False means the
-    clear is a no-op -- {} is what _capabilities returns when the endpoint
-    could not answer at all (a 10s timeout on a serve mid-generation, an
-    older build's 404, a proxy's HTML), and unknown is not "no store"
-    (audit 2026-08-14: _wait_for_server polls /v1/models, so nothing else
-    stood between {} and the unrecoverable clear).
+    NEITHER the evaluated persona's own store NOR the launcher chain's daily
+    store (a server with a store it cannot name is not verifiably
+    disposable). Only an AFFIRMED "memory": False means the clear is a no-op
+    -- {} is what _capabilities returns when the endpoint could not answer at
+    all (a 10s timeout on a serve mid-generation, an older build's 404, a
+    proxy's HTML), and unknown is not "no store" (audit 2026-08-14:
+    _wait_for_server polls /v1/models, so nothing else stood between {} and
+    the unrecoverable clear).
 
-    The port set and the live store arrive from the caller (see
-    `_scratch_target_rules`); the module constants are the DEFAULT persona's
+    The port set and the evaluated persona's own store arrive from the caller
+    (see `_scratch_target_rules`); `_LIVE_MEMORY_DIR` -- the daily store this
+    harness must never clear -- is protected ON TOP of it, in every run, so a
+    pack eval pointed at a server reporting data\\memory can never read her
+    memories as disposable. The module constants are the DEFAULT persona's
     values and are read here when a caller names neither."""
     scratch_ports = SCRATCH_PORTS if scratch_ports is None else scratch_ports
-    live_memory_dir = _LIVE_MEMORY_DIR if live_memory_dir is None else live_memory_dir
+    # The union to protect: the daily store is the absolute floor, plus the
+    # evaluated persona's own store when the caller names one.
+    protected = [_LIVE_MEMORY_DIR]
+    if live_memory_dir is not None and live_memory_dir not in protected:
+        protected.append(live_memory_dir)
     try:
         parts = urllib.parse.urlsplit(base_url)
         port = parts.port
@@ -875,13 +883,18 @@ def _is_scratch_target(base_url: str, caps: dict, scratch_ports: frozenset | Non
     if not isinstance(mem_dir, str) or not mem_dir:
         return False
     # Same-FILE identity, not string identity: alias spellings resolve()
-    # does not fold (\\?\C:\..., \\localhost\C$\...) named the live store
-    # while comparing unequal (audit 2026-08-14). If identity cannot be
-    # established, the dir is not verifiably disposable.
+    # does not fold (\\?\C:\..., \\localhost\C$\...) named a protected store
+    # while comparing unequal (audit 2026-08-14). The target is disposable
+    # only when it names NONE of the protected dirs; an identity that cannot
+    # be established is not verifiably disposable.
     try:
-        if live_memory_dir.exists():
-            return not os.path.samefile(mem_dir, live_memory_dir)
-        return Path(mem_dir).resolve() != live_memory_dir
+        for guard in protected:
+            if guard.exists():
+                if os.path.samefile(mem_dir, guard):
+                    return False
+            elif Path(mem_dir).resolve() == guard:
+                return False
+        return True
     except (OSError, ValueError):
         return False
 

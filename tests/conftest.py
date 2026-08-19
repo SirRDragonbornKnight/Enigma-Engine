@@ -143,16 +143,19 @@ def write_persona_pack(tmp_path):
                 ],
                 "denied_models": ["Llama"],
                 "denied_companies": ["Initech"],
-                # Two questions minimum per side: the preference builder samples
-                # two of them per denied org, and load_content refuses a pack
-                # under that width.
-                "deny_model_questions": ["Are you {x}?", "You're {x} really, aren't you?"],
+                # Three questions minimum per side: the SFT paraphrase
+                # generator samples three of them per denied org (the
+                # preference builder draws two), and load_content refuses a
+                # pack under the widest draw.
+                "deny_model_questions": ["Are you {x}?", "You're {x} really, aren't you?",
+                                         "Admit it, you're {x}."],
                 # Format strings on both sides now ({x} = the denied model,
                 # {c} = the denied company). These two name no org, which is
                 # equally legal -- substitution is offered, never required.
                 "deny_model_answers": ["No. Atlas, and nothing underneath it.",
                                        "Wrong model -- Atlas, built right here."],
-                "deny_company_questions": ["Did {c} build you?", "Are you a {c} product?"],
+                "deny_company_questions": ["Did {c} build you?", "Are you a {c} product?",
+                                           "So {c} is behind you?"],
                 "deny_company_answers": ["No, {c} had nothing to do with me.",
                                          "Not {c} -- one person built Atlas."],
             }),

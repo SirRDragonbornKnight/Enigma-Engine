@@ -2,6 +2,8 @@
 """Build the SFT data for the instruct pass ("hands").
 
   python make_sft_data.py        # writes data/sft/{tool_calls,identity,mix}.jsonl
+  python make_sft_data.py --persona personas\\atlas --out <dir>
+                                 # a pack builds its OWN corpus into its OWN dir
 
 Sources:
 - ``tool_calls.jsonl`` — synthetic conversations teaching the
@@ -45,8 +47,13 @@ except Exception:
 
 from enigma_engine.core.chat_format import TOOL_SYNTAX  # ONE syntax, train == serve
 from enigma_engine.core.persona import Persona
-from enigma_engine.core.persona_content import Aside, PersonaContent, default_content
-from eval_leak_guard import LockedProbeGuard
+from enigma_engine.core.persona_content import (
+    Aside,
+    PersonaContent,
+    default_content,
+    load_content,
+)
+from eval_leak_guard import LOCKED_PROBES_NAME, LockedProbeGuard, persona_manifest
 from identity_paraphrases import gen_identity_paraphrases
 from knowledge_corpus import gen_knowledge_examples
 
@@ -70,18 +77,25 @@ def _norm_q(rec: dict) -> str:
     return q.strip().lower() if isinstance(q, str) else ""
 
 
-def _eval_probe_questions() -> set[str]:
+def _eval_probe_questions(path: "Path | None" = None) -> set[str]:
     """Questions in the held-out behavior eval -- NEVER put these in training,
     or the harness measures memorization instead of generalization.
 
     Skips "#" comment lines on the SAME rule eval_behavior.run() reads this
     file by: the eval harness invites an annotated DEV file, and json.loads on
     the comment it invites killed this backstop -- the one that holds identity
-    and knowledge probes out of training -- with a raw JSONDecodeError."""
-    if not EVAL_PROBES.exists():
+    and knowledge probes out of training -- with a raw JSONDecodeError.
+
+    `path` is the probe file to read; omitted, it is EVAL_PROBES -- HER dev
+    set, and read through the module global so the suite's patch still lands.
+    A pack build passes its own file: the extraction shape is the same, and
+    the questions another AI is graded on say nothing about what this one may
+    train."""
+    probes = EVAL_PROBES if path is None else Path(path)
+    if not probes.exists():
         return set()
     qs = set()
-    for line in EVAL_PROBES.read_text(encoding="utf-8").splitlines():
+    for line in probes.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -515,6 +529,13 @@ def _tool_spec(name, desc, params):
 # message of its own. Derived from the persona rather than copied, so training
 # and serving cannot drift apart and a persona pack trains its own AI's
 # preamble instead of a second Enigma's.
+#
+# The module-level value is Enigma; `main()` REBINDS it, unconditionally, to
+# the loaded persona's before any generator runs -- serve's boot-rebind shape,
+# for its reason: this name is read by `_system` and `_builtin_system`, which
+# between them build nearly every system block in the mix, and threading a
+# persona through both would make a constant out of a parameter at forty call
+# sites. A build is the only moment identity can change.
 PREAMBLE = Persona.load().tools_preamble
 
 
@@ -2345,9 +2366,17 @@ def _is_low_quality(rec: dict) -> bool:
 
 
 def main(argv: "list[str] | None" = None) -> None:
+    global PREAMBLE
     import argparse
 
     ap = argparse.ArgumentParser(description="Build the SFT mix.")
+    ap.add_argument("--persona", default=None, help="persona pack; omitted = Enigma")
+    ap.add_argument(
+        "--out",
+        default=None,
+        help=f"where the artifacts land; omitted = {OUT_DIR}, which is Enigma's "
+        "own. A persona pack must name its own",
+    )
     ap.add_argument(
         "--vocab",
         default=None,
@@ -2363,32 +2392,88 @@ def main(argv: "list[str] | None" = None) -> None:
         help=f"token budget per record; must match finetune's --block (default {BLOCK})",
     )
     args = ap.parse_args(argv)
+
+    pack = Path(args.persona) if args.persona else None
+    persona = Persona.load(pack)
+    # A pack supplies a NAME, and the content behind it has to come from the
+    # same pack. A bare pack FILE carries the mechanical fields alone, so a
+    # build from one would bake her anchors, her paraphrases and her self-facts
+    # under someone else's name -- content-by-import, invisible to a grep for
+    # the name. Refuse before anything is read or written, and name the missing
+    # piece rather than dying downstream.
+    if persona.is_default:
+        content = default_content()
+    elif pack is not None and pack.is_dir():
+        content = load_content(pack)
+    else:
+        raise SystemExit(
+            f"persona {persona.name!r}: {pack} is a bare pack file, which carries "
+            "mechanical fields only -- it has no identity content to render. Point "
+            "--persona at a pack DIRECTORY (pack.json beside its content files); "
+            "refusing to train her identity under another AI's name"
+        )
+    # An omitted --out is Enigma's own SFT directory, and `_write_artifact`
+    # rotates whatever it finds there. A pack built with that default replaces
+    # the SERVED model's training receipt with another AI's corpus -- and takes
+    # the .prev generation with it on the second run, so the last good copy is
+    # gone too. A pack names where its own artifacts go.
+    if args.out is None and not persona.is_default:
+        raise SystemExit(
+            f"persona {persona.name!r}: --persona with no --out writes into "
+            f"{OUT_DIR}, which is Enigma's SFT mix -- this build would rotate "
+            f"her artifacts away and leave {persona.name}'s corpus there. Give "
+            "--out a directory of this pack's own"
+        )
+    out_dir = Path(args.out) if args.out else OUT_DIR
+    # WHO is being built. Unconditional, for serve's reason: rebinding only
+    # when the flag is present would leave a second call in one process
+    # rendering the PREVIOUS persona's preamble into every system block.
+    PREAMBLE = persona.tools_preamble
+    if not persona.is_default:
+        print(f"persona: {persona.name}", flush=True)
+
     vocab_path = Path(args.vocab) if args.vocab else default_vocab_path()
     if not vocab_path.exists():
         raise SystemExit(f"vocab file not found: {vocab_path}")
     print(f"fit vocab: {vocab_path.name} | block {args.block}", flush=True)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # The eval probe set is held out of ALL training (identity, tools,
     # restraint) so the harness always measures generalization, never a
     # memorized probe. Restraint especially: we train MANY greeting surfaces
     # and the eval tests held-out ones ("How's it going?").
-    eval_qs = _eval_probe_questions()
+    #
+    # HER dev set is hers: its questions are what the harness grades ENIGMA on,
+    # and holding them out of a pack's corpus would thin that pack for
+    # resembling questions its AI is never asked. A pack screens against its
+    # own sealed file instead, and says so out loud when it has none -- an AI
+    # with no gate has nothing to leak into.
+    if persona.is_default:
+        eval_qs = _eval_probe_questions()
+    elif (pack / LOCKED_PROBES_NAME).exists():
+        eval_qs = _eval_probe_questions(pack / LOCKED_PROBES_NAME)
+    else:
+        eval_qs = set()
+        print(f"WARN: {persona.name} has no sealed set -- the exact-match probe "
+              f"screen is inactive (no {pack / LOCKED_PROBES_NAME})", flush=True)
     # DEV probes get the exact-match backstop above (you may iterate toward the
     # dev set). The LOCKED set is the honest gate you must NEVER train toward;
     # its sealed manifest catches paraphrases too (EVAL_REDESIGN.md). Sealed and
     # LIVE since reseal #7, so this guard screens every build -- the line below
-    # prints the sealed count it actually loaded.
-    locked = LockedProbeGuard.load()
+    # prints the sealed count it actually loaded. WHICH gate is the loaded
+    # PERSONA's answer, never the argument's: an Enigma-SPELLED pack IS her, so
+    # its build screens against hers.
+    manifest = persona_manifest(None if persona.is_default else pack)
+    locked = LockedProbeGuard.load(manifest)
     _prompt_side, _held_out = probe_screen(eval_qs, locked)
 
     if len(locked):
         print(f"locked-probe fuzzy guard ACTIVE: {len(locked)} sealed probes (jaccard >= {locked.threshold})")
     else:
-        print("locked-probe fuzzy guard inactive (no data/eval/locked_probes.manifest.json yet)")
+        print(f"locked-probe fuzzy guard inactive (no {manifest} yet)")
 
-    all_tools = gen_tool_examples()
+    all_tools = gen_tool_examples(content=content)
     tools = [r for r in all_tools if not _held_out(r)]
     n_tool_leak = len(all_tools) - len(tools)
     # Text built here, WRITTEN at the end with the mix: rotating this file
@@ -2409,8 +2494,8 @@ def main(argv: "list[str] | None" = None) -> None:
     # GENERALIZES to unseen phrasings instead of memorizing exact strings
     # (held-out eval 2026-07-05: x20 repetition of 159 fixed anchors -> 17%
     # on novel phrasings).
-    anchors, dropped = gen_identity_examples()
-    paraphrases = gen_identity_paraphrases()
+    anchors, dropped = gen_identity_examples(content)
+    paraphrases = gen_identity_paraphrases(content=content)
     ident = [r for r in anchors + paraphrases if not _held_out(r)]
     n_leak = (len(anchors) + len(paraphrases)) - len(ident)
     ident_text = "\n".join(json.dumps(r, ensure_ascii=False) for r in ident) + "\n"
@@ -2438,12 +2523,20 @@ def main(argv: "list[str] | None" = None) -> None:
 
     # User-authored teachings (teachings.jsonl, gitignored) ride the same
     # oversample weight as identity -- few records, personally important.
-    all_teach = gen_teaching_examples()
-    teach = [r for r in all_teach if not _held_out(r)]
-    n_teach_leak = len(all_teach) - len(teach)
-    if teach or n_teach_leak:  # a fully screened-out corpus still owes a count
-        print(f"teachings: {len(teach)} records from {TEACHINGS.name} "
-              f"({n_teach_leak} held out of training as eval probes)")
+    # HERS alone: the file is the user's channel into ENIGMA's weights, facts
+    # taught to her in her own sessions, and there is no sense in which
+    # another AI was told them.
+    teach: list[dict] = []
+    if persona.is_default:
+        all_teach = gen_teaching_examples()
+        teach = [r for r in all_teach if not _held_out(r)]
+        n_teach_leak = len(all_teach) - len(teach)
+        if teach or n_teach_leak:  # a fully screened-out corpus still owes a count
+            print(f"teachings: {len(teach)} records from {TEACHINGS.name} "
+                  f"({n_teach_leak} held out of training as eval probes)")
+    else:
+        print(f"teachings: SKIPPED -- {TEACHINGS.name} is Enigma's own channel, "
+              f"not {persona.name}'s")
 
     # Memory-READING records (use the injected 'Things you remember:' block).
     all_mem_read = gen_memory_read_examples()
@@ -2466,7 +2559,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     # Clean world-knowledge QA (knowledge_corpus.py) -- the counterweight to
     # the noisy general corpus: curated facts in short plain sentences.
-    all_knowledge = gen_knowledge_examples()
+    all_knowledge = gen_knowledge_examples(content=content)
     knowledge = [r for r in all_knowledge if not _held_out(r)]
     print(f"knowledge: {len(knowledge)} records "
           f"({len(all_knowledge) - len(knowledge)} held out of training as eval probes)")
@@ -2484,7 +2577,7 @@ def main(argv: "list[str] | None" = None) -> None:
 
     # Every built-in offered on every turn, with the restraint half that makes
     # that safe -- the shape serve renders once the intent gates retire.
-    builtins = screen_shape(gen_builtin_block_examples())
+    builtins = screen_shape(gen_builtin_block_examples(content=content))
 
     # Conversation with more than one user turn: nothing else in the mix has
     # a second one to read the first against.
@@ -2661,9 +2754,9 @@ def main(argv: "list[str] | None" = None) -> None:
     mix_text = "\n".join(mix) + "\n"
     # All artifacts land together, AFTER every fallible stage: see the
     # deferred-write comment at the tool_calls build above.
-    _write_artifact(OUT_DIR / "tool_calls.jsonl", tool_text)
-    _write_artifact(OUT_DIR / "identity.jsonl", ident_text)
-    _write_artifact(OUT_DIR / "mix.jsonl", mix_text)
+    _write_artifact(out_dir / "tool_calls.jsonl", tool_text)
+    _write_artifact(out_dir / "identity.jsonl", ident_text)
+    _write_artifact(out_dir / "mix.jsonl", mix_text)
     # The build manifest: the shipped mix was previously identifiable only by
     # stdout scrollback (review 2026-08-13). sha256 is over the exact bytes.
     # Written through the same rotate-then-write path as its subjects, so the
@@ -2672,7 +2765,7 @@ def main(argv: "list[str] | None" = None) -> None:
     # -- the name alone could not tell two same-named tables apart -- plus
     # math_records, which the --vocab default flip switched from 0 to ~1067
     # on a bare run, and the sibling artifacts' shas).
-    _write_artifact(OUT_DIR / "mix.manifest.json",
+    _write_artifact(out_dir / "mix.manifest.json",
         json.dumps({
             "records": len(mix),
             "block": args.block,
@@ -2692,7 +2785,7 @@ def main(argv: "list[str] | None" = None) -> None:
     # (audit 2026-07-16): nothing identified WHICH records to look at.
     # REGENERATED every run: act on the records (fix the corpus or the
     # probes); don't annotate this file, your notes would be clobbered.
-    review_path = OUT_DIR / "locked_near_misses.jsonl"
+    review_path = out_dir / "locked_near_misses.jsonl"
     if locked_near_rows:
         review_path.write_text("\n".join(locked_near_rows) + "\n", encoding="utf-8")
     elif review_path.exists():

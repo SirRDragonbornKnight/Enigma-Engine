@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1206 passed on ENIGMAPC (2026-08-17, paired with the Stage-7 wave-3 + 2026-08-17 audit-fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine, the two new ones being the persona-aware gate and validator run against her real sealed set; 11 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1254 passed on ENIGMAPC (2026-08-18, paired with the Stage-7 wave-4 + 202b4863-audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -255,6 +255,16 @@ Deleted after a three-agent adversarial audit verified every claim
    `test_enigma_window.py` +4, `test_eval_scratch_gate.py` +1 -- while
    `test_eval_transcript.py` was reworked around the persona-aware gate at
    the same 42 collected.
+   **1206 -> 1254 is Stage-7 wave 4 (4a-4d) plus the fix wave from the
+   2026-08-17 audit of `202b4863` (2026-08-18)** -- the pretokenize curated
+   seam (`--curated-dir`/`--only-curated`), the SFT and DPO persona seams
+   with their `--out` refusals, gate selection on both trainers, and the
+   authoring doc's smoke-run recipe. Two new files carry 30 of the 48:
+   `test_sft_persona.py` 12 and `test_dpo_persona.py` 18; the audit-fix
+   wave's 11 and wave 4a's 7 grew in place (the scratch-rule union,
+   pack-file encoding refusals, `data_dirname` control chars and the -Port
+   reserved-port guard on the fix side; real-bytes curated-walk and refusal
+   tests on the 4a side).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

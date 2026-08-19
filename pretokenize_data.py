@@ -26,6 +26,12 @@ output name is the NEXT free version: an existing bin is refused at boot,
 because overwriting the live corpus or the rollback in place destroys the
 receipt a failed build would need.)
 
+A persona pack's curated shard (make_pretrain_curated.py --persona <pack>
+--out <dir>) rides the SAME walk: --curated-dir swaps the PATH under the
+"Curated" label, and --only-curated walks that one source alone -- the pack
+smoke shape. Neither reorders the walk (see build_source_dirs) and neither
+touches a run that passes neither.
+
 Parallel layout: the PARENT does the walk + paragraph dedup + filters --
 that state is inherently sequential (shared dedup filter) -- with file
 reads PREFETCHED by a thread pool (see iter_cleaned_docs: per-file open
@@ -162,7 +168,8 @@ HEADER_SIZE = 256  # Reserved header bytes
 DTYPES = {"uint32": "I", "uint16": "H"}
 
 
-def build_source_dirs() -> list[tuple[str, Path]]:
+def build_source_dirs(curated_dir: str | Path | None = None,
+                      only_curated: bool = False) -> list[tuple[str, Path]]:
     """The walk order, which IS the order of the token stream.
 
     There is deliberately no knob to reorder it. A --tail-sources flag existed
@@ -170,8 +177,26 @@ def build_source_dirs() -> list[tuple[str, Path]]:
     and the end of the bin is exactly what pretrain carves off as val, so the
     shard it moved would have been held out, not oversampled. Position in the
     corpus buys nothing the sampler can see; --repeat-sources is the honest
-    oversample."""
+    oversample.
+
+    Two knobs change WHICH dirs are walked, never the order:
+    * `curated_dir` replaces the PATH under the "Curated" label (a persona
+      pack's shard from make_pretrain_curated.py --out). The label stays, so
+      the shard is still walked FIRST and keeps both properties that position
+      buys -- never in the val tail, and first-wins on dedup collisions -- and
+      --repeat-sources still resolves it by the label AND by the new
+      directory's own basename.
+    * `only_curated` drops every other entry and the SE expansion, leaving
+      that one source alone: tokenize exactly one pack shard.
+    Defaults are the full hardcoded walk, byte for byte. Both read the module
+    globals, so a monkeypatched SOURCE_DIRS/SE_DIR still composes."""
     source_dirs = list(SOURCE_DIRS)
+    if curated_dir is not None:
+        swapped = Path(curated_dir)
+        source_dirs = [(label, swapped if label == "Curated" else path)
+                       for label, path in source_dirs]
+    if only_curated:
+        return [(label, path) for label, path in source_dirs if label == "Curated"]
     if SE_DIR.exists():
         for sub in sorted(SE_DIR.iterdir()):
             if sub.is_dir():
@@ -468,6 +493,22 @@ def main():
         "class: the whole source is cached in RAM for the repeat passes. Default: every "
         "source once",
     )
+    ap.add_argument(
+        "--curated-dir",
+        default=None,
+        help="walk this directory as the 'Curated' source instead of data/pretrain/curated "
+        "-- a persona pack's shard (make_pretrain_curated.py --out). Label, walk order and "
+        "every other source are unchanged, and --repeat-sources still resolves it as "
+        "'curated' or by this directory's own basename",
+    )
+    ap.add_argument(
+        "--only-curated",
+        action="store_true",
+        help="walk the Curated source ALONE: no other source dirs, no stackexchange "
+        "expansion. With --curated-dir this tokenizes exactly one pack shard; "
+        "--repeat-sources is refused under it (a one-source corpus's repeated extent "
+        "spans the whole bin, which pretrain refuses at boot)",
+    )
     args = ap.parse_args()
 
     out_bin = Path(args.output_bin)
@@ -566,7 +607,33 @@ def main():
     if bpt == 2 and vocab_size > 65536:
         raise SystemExit(f"--dtype uint16 with vocab {vocab_size:,} > 65,536 -- ids would overflow")
 
-    source_dirs = build_source_dirs()
+    # A directory someone explicitly pointed the walk at cannot be absent by
+    # intent (the same reasoning as the repeat-absent refusal below): an absent
+    # or non-directory --curated-dir would merely WARN as a skipped source and
+    # the run would write a corpus carrying no curated shard at all.
+    if args.curated_dir is not None and not Path(args.curated_dir).is_dir():
+        raise SystemExit(
+            f"--curated-dir is not a directory: {Path(args.curated_dir)} -- a source "
+            "named on the command line cannot be absent by intent (it would be "
+            "skipped with a warning and this corpus would carry no curated shard). "
+            "Point it at the shard make_pretrain_curated.py --out wrote."
+        )
+    # --only-curated makes the walk ONE source, so a repeat of it spans the
+    # whole bin -- which means it reaches the val tail, and pretrain_enigma.py's
+    # refuse_repeated_source_in_val refuses that corpus at boot. Fail here
+    # instead of after the tokenize.
+    if args.only_curated and args.repeat_sources.strip():
+        raise SystemExit(
+            "--only-curated with --repeat-sources is structurally untrainable: the "
+            "walk is a single source, so the repeated source's extent spans the whole "
+            "bin and therefore reaches the val tail -- pretrain_enigma.py refuses a "
+            "repeated source that extends into val at boot. Tokenize the shard alone "
+            "(no repeat), or oversample it in a full-corpus run (--curated-dir without "
+            "--only-curated)."
+        )
+
+    source_dirs = build_source_dirs(curated_dir=args.curated_dir,
+                                    only_curated=args.only_curated)
     repeats = parse_repeat_sources(args.repeat_sources, source_dirs)
     for label, r in repeats.items():
         print(f"  Repeat: {label} x{r} (copies emitted after the source's own pass)", flush=True)
@@ -761,6 +828,11 @@ def main():
         "vocab_file": str(args.vocab) if args.vocab else "enigma_engine/vocab_model/bpe_vocab.json",
         "workers": args.workers,
         "sources_absent": absent,
+        # Which walk this was. null/false is the full hardcoded one; a path
+        # here means the "Curated" extent below is that directory's shard (a
+        # persona pack's), not data/pretrain/curated.
+        "curated_dir": str(Path(args.curated_dir).resolve()) if args.curated_dir else None,
+        "only_curated": bool(args.only_curated),
         "repeated_sources": repeats,
         "source_token_extents": extents,
         "dupes_skipped": dupes_skipped,

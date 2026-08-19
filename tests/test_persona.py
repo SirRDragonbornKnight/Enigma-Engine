@@ -173,6 +173,22 @@ def test_a_control_character_in_name_meaning_is_refused(meaning):
         Persona(name="Atlas", data_dirname=".atlas", name_meaning=meaning)
 
 
+@pytest.mark.parametrize("dirname", [
+    "atlas" + chr(0),      # NUL, the classic path terminator...
+    "atlas" + chr(1),      # ...through the C0 range the separator screen misses
+    "atlas" + chr(0x1F),
+    "atlas" + chr(127),    # ...and DEL
+])
+def test_a_control_character_in_the_data_dirname_is_refused(dirname):
+    """data_dirname becomes home, and serve's boot calls home.mkdir(). The
+    separator screen blocks \\n\\r\\t but no other control, so every remaining
+    C0 byte and DEL reached mkdir and crashed serve with a raw OSError -- name
+    and name_meaning already reject the whole range, and this was the one field
+    that did not."""
+    with pytest.raises(ValueError):
+        Persona(name="Atlas", data_dirname=dirname)
+
+
 def test_name_meaning_may_be_empty_or_carry_unicode():
     """A pack may say nothing about its name, and the repo's ASCII rule is
     CONSOLE-bound -- training text carries unicode, her own anchors included."""
@@ -201,6 +217,20 @@ def test_a_mistyped_pack_field_refuses_instead_of_tracebacking(tmp_path, blob):
     pack.write_text(json.dumps(blob), encoding="utf-8")
     with pytest.raises(SystemExit):
         Persona.load(pack)
+
+
+def test_a_pack_saved_as_ansi_refuses_by_name_not_a_traceback(tmp_path):
+    """A pack.json saved cp1252/latin-1 -- the same Windows editors that write
+    the tolerated BOM also save ANSI -- raises UnicodeDecodeError, a ValueError
+    that is neither DuplicateJSONKey nor JSONDecodeError and slipped past every
+    except clause as a bare codecs traceback. The shared reader turns it into
+    the clean refusal that names the file. 0xE9 is 'e-acute' in cp1252 and an
+    invalid UTF-8 lead byte here."""
+    pack = tmp_path / "pack.json"
+    pack.write_bytes(b'{"name": "Atlas", "name_meaning": "caf\xe9 owner"}')
+    with pytest.raises(SystemExit, match="is not valid UTF-8") as exc:
+        Persona.load(pack)
+    assert str(pack) in str(exc.value)
 
 
 def test_a_pack_spelling_out_her_values_is_still_her(tmp_path):

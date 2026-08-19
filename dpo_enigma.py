@@ -37,9 +37,10 @@ import torch.nn.functional as F
 from enigma_engine.core.chat_format import CHAT_FORMAT_NAME, attach_chat_tokens, render_training
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
+from enigma_engine.core.persona import Persona
 from enigma_engine.core.safe_save import refuse_existing_artifact
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
-from eval_leak_guard import refuse_if_leaky
+from eval_leak_guard import persona_manifest, refuse_if_leaky
 
 PAD = 0  # padding id for batching; padded positions are never scored
 
@@ -135,6 +136,18 @@ def startup_artifact_guard(args) -> None:
     at an existing run dir was pointless friction."""
     if not args.sanity:
         refuse_existing_artifact(Path(args.out))
+
+
+def screening_manifest(persona_arg: str | None) -> Path:
+    """The sealed gate this run screens its pairs against.
+
+    WHICH gate is the loaded PERSONA's answer, never the argument's: an
+    Enigma-SPELLED pack IS her, so it screens against hers. Split out of
+    `main` because it is the whole behavior of `--persona` here -- the trainers
+    route no data by persona -- and a test can reach it without a GPU."""
+    pack = Path(persona_arg) if persona_arg else None
+    persona = Persona.load(pack)
+    return persona_manifest(None if persona.is_default else pack)
 
 
 def artifact_payload(model_state: dict, config_dict: dict, step: int,
@@ -256,12 +269,22 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--sanity", action="store_true", help="one step then exit")
+    # Manifest selection and NOTHING else: --data still says which pairs to
+    # train on. A pack's run screened against HER sealed gate would refuse the
+    # pack for resembling questions its AI is never asked, while enforcing a
+    # gate its weights are not trained for.
+    ap.add_argument("--persona", default=None,
+                    help="persona pack whose sealed gate screens --data; omitted = Enigma's")
     return ap
 
 
 def main() -> None:
     args = build_parser().parse_args()
     startup_artifact_guard(args)
+    manifest = screening_manifest(args.persona)
+    if args.persona:
+        print(f"persona: {Persona.load(Path(args.persona)).name} | "
+              f"leak gate: {manifest}", flush=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(args.seed)
@@ -325,7 +348,7 @@ def main() -> None:
         # and its twin on val (the group_split leak, in a new dress).
         pairs.append(((sysblk or "") + "\n" + p["prompt"],
                       p.get("class") or "untagged", c, r))
-    refuse_if_leaky(prompts, Path(args.data), advisory=answers)
+    refuse_if_leaky(prompts, Path(args.data), manifest=manifest, advisory=answers)
     if not pairs:
         raise SystemExit("no usable preference pairs")
 

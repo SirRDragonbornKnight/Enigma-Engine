@@ -168,6 +168,56 @@ def test_a_pack_stop_leaves_the_other_ais_window_alone(tmp_path):
                         "exclude=")
 
 
+def _refuses(script: str, *args: str) -> subprocess.CompletedProcess:
+    """Run a launcher expecting it to refuse: non-zero, nothing on stdout."""
+    proc = subprocess.run(
+        [_POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+         str(REPO_ROOT / script), *args],
+        capture_output=True, text=True, timeout=120, cwd=str(REPO_ROOT),
+    )
+    assert proc.returncode != 0, f"{script} {args} did not refuse"
+    assert "DRYRUN" not in proc.stdout
+    return proc
+
+
+@needs_powershell
+@pytest.mark.parametrize("script", ["Start-Enigma.ps1", "Stop-Enigma.ps1"])
+def test_a_pack_refuses_a_reserved_bind_port(tmp_path, script):
+    """8123 is the eval scratch port an eval run CLEARS; 8000 is Enigma's own
+    daily serve. A pack that RESOLVES to either squats a port that is not hers.
+    The -Port override reaches neither Persona.load's declared-port check nor
+    the ownership test, so the resolve refuses it -- and Start and Stop cannot
+    disagree, since both route the port through Resolve-EnigmaPersona."""
+    pack = _write_pack(tmp_path / "atlas")
+    proc = _refuses(script, "-Persona", str(pack), "-Port", "8123", "-DryRun")
+    assert "8123" in proc.stderr
+
+
+@needs_powershell
+def test_a_portless_pack_refuses_instead_of_squatting_her_port(tmp_path):
+    """A pack with no port field, hand-run through Start without -Port, fell
+    through to $bind = 8000 -- Enigma's own port. Only make_persona_launchers
+    refused a portless pack before; the resolve refuses the fall-through now
+    too, so it cannot reach 8000."""
+    pack = tmp_path / "portless"
+    pack.mkdir()
+    (pack / "pack.json").write_text(
+        json.dumps({"name": "Atlas", "data_dirname": ".atlas"}), encoding="utf-8")
+    proc = _refuses("Start-Enigma.ps1", "-Persona", str(pack), "-DryRun")
+    assert "8000" in proc.stderr
+
+
+@needs_powershell
+def test_her_own_dryrun_still_binds_8000_past_the_reserved_port_guard():
+    """The guard is NON-default only: Enigma's own no-Persona launch still
+    resolves to 8000, byte-identical -- the reserved-port refusal must never
+    fire on the default path."""
+    lines = _run_ps("Start-Enigma.ps1", "-DryRun")
+    serve = next(ln for ln in lines if ln.startswith("DRYRUN serve: "))
+    tokens = _tokens(serve[len("DRYRUN serve: "):])
+    assert tokens[tokens.index("--port") + 1] == "8000"
+
+
 # ---------------------------------------------------------------------------
 # the derivation, against the Python it mirrors
 # ---------------------------------------------------------------------------
