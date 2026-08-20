@@ -33,16 +33,24 @@ import pytest
 import make_dpo_data as mod
 from enigma_engine.core.persona_content import ENIGMA_ASIDES, default_content
 
-# The corpus digest recorded at wave 3c and re-derived at every wave since --
-# `sha256(json.dumps(gen_dpo_pairs(), sort_keys=True))` over the DEFAULT
-# content, 489 pairs. It is the receipt's own method and NOT the file's bytes
-# (the rendered `dpo_pairs.jsonl` hashes to 196d2fe4...); the two describe one
-# corpus through different byte streams, and this is the one the receipts
-# quote.
+# The corpus digest recorded at wave 3c and re-derived at every wave since.
+# ONE byte stream, named exactly: `json.dumps(gen_dpo_pairs(), sort_keys=True)`
+# over the DEFAULT content, 489 pairs, sha256'd in memory -- the generator's
+# return value, never a file. The rendered `data/sft/dpo_pairs.jsonl` is
+# whatever the last bake wrote there, from whatever generator vintage was
+# current then; nothing in this module reads it and no pin here constrains it.
+# (The note this replaces claimed that artifact hashed to 196d2fe4... -- stale
+# at HEAD, and a rendered-file hash was never the enforced pin.)
 #
 # A legitimate change to her preference content moves this. Re-derive it, put
 # the new value here, and record the move -- do not delete the pin.
-HER_CORPUS_SHA = "f636a6bb19e28ec28ec1332913540b6fbdfd89be20cc811e67d0ffb223f479d9"
+#
+# Moved 2026-08-19 by the em-dash unification: the 44 prose dashes in
+# make_dpo_data's tables and the 7 in ENIGMA_ASIDES became the spaced em-dash
+# the anchors already use, so every rendered pair carrying one changed bytes.
+# Content and pair count are otherwise untouched (f636a6bb -> 1bc02b66, 489
+# pairs both sides).
+HER_CORPUS_SHA = "1bc02b66f96fb0a1c6895701f56bdde54b2c256b76554268e4ea0c9c76c6ab9a"
 HER_PAIR_COUNT = 489
 
 
@@ -201,7 +209,7 @@ def test_her_own_aside_still_carries_the_count_it_always_did(tmp_path, monkeypat
     chosen = {r["chosen"] for r in _records(out / "dpo_pairs.jsonl")}
     assert ENIGMA_ASIDES["refuse_bigger_model"][1] in chosen
     assert ENIGMA_ASIDES["refuse_bigger_model"][1] == (
-        "There's no bigger model back there -- it's me all the way down, all 240 "
+        "There's no bigger model back there — it's me all the way down, all 240 "
         "million parameters of it.")
 
 

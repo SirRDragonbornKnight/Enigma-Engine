@@ -186,6 +186,108 @@ def test_console_bound_strings_are_ascii() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Training-content dash convention -- the console gate's inverted twin. The
+# hand-authored sources below feed the corpora she is trained on, and a prose
+# dash there is content, not console output: it must be the spaced em-dash the
+# identity anchors have always used. Both rules meet inside these same files,
+# so scope is decided per literal, never per file -- console-bound literals
+# keep ASCII, docstrings and comments are out of scope for both.
+# ---------------------------------------------------------------------------
+
+# The hand-authored training-content sources. knowledge_corpus.py is in scope
+# too: its tables also render the continued-pretrain facts stream, and
+# test_knowledge_data.test_pretrain_text_lines_are_clean now whitelists exactly
+# U+2014 on top of ASCII, so the two rules agree instead of contradicting.
+# Its two separator constants (_SENTENCE_SEPS/_FRAGMENT_SEPS) split answers on
+# the prose dash, so they carry the em-dash with the content they parse.
+TRAINING_CONTENT_FILES: tuple[str, ...] = (
+    "identity_paraphrases.py",
+    "enigma_engine/core/persona_content.py",
+    "make_sft_data.py",
+    "make_dpo_data.py",
+    "knowledge_corpus.py",
+)
+
+# Helpers that raise or print on their caller's behalf. Their message literals
+# reach the console, and the sink match above cannot see through the call.
+_INDIRECT_CONSOLE_SINKS = {"_refuse"}
+
+ASCII_DASH = " -- "
+EM_DASH = " — "
+
+
+def _console_or_docstring_lines(tree: ast.AST) -> set[int]:
+    """Lines whose string literals are a docstring or console-bound.
+
+    Line ranges rather than nodes: a console sink's literals can sit anywhere
+    inside its call, and marking the whole call is what makes "everything
+    else is content" a decidable question."""
+    lines: set[int] = set()
+
+    def mark(node) -> None:
+        lines.update(range(node.lineno, node.end_lineno + 1))
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                mark(body[0].value)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise):
+            mark(node)
+            continue
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name) and (
+            f.id in {"print", "SystemExit", "ArgumentParser"} or f.id in _INDIRECT_CONSOLE_SINKS
+        ):
+            mark(node)
+        elif isinstance(f, ast.Attribute) and (
+            f.attr in _LOGGER_METHODS
+            or f.attr in {"_emit_progress", "exit", "add_argument", "ArgumentParser"}
+            or f.attr in _INDIRECT_CONSOLE_SINKS
+        ):
+            mark(node)
+    return lines
+
+
+def test_training_content_spells_its_prose_dash_as_an_em_dash() -> None:
+    """No training-table literal may carry the spaced ASCII dash.
+
+    identity_anchors.py spelled all 154 of its prose dashes as the em-dash
+    while the other authored sources spelled the same dash " -- ", so one
+    corpus carried two surfaces for one punctuation mark. Kokoro's G2P is the
+    tiebreak: it reads the em-dash as prosodic punctuation and DELETES " -- "
+    from the phoneme stream, so the ASCII form went unspoken. Unified
+    2026-08-19.
+
+    A console-bound literal in these same files is the console gate's, not
+    this one's, and keeps ASCII."""
+    violations: list[str] = []
+    for rel in TRAINING_CONTENT_FILES:
+        path = REPO_ROOT / rel
+        assert path.exists(), f"{rel} is a documented training-content source"
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as exc:  # a file that cannot parse is its own bug
+            violations.append(f"  {rel}: SyntaxError {exc}")
+            continue
+        skip = _console_or_docstring_lines(tree)
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and ASCII_DASH in node.value and node.lineno not in skip):
+                violations.append(f"  {rel}:{node.lineno}: {node.value.strip()[:70]!r}")
+    assert not violations, (
+        "training-content literals still carry the spaced ASCII dash; the "
+        f"convention is {EM_DASH!r} (console-bound literals keep ASCII):\n"
+        + "\n".join(sorted(set(violations)))
+    )
+
+
 def test_detached_launchers_survive_cmd_quote_stripping():
     """cmd.exe strips the outermost quote pair from the line after /c when
     that line holds several quoted tokens. Both the venv interpreter path and

@@ -44,47 +44,47 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["Which planet is the biggest one?", "What is the largest planet going around our sun?", "Of all the planets, which is largest?"],
         ["Jupiter. It is by far the largest planet in our solar system.",
-         "Jupiter is the biggest planet -- more massive than all the other planets combined."],
+         "Jupiter is the biggest planet — more massive than all the other planets combined."],
     ),
     (
         ["Which planet is smallest?", "What's the smallest planet in the solar system?"],
         ["Mercury is the smallest planet in our solar system.",
-         "That's Mercury -- the smallest planet, and also the one closest to the sun."],
+         "That's Mercury — the smallest planet, and also the one closest to the sun."],
     ),
     (
         ["Which planet is closest to the sun?", "What planet orbits nearest the sun?"],
         ["Mercury is the closest planet to the sun.",
-         "Mercury -- it sits nearest the sun of all the planets."],
+         "Mercury — it sits nearest the sun of all the planets."],
     ),
     (
         ["Why is Mars called the red planet?", "Which planet is known as the red planet?"],
         ["Mars. Its surface is covered in iron-rich dust that looks red.",
-         "Mars is the red planet -- rusty iron dust on its surface gives it that color."],
+         "Mars is the red planet — rusty iron dust on its surface gives it that color."],
     ),
     (
         ["Which planet has the famous rings?", "What planet is known for its rings?"],
         ["Saturn. Its rings are made of ice and rock circling the planet.",
-         "Saturn is the ringed planet -- bright rings of ice and rock."],
+         "Saturn is the ringed planet — bright rings of ice and rock."],
     ),
     (
         ["Which planet is our home?", "What planet are we standing on right now?", "Where do humans live in the solar system?"],
         ["Earth. It is the only planet known to support life.",
-         "We live on Earth -- the third planet from the sun."],
+         "We live on Earth — the third planet from the sun."],
     ),
     (
         ["Which planet is the hottest?", "What's the hottest planet in the solar system?"],
         ["Venus. Its thick atmosphere traps heat, making it hotter than Mercury.",
-         "Venus is the hottest planet -- its heavy atmosphere holds the heat in."],
+         "Venus is the hottest planet — its heavy atmosphere holds the heat in."],
     ),
     (
         ["How many planets are in the solar system?", "How many planets orbit our sun?"],
         ["Eight planets: Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune.",
-         "There are eight -- Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune."],
+         "There are eight — Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune."],
     ),
     (
         ["Is Pluto a planet?", "What happened to Pluto's planet status?"],
         ["Pluto is classified as a dwarf planet, not one of the eight planets.",
-         "It's a dwarf planet -- Pluto was reclassified, so the solar system counts eight planets."],
+         "It's a dwarf planet — Pluto was reclassified, so the solar system counts eight planets."],
     ),
     (
         ["What does Earth orbit?", "What does our planet go around?"],
@@ -94,11 +94,11 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What goes around the Earth?", "What is Earth's natural satellite?"],
         ["The moon orbits the Earth, taking about a month for each trip.",
-         "That's the moon -- Earth's only natural satellite."],
+         "That's the moon — Earth's only natural satellite."],
     ),
     (
         ["Is the sun a star or a planet?", "What kind of object is the sun?"],
-        ["The sun is a star -- a huge ball of hot gas that gives us light and heat.",
+        ["The sun is a star — a huge ball of hot gas that gives us light and heat.",
          "A star. The sun is simply the star closest to us."],
     ),
     (
@@ -109,27 +109,27 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What galaxy do we live in?", "What is the name of our galaxy?"],
         ["We live in the Milky Way galaxy.",
-         "The Milky Way -- our whole solar system is inside it."],
+         "The Milky Way — our whole solar system is inside it."],
     ),
     (
         ["Why do we have day and night?", "What causes day and night?"],
         ["Earth spins. The side facing the sun has day, and the side facing away has night.",
-         "Day and night come from Earth rotating -- each full spin takes about twenty-four hours."],
+         "Day and night come from Earth rotating — each full spin takes about twenty-four hours."],
     ),
     (
         ["What causes the tides?", "Why does the sea rise and fall?"],
         ["The moon's gravity pulls on the oceans, making the tides rise and fall.",
-         "Mostly the moon -- its gravity tugs the oceans as Earth turns."],
+         "Mostly the moon — its gravity tugs the oceans as Earth turns."],
     ),
     (
         ["Who was the first person to walk on the moon?", "Who first set foot on the moon?"],
         ["Neil Armstrong, in 1969, during the Apollo 11 mission.",
-         "Neil Armstrong -- he stepped onto the moon in 1969 with Apollo 11."],
+         "Neil Armstrong — he stepped onto the moon in 1969 with Apollo 11."],
     ),
     (
         ["What is the North Star called?", "Which star points north?"],
         ["Polaris. It sits almost directly above the North Pole, so it points north.",
-         "That's Polaris, the North Star -- travelers have used it to find north for centuries."],
+         "That's Polaris, the North Star — travelers have used it to find north for centuries."],
     ),
     (
         ["How long does sunlight take to reach Earth?", "How long does light travel from the sun to us?"],
@@ -150,7 +150,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["How many days are in a year?", "How long is a year in days?"],
         ["Three hundred sixty-five days, and three hundred sixty-six in a leap year.",
-         "A year lasts three hundred sixty-five days -- leap years add one more."],
+         "A year lasts three hundred sixty-five days — leap years add one more."],
     ),
     (
         ["How many hours are in a day?", "A day has how many hours?"],
@@ -175,12 +175,12 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["Which month is the shortest?", "What's the shortest month of the year?"],
         ["February. It has twenty-eight days, or twenty-nine in a leap year.",
-         "February is the shortest -- twenty-eight days most years."],
+         "February is the shortest — twenty-eight days most years."],
     ),
     (
         ["How often do leap years happen?", "When do we get a leap year?"],
         ["Every four years. February gains an extra day, the twenty-ninth.",
-         "Once every four years -- that's when February gets a twenty-ninth day."],
+         "Once every four years — that's when February gets a twenty-ninth day."],
     ),
     (
         ["How many years are in a decade?", "A decade is how long?"],
@@ -201,7 +201,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["How many continents are there?", "Name the continents of the world."],
         ["Seven: Africa, Antarctica, Asia, Australia, Europe, North America, and South America.",
-         "There are seven continents -- Asia, Africa, North America, South America, Antarctica, Europe, and Australia."],
+         "There are seven continents — Asia, Africa, North America, South America, Antarctica, Europe, and Australia."],
     ),
     (
         ["Which continent is the largest?", "What's the biggest continent?"],
@@ -211,12 +211,12 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["Which continent is the coldest?", "What's the coldest place on Earth, continent-wise?"],
         ["Antarctica. It is the coldest, windiest continent, covered in ice.",
-         "Antarctica -- an ice-covered continent at the South Pole."],
+         "Antarctica — an ice-covered continent at the South Pole."],
     ),
     (
         ["How many oceans are there?", "Name the oceans of the world."],
         ["Five: the Pacific, Atlantic, Indian, Arctic, and Southern oceans.",
-         "There are five oceans -- Pacific, Atlantic, Indian, Arctic, and Southern."],
+         "There are five oceans — Pacific, Atlantic, Indian, Arctic, and Southern."],
     ),
     (
         ["Which ocean is the biggest?", "What's the largest ocean on Earth?"],
@@ -226,17 +226,17 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What's the longest river in the world?", "Which river is longest?"],
         ["The Nile is usually called the longest river; the Amazon carries the most water.",
-         "Most sources say the Nile, in Africa -- though the Amazon is the biggest by water volume."],
+         "Most sources say the Nile, in Africa — though the Amazon is the biggest by water volume."],
     ),
     (
         ["What's the tallest mountain on Earth?", "Which mountain is the highest?"],
         ["Mount Everest, in the Himalayas, is the highest mountain above sea level.",
-         "Mount Everest -- the peak of the world, on the border of Nepal and China."],
+         "Mount Everest — the peak of the world, on the border of Nepal and China."],
     ),
     (
         ["What's the largest hot desert?", "Which desert is the biggest hot one?"],
         ["The Sahara, in northern Africa, is the largest hot desert.",
-         "That's the Sahara -- it stretches across much of northern Africa."],
+         "That's the Sahara — it stretches across much of northern Africa."],
     ),
     (
         ["What's the biggest country in the world?", "Which country has the most land?"],
@@ -246,7 +246,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["Which country has the most people?", "What's the most populated country?"],
         ["India has the most people, with China a close second.",
-         "India -- it recently passed China as the most populous country."],
+         "India — it recently passed China as the most populous country."],
     ),
     (
         ["What's the capital of the United States?", "Which city is the US capital?"],
@@ -299,17 +299,17 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What's the capital of Canada?", "Which city is Canada's capital?"],
-        ["Ottawa -- not Toronto, which is just the biggest city.",
+        ["Ottawa — not Toronto, which is just the biggest city.",
          "Canada's capital is Ottawa."],
     ),
     (
         ["What's the capital of Australia?", "Which city is Australia's capital?"],
-        ["Canberra -- not Sydney, which is just the biggest city.",
+        ["Canberra — not Sydney, which is just the biggest city.",
          "Australia's capital is Canberra."],
     ),
     (
         ["What's the capital of Brazil?", "Which city is Brazil's capital?"],
-        ["Brasilia -- a city built specifically to be the capital.",
+        ["Brasilia — a city built specifically to be the capital.",
          "Brazil's capital is Brasilia."],
     ),
     (
@@ -340,17 +340,17 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What is the equator?", "Where is the equator?"],
         ["The equator is the imaginary line around Earth's middle, halfway between the poles.",
-         "It's the line circling the center of the Earth -- the hottest zone sits along it."],
+         "It's the line circling the center of the Earth — the hottest zone sits along it."],
     ),
     (
         ["What's the largest rainforest?", "Which rainforest is the biggest?"],
         ["The Amazon rainforest, in South America.",
-         "The Amazon -- the biggest rainforest on Earth, mostly in Brazil."],
+         "The Amazon — the biggest rainforest on Earth, mostly in Brazil."],
     ),
     (
         ["What language do people speak in Brazil?", "What do Brazilians mostly speak?"],
         ["Portuguese. Brazil is the largest Portuguese-speaking country in the world.",
-         "Brazilians speak Portuguese -- not Spanish, which surprises many people."],
+         "Brazilians speak Portuguese — not Spanish, which surprises many people."],
     ),
     (
         ["What language is spoken in Mexico?", "What do people in Mexico speak?"],
@@ -360,18 +360,18 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What language has the most native speakers?", "Which language do the most people speak natively?"],
         ["Mandarin Chinese has the most native speakers; English is the most widely learned.",
-         "Mandarin Chinese, by native speakers -- English leads once you count second-language speakers."],
+         "Mandarin Chinese, by native speakers — English leads once you count second-language speakers."],
     ),
     # -------------------------------------------------------------- science
     (
         ["What is water made of?", "What are the elements in water?"],
-        ["Hydrogen and oxygen -- two hydrogen atoms and one oxygen atom, H2O.",
+        ["Hydrogen and oxygen — two hydrogen atoms and one oxygen atom, H2O.",
          "Water is H2O: two parts hydrogen, one part oxygen."],
     ),
     (
         ["At what temperature does water freeze?", "When does water turn to ice?"],
         ["Zero degrees Celsius, which is thirty-two degrees Fahrenheit.",
-         "Water freezes at zero Celsius -- thirty-two Fahrenheit."],
+         "Water freezes at zero Celsius — thirty-two Fahrenheit."],
     ),
     (
         ["At what temperature does water boil?", "When does water start boiling?"],
@@ -383,88 +383,88 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
         # Digit surface FIRST: the cloze takes the first answer's lead
         # fragment, and a word-number lead re-created the unwinnable surface
         # one line down from the fix (audit 2026-08-14).
-        ["100 degrees Celsius -- one hundred -- at sea level, which is 212 Fahrenheit.",
+        ["100 degrees Celsius — one hundred — at sea level, which is 212 Fahrenheit.",
          "Water boils at 100 degrees Celsius at sea level."],
     ),
     (
         ["What are the states of matter?", "Name the main states of matter."],
-        ["Solid, liquid, and gas -- plus plasma, like the inside of stars.",
+        ["Solid, liquid, and gas — plus plasma, like the inside of stars.",
          "The three everyday ones are solid, liquid, and gas. Plasma is the fourth."],
     ),
     (
         ["What gas do we breathe in to live?", "What gas do humans need from the air?"],
         ["Oxygen. We breathe in oxygen and breathe out carbon dioxide.",
-         "Oxygen keeps us alive -- we exhale carbon dioxide in return."],
+         "Oxygen keeps us alive — we exhale carbon dioxide in return."],
     ),
     (
         ["What is most of the air made of?", "What gas makes up most of the atmosphere?"],
-        ["Nitrogen -- about four-fifths of the air. Oxygen is most of the rest.",
+        ["Nitrogen — about four-fifths of the air. Oxygen is most of the rest.",
          "Mostly nitrogen, roughly seventy-eight percent. Oxygen is about twenty-one percent."],
     ),
     (
         ["How do plants make their food?", "What is photosynthesis?"],
         ["Photosynthesis: plants use sunlight to turn water and carbon dioxide into food, releasing oxygen.",
-         "Plants capture sunlight and use it to make food from water and carbon dioxide -- the oxygen we breathe is their exhaust."],
+         "Plants capture sunlight and use it to make food from water and carbon dioxide — the oxygen we breathe is their exhaust."],
     ),
     (
         ["What is gravity?", "Why do things fall down?"],
-        ["Gravity is the force that pulls objects toward each other -- it keeps us on the ground and the planets around the sun.",
+        ["Gravity is the force that pulls objects toward each other — it keeps us on the ground and the planets around the sun.",
          "Things fall because Earth's gravity pulls them toward its center."],
     ),
     (
         ["Which is faster, light or sound?", "Why do we see lightning before hearing thunder?"],
         ["Light is far faster than sound. That's why lightning flashes first and thunder arrives after.",
-         "Light wins by a huge margin -- the lightning reaches your eyes almost instantly, the thunder lags behind."],
+         "Light wins by a huge margin — the lightning reaches your eyes almost instantly, the thunder lags behind."],
     ),
     (
         ["How fast does light travel?", "What's the speed of light?"],
-        ["About three hundred thousand kilometers per second -- nothing moves faster.",
+        ["About three hundred thousand kilometers per second — nothing moves faster.",
          "Roughly 300,000 kilometers every second. It's the universe's speed limit."],
     ),
     (
         ["How many poles does a magnet have?", "What are the poles of a magnet?"],
         ["Two: a north pole and a south pole. Opposite poles attract; like poles repel.",
-         "Every magnet has a north and a south pole -- opposites pull together, matching poles push apart."],
+         "Every magnet has a north and a south pole — opposites pull together, matching poles push apart."],
     ),
     (
         ["What is electricity?", "What flows through a wire?"],
         ["Electricity is the flow of electrons through a material like copper wire.",
-         "Moving electrons -- that flow through wires is what we call electricity."],
+         "Moving electrons — that flow through wires is what we call electricity."],
     ),
     (
         ["What's the hardest natural material?", "Which natural substance is hardest?"],
         ["Diamond. It's carbon arranged in an extremely strong crystal.",
-         "Diamond is the hardest natural material -- pure carbon under enormous pressure."],
+         "Diamond is the hardest natural material — pure carbon under enormous pressure."],
     ),
     (
         ["What's the chemical symbol for gold?", "What letters stand for gold in chemistry?"],
         ["Au, from the Latin word aurum.",
-         "Gold's symbol is Au -- Latin for aurum."],
+         "Gold's symbol is Au — Latin for aurum."],
     ),
     (
         ["What is table salt made of?", "What's the chemistry of salt?"],
-        ["Sodium and chlorine -- sodium chloride, NaCl.",
+        ["Sodium and chlorine — sodium chloride, NaCl.",
          "Salt is sodium chloride: one sodium atom bonded to one chlorine atom."],
     ),
     (
         ["Why does ice float on water?", "How can ice float?"],
         ["Ice is less dense than liquid water, so it floats.",
-         "Because freezing makes water expand -- ice is lighter for its size, so it rides on top."],
+         "Because freezing makes water expand — ice is lighter for its size, so it rides on top."],
     ),
     (
         ["Where does the sun get its energy?", "How does the sun make light?"],
         ["Nuclear fusion. The sun fuses hydrogen into helium, releasing enormous energy.",
-         "The sun runs on fusion -- hydrogen atoms merging into helium deep in its core."],
+         "The sun runs on fusion — hydrogen atoms merging into helium deep in its core."],
     ),
     (
         ["What makes a rainbow?", "How do rainbows form?"],
-        ["Sunlight bending through water droplets splits into its colors -- that's a rainbow.",
+        ["Sunlight bending through water droplets splits into its colors — that's a rainbow.",
          "Rainbows appear when sunlight passes through raindrops and spreads into colors."],
     ),
     (
         ["What is everything made of?", "What are the building blocks of matter?"],
         ["Atoms. Everything you can touch is made of atoms bonded together.",
-         "Matter is made of atoms -- tiny particles made of protons, neutrons, and electrons."],
+         "Matter is made of atoms — tiny particles made of protons, neutrons, and electrons."],
     ),
     (
         ["What are the parts of an atom?", "What's inside an atom?"],
@@ -474,17 +474,17 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What does DNA do?", "What is DNA for?"],
         ["DNA carries the genetic instructions for building and running a living thing.",
-         "It's the instruction manual of life -- DNA stores the code your cells follow."],
+         "It's the instruction manual of life — DNA stores the code your cells follow."],
     ),
     (
         ["What are living things made of?", "What is the basic unit of life?"],
         ["Cells. Every living thing is made of one or more cells.",
-         "The cell -- the smallest building block of every living organism."],
+         "The cell — the smallest building block of every living organism."],
     ),
     (
         ["What comes out of a volcano?", "What is lava?"],
         ["Molten rock. Underground it's called magma; once it erupts, it's lava.",
-         "Lava -- melted rock from deep inside the Earth."],
+         "Lava — melted rock from deep inside the Earth."],
     ),
     (
         ["What causes earthquakes?", "Why does the ground shake in an earthquake?"],
@@ -493,34 +493,34 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["How does rain happen?", "What is the water cycle?"],
-        ["Water evaporates, rises, condenses into clouds, and falls back as rain -- the water cycle.",
+        ["Water evaporates, rises, condenses into clouds, and falls back as rain — the water cycle.",
          "The sun lifts water into the sky as vapor, it forms clouds, and it falls again as rain."],
     ),
     # ------------------------------------------------------- body / biology
     (
         ["What does the heart do?", "What's the heart's job?"],
         ["The heart pumps blood around your body, delivering oxygen and nutrients.",
-         "It's a pump -- your heart pushes blood through your whole body, beat after beat."],
+         "It's a pump — your heart pushes blood through your whole body, beat after beat."],
     ),
     (
         ["What do lungs do?", "What's the job of your lungs?"],
         ["Lungs take in oxygen when you breathe in and push out carbon dioxide when you breathe out.",
-         "They handle breathing -- oxygen in, carbon dioxide out."],
+         "They handle breathing — oxygen in, carbon dioxide out."],
     ),
     (
         ["What does the brain do?", "What's the brain's job?"],
-        ["The brain controls everything -- thought, memory, movement, and the senses.",
+        ["The brain controls everything — thought, memory, movement, and the senses.",
          "It runs the whole show: thinking, feeling, remembering, and controlling your body."],
     ),
     (
         ["How many bones does an adult have?", "What's the number of bones in the human body?"],
         ["An adult has two hundred six bones. Babies are born with more, and some fuse as they grow.",
-         "Two hundred six in an adult -- children start with around three hundred that fuse over time."],
+         "Two hundred six in an adult — children start with around three hundred that fuse over time."],
     ),
     (
         ["What's the largest organ of the body?", "Which human organ is the biggest?"],
         ["The skin. It covers the entire body and protects everything inside.",
-         "Your skin -- it's the body's largest organ."],
+         "Your skin — it's the body's largest organ."],
     ),
     (
         ["What are the five senses?", "Name the human senses."],
@@ -530,17 +530,17 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What do kidneys do?", "What's the job of the kidneys?"],
         ["Kidneys filter waste out of your blood and turn it into urine.",
-         "They're the blood's filters -- kidneys clean waste from the blood."],
+         "They're the blood's filters — kidneys clean waste from the blood."],
     ),
     (
         ["Are humans mammals?", "What kind of animal is a human?"],
-        ["Yes -- humans are mammals: warm-blooded, with hair, and fed on milk as babies.",
+        ["Yes — humans are mammals: warm-blooded, with hair, and fed on milk as babies.",
          "Humans are mammals, like whales, dogs, and elephants."],
     ),
     (
         ["What makes an animal a mammal?", "What defines mammals?"],
         ["Mammals are warm-blooded, have hair or fur, and feed their young with milk.",
-         "Warm blood, fur or hair, and milk for their babies -- that's what makes a mammal."],
+         "Warm blood, fur or hair, and milk for their babies — that's what makes a mammal."],
     ),
     (
         ["How do fish breathe?", "How do fish get oxygen underwater?"],
@@ -549,7 +549,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["How many legs does an insect have?", "What's the leg count for insects?"],
-        ["Six legs. If it has eight, it's not an insect -- it's probably a spider.",
+        ["Six legs. If it has eight, it's not an insect — it's probably a spider.",
          "Insects have six legs, always."],
     ),
     (
@@ -559,13 +559,13 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What's the largest animal ever?", "Which animal is the biggest on Earth?"],
-        ["The blue whale -- the largest animal that has ever lived, bigger than any dinosaur.",
+        ["The blue whale — the largest animal that has ever lived, bigger than any dinosaur.",
          "The blue whale. Nothing alive, or ever alive, has been bigger."],
     ),
     (
         ["What's the tallest animal?", "Which animal stands the tallest?"],
         ["The giraffe. Its long neck lets it reach leaves other animals can't.",
-         "Giraffes -- the tallest animals on land."],
+         "Giraffes — the tallest animals on land."],
     ),
     (
         ["What's the fastest land animal?", "Which animal runs the fastest?"],
@@ -574,13 +574,13 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What do bees make?", "What insect makes honey?"],
-        ["Bees make honey from flower nectar -- and they pollinate plants while gathering it.",
+        ["Bees make honey from flower nectar — and they pollinate plants while gathering it.",
          "Honey comes from bees, which turn nectar into it inside the hive."],
     ),
     (
         ["What does a caterpillar turn into?", "What comes out of a chrysalis?"],
         ["A butterfly. The caterpillar transforms inside a chrysalis.",
-         "A caterpillar becomes a butterfly -- or a moth, depending on the species."],
+         "A caterpillar becomes a butterfly — or a moth, depending on the species."],
     ),
     (
         ["What does a tadpole become?", "What grows from a tadpole?"],
@@ -589,18 +589,18 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["Can penguins fly?", "Do penguins fly like other birds?"],
-        ["No -- penguins are birds, but their wings are built for swimming, not flying.",
+        ["No — penguins are birds, but their wings are built for swimming, not flying.",
          "They can't fly. Penguins use their wings as flippers to swim instead."],
     ),
     (
         ["Are bats birds?", "What kind of animal is a bat?"],
-        ["Bats are mammals -- the only mammals that truly fly.",
+        ["Bats are mammals — the only mammals that truly fly.",
          "Not birds. Bats are flying mammals: fur, live young, milk."],
     ),
     (
         ["Are whales fish?", "What kind of animal is a whale?"],
         ["Whales are mammals, not fish. They breathe air and feed their calves milk.",
-         "Not fish -- whales are mammals that must surface to breathe."],
+         "Not fish — whales are mammals that must surface to breathe."],
     ),
     (
         ["How many arms does an octopus have?", "What's the arm count for an octopus?"],
@@ -610,12 +610,12 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What's in a camel's hump?", "Do camels store water in their humps?"],
         ["Fat, not water. The stored fat lets camels go a long time without food.",
-         "Humps hold fat -- it's an energy reserve, not a water tank."],
+         "Humps hold fat — it's an energy reserve, not a water tank."],
     ),
     (
         ["When did the dinosaurs die out?", "How long ago did dinosaurs go extinct?"],
         ["About sixty-six million years ago, most likely after a giant asteroid impact.",
-         "Roughly sixty-six million years ago -- an asteroid strike is the leading explanation."],
+         "Roughly sixty-six million years ago — an asteroid strike is the leading explanation."],
     ),
     # --------------------------------------------------------------- units
     (
@@ -641,11 +641,11 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What do Celsius and Fahrenheit measure?", "What kind of scales are Celsius and Fahrenheit?"],
         ["Temperature. Celsius is used in most of the world; Fahrenheit mainly in the United States.",
-         "They're temperature scales -- water freezes at zero Celsius or thirty-two Fahrenheit."],
+         "They're temperature scales — water freezes at zero Celsius or thirty-two Fahrenheit."],
     ),
     (
         ["What does a liter measure?", "What kind of unit is a liter?"],
-        ["Volume -- how much space a liquid takes up.",
+        ["Volume — how much space a liquid takes up.",
          "A liter measures liquid volume, like a bottle of water."],
     ),
     # ----------------------------------------------------- language / misc
@@ -656,12 +656,12 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What are the vowels?", "Which letters are vowels in English?"],
-        ["A, E, I, O, and U -- and sometimes Y.",
+        ["A, E, I, O, and U — and sometimes Y.",
          "The vowels are A, E, I, O, U, with Y sometimes counting too."],
     ),
     (
         ["What are the primary colors of paint?", "Which colors mix to make the others in paint?"],
-        ["Red, yellow, and blue -- mixing them makes the other colors.",
+        ["Red, yellow, and blue — mixing them makes the other colors.",
          "In paint: red, yellow, and blue."],
     ),
     (
@@ -676,7 +676,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["How many keys does a piano have?", "What's the key count of a full piano?"],
-        ["Eighty-eight keys -- fifty-two white and thirty-six black.",
+        ["Eighty-eight keys — fifty-two white and thirty-six black.",
          "A full-size piano has eighty-eight keys."],
     ),
     (
@@ -691,7 +691,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["How often are the Olympic Games held?", "How many years between Olympics?"],
-        ["Every four years -- with summer and winter games alternating every two.",
+        ["Every four years — with summer and winter games alternating every two.",
          "The Olympics come every four years for each kind, summer and winter."],
     ),
     (
@@ -712,7 +712,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["When did people first land on the moon?", "What year was the first moon landing?"],
-        ["1969 -- Apollo 11, with Neil Armstrong first on the surface.",
+        ["1969 — Apollo 11, with Neil Armstrong first on the surface.",
          "The first moon landing was in 1969."],
     ),
     (
@@ -737,18 +737,18 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["Who described gravity after seeing a falling apple?", "Which scientist is famous for gravity?"],
-        ["Isaac Newton -- he worked out the laws of gravity and motion.",
+        ["Isaac Newton — he worked out the laws of gravity and motion.",
          "That story belongs to Isaac Newton, who described how gravity works."],
     ),
     (
         ["Who proposed the theory of evolution?", "Which scientist wrote about natural selection?"],
         ["Charles Darwin, in On the Origin of Species.",
-         "Charles Darwin -- his theory of evolution by natural selection."],
+         "Charles Darwin — his theory of evolution by natural selection."],
     ),
     (
         ["Who invented the printing press?", "Which inventor made printing books practical?"],
         ["Johannes Gutenberg, in the fifteenth century.",
-         "Gutenberg -- his printing press made books widely available."],
+         "Gutenberg — his printing press made books widely available."],
     ),
     # ------------------------------------------------------------------
     # Floor widening, 2026-08-08 (ruled: ~138 -> wider, same class -- common,
@@ -757,49 +757,49 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     # ---------------------------------------------------------------- space
     (
         ["Does the moon make its own light?", "Why does the moon shine?"],
-        ["No -- moonlight is reflected sunlight bouncing off the moon's surface.",
+        ["No — moonlight is reflected sunlight bouncing off the moon's surface.",
          "The moon shines by reflecting the sun. It makes no light of its own."],
     ),
     (
         ["What is a shooting star?", "What are shooting stars really?"],
-        ["A meteor -- a bit of space rock burning up as it hits our atmosphere.",
+        ["A meteor — a bit of space rock burning up as it hits our atmosphere.",
          "Not a star at all: a small piece of rock or dust burning bright as it falls through the air."],
     ),
     (
         ["Why do the sun and moon look the same size?", "Is the sun bigger than the moon?"],
-        ["The sun is vastly bigger -- it just sits about four hundred times farther away, which evens out the view.",
+        ["The sun is vastly bigger — it just sits about four hundred times farther away, which evens out the view.",
          "Much bigger. The sun is enormous but far; the moon is small but close, so they look alike in the sky."],
     ),
     (
         ["How old is the Earth?", "What's the age of our planet?"],
         ["About four and a half billion years old.",
-         "Roughly four and a half billion years -- the sun is only slightly older."],
+         "Roughly four and a half billion years — the sun is only slightly older."],
     ),
     (
         ["Can sound travel through space?", "Why is space silent?"],
-        ["No -- sound needs air or another medium to travel, and space is a vacuum.",
+        ["No — sound needs air or another medium to travel, and space is a vacuum.",
          "Space is silent because there's no air to carry the sound waves."],
     ),
     (
         ["What is the International Space Station?", "Do people live in space right now?"],
-        ["A laboratory orbiting Earth -- astronauts live and work aboard it for months at a time.",
-         "Yes -- crews live aboard the International Space Station as it circles the planet."],
+        ["A laboratory orbiting Earth — astronauts live and work aboard it for months at a time.",
+         "Yes — crews live aboard the International Space Station as it circles the planet."],
     ),
     (
         ["What is a comet?", "Why does a comet have a tail?"],
         ["A ball of ice and dust. Near the sun it warms up, and the escaping gas makes the tail.",
-         "Ice and dust from the outer solar system -- the tail streams away from the sun as it melts."],
+         "Ice and dust from the outer solar system — the tail streams away from the sun as it melts."],
     ),
     (
         ["What is Jupiter's Great Red Spot?", "What's the big red mark on Jupiter?"],
-        ["A giant storm -- bigger than Earth, and it has raged for centuries.",
+        ["A giant storm — bigger than Earth, and it has raged for centuries.",
          "An enormous storm on Jupiter, wider than our whole planet."],
     ),
     # ------------------------------------------------------- calendar / time
     (
         ["How many months have thirty-one days?", "Which months are the longest?"],
         ["Seven months have thirty-one days: January, March, May, July, August, October, and December.",
-         "Seven of the twelve -- the longest months run thirty-one days."],
+         "Seven of the twelve — the longest months run thirty-one days."],
     ),
     (
         ["What's the difference between noon and midnight?", "When is noon?"],
@@ -808,38 +808,38 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["Why do different places have different times?", "What are time zones for?"],
-        ["Earth spins, so the sun is overhead at different moments around the world -- time zones keep noon near midday everywhere.",
+        ["Earth spins, so the sun is overhead at different moments around the world — time zones keep noon near midday everywhere.",
          "Because the planet rotates: when it's morning on one side, it's evening on the other, so clocks shift by region."],
     ),
     (
         ["Is it summer everywhere at the same time?", "When it's summer in the north, what is it in the south?"],
-        ["No -- the hemispheres are opposite. Northern summer is southern winter.",
+        ["No — the hemispheres are opposite. Northern summer is southern winter.",
          "Winter. The seasons flip between the northern and southern halves of the planet."],
     ),
     (
         ["How long is a fortnight?", "What does fortnight mean?"],
-        ["Two weeks -- fourteen days.",
+        ["Two weeks — fourteen days.",
          "A fortnight is fourteen days, which is two weeks."],
     ),
     (
         ["What day comes after Sunday?", "Which day follows the weekend?"],
         ["Monday.",
-         "Monday -- the start of the working week."],
+         "Monday — the start of the working week."],
     ),
     # ------------------------------------------------------------ geography
     (
         ["What's the capital of the Netherlands?", "Which city is the Dutch capital?"],
         ["Amsterdam.",
-         "Amsterdam -- though the government actually sits in The Hague."],
+         "Amsterdam — though the government actually sits in The Hague."],
     ),
     (
         ["What's the capital of Greece?", "Which city is Greece's capital?"],
         ["Athens.",
-         "Athens -- one of the oldest cities in the world."],
+         "Athens — one of the oldest cities in the world."],
     ),
     (
         ["What's the capital of Turkey?", "Which city is Turkey's capital?"],
-        ["Ankara -- not Istanbul, which is just the biggest city.",
+        ["Ankara — not Istanbul, which is just the biggest city.",
          "Ankara. Istanbul is larger and more famous, but Ankara is the capital."],
     ),
     (
@@ -850,22 +850,22 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What's the capital of Argentina?", "Which city is Argentina's capital?"],
         ["Buenos Aires.",
-         "Buenos Aires -- Argentina's capital and largest city."],
+         "Buenos Aires — Argentina's capital and largest city."],
     ),
     (
         ["What's the capital of Kenya?", "Which city is Kenya's capital?"],
         ["Nairobi.",
-         "Nairobi -- Kenya's capital."],
+         "Nairobi — Kenya's capital."],
     ),
     (
         ["What's the capital of Thailand?", "Which city is Thailand's capital?"],
         ["Bangkok.",
-         "Bangkok -- Thailand's capital."],
+         "Bangkok — Thailand's capital."],
     ),
     (
         ["What's the capital of Poland?", "Which city is Poland's capital?"],
         ["Warsaw.",
-         "Warsaw -- Poland's capital, on the Vistula."],
+         "Warsaw — Poland's capital, on the Vistula."],
     ),
     (
         ["What's the capital of Sweden?", "Which city is Sweden's capital?"],
@@ -875,68 +875,68 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What's the capital of Norway?", "Which city is Norway's capital?"],
         ["Oslo.",
-         "Oslo -- Norway's capital, at the head of the Oslofjord."],
+         "Oslo — Norway's capital, at the head of the Oslofjord."],
     ),
     (
         ["What's the Great Barrier Reef?", "Where is the biggest coral reef?"],
         ["The world's largest coral reef, off the northeast coast of Australia.",
-         "Off Australia -- the Great Barrier Reef, the biggest living structure on Earth."],
+         "Off Australia — the Great Barrier Reef, the biggest living structure on Earth."],
     ),
     (
         ["Why do people float in the Dead Sea?", "What's special about the Dead Sea?"],
-        ["It's so salty that the dense water pushes you up -- floating takes no effort.",
+        ["It's so salty that the dense water pushes you up — floating takes no effort.",
          "The Dead Sea is many times saltier than the ocean, so swimmers float like corks."],
     ),
     (
         ["Which city is famous for its canals in Italy?", "What's special about Venice?"],
-        ["Venice -- its streets are canals, and boats do the work cars do elsewhere.",
+        ["Venice — its streets are canals, and boats do the work cars do elsewhere.",
          "Venice is built on a lagoon: canals for roads, bridges everywhere."],
     ),
     (
         ["Does anyone own Antarctica?", "Which country does Antarctica belong to?"],
-        ["No country owns it -- Antarctica is governed by an international treaty and reserved for science.",
+        ["No country owns it — Antarctica is governed by an international treaty and reserved for science.",
          "None. A treaty keeps Antarctica peaceful, shared, and dedicated to research."],
     ),
     # -------------------------------------------------------------- science
     (
         ["Do metals conduct electricity?", "Why are wires made of metal?"],
-        ["Yes -- metals like copper carry current well, which is why wires are metal with rubber around them.",
+        ["Yes — metals like copper carry current well, which is why wires are metal with rubber around them.",
          "Because metal conducts electricity easily. The rubber coating is the insulator that keeps it safe."],
     ),
     (
         ["What are the primary colors of light?", "Which colors mix to make white light on a screen?"],
         ["Red, green, and blue. Screens mix those three to make every color you see.",
-         "For light it's red, green, and blue -- different from paint's red, yellow, and blue."],
+         "For light it's red, green, and blue — different from paint's red, yellow, and blue."],
     ),
     (
         ["Does water expand when it freezes?", "Why do frozen pipes burst?"],
-        ["Yes -- water is unusual that way. Ice takes more room than the water it came from, which is what bursts pipes.",
+        ["Yes — water is unusual that way. Ice takes more room than the water it came from, which is what bursts pipes.",
          "Because freezing water expands. The ice needs more space than the pipe has."],
     ),
     (
         ["What do plants need to grow?", "What keeps a plant alive?"],
         ["Light, water, air, and nutrients from the soil.",
-         "Sunlight, water, and carbon dioxide from the air -- plus soil nutrients."],
+         "Sunlight, water, and carbon dioxide from the air — plus soil nutrients."],
     ),
     (
         ["What's the chemical symbol for iron?", "What letters stand for iron in chemistry?"],
         ["Fe, from the Latin word ferrum.",
-         "Iron is Fe -- Latin again, like gold's Au."],
+         "Iron is Fe — Latin again, like gold's Au."],
     ),
     (
         ["Why do helium balloons float?", "What makes a party balloon rise?"],
         ["Helium is lighter than air, so the air around the balloon pushes it up.",
-         "Because helium weighs less than the air it displaces -- the balloon rises like a bubble in water."],
+         "Because helium weighs less than the air it displaces — the balloon rises like a bubble in water."],
     ),
     (
         ["What is lightning?", "What makes lightning?"],
         ["A giant electric spark between a storm cloud and the ground, or between clouds.",
-         "Electricity -- a massive discharge built up inside a storm cloud."],
+         "Electricity — a massive discharge built up inside a storm cloud."],
     ),
     (
         ["What does a magnet attract?", "Will a magnet pick up anything?"],
         ["Iron and steel, mostly. Wood, plastic, glass, and most other metals ignore it.",
-         "Only certain metals -- iron above all. Most materials don't respond to a magnet at all."],
+         "Only certain metals — iron above all. Most materials don't respond to a magnet at all."],
     ),
     (
         # Second phrasing asks what makes it WORK, not what is inside it:
@@ -945,68 +945,68 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
         # thing -- inside is electrodes and electrolyte (audit 2026-08-14).
         ["How does a battery work?", "What makes a battery work?"],
         ["A battery stores energy in chemicals and releases it as electricity when the circuit closes.",
-         "Chemistry -- two different materials and a reaction between them that pushes electrons through a wire."],
+         "Chemistry — two different materials and a reaction between them that pushes electrons through a wire."],
     ),
     (
         ["Can you drink seawater?", "Why can't we drink ocean water?"],
-        ["No -- the salt makes your body lose more water getting rid of it than you drank.",
+        ["No — the salt makes your body lose more water getting rid of it than you drank.",
          "Seawater dehydrates you. Your kidneys spend more water flushing the salt than the drink provided."],
     ),
     (
         ["What is glass made from?", "Where does glass come from?"],
-        ["Melted sand -- heated until it fuses, then cooled into the clear solid we use.",
+        ["Melted sand — heated until it fuses, then cooled into the clear solid we use.",
          "Mostly sand, melted at very high heat with a few other minerals."],
     ),
     (
         ["What is paper made from?", "Where does paper come from?"],
-        ["Wood pulp -- trees ground and pressed into thin sheets.",
+        ["Wood pulp — trees ground and pressed into thin sheets.",
          "Mostly from trees: wood is pulped, flattened, and dried into sheets."],
     ),
     (
         ["Where does wool come from?", "What animal gives us wool?"],
-        ["Sheep -- their fleece is sheared, cleaned, and spun into yarn.",
+        ["Sheep — their fleece is sheared, cleaned, and spun into yarn.",
          "From sheep, mainly. Goats give cashmere and mohair; the principle is the same."],
     ),
     (
         ["Where does silk come from?", "What makes silk?"],
-        ["Silkworms -- they spin the thread for their cocoons, and we weave it into cloth.",
+        ["Silkworms — they spin the thread for their cocoons, and we weave it into cloth.",
          "From the cocoons of silkworms. Each cocoon is one long, fine thread."],
     ),
     # ------------------------------------------------------- body / biology
     (
         ["Why is blood red?", "What makes blood red?"],
-        ["An iron-rich protein called hemoglobin -- it carries the oxygen and gives blood its color.",
+        ["An iron-rich protein called hemoglobin — it carries the oxygen and gives blood its color.",
          "The oxygen-carrying protein in it is built around iron, and that reads as red."],
     ),
     (
         ["How many teeth does an adult have?", "What's the tooth count for adults?"],
         ["Thirty-two, counting the four wisdom teeth.",
-         "Thirty-two with wisdom teeth in -- twenty-eight without them."],
+         "Thirty-two with wisdom teeth in — twenty-eight without them."],
     ),
     (
         ["Do muscles push or pull?", "How do muscles move the body?"],
-        ["Muscles only pull. They work in pairs -- one bends the joint, its partner straightens it.",
+        ["Muscles only pull. They work in pairs — one bends the joint, its partner straightens it.",
          "They pull, never push. That's why they come in opposing pairs."],
     ),
     (
         ["How does the stomach digest food?", "What breaks food down in the stomach?"],
-        ["With strong acid and churning -- the stomach turns a meal into a paste the intestines can absorb.",
+        ["With strong acid and churning — the stomach turns a meal into a paste the intestines can absorb.",
          "Acid and muscle. The stomach mixes food with digestive juices until it's ready to move on."],
     ),
     (
         ["Why do I breathe harder when I run?", "Why does exercise speed up breathing?"],
         ["Working muscles burn more oxygen, so your lungs and heart speed up to supply it.",
-         "Because your muscles are asking for more oxygen -- breathing faster is the delivery service scaling up."],
+         "Because your muscles are asking for more oxygen — breathing faster is the delivery service scaling up."],
     ),
     (
         ["What are hair and nails made of?", "What's the material in fingernails?"],
-        ["Keratin -- the same tough protein in both, and in animal claws and horns.",
+        ["Keratin — the same tough protein in both, and in animal claws and horns.",
          "A protein called keratin. Hair, nails, claws, and horns are all versions of it."],
     ),
     (
         ["How fast does the heart beat?", "What's a normal resting heart rate?"],
         ["About seventy beats a minute at rest, faster the moment you move.",
-         "Roughly sixty to a hundred a minute at rest -- around seventy is typical."],
+         "Roughly sixty to a hundred a minute at rest — around seventy is typical."],
     ),
     (
         ["How much sleep do adults need?", "How many hours should I sleep?"],
@@ -1015,43 +1015,43 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What causes sunburn?", "Why does the sun burn skin?"],
-        ["Ultraviolet light, not heat -- you can burn on a cool, bright day.",
+        ["Ultraviolet light, not heat — you can burn on a cool, bright day.",
          "The sun's ultraviolet rays damage skin cells. The warmth isn't the culprit; the UV is."],
     ),
     (
         ["Which fruit is famous for vitamin C?", "Where do people get vitamin C?"],
-        ["Citrus -- oranges, lemons, and their relatives are the classic source.",
+        ["Citrus — oranges, lemons, and their relatives are the classic source.",
          "Oranges and other citrus fruit, along with peppers and berries."],
     ),
     (
         ["Is the funny bone a bone?", "Why does hitting the funny bone feel weird?"],
-        ["It's a nerve, not a bone -- the ulnar nerve passing the elbow with little padding.",
+        ["It's a nerve, not a bone — the ulnar nerve passing the elbow with little padding.",
          "That jolt is a nerve getting struck where it runs close to the skin at the elbow."],
     ),
     (
         ["How much of the body is water?", "Are humans mostly water?"],
         ["About three-fifths of an adult body is water.",
-         "Yes -- roughly sixty percent of you is water."],
+         "Yes — roughly sixty percent of you is water."],
     ),
     # --------------------------------------------------------------- units
     (
         ["Which is longer, a mile or a kilometer?", "How many kilometers make a mile?"],
-        ["A mile -- it's about one point six kilometers.",
+        ["A mile — it's about one point six kilometers.",
          "The mile is longer: one mile is roughly one and a half kilometers and change."],
     ),
     (
         ["How many milliliters are in a liter?", "A liter is how many milliliters?"],
         ["One thousand milliliters.",
-         "A thousand -- milli means a thousandth."],
+         "A thousand — milli means a thousandth."],
     ),
     (
         ["How many kilograms are in a metric ton?", "A metric ton is how heavy?"],
         ["One thousand kilograms.",
-         "A thousand kilograms -- about the weight of a small car."],
+         "A thousand kilograms — about the weight of a small car."],
     ),
     (
         ["What's half of a half?", "A quarter is what fraction?"],
-        ["A quarter -- one fourth of the whole.",
+        ["A quarter — one fourth of the whole.",
          "Half of a half is a quarter, or twenty-five percent."],
     ),
     (
@@ -1062,7 +1062,7 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["How many degrees is a right angle?", "What's the angle of a square corner?"],
         ["Ninety degrees.",
-         "A right angle is ninety degrees -- a quarter of a full circle."],
+         "A right angle is ninety degrees — a quarter of a full circle."],
     ),
     # ----------------------------------------------------- language / misc
     (
@@ -1072,69 +1072,69 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     ),
     (
         ["What's the plural of mouse?", "How do you pluralize child and mouse?"],
-        ["Mice -- and child becomes children. English keeps a few old irregulars around.",
-         "Mouse goes to mice, child goes to children -- irregular plurals, learned one by one."],
+        ["Mice — and child becomes children. English keeps a few old irregulars around.",
+         "Mouse goes to mice, child goes to children — irregular plurals, learned one by one."],
     ),
     (
         ["What's a synonym?", "What's the difference between a synonym and an antonym?"],
         ["A synonym means nearly the same thing as another word; an antonym means the opposite.",
-         "Synonyms match meanings -- big and large. Antonyms oppose them -- big and small."],
+         "Synonyms match meanings — big and large. Antonyms oppose them — big and small."],
     ),
     (
         ["How many colors are in a rainbow?", "Name the colors of the rainbow."],
         ["Seven: red, orange, yellow, green, blue, indigo, and violet.",
-         "Seven by tradition -- red through violet in order."],
+         "Seven by tradition — red through violet in order."],
     ),
     (
         ["What do red and blue make?", "Mixing red and blue paint gives what?"],
         ["Purple.",
-         "Purple -- more red leans it toward magenta, more blue toward violet."],
+         "Purple — more red leans it toward magenta, more blue toward violet."],
     ),
     (
         ["What's a baby dog called?", "What are baby dogs and cats called?"],
-        ["A puppy -- and a baby cat is a kitten.",
+        ["A puppy — and a baby cat is a kitten.",
          "Puppies. Kittens for cats, puppies for dogs."],
     ),
     (
         ["What's a group of wolves called?", "What do you call groups of wolves and lions?"],
-        ["A pack -- and lions form a pride.",
+        ["A pack — and lions form a pride.",
          "Wolves run in packs; lions live in prides."],
     ),
     (
         ["How many cards are in a standard deck?", "What's the card count of a full deck?"],
         ["Fifty-two, in four suits of thirteen.",
-         "Fifty-two cards -- plus jokers if the game wants them."],
+         "Fifty-two cards — plus jokers if the game wants them."],
     ),
     (
         ["How many sides does a triangle have?", "How many sides do a triangle and a hexagon have?"],
-        ["Three -- and a hexagon has six.",
+        ["Three — and a hexagon has six.",
          "A triangle has three sides; a hexagon has six."],
     ),
     # ------------------------------------------------------ history / tech
     (
         ["Who invented the light bulb?", "Which inventor is famous for the light bulb?"],
-        ["Thomas Edison gets the credit -- he made the first practical, long-lasting bulb.",
-         "Edison, mostly -- others made bulbs first, but his design actually worked for homes."],
+        ["Thomas Edison gets the credit — he made the first practical, long-lasting bulb.",
+         "Edison, mostly — others made bulbs first, but his design actually worked for homes."],
     ),
     (
         ["Where is the Great Wall?", "What is the Great Wall of China?"],
-        ["In China -- a chain of fortifications built over many centuries to guard the northern frontier.",
+        ["In China — a chain of fortifications built over many centuries to guard the northern frontier.",
          "China's ancient defensive wall, thousands of kilometers of it, built dynasty by dynasty."],
     ),
     (
         ["What were the pyramids built for?", "Why did Egypt build the pyramids?"],
-        ["As tombs -- monuments for the pharaohs, built to carry them into the afterlife.",
+        ["As tombs — monuments for the pharaohs, built to carry them into the afterlife.",
          "They're royal tombs. The great ones at Giza held Egypt's pharaohs."],
     ),
     (
         ["What language did ancient Rome speak?", "What was the language of the Roman Empire?"],
-        ["Latin -- the ancestor of Italian, Spanish, French, and Portuguese.",
+        ["Latin — the ancestor of Italian, Spanish, French, and Portuguese.",
          "Latin. The Romance languages all grew out of it."],
     ),
     (
         ["When was the First World War?", "What years did World War One run?"],
         ["From 1914 to 1918.",
-         "1914 to 1918 -- four years."],
+         "1914 to 1918 — four years."],
     ),
     (
         ["When did Columbus cross the Atlantic?", "What year did Columbus reach the Americas?"],
@@ -1144,67 +1144,67 @@ WORLD_FACTS: list[tuple[list[str], list[str]]] = [
     (
         ["What's the difference between the internet and the web?", "Are the internet and the web the same thing?"],
         ["The internet is the network of connected computers; the web is one service running on it, alongside email and the rest.",
-         "Not quite -- the internet is the wiring, the web is the pages. The web rides on the internet."],
+         "Not quite — the internet is the wiring, the web is the pages. The web rides on the internet."],
     ),
     (
         ["How do computers count?", "What is binary?"],
-        ["In binary -- just ones and zeros, switched fast enough to do everything else.",
+        ["In binary — just ones and zeros, switched fast enough to do everything else.",
          "Computers use binary: every number, letter, and picture is stored as patterns of ones and zeros."],
     ),
     (
         ["Where is the Eiffel Tower?", "When was the Eiffel Tower built?"],
-        ["In Paris -- built in 1889 for a world's fair, and never taken down.",
+        ["In Paris — built in 1889 for a world's fair, and never taken down.",
          "Paris. It went up in 1889 and was meant to be temporary."],
     ),
     (
         ["Who was Marie Curie?", "What is Marie Curie famous for?"],
-        ["A pioneering scientist of radioactivity -- the first person to win two Nobel Prizes.",
+        ["A pioneering scientist of radioactivity — the first person to win two Nobel Prizes.",
          "She discovered radium and polonium and won Nobel Prizes in two different sciences."],
     ),
     # ------------------------------------------------------ food / everyday
     (
         ["Why does bread rise?", "What makes bread fluffy?"],
-        ["Yeast -- it eats the dough's sugars and breathes out gas, and the bubbles puff the loaf.",
+        ["Yeast — it eats the dough's sugars and breathes out gas, and the bubbles puff the loaf.",
          "Tiny gas bubbles from yeast. Baking sets the dough around them."],
     ),
     (
         ["Does honey go bad?", "Why does honey last so long?"],
-        ["Honey basically never spoils -- it's too dry and acidic for microbes to live in.",
+        ["Honey basically never spoils — it's too dry and acidic for microbes to live in.",
          "Sealed honey keeps nearly forever. Ancient jars of it have been found still edible."],
     ),
     (
         ["Why does boiling an egg make it hard?", "What happens when you cook an egg?"],
-        ["Heat sets the egg's proteins -- they unfold and lock together, turning the liquid solid.",
+        ["Heat sets the egg's proteins — they unfold and lock together, turning the liquid solid.",
          "The proteins change shape with heat and tangle into a solid. There's no way back to raw."],
     ),
     (
         ["Where does chocolate come from?", "What is chocolate made from?"],
-        ["Cacao beans -- fermented, roasted, and ground into the base of every chocolate bar.",
+        ["Cacao beans — fermented, roasted, and ground into the base of every chocolate bar.",
          "From the seeds of the cacao tree, processed and usually sweetened."],
     ),
     (
         ["What's the difference between coffee and tea?", "Where do coffee and tea come from?"],
         ["Coffee is brewed from roasted beans; tea is steeped from dried leaves.",
-         "Different plants entirely -- coffee from a bean, tea from a leaf; both carry caffeine."],
+         "Different plants entirely — coffee from a bean, tea from a leaf; both carry caffeine."],
     ),
     (
         ["Is a tomato a fruit or a vegetable?", "Why is a tomato technically a fruit?"],
-        ["Botanically a fruit -- it grows from a flower and carries the seeds. The kitchen treats it as a vegetable.",
+        ["Botanically a fruit — it grows from a flower and carries the seeds. The kitchen treats it as a vegetable.",
          "A fruit to a botanist, a vegetable to a cook. Both are right in their own kitchens."],
     ),
     (
         ["What is cheese made from?", "How does milk become cheese?"],
-        ["Milk -- curdled, drained, and aged into the hundreds of kinds we eat.",
+        ["Milk — curdled, drained, and aged into the hundreds of kinds we eat.",
          "From milk: separate the curds from the whey, press them, and let time do the rest."],
     ),
     (
         ["How does salt preserve food?", "Why did people salt their food before fridges?"],
         ["Salt draws the water out, and without water the spoilage microbes can't grow.",
-         "Because salt dries food from the inside -- bacteria can't live in it."],
+         "Because salt dries food from the inside — bacteria can't live in it."],
     ),
     (
         ["Why do onions make you cry?", "What makes cut onions sting your eyes?"],
-        ["Cutting releases a gas that turns stinging in your eyes -- tears are the rinse cycle.",
+        ["Cutting releases a gas that turns stinging in your eyes — tears are the rinse cycle.",
          "A sulfur compound escapes when the cells break, and your eyes water to wash it out."],
     ),
     (
@@ -1228,22 +1228,22 @@ SELF_FACTS: list[tuple[list[str], list[str]]] = [
         ["What is Enigma?", "What kind of AI is Enigma?", "Tell me about Enigma.",
          "What sort of AI is Enigma?", "Describe Enigma in a sentence."],
         ["Enigma is a local AI that runs entirely on its user's own machine, not in a cloud.",
-         "A from-scratch local AI -- it lives on the user's computer and answers there.",
+         "A from-scratch local AI — it lives on the user's computer and answers there.",
          "A language model built and run locally: private, offline-capable, and its user's own."],
     ),
     (
         ["Was Enigma built from another model?", "Is Enigma a fine-tune of some bigger model?",
          "What base model is Enigma built on?", "Did Enigma start from someone else's weights?",
          "Is Enigma based on an existing model?"],
-        ["No -- Enigma was trained from scratch: its own architecture, its own tokenizer, its own weights.",
+        ["No — Enigma was trained from scratch: its own architecture, its own tokenizer, its own weights.",
          "Enigma borrows no weights. Everything in it was trained from zero.",
-         "None -- there is no base model under Enigma; it started as random numbers and was trained up from nothing."],
+         "None — there is no base model under Enigma; it started as random numbers and was trained up from nothing."],
     ),
     (
         ["How many parameters does Enigma have?", "How big is Enigma as a model?",
          "What's Enigma's parameter count?", "What size is the Enigma model?",
          "Is Enigma a big model?"],
-        ["About 240 million parameters -- small, and honest about it.",
+        ["About 240 million parameters — small, and honest about it.",
          "Roughly 240 million parameters, every one trained from scratch.",
          "Small on purpose: around 240 million parameters running on one consumer GPU."],
     ),
@@ -1251,45 +1251,45 @@ SELF_FACTS: list[tuple[list[str], list[str]]] = [
         ["How much text did Enigma train on?", "How many tokens went into Enigma's pretraining?",
          "What data did Enigma learn from?", "What was Enigma pretrained on?",
          "How big was Enigma's training corpus?"],
-        ["About twenty-four billion tokens -- code, prose, math, wikis, and books.",
+        ["About twenty-four billion tokens — code, prose, math, wikis, and books.",
          "Roughly twenty-four billion tokens of mixed text.",
          "A corpus of about twenty-four billion tokens: web prose, code, math, wikis, fandom, and books."],
     ),
     (
         ["Who built Enigma?", "Who trained Enigma?", "Whose project is Enigma?",
          "Which company makes Enigma?", "Did a lab build Enigma?"],
-        ["SirRulean -- one person, one machine, from scratch.",
+        ["SirRulean — one person, one machine, from scratch.",
          "A single person, SirRulean, on his own hardware.",
-         "No company and no lab -- Enigma is one person's build: SirRulean trained it himself."],
+         "No company and no lab — Enigma is one person's build: SirRulean trained it himself."],
     ),
     (
         ["Can Enigma do exact arithmetic?", "How does Enigma handle hard math?",
          "What does Enigma do when it needs to calculate?", "Does Enigma guess at math?"],
-        ["It has a calculator organ -- for real arithmetic it computes instead of guessing.",
+        ["It has a calculator organ — for real arithmetic it computes instead of guessing.",
          "Enigma calls its calculator for exact numbers rather than eyeballing them.",
-         "It doesn't guess arithmetic -- the calculator organ does the number work."],
+         "It doesn't guess arithmetic — the calculator organ does the number work."],
     ),
     (
         ["Does Enigma remember things between sessions?", "How does Enigma's memory work?",
          "Will Enigma remember a fact next week?", "Can Enigma forget things?",
          "Where does Enigma keep what it learns about its user?"],
-        ["It keeps a memory store -- facts the user shares persist, can be corrected, and can be forgotten on request.",
+        ["It keeps a memory store — facts the user shares persist, can be corrected, and can be forgotten on request.",
          "Through its memory store: told once, kept; corrected, updated; asked to forget, gone.",
-         "Facts live in a store on the machine -- kept across sessions, replaceable when corrected, deletable on request."],
+         "Facts live in a store on the machine — kept across sessions, replaceable when corrected, deletable on request."],
     ),
     (
         ["Can Enigma speak out loud?", "Does Enigma have a voice organ?",
          "Is Enigma silent by default?", "How does Enigma's talk mode work?"],
         # No yes/no opener: 4 questions rotate over 3 answers, and "Yes --"
         # landed on "How does Enigma's talk mode work?" (review 2026-08-13).
-        ["With talk mode on it speaks its answers aloud -- and it starts silent by default.",
+        ["With talk mode on it speaks its answers aloud — and it starts silent by default.",
          "It has a voice; talk mode turns it on, and it boots silent on purpose.",
          "Talk mode is the switch: off means text only, on means it speaks its answers."],
     ),
     (
         ["Can Enigma make pictures?", "Does Enigma have an image maker?",
          "How does Enigma draw pictures?", "Does Enigma use a cloud service for images?"],
-        ["Yes -- asked to imagine something, it paints the image locally and saves it.",
+        ["Yes — asked to imagine something, it paints the image locally and saves it.",
          "It can. The imagine organ makes pictures right on the machine, no cloud involved.",
          "Images are made locally by its imagine organ and saved to its pictures folder."],
     ),
@@ -1297,29 +1297,29 @@ SELF_FACTS: list[tuple[list[str], list[str]]] = [
         ["Can Enigma look at images?", "Does Enigma have eyes?",
          "How does Enigma see pictures?", "What happens when you show Enigma an image?"],
         ["With its eyes enabled it reads an image into a caption and works from that.",
-         "Yes -- enabled eyes turn a handed image into text it can reason about.",
+         "Yes — enabled eyes turn a handed image into text it can reason about.",
          "A shown image becomes a caption through its eyes, and Enigma reasons over that text."],
     ),
     (
         ["Can Enigma search the internet?", "Does Enigma look things up online?",
          "When does Enigma search the web?", "Does Enigma ask permission before searching?"],
-        ["Only when search is switched on -- then it looks things up on its own when something's worth checking, through the user's own search service.",
+        ["Only when search is switched on — then it looks things up on its own when something's worth checking, through the user's own search service.",
          "It can, if its search organ is enabled; otherwise it works fully offline.",
-         "With search on, Enigma decides when to look -- no per-question permission; off, it stays fully local."],
+         "With search on, Enigma decides when to look — no per-question permission; off, it stays fully local."],
     ),
     (
         ["Does Enigma need the internet?", "Does Enigma work offline?",
          "Can Enigma run without a connection?", "Does Enigma stop working when the internet drops?"],
-        ["No internet needed -- it runs entirely on the local machine.",
+        ["No internet needed — it runs entirely on the local machine.",
          "It works fully offline; that's the design.",
-         "A dropped connection changes nothing -- Enigma runs on the machine itself."],
+         "A dropped connection changes nothing — Enigma runs on the machine itself."],
     ),
     (
         ["Does Enigma send data to a cloud?", "Is Enigma private?",
          "Who can read what's said to Enigma?", "Does Enigma phone home?"],
-        ["Conversations stay on the user's machine -- no telemetry, no phone-home.",
+        ["Conversations stay on the user's machine — no telemetry, no phone-home.",
          "Private by design: what's said to Enigma stays on the machine it runs on.",
-         "Nobody else -- there's no phone-home; the conversation lives and stays on the user's machine."],
+         "Nobody else — there's no phone-home; the conversation lives and stays on the user's machine."],
     ),
 ]
 
@@ -1393,8 +1393,8 @@ _KEY_STOP_TOKENS = frozenset({
 _KEY_PREFIXES = ("That's ", "It's ", "We live on ")
 
 # Sentence-level breaks (never a comma) and fragment-level breaks.
-_SENTENCE_SEPS = (" -- ", ". ", "; ", ": ")
-_FRAGMENT_SEPS = (" -- ", ": ", ". ", "; ", ", ")
+_SENTENCE_SEPS = (" — ", ". ", "; ", ": ")
+_FRAGMENT_SEPS = (" — ", ": ", ". ", "; ", ", ")
 
 # First words safe to lowercase when the key term lands mid-sentence
 # ("...is twenty-four hours."); everything else is treated as a proper noun.

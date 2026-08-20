@@ -53,12 +53,25 @@ def test_pretrain_text_dodges_eval_probes():
 
 
 def test_pretrain_text_lines_are_clean():
+    """The codepoint pin catches ENCODING DAMAGE, not typography: ASCII plus
+    the one non-ASCII character the training-content convention spells the
+    prose dash with, U+2014 (the em-dash unification 2026-08-19 -- Kokoro's
+    G2P deletes " -- " from the phoneme stream, so the ASCII form went
+    unspoken). EVERY other non-ASCII codepoint still fails, so mojibake stays
+    caught: an em-dash mangled by a cp1252/UTF-8 round trip arrives as the
+    three codepoints U+00E2 U+20AC U+201D, and all three are still refused.
+    C0 controls and DEL fail on the same rule: the line iteration already
+    stripped the newline, and U+001E is DOC_SEP_CHAR, the packed-file record
+    separator `pretokenize_data.py` splits on -- one riding inside a fact line
+    forges a document boundary and cuts the record in half, silently."""
     lines = gen_knowledge_pretrain_text()
     assert lines
     for line in lines:
         assert line and line == line.strip()
         assert "\n" not in line and "\r" not in line
-        assert line.isascii(), line
+        bad = sorted({f"U+{ord(c):04X}" for c in line
+                      if ord(c) < 32 or ord(c) == 127 or (ord(c) > 127 and c != "—")})
+        assert not bad, f"{','.join(bad)}: {line}"
 
 
 def test_pretrain_text_count_bounds():
@@ -176,6 +189,11 @@ def test_clozes_are_never_tautologies_or_broken_copulas():
     # first fix re-created the word-number-only line one step downstream)
     assert any("is 100 degrees Celsius." in l for l in clozes), \
         "the boil cloze lost its digit surface again"
+    # ...and the self row's parameter count keeps its word form: the extractor
+    # reads the term off the leading answer fragment, so a re-worded first
+    # answer moves this line without moving any count.
+    assert any(l.endswith("is about 240 million parameters.") for l in clozes), \
+        "the parameter-count cloze lost its word form"
 
 
 def test_pretrain_text_covers_jupiter_in_multiple_forms():

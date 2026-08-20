@@ -19,8 +19,13 @@ Sources (all require `pip install datasets`):
   - All sources (--all)     - Download everything above except OpenThoughts3
 
 The 2026-07-15 diet: small-model-native SHORT records (completion caps tuned
-when the block was 1024; re-tune queued now that it is 2048) + short-answer
-recall sets as the counterweight to Dolly's extract-from-context bias.
+when the block was 1024) + short-answer recall sets as the counterweight to
+Dolly's extract-from-context bias. Those caps are STYLE filters, not block
+filters, and they STAND at block 2048: measured 2026-08-19, 56 of the
+105,203 combined records render past 2048 against the serving vocab, and all
+but two of them are already longer than the 600-char completion / 800-char
+prompt caps allow. Raising the caps to match the block would buy nothing and
+would cost the short-record diet; no re-tune is queued.
 
 Output format:
   JSONL with {"prompt": "...", "completion": "..."} per line.

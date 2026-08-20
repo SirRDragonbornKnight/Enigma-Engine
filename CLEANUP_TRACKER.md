@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1254 passed on ENIGMAPC (2026-08-18, paired with the Stage-7 wave-4 + 202b4863-audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1256 passed on ENIGMAPC (2026-08-20, paired with the round-2 solution-audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -265,6 +265,14 @@ Deleted after a three-agent adversarial audit verified every claim
    pack-file encoding refusals, `data_dirname` control chars and the -Port
    reserved-port guard on the fix side; real-bytes curated-walk and refusal
    tests on the 4a side).
+   **1254 -> 1256 is the round-2 solution-audit fix wave (2026-08-19)** --
+   training prose unified on the em-dash (the voice path renders it and
+   deletes the ASCII form), calculate delegation widened to hard arithmetic
+   with the percent idiom canonicalized, and the facts-stream purity pin
+   narrowed to intent (ASCII + the em-dash, C0/DEL refused). The 2 new
+   tests are the dash-convention gate in `test_repo_hygiene.py` and the
+   percent-idiom guard in `test_sft_regen_shapes.py`; everything else grew
+   or moved in place.
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

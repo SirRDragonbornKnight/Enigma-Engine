@@ -32,6 +32,8 @@ from enigma_engine.core.chat_format import (
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 from make_sft_data import (
     PREAMBLE,
+    TOOLS,
+    _BUILTIN_USE,
     _builtin_system,
     fit_mix_to_block,
     gen_builtin_block_examples,
@@ -776,8 +778,8 @@ def test_builtin_calc_covers_power_and_percent_expressions():
     """Fix arc 2026-08-08 (gate finding 2): 'squared'/'to the power of'/'percent
     of' had ZERO trained expression surfaces, so the model mapped them to `^`
     (BitXor, which the calculator honestly refuses). Every power surface must
-    call calculate with a `**` expression, and percent with a decimal
-    multiply -- never `^`."""
+    call calculate with a `**` expression, and percent through the one
+    canonical `X * P / 100` idiom (consolidated 2026-08-19) -- never `^`."""
     calls = [r for r in gen_builtin_block_examples() if r["category"] == "builtin_call"]
     exprs = " ".join(
         c["arguments"].get("expression", "")
@@ -788,6 +790,39 @@ def test_builtin_calc_covers_power_and_percent_expressions():
     asks = " ".join(r["messages"][1]["content"].lower() for r in calls)
     assert "squared" in asks and "power of" in asks and "percent of" in asks, \
         "a measured math-miss surface is untrained"
+
+
+# BASE * PERCENT / 100 -- the one canonical percent-of expression. A decimal
+# base is allowed ("12.5 * 20 / 100"); the percent itself is an integer.
+_PERCENT_EXPR = re.compile(r"^\d+(?:\.\d+)? \* \d+ / 100$")
+
+
+def _calculate_cases():
+    """(ask, expression) for every calculate case in the hand-authored tool
+    tables -- the TOOLS entry's own cases and the built-in use table."""
+    for name, _desc, _params, cases in TOOLS:
+        if name == "calculate":
+            for ask, args, _result, _final in cases:
+                yield ask, args["expression"]
+    for ask, tool, args, _result, _final in _BUILTIN_USE:
+        if tool == "calculate":
+            yield ask, args["expression"]
+
+
+def test_percent_of_calculate_asks_spell_one_canonical_expression():
+    """Percent-of shipped two spellings for one skill -- `X * P / 100` in some
+    rows and the `0.NN * X` twin in others -- so half the gradient taught a
+    second surface form instead of reinforcing the first. Consolidated
+    2026-08-19 onto `X * P / 100` across BOTH tool tables; this is the pin
+    that keeps a future widening from re-introducing the twin."""
+    pct = [(ask, expr) for ask, expr in _calculate_cases() if "percent" in ask.lower()]
+    assert len(pct) >= 6, f"percent-of coverage collapsed to {len(pct)} cases"
+    bad = [f"  {ask!r} -> {expr!r}" for ask, expr in pct if not _PERCENT_EXPR.match(expr)]
+    assert not bad, (
+        "percent-of calculate expressions must be spelled BASE * PERCENT / 100 "
+        "(the 0.NN * BASE twin trains a second shape for one skill):\n"
+        + "\n".join(bad)
+    )
 
 
 def test_builtin_restraint_refuses_to_save_dictated_falsehoods():

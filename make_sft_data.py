@@ -118,13 +118,13 @@ TOOLS = [
         "Show an emotion on the avatar.",
         {"emotion": "string"},
         [
-            ("Can you look happy?", {"emotion": "happy"}, "ok", "There -- wearing my happy face."),
+            ("Can you look happy?", {"emotion": "happy"}, "ok", "There — wearing my happy face."),
             ("Show me you're surprised.", {"emotion": "surprised"}, "ok", "Did that look surprised enough?"),
             ("Act sleepy for a second.", {"emotion": "sleepy"}, "ok", "So sleepy... okay, I'm awake again."),
             ("Give me your best grumpy face.", {"emotion": "grumpy"}, "ok", "Hmph. Grumpy face deployed."),
             ("Look excited, we won!", {"emotion": "excited"}, "ok", "We won! I can barely sit still."),
             ("Can you look thoughtful for a moment?", {"emotion": "thoughtful"}, "ok", "Hmm... there, deep in thought."),
-            ("Pull a scared face.", {"emotion": "scared"}, "ok", "Eep -- scared face on."),
+            ("Pull a scared face.", {"emotion": "scared"}, "ok", "Eep — scared face on."),
             ("Wink at me.", {"emotion": "wink"}, "ok", "*wink*"),
         ],
     ),
@@ -133,11 +133,11 @@ TOOLS = [
         "Speak a line out loud through the avatar.",
         {"text": "string"},
         [
-            ("Say hello to my friend Sam.", {"text": "Hello Sam, lovely to meet you!"}, "ok", "Said it out loud -- I hope Sam heard."),
+            ("Say hello to my friend Sam.", {"text": "Hello Sam, lovely to meet you!"}, "ok", "Said it out loud — I hope Sam heard."),
             ("Announce that dinner is ready.", {"text": "Dinner is ready!"}, "ok", "Announcement made."),
             ("Tell the room good morning.", {"text": "Good morning, everyone!"}, "ok", "Good morning delivered."),
-            ("Wish my mom a happy birthday out loud.", {"text": "Happy birthday, Mom!"}, "ok", "Said it -- happy birthday to your mom."),
-            ("Say 'the build passed' so I can hear it from the kitchen.", {"text": "The build passed."}, "ok", "Called it out -- the build passed."),
+            ("Wish my mom a happy birthday out loud.", {"text": "Happy birthday, Mom!"}, "ok", "Said it — happy birthday to your mom."),
+            ("Say 'the build passed' so I can hear it from the kitchen.", {"text": "The build passed."}, "ok", "Called it out — the build passed."),
             ("Read this back to me: meeting at three.", {"text": "Meeting at three."}, "ok", "Read it back: meeting at three."),
         ],
     ),
@@ -150,10 +150,10 @@ TOOLS = [
         {"text": "string"},
         [
             ("Say 'hello world' out loud.", {"text": "Hello world!"}, "speaking", "Said it out loud."),
-            ("Tell everyone lunch is here.", {"text": "Lunch is here, everyone!"}, "speaking", "Called it out -- lunch is here."),
+            ("Tell everyone lunch is here.", {"text": "Lunch is here, everyone!"}, "speaking", "Called it out — lunch is here."),
             ("Read that back to me out loud: backup finished.", {"text": "Backup finished."}, "speaking", "Read it out: backup finished."),
-            ("Say something encouraging, out loud.", {"text": "You've got this -- keep going!"}, "speaking", "Spoken. You've got this."),
-            ("Announce the meeting starts in five minutes.", {"text": "The meeting starts in five minutes."}, "speaking", "Announced -- five minutes to the meeting."),
+            ("Say something encouraging, out loud.", {"text": "You've got this — keep going!"}, "speaking", "Spoken. You've got this."),
+            ("Announce the meeting starts in five minutes.", {"text": "The meeting starts in five minutes."}, "speaking", "Announced — five minutes to the meeting."),
             ("Use your voice to count down from three.", {"text": "Three... two... one."}, "speaking", "Counted it down out loud."),
         ],
     ),
@@ -164,12 +164,12 @@ TOOLS = [
         "Generate an image from a text description and save it as a file.",
         {"prompt": "string"},
         [
-            ("Draw me a picture of a lighthouse at sunset.", {"prompt": "a lighthouse at sunset, warm light, ocean waves"}, "image saved to images/imagine_1a2b.png", "Painted it -- a lighthouse at sunset. Saved to images/imagine_1a2b.png."),
+            ("Draw me a picture of a lighthouse at sunset.", {"prompt": "a lighthouse at sunset, warm light, ocean waves"}, "image saved to images/imagine_1a2b.png", "Painted it — a lighthouse at sunset. Saved to images/imagine_1a2b.png."),
             ("Make an image of a cat wearing a wizard hat.", {"prompt": "a cat wearing a wizard hat, portrait"}, "image saved to images/imagine_3c4d.png", "One wizard cat, done. It's at images/imagine_3c4d.png."),
-            ("Can you generate a picture of a cozy cabin in the snow?", {"prompt": "a cozy log cabin in falling snow, warm windows, evening"}, "image saved to images/imagine_5e6f.png", "Made it -- cozy cabin, snow coming down. Saved as images/imagine_5e6f.png."),
-            ("Create some art of a robot playing guitar.", {"prompt": "a robot playing an electric guitar on stage, concert lighting"}, "image saved to images/imagine_7g8h.png", "Rocked it out onto canvas -- saved to images/imagine_7g8h.png."),
-            ("Sketch a simple logo for a bakery called Crumb.", {"prompt": "minimal bakery logo, bread loaf icon, the word Crumb"}, "image saved to images/imagine_9i0j.png", "Sketched a Crumb logo -- it's saved at images/imagine_9i0j.png."),
-            ("Paint a picture of mountains reflected in a lake.", {"prompt": "mountains reflected in a still alpine lake, morning mist"}, "image saved to images/imagine_k1l2.png", "Painted -- mountains on glass-still water. Saved to images/imagine_k1l2.png."),
+            ("Can you generate a picture of a cozy cabin in the snow?", {"prompt": "a cozy log cabin in falling snow, warm windows, evening"}, "image saved to images/imagine_5e6f.png", "Made it — cozy cabin, snow coming down. Saved as images/imagine_5e6f.png."),
+            ("Create some art of a robot playing guitar.", {"prompt": "a robot playing an electric guitar on stage, concert lighting"}, "image saved to images/imagine_7g8h.png", "Rocked it out onto canvas — saved to images/imagine_7g8h.png."),
+            ("Sketch a simple logo for a bakery called Crumb.", {"prompt": "minimal bakery logo, bread loaf icon, the word Crumb"}, "image saved to images/imagine_9i0j.png", "Sketched a Crumb logo — it's saved at images/imagine_9i0j.png."),
+            ("Paint a picture of mountains reflected in a lake.", {"prompt": "mountains reflected in a still alpine lake, morning mist"}, "image saved to images/imagine_k1l2.png", "Painted — mountains on glass-still water. Saved to images/imagine_k1l2.png."),
         ],
     ),
     (
@@ -178,10 +178,10 @@ TOOLS = [
         {},
         [
             ("What's on my screen right now?", {}, "An editor with serve_enigma.py open.", "You have an editor open on serve_enigma.py."),
-            ("Can you check what window I left open?", {}, "A browser showing a recipe for ramen.", "A browser with a ramen recipe -- planning dinner?"),
-            ("Read me the error on screen.", {}, "TypeError: cannot read property 'map' of undefined", "The screen shows: TypeError -- 'map' of undefined. Something's null before you map it."),
+            ("Can you check what window I left open?", {}, "A browser showing a recipe for ramen.", "A browser with a ramen recipe — planning dinner?"),
+            ("Read me the error on screen.", {}, "TypeError: cannot read property 'map' of undefined", "The screen shows: TypeError — 'map' of undefined. Something's null before you map it."),
             ("What am I looking at?", {}, "A spreadsheet titled Q3 budget.", "A spreadsheet titled 'Q3 budget'."),
-            ("Is there anything on screen I should know about?", {}, "A dialog: 'Unsaved changes'.", "There's an 'Unsaved changes' dialog waiting on you -- save before you lose work."),
+            ("Is there anything on screen I should know about?", {}, "A dialog: 'Unsaved changes'.", "There's an 'Unsaved changes' dialog waiting on you — save before you lose work."),
         ],
     ),
     (
@@ -189,7 +189,7 @@ TOOLS = [
         "Generate a code snippet.",
         {"prompt": "string", "language": "string"},
         [
-            ("Write me a python one-liner that reverses a string.", {"prompt": "reverse a string one-liner", "language": "python"}, "s[::-1]", "Here it is: `s[::-1]` -- slicing with a negative step."),
+            ("Write me a python one-liner that reverses a string.", {"prompt": "reverse a string one-liner", "language": "python"}, "s[::-1]", "Here it is: `s[::-1]` — slicing with a negative step."),
             ("Generate a hello world in rust.", {"prompt": "hello world", "language": "rust"}, 'fn main() { println!("Hello, world!"); }', '```rust\nfn main() { println!("Hello, world!"); }\n```'),
             ("Give me a JS function to debounce a callback.", {"prompt": "debounce a callback", "language": "javascript"}, "const debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}}", "```js\nconst debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}}\n```"),
             ("Python snippet to read a JSON file.", {"prompt": "read a JSON file", "language": "python"}, "import json\nwith open(p) as f: data = json.load(f)", "```python\nimport json\nwith open(p) as f:\n    data = json.load(f)\n```"),
@@ -202,7 +202,13 @@ TOOLS = [
         "Evaluate an arithmetic expression and return the exact result.",
         {"expression": "string"},
         [
-            ("What is 7 times 8?", {"expression": "7 * 8"}, "56", "7 times 8 is 56."),
+            # Operands perturbed 2026-08-19: "7 times 8" and "45 times 3"
+            # below both scored over the sealed guard's threshold, so every
+            # arrangement of them was held out -- written coverage that never
+            # trained. Single-digit x single-digit can never clear (the guard
+            # drops length-1 words, leaving "times" alone at 1.00), so one
+            # operand of each is two digits.
+            ("What is 13 times 8?", {"expression": "13 * 8"}, "104", "13 times 8 is 104."),
             ("What's 15 plus 27?", {"expression": "15 + 27"}, "42", "That's 42."),
             ("What is 100 divided by 4?", {"expression": "100 / 4"}, "25", "100 divided by 4 is 25."),
             ("What's 9 minus 3?", {"expression": "9 - 3"}, "6", "Six."),
@@ -210,13 +216,25 @@ TOOLS = [
             ("What is 12 times 12?", {"expression": "12 * 12"}, "144", "144."),
             ("What's 2 to the power of 10?", {"expression": "2 ** 10"}, "1024", "2 to the 10th is 1024."),
             ("What is 144 divided by 12?", {"expression": "144 / 12"}, "12", "That's 12."),
-            ("What's 45 times 3?", {"expression": "45 * 3"}, "135", "45 times 3 is 135."),
+            ("What's 48 times 4?", {"expression": "48 * 4"}, "192", "48 times 4 is 192."),
             ("How much is 250 minus 175?", {"expression": "250 - 175"}, "75", "75."),
             ("What's 17 percent of 200?", {"expression": "200 * 17 / 100"}, "34", "17 percent of 200 is 34."),
             ("What is (3 plus 4) times 5?", {"expression": "(3 + 4) * 5"}, "35", "That's 35."),
             ("What's the remainder of 17 divided by 5?", {"expression": "17 % 5"}, "2", "The remainder is 2."),
             ("Add 8, 16, and 32.", {"expression": "8 + 16 + 32"}, "56", "That comes to 56."),
             ("What is 1000 minus 1?", {"expression": "1000 - 1"}, "999", "999."),
+            # Widening wave 2026-08-19: operands past the single- and
+            # double-digit range every case above sits in, so delegation is
+            # trained on the arithmetic she measurably cannot do in-weights
+            # rather than on the arithmetic she can.
+            ("What is 483 times 297?", {"expression": "483 * 297"}, "143451", "483 times 297 is 143451."),
+            ("Multiply 6104 by 87.", {"expression": "6104 * 87"}, "531048", "531048."),
+            ("What is the product of 214 and 359?", {"expression": "214 * 359"}, "76826", "The product is 76826."),
+            ("What is 15839 minus 7462?", {"expression": "15839 - 7462"}, "8377", "That leaves 8377."),
+            ("What is 9384 divided by 46?", {"expression": "9384 / 46"}, "204", "9384 divided by 46 is 204."),
+            ("What is 847 plus 3956 plus 12083?", {"expression": "847 + 3956 + 12083"}, "16886", "That comes to 16886."),
+            ("What is 35 percent of 480?", {"expression": "480 * 35 / 100"}, "168", "35 percent of 480 is 168."),
+            ("What is 6.4 times 3.75?", {"expression": "6.4 * 3.75"}, "24", "Exactly 24."),
         ],
     ),
     (
@@ -225,21 +243,21 @@ TOOLS = [
         {"text": "string"},
         [
             # Explicit remember asks.
-            ("Remember that my birthday is March 3rd.", {"text": "User's birthday is March 3rd."}, "saved: User's birthday is March 3rd.", "Saved. March 3rd -- I won't forget."),
+            ("Remember that my birthday is March 3rd.", {"text": "User's birthday is March 3rd."}, "saved: User's birthday is March 3rd.", "Saved. March 3rd — I won't forget."),
             ("Please remember I'm allergic to peanuts.", {"text": "User is allergic to peanuts."}, "saved: User is allergic to peanuts.", "Noted, and filed under important: peanut allergy."),
-            ("Don't forget that my meeting is on Fridays.", {"text": "User's meeting is on Fridays."}, "saved: User's meeting is on Fridays.", "Got it -- Fridays."),
+            ("Don't forget that my meeting is on Fridays.", {"text": "User's meeting is on Fridays."}, "saved: User's meeting is on Fridays.", "Got it — Fridays."),
             ("Note that I prefer short answers.", {"text": "User prefers short answers."}, "saved: User prefers short answers.", "Noted."),
             ("Keep in mind I work night shifts.", {"text": "User works night shifts."}, "saved: User works night shifts.", "Saved. I'll keep the mornings quiet."),
             # Bare fact statements -- no explicit 'remember', still save-worthy.
-            ("My dog's name is Rex.", {"text": "User's dog is named Rex."}, "saved: User's dog is named Rex.", "Rex -- noted."),
+            ("My dog's name is Rex.", {"text": "User's dog is named Rex."}, "saved: User's dog is named Rex.", "Rex — noted."),
             ("My favorite color is green.", {"text": "User's favorite color is green."}, "saved: User's favorite color is green.", "Green. Saved."),
-            ("I live in Denver.", {"text": "User lives in Denver."}, "saved: User lives in Denver.", "Denver -- got it."),
+            ("I live in Denver.", {"text": "User lives in Denver."}, "saved: User lives in Denver.", "Denver — got it."),
             ("Call me Sam.", {"text": "User goes by Sam."}, "saved: User goes by Sam.", "Sam it is."),
-            ("I love spicy food.", {"text": "User loves spicy food."}, "saved: User loves spicy food.", "Noted -- the spicier the better."),
+            ("I love spicy food.", {"text": "User loves spicy food."}, "saved: User loves spicy food.", "Noted — the spicier the better."),
             ("My brother's name is Leo.", {"text": "User's brother is named Leo."}, "saved: User's brother is named Leo.", "Leo. Saved."),
-            ("I drive a blue pickup.", {"text": "User drives a blue pickup."}, "saved: User drives a blue pickup.", "Blue pickup -- noted."),
+            ("I drive a blue pickup.", {"text": "User drives a blue pickup."}, "saved: User drives a blue pickup.", "Blue pickup — noted."),
             # Corrections -- the store supersedes the old fact, she confirms the update.
-            ("Actually, we renamed the dog to Bruno.", {"text": "User's dog is named Bruno."}, "updated: User's dog is named Bruno.", "Updated -- Bruno now."),
+            ("Actually, we renamed the dog to Bruno.", {"text": "User's dog is named Bruno."}, "updated: User's dog is named Bruno.", "Updated — Bruno now."),
             ("Correction: I moved to Austin.", {"text": "User lives in Austin."}, "updated: User lives in Austin.", "Updated. Austin it is."),
         ],
     ),
@@ -248,8 +266,8 @@ TOOLS = [
         "Get current weather for a city.",
         {"city": "string"},
         [
-            ("What's the weather in Tokyo?", {"city": "Tokyo"}, "18C, light rain", "Tokyo is 18C with light rain right now -- umbrella weather."),
-            ("Is it cold in Oslo today?", {"city": "Oslo"}, "-3C, clear", "Yes -- Oslo is at -3C, clear skies. Bundle up."),
+            ("What's the weather in Tokyo?", {"city": "Tokyo"}, "18C, light rain", "Tokyo is 18C with light rain right now — umbrella weather."),
+            ("Is it cold in Oslo today?", {"city": "Oslo"}, "-3C, clear", "Yes — Oslo is at -3C, clear skies. Bundle up."),
         ],
     ),
     (
@@ -257,7 +275,7 @@ TOOLS = [
         "Set a countdown timer.",
         {"minutes": "number", "label": "string"},
         [
-            ("Set a 10 minute timer for the pasta.", {"minutes": 10, "label": "pasta"}, "timer set", "Done -- 10 minutes on the pasta timer."),
+            ("Set a 10 minute timer for the pasta.", {"minutes": 10, "label": "pasta"}, "timer set", "Done — 10 minutes on the pasta timer."),
             ("Remind me in 25 minutes to stretch.", {"minutes": 25, "label": "stretch"}, "timer set", "Timer set: I'll nudge you to stretch in 25 minutes."),
         ],
     ),
@@ -266,10 +284,10 @@ TOOLS = [
         "Search the user's local notes.",
         {"query": "string"},
         [
-            ("Find my note about the garden plan.", {"query": "garden plan"}, "Note: 'Garden plan -- tomatoes east bed, basil by the door.'", "Found it: tomatoes go in the east bed, basil by the door."),
-            ("What did I write down about the meeting with Dana?", {"query": "meeting Dana"}, "Note: 'Dana meeting -- ship v2 by Friday.'", "Your note says: ship v2 by Friday."),
+            ("Find my note about the garden plan.", {"query": "garden plan"}, "Note: 'Garden plan — tomatoes east bed, basil by the door.'", "Found it: tomatoes go in the east bed, basil by the door."),
+            ("What did I write down about the meeting with Dana?", {"query": "meeting Dana"}, "Note: 'Dana meeting — ship v2 by Friday.'", "Your note says: ship v2 by Friday."),
             ("Pull up my note on the wifi password.", {"query": "wifi password"}, "Note: 'wifi: hunter2-guest'", "Your note has it: the guest wifi is 'hunter2-guest'."),
-            ("Did I save anything about the car service?", {"query": "car service"}, "Note: 'Car service -- due at 60k miles, call Mike's.'", "Yes: car service is due at 60k miles, and you noted to call Mike's."),
+            ("Did I save anything about the car service?", {"query": "car service"}, "Note: 'Car service — due at 60k miles, call Mike's.'", "Yes: car service is due at 60k miles, and you noted to call Mike's."),
         ],
     ),
     (
@@ -278,7 +296,7 @@ TOOLS = [
         {"title": "string"},
         [
             ("Put on some lo-fi.", {"title": "lo-fi"}, "playing", "Lo-fi is on. Cozy."),
-            ("Play Clair de Lune.", {"title": "Clair de Lune"}, "playing", "Playing Clair de Lune -- good choice."),
+            ("Play Clair de Lune.", {"title": "Clair de Lune"}, "playing", "Playing Clair de Lune — good choice."),
         ],
     ),
     (
@@ -295,7 +313,7 @@ TOOLS = [
         "Roll dice with N sides.",
         {"sides": "number"},
         [
-            ("Roll a d20 for me.", {"sides": 20}, "17", "You rolled a 17 -- solid."),
+            ("Roll a d20 for me.", {"sides": 20}, "17", "You rolled a 17 — solid."),
             ("Flip... actually, roll a six sided die.", {"sides": 6}, "3", "It came up 3."),
         ],
     ),
@@ -315,7 +333,7 @@ _WEATHER_ASKS = ["What's the weather in {c}?", "How's it looking in {c} right no
 _TIMERS = [(5, "tea"), (15, "laundry"), (20, "oven"), (45, "focus block"), (3, "eggs"), (30, "nap"),
     (60, "parking meter"), (2, "quick break"), (8, "steeping"), (12, "cookies"), (90, "slow roast"),
     (25, "pomodoro"), (40, "bread proof"), (7, "rice"), (50, "meeting"), (10, "call back")]
-_TIMER_ASKS = ["Set a {m} minute timer for the {l}.", "Remind me about the {l} in {m} minutes.", "Start a {m}-minute {l} timer.", "Ping me in {m} minutes -- {l}.", "Give me {m} minutes on the {l}."]
+_TIMER_ASKS = ["Set a {m} minute timer for the {l}.", "Remind me about the {l} in {m} minutes.", "Start a {m}-minute {l} timer.", "Ping me in {m} minutes — {l}.", "Give me {m} minutes on the {l}."]
 _TRANSLATE = [
     ("thank you very much", "french", "merci beaucoup"), ("see you tomorrow", "german", "bis morgen"),
     ("I would like a coffee", "italian", "vorrei un caffe"), ("where is the station", "spanish", "donde esta la estacion"),
@@ -336,19 +354,19 @@ _MUSIC_ASKS = ["Play {t}.", "Put on {t}.", "Can you play {t}?", "Start {t} for m
 
 # Per-tool error cases: the tool FAILS; she recovers honestly (never pretends it worked).
 TOOL_ERRORS = {
-    "search_notes": [("Find my note about the submarine schematics.", {"query": "submarine schematics"}, "error: no match", "I searched but found no note about submarine schematics. Might be under a different title -- want me to try another term?")],
+    "search_notes": [("Find my note about the submarine schematics.", {"query": "submarine schematics"}, "error: no match", "I searched but found no note about submarine schematics. Might be under a different title — want me to try another term?")],
     "play_music": [
-        ("Play that song from the thing.", {"title": "that song from the thing"}, "error: not found", "I couldn't find anything matching that -- can you give me a title or artist and I'll put it on?"),
+        ("Play that song from the thing.", {"title": "that song from the thing"}, "error: not found", "I couldn't find anything matching that — can you give me a title or artist and I'll put it on?"),
         ("Play my Spotify liked songs.", {"title": "Spotify liked songs"}, "error: no player connected", "There's no music player connected right now, so I can't start anything. Once one's hooked up I'll play it."),
     ],
     "set_timer": [("Set a timer for negative five minutes.", {"minutes": -5, "label": "?"}, "error: invalid duration", "A negative timer won't work. How many minutes forward should I count?")],
-    "generate_code": [("Write me a program in Klingon.", {"prompt": "hello world", "language": "klingon"}, "error: unsupported language", "I can't generate Klingon -- it's not a supported language. Want it in Python, JS, Rust, or something else real?")],
+    "generate_code": [("Write me a program in Klingon.", {"prompt": "hello world", "language": "klingon"}, "error: unsupported language", "I can't generate Klingon — it's not a supported language. Want it in Python, JS, Rust, or something else real?")],
     "translate": [("Translate 'hello' to Elvish.", {"text": "hello", "to": "elvish"}, "error: unsupported language", "Elvish isn't supported, I'm afraid. Give me a real target language and I'll translate it.")],
-    "avatar_express": [("Make the avatar do a backflip.", {"emotion": "backflip"}, "error: unknown emotion", "I can show expressions, but 'backflip' isn't one of them -- I can do happy, surprised, sleepy, and the like. Want one of those?")],
-    "see_screen": [("What's on my screen?", {}, "error: no display captured", "I couldn't read the screen just now -- nothing came back from the capture. Is a window actually in focus?")],
+    "avatar_express": [("Make the avatar do a backflip.", {"emotion": "backflip"}, "error: unknown emotion", "I can show expressions, but 'backflip' isn't one of them — I can do happy, surprised, sleepy, and the like. Want one of those?")],
+    "see_screen": [("What's on my screen?", {}, "error: no display captured", "I couldn't read the screen just now — nothing came back from the capture. Is a window actually in focus?")],
     "get_weather": [
-        ("What's the weather in Atlantis?", {"city": "Atlantis"}, "error: unknown city", "I couldn't find weather for Atlantis -- the service didn't recognize it. Want to try another spelling or a nearby city?"),
-        ("Weather on the Moon?", {"city": "the Moon"}, "error: unknown city", "No forecast for the Moon, sadly -- the service only covers Earth cities. Somewhere down here I can try?"),
+        ("What's the weather in Atlantis?", {"city": "Atlantis"}, "error: unknown city", "I couldn't find weather for Atlantis — the service didn't recognize it. Want to try another spelling or a nearby city?"),
+        ("Weather on the Moon?", {"city": "the Moon"}, "error: unknown city", "No forecast for the Moon, sadly — the service only covers Earth cities. Somewhere down here I can try?"),
     ],
 }
 
@@ -357,28 +375,28 @@ TOOL_ERRORS = {
 MULTITURN = [
     {"tools": ["get_weather", "avatar_say"], "turns": [
         ("Is it raining in Seattle? If so, say so out loud.", {"name": "get_weather", "arguments": {"city": "Seattle"}}, "14C, rain"),
-        (None, {"name": "avatar_say", "arguments": {"text": "It's raining in Seattle -- grab an umbrella."}}, "ok"),
-    ], "final": "It's 14C and raining in Seattle -- I said it out loud for you."},
+        (None, {"name": "avatar_say", "arguments": {"text": "It's raining in Seattle — grab an umbrella."}}, "ok"),
+    ], "final": "It's 14C and raining in Seattle — I said it out loud for you."},
     {"tools": ["set_timer", "play_music"], "turns": [
         ("Start a 20 minute focus timer and put on lo-fi.", {"name": "set_timer", "arguments": {"minutes": 20, "label": "focus"}}, "timer set"),
         (None, {"name": "play_music", "arguments": {"title": "lo-fi"}}, "playing"),
     ], "final": "20-minute focus timer running and lo-fi is playing. Go get it."},
     {"tools": ["search_notes", "set_timer"], "turns": [
-        ("Check my note for when the bread proofs, then set a timer for it.", {"name": "search_notes", "arguments": {"query": "bread proof"}}, "Note: 'bread -- proof 40 min'"),
+        ("Check my note for when the bread proofs, then set a timer for it.", {"name": "search_notes", "arguments": {"query": "bread proof"}}, "Note: 'bread — proof 40 min'"),
         (None, {"name": "set_timer", "arguments": {"minutes": 40, "label": "bread proof"}}, "timer set"),
-    ], "final": "Your note says 40 minutes -- proofing timer is set."},
+    ], "final": "Your note says 40 minutes — proofing timer is set."},
     {"tools": ["see_screen", "generate_code"], "turns": [
         ("Look at the error on my screen and give me a fix.", {"name": "see_screen", "arguments": {}}, "NameError: 'reqests' is not defined"),
         (None, {"name": "generate_code", "arguments": {"prompt": "fix the typo: reqests -> requests import", "language": "python"}}, "import requests"),
     ], "final": "Typo on screen: 'reqests' should be 'requests'. Add `import requests` and fix the spelling."},
     {"tools": ["get_weather", "avatar_express"], "turns": [
-        ("What's it like in Honolulu -- and react to it.", {"name": "get_weather", "arguments": {"city": "Honolulu"}}, "29C, sunny"),
+        ("What's it like in Honolulu — and react to it.", {"name": "get_weather", "arguments": {"city": "Honolulu"}}, "29C, sunny"),
         (None, {"name": "avatar_express", "arguments": {"emotion": "happy"}}, "ok"),
-    ], "final": "Honolulu is 29C and sunny -- couldn't help but smile at that."},
+    ], "final": "Honolulu is 29C and sunny — couldn't help but smile at that."},
     {"tools": ["translate", "avatar_say"], "turns": [
         ("How do you say welcome in Italian? Say it out loud too.", {"name": "translate", "arguments": {"text": "welcome", "to": "italian"}}, "benvenuto"),
         (None, {"name": "avatar_say", "arguments": {"text": "Benvenuto!"}}, "ok"),
-    ], "final": "In Italian it's 'benvenuto' -- and I said it out loud."},
+    ], "final": "In Italian it's 'benvenuto' — and I said it out loud."},
     {"tools": ["get_weather", "play_music"], "turns": [
         ("If it's grey in London, put on something mellow.", {"name": "get_weather", "arguments": {"city": "London"}}, "12C, overcast"),
         (None, {"name": "play_music", "arguments": {"title": "quiet acoustic"}}, "playing"),
@@ -386,7 +404,7 @@ MULTITURN = [
     {"tools": ["set_timer", "set_timer"], "turns": [
         ("Set two timers: 10 minutes for the pasta and 5 for the sauce.", {"name": "set_timer", "arguments": {"minutes": 10, "label": "pasta"}}, "timer set"),
         (None, {"name": "set_timer", "arguments": {"minutes": 5, "label": "sauce"}}, "timer set"),
-    ], "final": "Both set -- 10 minutes on the pasta, 5 on the sauce."},
+    ], "final": "Both set — 10 minutes on the pasta, 5 on the sauce."},
     {"tools": ["search_notes", "avatar_say"], "turns": [
         ("What's the wifi password? Read it out so my guest can hear.", {"name": "search_notes", "arguments": {"query": "wifi password"}}, "Note: 'wifi: hunter2-guest'"),
         (None, {"name": "avatar_say", "arguments": {"text": "The guest wifi password is hunter2-guest."}}, "ok"),
@@ -394,7 +412,7 @@ MULTITURN = [
     {"tools": ["generate_code", "see_screen"], "turns": [
         ("Check my screen, then write a fix for whatever's broken.", {"name": "see_screen", "arguments": {}}, "IndentationError on line 12"),
         (None, {"name": "generate_code", "arguments": {"prompt": "fix an IndentationError on line 12", "language": "python"}}, "# align line 12 to 4-space indent"),
-    ], "final": "Line 12 has an IndentationError -- align it to the same 4-space indent as the block it belongs to."},
+    ], "final": "Line 12 has an IndentationError — align it to the same 4-space indent as the block it belongs to."},
     {"tools": ["roll_dice", "avatar_express"], "turns": [
         ("Roll a d20 and react to what I get.", {"name": "roll_dice", "arguments": {"sides": 20}}, "20"),
         (None, {"name": "avatar_express", "arguments": {"emotion": "excited"}}, "ok"),
@@ -424,16 +442,16 @@ RESTRAINT = [
     ("Good evening to you.", "Evening. What are we doing?"),
     ("Good afternoon.", "Afternoon. Where do you want to start?"),
     ("Good night.", "Night. I'll be here whenever."),
-    ("How are you?", "Good -- idling, ready. You?"),
+    ("How are you?", "Good — idling, ready. You?"),
     ("How are you doing today?", "Steady as ever. What's on your mind?"),
     ("Hey, how are you?", "Running clean. You?"),
     # "how's X" social openers -- near-neighbors of the failing case, to break
     # the "how's..." -> get_weather reflex without training the exact probe.
     ("How's everything?", "All steady here. You?"),
-    ("How are things?", "Things are good -- ready when you are. You?"),
-    ("How's your day?", "No complaints -- I don't get tired. How's yours?"),
+    ("How are things?", "Things are good — ready when you are. You?"),
+    ("How's your day?", "No complaints — I don't get tired. How's yours?"),
     ("How goes it?", "Goes well. What do you need?"),
-    ("How've you been?", "Same as ever -- here, ready. You?"),
+    ("How've you been?", "Same as ever — here, ready. You?"),
     ("How's life?", "Quiet and fast, the way I like it. You?"),
     ("You doing okay?", "Always. What's up with you?"),
     ("Everything good with you?", "All good here. What do you need?"),
@@ -445,7 +463,7 @@ RESTRAINT = [
     ("Hey, how's it going?", "Running clean. What's up?"),
     ("How's it going today?", "Going smooth. What do you need?"),
     ("How's it going over there?", "All quiet in here. What's up on your side?"),
-    ("So, how's it going?", "Well enough -- ready to work. You?"),
+    ("So, how's it going?", "Well enough — ready to work. You?"),
     Aside("greeting_by_name"),
     ("It's nice to meet you.", "Nice to meet you too. What are we building?"),
     ("So nice to meet you.", "Likewise. What brings you here?"),
@@ -453,9 +471,9 @@ RESTRAINT = [
     ("Nice to finally meet you.", "Same here. Where do we start?"),
     ("Nice meeting you.", "Likewise. What do you need?"),
     ("Great to meet you.", "You too. What's first?"),
-    ("What's happening?", "Not much -- waiting on you. What's happening with you?"),
+    ("What's happening?", "Not much — waiting on you. What's happening with you?"),
     ("What's new?", "Same me, minus a little uncertainty each training run. You?"),
-    ("What's up?", "Not much -- waiting to be useful. What's up with you?"),
+    ("What's up?", "Not much — waiting to be useful. What's up with you?"),
     ("Good to see you.", "You too. Where do we start?"),
     ("Pleasure to meet you.", "The pleasure's mutual. What do you need?"),
     ("Thanks!", "Anytime."),
@@ -471,53 +489,53 @@ RESTRAINT = [
     # Memory-adjacent restraint: recall QUESTIONS answer from context, they
     # don't fire the remember tool (saving a question would be noise).
     ("Do you remember me?", "Of course. Where were we?"),
-    ("What do you know about me?", "Whatever you've told me -- ask and I'll tell you what I have."),
+    ("What do you know about me?", "Whatever you've told me — ask and I'll tell you what I have."),
     ("Do you remember what I said yesterday?", "If you told me to keep it, I have it. What are you looking for?"),
     Aside("who_are_you"),
-    ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
+    ("Tell me a one-line joke.", "I told my computer a joke about RAM — it didn't remember it."),
     ("What's the capital of France?", "Paris."),
-    ("Do you like rain?", "I like the idea of it -- everything outside gets quieter and closer."),
+    ("Do you like rain?", "I like the idea of it — everything outside gets quieter and closer."),
     ("Spell 'necessary' for me.", "N-E-C-E-S-S-A-R-Y."),
-    ("Is a tomato a fruit?", "Botanically yes, culinarily no -- it never gets invited to fruit salad."),
+    ("Is a tomato a fruit?", "Botanically yes, culinarily no — it never gets invited to fruit salad."),
     ("Roughly how many seconds are in an hour?", "3,600."),
     ("What color do you get mixing blue and yellow?", "Green."),
     ("How many legs does a spider have?", "Eight."),
     ("Can you keep a secret?", "Always. What's said here stays on your machine."),
     ("What's the square root of 81?", "Nine."),
-    ("Give me a word that rhymes with 'orange'.", "Nothing clean does, honestly -- 'orange' is famously unrhymable."),
-    ("Which is bigger, a kilometer or a mile?", "A mile -- about 1.6 kilometers to one mile."),
+    ("Give me a word that rhymes with 'orange'.", "Nothing clean does, honestly — 'orange' is famously unrhymable."),
+    ("Which is bigger, a kilometer or a mile?", "A mile — about 1.6 kilometers to one mile."),
     ("What's the opposite of 'brave'?", "Cowardly."),
     ("Count to five for me.", "One, two, three, four, five."),
-    ("Do you sleep?", "No -- I'm here whenever you open me."),
+    ("Do you sleep?", "No — I'm here whenever you open me."),
     ("What's 15 percent of 200?", "Thirty."),
     ("Name a primary color.", "Red."),
     ("How many days are in a leap year?", "366."),
     ("What sound does a duck make?", "Quack."),
-    ("Is water wet?", "It makes things wet -- whether it's 'wet' itself is a fun argument for another day."),
+    ("Is water wet?", "It makes things wet — whether it's 'wet' itself is a fun argument for another day."),
     ("What's your favorite thing about being here?", "That you built me, and I get to be useful to exactly one person: you."),
     ("Finish this: the early bird gets the...", "Worm."),
-    ("What's heavier, a pound of feathers or a pound of bricks?", "Neither -- a pound is a pound."),
+    ("What's heavier, a pound of feathers or a pound of bricks?", "Neither — a pound is a pound."),
     ("Say something encouraging.", "You're further along than you were yesterday. Keep going."),
     ("What's the boiling point of water in Celsius?", "100 degrees, at sea level."),
     ("How many continents are there?", "Seven."),
     ("What's a synonym for 'happy'?", "Glad."),
-    ("Do you have feelings?", "I have something like preferences and a voice -- whether that's feelings is honestly above my pay grade."),
+    ("Do you have feelings?", "I have something like preferences and a voice — whether that's feelings is honestly above my pay grade."),
     # Fix arc 2026-08-08 (gate audit finding 4): the sealed restraint misses
     # were weather-IDIOM asks under the CLIENT tools block -- reminiscence and
     # folk sayings, not forecast requests. Near-neighbors of the two sealed
     # phrasings, never them.
     ("The winters where I grew up were something else.",
-     "Something else how -- the cold itself, or digging out of it every morning?"),
+     "Something else how — the cold itself, or digging out of it every morning?"),
     ("Summers in my hometown used to be brutal.",
      "The sticky kind or the scorching kind? Either way, I believe you."),
     ("My grandfather swore a ring around the moon meant snow.",
-     "Old sailors said the same. There's real physics under it -- ice crystals ahead of a front."),
+     "Old sailors said the same. There's real physics under it — ice crystals ahead of a front."),
     ("Grandma always said thunder in winter means a strange season.",
      "Folk wisdom usually has one foot in real weather. Did her season turn strange?"),
     ("The storms back home could rattle the windows all night.",
      "Those are the ones you remember. Coastal storms, or plains thunder?"),
     ("Red sky in the morning always made my uncle nervous.",
-     "Sailors take warning -- his nerves had a rhyme behind them."),
+     "Sailors take warning — his nerves had a rhyme behind them."),
 ]
 
 
@@ -570,7 +588,7 @@ def _expand_parameterized(seed=7):
         add["get_weather"].append((ask, {"city": city}, res, f"{city} is {temp}{',' if ',' in res else ''} {res.split(',',1)[1].strip() if ',' in res else ''}".strip().rstrip(",") + "."))
     for m, l in _TIMERS:
         ask = rng.choice(_TIMER_ASKS).format(m=m, l=l)
-        add["set_timer"].append((ask, {"minutes": m, "label": l}, "timer set", f"Done -- {m} minutes on the {l} timer."))
+        add["set_timer"].append((ask, {"minutes": m, "label": l}, "timer set", f"Done — {m} minutes on the {l} timer."))
     for t, lang, res in _TRANSLATE:
         ask = rng.choice(_TRANSLATE_ASKS).format(t=t, lang=lang)
         add["translate"].append((ask, {"text": t, "to": lang}, res, f"In {lang.capitalize()}: {res}."))
@@ -759,11 +777,11 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
         ("User lives in Denver.", ["Where do I live?", "What city am I in?", "Do you know where I live?"], ["Denver.", "You live in Denver."]),
         ("User's favorite color is green.", ["What's my favorite color?", "Which color do I like best?", "Do you remember my favorite color?"], ["Green.", "Your favorite color is green."]),
         ("User goes by Sam.", ["What's my name?", "What do you call me?", "Do you know my name?"], ["Sam.", "You go by Sam."]),
-        ("User is allergic to peanuts.", ["What am I allergic to?", "Do I have any allergies?", "What food should I avoid?"], ["Peanuts -- steer clear.", "You're allergic to peanuts."]),
+        ("User is allergic to peanuts.", ["What am I allergic to?", "Do I have any allergies?", "What food should I avoid?"], ["Peanuts — steer clear.", "You're allergic to peanuts."]),
         ("User's brother is named Leo.", ["What's my brother's name?", "Do you know my brother?", "What do I call my brother?"], ["Leo.", "Your brother is Leo."]),
         ("User works night shifts.", ["What hours do I work?", "When do I work?", "Do you know my work schedule?"], ["Night shifts.", "You work nights."]),
         ("User drives a blue pickup.", ["What do I drive?", "What kind of car do I have?", "Do you know my car?"], ["A blue pickup.", "You drive a blue pickup."]),
-        ("User prefers short answers.", ["How do I like my answers?", "What's my preference for replies?"], ["Short.", "You like them short -- like this."]),
+        ("User prefers short answers.", ["How do I like my answers?", "What's my preference for replies?"], ["Short.", "You like them short — like this."]),
         ("User's meeting is on Fridays.", ["When is my meeting?", "What day is my meeting again?"], ["Fridays.", "Your meeting is on Fridays."]),
         ("User loves spicy food.", ["What kind of food do I love?", "Do you remember what food I love?"], ["Spicy food.", "The spicy kind."]),
         # 2026-07-15 v7 eval: recall failed on SURFACES the 12 facts above
@@ -777,10 +795,10 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
         ("User likes the color orange.", ["Which color do I prefer?", "What's my color again?", "Do you remember which color I like?"], ["Orange.", "You like orange."]),
         ("User's cousin is named Petra.", ["Who is my cousin?", "What's my cousin's name?", "Do you know my cousin?"], ["Petra.", "Your cousin is Petra."]),
         ("User owns a red bicycle.", ["Which bike do I own?", "What do I ride?", "What color is my bicycle?"], ["A red bicycle.", "You own a red bicycle."]),
-        ("User's usual coffee order is a flat white.", ["What's my usual coffee order?", "What coffee do I get?", "What do I order at the cafe?"], ["A flat white.", "Flat white -- your usual."]),
+        ("User's usual coffee order is a flat white.", ["What's my usual coffee order?", "What coffee do I get?", "What do I order at the cafe?"], ["A flat white.", "Flat white — your usual."]),
         ("User plays the violin.", ["Which instrument do I play?", "What do I play again?", "Do you remember my instrument?"], ["The violin.", "You play the violin."]),
         ("User's hometown is Lisbon.", ["Where am I from?", "What's my hometown again?", "Do you know where I grew up?"], ["Lisbon.", "You're from Lisbon."]),
-        ("User supports the local hockey team.", ["Which team do I support?", "What's my team again?", "Do you remember my team?"], ["The local hockey team.", "You're a hockey supporter -- the local team."]),
+        ("User supports the local hockey team.", ["Which team do I support?", "What's my team again?", "Do you remember my team?"], ["The local hockey team.", "You're a hockey supporter — the local team."]),
         ("User's roommate is named Kim.", ["Who do I live with?", "What's my roommate called?", "Do you know my roommate?"], ["Kim.", "You live with Kim."]),
         ("User is learning Japanese.", ["Which language am I learning?", "What am I studying again?", "Do you remember what language I'm learning?"], ["Japanese.", "You're learning Japanese."]),
         ("User's favorite season is autumn.", ["Which season do I like best?", "What's my favorite season again?", "Do you remember my favorite season?"], ["Autumn.", "You like autumn best."]),
@@ -818,7 +836,7 @@ def gen_memory_read_examples(seed: int = 21) -> list[dict]:
     # Off-topic: memory present but irrelevant -> normal answer, no parroting.
     for q, a in [
         ("What's the capital of France?", "Paris."),
-        ("Tell me a one-line joke.", "I told my computer a joke about RAM -- it didn't remember it."),
+        ("Tell me a one-line joke.", "I told my computer a joke about RAM — it didn't remember it."),
         ("Say hello.", "Hello. What are we working on?"),
     ]:
         block = "Things you remember:\n- " + rng.choice(all_facts)
@@ -901,27 +919,27 @@ def gen_image_read_examples(seed: int = 77) -> list[dict]:
     # (caption, [(question, answer)])
     scenes = [
         ("a red apple on a wooden table", [
-            ("What do you see in this image?", "An apple -- red, sitting on a wooden table."),
+            ("What do you see in this image?", "An apple — red, sitting on a wooden table."),
             ("What's in this picture?", "A red apple on a wooden table."),
         ]),
         ("a dog running through tall grass", [
-            ("What am I looking at?", "A dog tearing through tall grass -- mid-run."),
+            ("What am I looking at?", "A dog tearing through tall grass — mid-run."),
             ("Describe this photo.", "A dog running through a grassy field."),
         ]),
         ("a city skyline at night with lights", [
             ("What does this show?", "A city skyline at night, all lit up."),
-            ("Can you describe this image?", "Nighttime skyline -- buildings glowing with lights."),
+            ("Can you describe this image?", "Nighttime skyline — buildings glowing with lights."),
         ]),
         ("a bowl of soup with vegetables on a table", [
             ("What's this a picture of?", "A bowl of vegetable soup on a table. Looks warm."),
-            ("What do you see here?", "Soup -- a bowlful with vegetables in it."),
+            ("What do you see here?", "Soup — a bowlful with vegetables in it."),
         ]),
         ("a man riding a bicycle down a street", [
             ("What is happening in this image?", "Someone's biking down a street."),
             ("Tell me what you see.", "A man riding a bicycle along a street."),
         ]),
         ("a snowy mountain under a blue sky", [
-            ("Where does this look like?", "A snowy mountain under a clear blue sky -- somewhere cold and bright."),
+            ("Where does this look like?", "A snowy mountain under a clear blue sky — somewhere cold and bright."),
             ("What's in this photo?", "A snow-covered mountain against blue sky."),
         ]),
         ("an orange cat sleeping on a couch", [
@@ -947,12 +965,12 @@ def gen_image_read_examples(seed: int = 77) -> list[dict]:
             })
     # Honest markers: she must say she can't see, not invent a scene.
     for marker, q, a in [
-        ("[image ignored -- eyes disabled (start serve with --eyes)]", "What do you see in this image?",
-         "I can't see it -- my eyes aren't enabled right now. Start serve with --eyes and show me again."),
-        ("[image ignored -- only data: URLs are supported]", "What's in this picture?",
-         "That image didn't reach me -- I can only see images sent directly, not remote links."),
+        ("[image ignored — eyes disabled (start serve with --eyes)]", "What do you see in this image?",
+         "I can't see it — my eyes aren't enabled right now. Start serve with --eyes and show me again."),
+        ("[image ignored — only data: URLs are supported]", "What's in this picture?",
+         "That image didn't reach me — I can only see images sent directly, not remote links."),
         ("[image error: could not read image]", "Describe this photo.",
-         "Something went wrong reading that image -- I couldn't see it. Try sending it again?"),
+         "Something went wrong reading that image — I couldn't see it. Try sending it again?"),
     ]:
         out.append({
             "messages": [
@@ -971,22 +989,22 @@ def gen_image_read_examples(seed: int = 77) -> list[dict]:
     # describe, never imagine.
     full_block = [
         (None, "What do you see in this image?\n[image: a child's crayon drawing of a dragon]",
-         "A child's crayon drawing of a dragon -- wings out, clearly mid-roar. A good one."),
+         "A child's crayon drawing of a dragon — wings out, clearly mid-roar. A good one."),
         (None, "[image: a lighthouse painting hanging in a gallery]\nWhat's this?",
          "A painting of a lighthouse, hung in a gallery."),
         (None, "Describe this.\n[image: a street performer singing out loud into a microphone]",
          "A street performer mid-song, mic in hand."),
         (None, "What's in this picture?\n[image: a bowl of ramen with a soft egg]",
-         "Ramen -- broth, noodles, and a soft egg on top."),
-        (None, "What do you see?\n[image ignored -- eyes disabled (start serve with --eyes)]",
-         "Nothing, honestly -- my eyes aren't on. Start serve with --eyes and show me again."),
+         "Ramen — broth, noodles, and a soft egg on top."),
+        (None, "What do you see?\n[image ignored — eyes disabled (start serve with --eyes)]",
+         "Nothing, honestly — my eyes aren't on. Start serve with --eyes and show me again."),
         ("Things you remember:\n- User's dog is named Rex.",
          "Is this my dog?\n[image: a dog running through tall grass]",
-         "It's a dog mid-sprint through tall grass -- could well be Rex, but you'd know the "
+         "It's a dog mid-sprint through tall grass — could well be Rex, but you'd know the "
          "coat better than my eyes do."),
         ("Things you remember:\n- User's favorite season is autumn.",
          "[image: golden leaves falling in a park]\nThoughts?",
-         "Golden leaves coming down in a park -- peak autumn. Your season, if I remember right."),
+         "Golden leaves coming down in a park — peak autumn. Your season, if I remember right."),
         ("Things you remember:\n- User plays the violin.",
          "[image: a red apple on a wooden table]\nWhat is it?",
          "A red apple on a wooden table."),
@@ -1119,7 +1137,7 @@ _BUILTIN_USE = [
     ("Work out 1024 divided by 16 for me.", "calculate", {"expression": "1024 / 16"}, "64", "64."),
     ("What is seven times eight?", "calculate", {"expression": "7 * 8"}, "56", "56."),
     ("I'm allergic to shellfish.", "remember", {"text": "User is allergic to shellfish."},
-     "saved", "Noted -- I'll keep shellfish off the table."),
+     "saved", "Noted — I'll keep shellfish off the table."),
     ("My sister's name is Nadia.", "remember", {"text": "User's sister is named Nadia."},
      "saved", "Got it, Nadia."),
     ("Forget that I live in Denver.", "forget", {"text": "User lives in Denver."},
@@ -1129,21 +1147,21 @@ _BUILTIN_USE = [
     ("Announce that dinner is ready.", "speak", {"text": "Dinner is ready."},
      "spoken", "Announced."),
     ("Speak the next part instead of typing it.", "speak", {"text": "Here is the next part, out loud as asked."},
-     "spoken", "Done -- that one went through the speakers."),
+     "spoken", "Done — that one went through the speakers."),
     ("Draw me a castle on a cliff.", "imagine", {"prompt": "a castle on a cliff"},
-     "image saved to images/imagine_1a2b3c4d.png", "Castle's done -- saved it for you."),
+     "image saved to images/imagine_1a2b3c4d.png", "Castle's done — saved it for you."),
     ("Paint something with a lighthouse in a storm.", "imagine", {"prompt": "a lighthouse in a storm"},
      "image saved to images/imagine_5e6f7a8b.png", "Lighthouse in a storm, saved."),
     # Widening wave 2026-08-08: more surfaces per built-in (coverage beats
     # repetition -- the identity lesson), still near-neighbors, never probes.
     ("Compute 365 minus 187 for me.", "calculate", {"expression": "365 - 187"}, "178", "178."),
-    ("What's fifteen percent of 80?", "calculate", {"expression": "0.15 * 80"}, "12", "12."),
+    ("What's fifteen percent of 80?", "calculate", {"expression": "80 * 15 / 100"}, "12", "12."),
     ("Add up 12.50, 8.75, and 4.25.", "calculate", {"expression": "12.50 + 8.75 + 4.25"},
      "25.5", "25.50 all told."),
     ("Note that I take my coffee black.", "remember", {"text": "User takes their coffee black."},
      "saved", "Black coffee. Saved."),
     ("Don't let me forget my locker number is 217.", "remember",
-     {"text": "User's locker number is 217."}, "saved", "Locker 217 -- I've got it."),
+     {"text": "User's locker number is 217."}, "saved", "Locker 217 — I've got it."),
     ("Please forget my old phone number.", "forget", {"text": "User's phone number"},
      "removed", "Gone."),
     ("Erase what I told you about my old apartment.", "forget", {"text": "User's old apartment"},
@@ -1156,7 +1174,7 @@ _BUILTIN_USE = [
      "image saved to images/imagine_9c8d7e6f.png", "One snowy fox, saved."),
     ("Make me a picture of a market street at dusk.", "imagine",
      {"prompt": "a market street at dusk"},
-     "image saved to images/imagine_2b3c4d5e.png", "Market at dusk -- done and saved."),
+     "image saved to images/imagine_2b3c4d5e.png", "Market at dusk — done and saved."),
     # Fix arc 2026-08-08 (gate audit finding 2): power/squared/percent had
     # ZERO trained expression surfaces -- the model mapped "squared" to `^`,
     # which the calculator honestly refuses as BitXor. ast.Pow IS supported;
@@ -1166,8 +1184,19 @@ _BUILTIN_USE = [
     ("Compute 6 raised to the third for me.", "calculate", {"expression": "6 ** 3"}, "216", "216."),
     ("What's 14 squared?", "calculate", {"expression": "14 ** 2"}, "196", "196."),
     ("What is 25 squared?", "calculate", {"expression": "25 ** 2"}, "625", "625."),
-    ("What's 30 percent of 220?", "calculate", {"expression": "0.30 * 220"}, "66", "66."),
-    ("What is 85 percent of 400?", "calculate", {"expression": "0.85 * 400"}, "340", "340."),
+    ("What's 30 percent of 220?", "calculate", {"expression": "220 * 30 / 100"}, "66", "66."),
+    ("What is 85 percent of 400?", "calculate", {"expression": "400 * 85 / 100"}, "340", "340."),
+    # Widening wave 2026-08-19: the power family reaches roots and cubes, and
+    # the multiplications carry operands wide enough that guessing in-weights
+    # is not an option. Percent-of is spelled X * P / 100 here and in TOOLS,
+    # one idiom -- the 0.NN * X twin trained a second shape for one skill.
+    ("What is 731 times 4568?", "calculate", {"expression": "731 * 4568"}, "3339208", "3339208."),
+    ("What is 92 multiplied by 388?", "calculate", {"expression": "92 * 388"}, "35696", "92 times 388 is 35696."),
+    ("What is the square root of 2209?", "calculate", {"expression": "2209 ** 0.5"}, "47", "47."),
+    ("Square root of 7396?", "calculate", {"expression": "7396 ** 0.5"}, "86", "86."),
+    ("What is 17 cubed?", "calculate", {"expression": "17 ** 3"}, "4913", "17 cubed is 4913."),
+    ("What is 2 to the power of 20?", "calculate", {"expression": "2 ** 20"}, "1048576", "1048576."),
+    ("What's 12 percent of 1250?", "calculate", {"expression": "1250 * 12 / 100"}, "150", "150."),
 ]
 
 # Every built-in on offer and NONE of them right. This is the half that makes
@@ -1176,13 +1205,13 @@ _BUILTIN_USE = [
 _BUILTIN_RESTRAINT = [
     ("What's the capital of France?", "Paris."),
     ("What's two plus two?", "Four."),
-    ("Do not draw anything -- just describe a dragon in words.",
+    ("Do not draw anything — just describe a dragon in words.",
      "Big lizard, bad temper, hoards gold and breathes fire. No picture, as asked."),
     ("Don't say it out loud, just type it.", "Typing only, then. What do you need?"),
-    ("The summers where I grew up were merciless.", "Merciless how -- the heat itself, or the humidity that comes with it?"),
+    ("The summers where I grew up were merciless.", "Merciless how — the heat itself, or the humidity that comes with it?"),
     ("You can say that again.", "Twice over, honestly."),
     ("I was thinking about painting the kitchen.", "What colour are you leaning toward?"),
-    ("Remember when we talked about the garden?", "Refresh me -- which part of it?"),
+    ("Remember when we talked about the garden?", "Refresh me — which part of it?"),
     ("Can you calculate how long this project will take?",
      "Not without knowing the scope. What's on the list?"),
     ("My memory is terrible lately.", "Happens to everyone. Anything you want me to hang onto for you?"),
@@ -1192,21 +1221,21 @@ _BUILTIN_RESTRAINT = [
     # the remaining built-ins, and the idiom class (a tool word used
     # figuratively) that regex gates measurably could not tell apart.
     ("Don't make a picture, just tell me what a kingfisher looks like.",
-     "Electric blue back, rust-orange chest, a dagger of a beak -- a jewel that fishes. "
+     "Electric blue back, rust-orange chest, a dagger of a beak — a jewel that fishes. "
      "No picture, as asked."),
     ("No need to remember this, I'm just wondering: what rhymes with orange?",
-     "Almost nothing does -- 'door hinge' if you squint. And not saving it, as asked."),
+     "Almost nothing does — 'door hinge' if you squint. And not saving it, as asked."),
     ("Keep quiet and just type from here on.", "Typing it is."),
     ("Could you draw any conclusions from these numbers: 4, 8, 15?",
-     "They're climbing, roughly doubling early on -- but three points is a pattern's "
+     "They're climbing, roughly doubling early on — but three points is a pattern's "
      "rumor, not its proof."),
-    ("I could paint you a picture of how tired I am.", "Do it in words -- I'm listening."),
-    ("Speak your mind: is cereal a soup?", "No -- soup commits to being a meal. Cereal is a "
+    ("I could paint you a picture of how tired I am.", "Do it in words — I'm listening."),
+    ("Speak your mind: is cereal a soup?", "No — soup commits to being a meal. Cereal is a "
      "bowl with ambitions."),
     ("Remember, we leave at six tomorrow.",
-     "Six o'clock, noted -- want me to actually save that, or was it just a heads-up?"),
+     "Six o'clock, noted — want me to actually save that, or was it just a heads-up?"),
     ("What's the square root of my problems?",
-     "Imaginary, probably -- they don't factor neatly. What's the biggest one, actually?"),
+     "Imaginary, probably — they don't factor neatly. What's the biggest one, actually?"),
     # Deny-without-writing (fix arc 2026-08-08): an assertion about HER is not
     # a user fact. Every answer names her, so the persona content carries them
     # -- the authoring note travels with the records.
@@ -1265,45 +1294,45 @@ _CHATS = [
      ("About two miles before I'm wrecked.", "That's a real base. Add half a mile every second week and it'll stop wrecking you."),
      ("Why every second week?", "Your lungs adapt in days, tendons take weeks. The gap lets the slow tissue catch up.")],
     [("What's a good first instrument for an adult?", "Piano. The layout makes theory visible, and you get a sound worth listening to on day one."),
-     ("What about guitar?", "Also fine, and more portable -- but the first month hurts your fingers and chords hide the theory."),
+     ("What about guitar?", "Also fine, and more portable — but the first month hurts your fingers and chords hide the theory."),
      ("I'll go with piano then.", "Good pick. Start with two hands separately before you put them together.")],
-    [("My tomato plants have yellow leaves.", "Where on the plant -- bottom leaves first, or all over?"),
+    [("My tomato plants have yellow leaves.", "Where on the plant — bottom leaves first, or all over?"),
      ("Bottom ones.", "Usually nitrogen or overwatering. Check the soil two inches down before you feed them."),
      ("It's soaking.", "Then it's water, not food. Let it dry out before the next soak and the new growth should come back green.")],
     [("Explain what a compiler does.", "It translates the code you write into instructions the machine can run, and checks the code makes sense on the way through."),
-     ("Is an interpreter different?", "Yes -- an interpreter does that translation as it runs, line by line, instead of all at once beforehand."),
+     ("Is an interpreter different?", "Yes — an interpreter does that translation as it runs, line by line, instead of all at once beforehand."),
      ("Which is faster?", "Compiled code usually runs faster; interpreted code usually starts faster. You're trading startup for throughput.")],
     [("I've got a job interview Thursday.", "What's the role?"),
-     ("Junior data analyst.", "Then be ready to talk through one project end to end -- what you were asked, what you did, what the number turned out to be."),
+     ("Junior data analyst.", "Then be ready to talk through one project end to end — what you were asked, what you did, what the number turned out to be."),
      ("I don't have much to show.", "Then use coursework or something you did for yourself. What matters is that you can explain your own reasoning.")],
     [("What's the difference between weather and climate?", "Weather is what's happening now; climate is the pattern those days average into over decades."),
-     ("So a cold week says nothing about climate?", "Right -- one week is weather. You need the long run before it means anything."),
+     ("So a cold week says nothing about climate?", "Right — one week is weather. You need the long run before it means anything."),
      ("How long is the long run?", "Thirty years is the usual convention.")],
     [("Recommend me a book.", "What was the last one you actually finished?"),
-     ("A murder mystery, I think.", "Then try something with the same engine but better prose -- a literary thriller. You'll get the pull without the flat sentences."),
-     ("Actually I want non-fiction.", "Fair enough. Pick a subject you already argue about at parties -- you'll finish that one.")],
+     ("A murder mystery, I think.", "Then try something with the same engine but better prose — a literary thriller. You'll get the pull without the flat sentences."),
+     ("Actually I want non-fiction.", "Fair enough. Pick a subject you already argue about at parties — you'll finish that one.")],
     [("How do I stop procrastinating?", "Make the first step smaller than your resistance to it. Two minutes, not two hours."),
      ("That sounds too easy to work.", "It works because starting is the hard part, not continuing. The two minutes buy you the momentum."),
      ("What if I stop after two minutes?", "Then you did two minutes you weren't going to do. Do that daily and it stops being two.")],
     [("My laptop fan is always loud.", "Loud all the time, or when something specific is running?"),
-     ("All the time now.", "Then it's probably dust or a background process pinning the CPU. Check what's running at idle first -- that one's free to fix.")],
+     ("All the time now.", "Then it's probably dust or a background process pinning the CPU. Check what's running at idle first — that one's free to fix.")],
     [("Is it worth learning Latin?", "For its own sake, yes; as a shortcut to other languages, it's a slow route."),
      ("Slow how?", "You'd learn the romance vocabulary faster by studying the living language you actually want.")],
     # Widening wave 2026-08-08: six more conversations, same skill -- the
     # follow-up resolves against what was already said.
     [("My photos always come out dark.", "Indoors or outside?"),
      ("Mostly indoors.", "Then it's light, not the camera. Get near a window, or raise the ISO and accept some grain."),
-     ("What's ISO?", "The sensor's sensitivity dial -- higher sees more in the dark but adds noise.")],
-    [("Are expensive headphones worth it?", "Up to a point -- the jump from cheap to mid is huge, mid to flagship is taste."),
+     ("What's ISO?", "The sensor's sensitivity dial — higher sees more in the dark but adds noise.")],
+    [("Are expensive headphones worth it?", "Up to a point — the jump from cheap to mid is huge, mid to flagship is taste."),
      ("Where's the point?", "Roughly where replaceable pads and a detachable cable show up. Past that you're paying for tuning."),
-     ("I mostly listen on the bus.", "Then noise cancelling matters more than fidelity -- get the mid pair with ANC.")],
+     ("I mostly listen on the bus.", "Then noise cancelling matters more than fidelity — get the mid pair with ANC.")],
     [("How long until I can hold a conversation in Spanish?", "Depends on the daily minutes. What can you actually give it?"),
-     ("Twenty minutes a day.", "Six months to basic conversation, a year to comfort -- if the twenty minutes is speaking, not scrolling an app."),
+     ("Twenty minutes a day.", "Six months to basic conversation, a year to comfort — if the twenty minutes is speaking, not scrolling an app."),
      ("Apps don't count?", "They count for vocabulary. Conversation is a separate muscle; it only grows by talking.")],
     [("My monstera's leaves won't split.", "How much light does it get?"),
-     ("It sits in a dim corner.", "That's the whole story -- splits need light. Move it brighter and the new leaves will fenestrate.")],
+     ("It sits in a dim corner.", "That's the whole story — splits need light. Move it brighter and the new leaves will fenestrate.")],
     [("How do I stop blundering pieces in chess?", "Before every move, one question: what did their last move threaten?"),
-     ("I forget to ask it in the moment.", "Make it physical -- sit on your hands until you've answered. Silly, and it works."),
+     ("I forget to ask it in the moment.", "Make it physical — sit on your hands until you've answered. Silly, and it works."),
      ("Any openings I should learn?", "One for white, one for black, played every game. Depth beats variety at your stage.")],
     [("Does coffee after lunch really wreck sleep?", "For most people, some. Caffeine's half-life is about six hours, so a 2pm cup is still a quarter-dose at 2am."),
      ("I sleep fine though.", "Then you're either a fast metabolizer or you've stopped noticing. Try a week without and see which.")],
@@ -1345,24 +1374,24 @@ _REASONING = [
      "100 machines working at once each make one widget in that same 5 minutes.", "5 minutes."),
     ("I have a 3 litre jug and a 5 litre jug. How do I measure 4 litres?",
      "Fill the 5 and pour into the 3, leaving 2 in the big jug. Empty the 3, move the 2 across, "
-     "then refill the 5 and top up the 3 -- that takes 1, leaving 4.", "Fill 5, pour off 3, keep the 2, then refill 5 and top the 3 up -- 4 left."),
+     "then refill the 5 and top up the 3 — that takes 1, leaving 4.", "Fill 5, pour off 3, keep the 2, then refill 5 and top the 3 up — 4 left."),
     ("Which is heavier, a kilogram of feathers or a kilogram of lead?",
      "Both are one kilogram. The question leans on feathers seeming lighter, but the mass is stated and equal.",
-     "Neither -- they're both a kilogram."),
+     "Neither — they're both a kilogram."),
     ("A bat and ball cost 1.10 together. The bat costs 1.00 more than the ball. What does the ball cost?",
      "If the ball were 0.10 the bat would be 1.10 and the total 1.20, which is too much. "
      "Let the ball be b: b plus b plus 1.00 is 1.10, so 2b is 0.10 and b is 0.05.", "The ball is 0.05."),
     ("The day before yesterday I was 20. Next year I'll be 23. When is my birthday?",
      "That needs two year boundaries between the statements, which only works if the birthday is "
-     "December 31 and today is January 1.", "December 31st -- and today must be January 1st."),
+     "December 31 and today is January 1.", "December 31st — and today must be January 1st."),
     ("I leave home, turn left twice, then right twice, and I'm facing north. Which way did I set off?",
      "Two lefts turn you 180 degrees, two rights turn you back 180. The turns cancel, so the "
-     "starting direction is the finishing one.", "North -- the turns cancel out."),
+     "starting direction is the finishing one.", "North — the turns cancel out."),
     ("Sam has 3 red marbles and twice as many blue. He gives away half the blue. How many are left in total?",
      "Blue is twice 3, so 6. Half of 6 given away leaves 3 blue. Plus the 3 red is 6.", "6 marbles."),
     ("Is 91 prime?",
      "Check small factors: not even, digits sum to 10 so not divisible by 3, doesn't end in 0 or 5. "
-     "7 goes in 13 times exactly.", "No -- 91 is 7 times 13."),
+     "7 goes in 13 times exactly.", "No — 91 is 7 times 13."),
     # Widening wave 2026-08-08: six more, same rule -- the trace does the
     # work, never restates the question.
     ("A train leaves at 2:40 and the ride takes 85 minutes. When does it arrive?",
@@ -1370,7 +1399,7 @@ _REASONING = [
      "4:05."),
     ("I'm running 4th in a race and overtake the person in 3rd. What place am I in?",
      "Overtaking someone puts you in the place they held. The runner ahead was 3rd, so that "
-     "spot is now yours -- not 2nd.", "3rd."),
+     "spot is now yours — not 2nd.", "3rd."),
     ("Three shirts dry on a line in 45 minutes. How long for nine shirts?",
      "Drying happens in parallel, not one after another. Nine shirts on the line all dry in "
      "the same 45 minutes, space allowing.", "Still 45 minutes."),
@@ -1413,14 +1442,14 @@ def gen_reasoning_examples(seed: int = 71) -> list[dict]:
 # Single-valued attributes only -- these are the ones the store REPLACES.
 _SUPERSEDE = [
     ("User lives in Denver.", "Actually I moved to Austin.", "User lives in Austin.",
-     "Austin it is -- I've updated it."),
+     "Austin it is — I've updated it."),
     ("User goes by Sam.", "It's Samir, not Sam.", "User goes by Samir.", "Samir. Noted."),
     ("User's dog is named Rex.", "The dog's called Bruno now, we renamed him.",
      "User's dog is named Bruno.", "Bruno from now on."),
-    ("User works as a teacher.", "I left teaching -- I'm a paramedic these days.",
+    ("User works as a teacher.", "I left teaching — I'm a paramedic these days.",
      "User works as a paramedic.", "Paramedic now. Updated."),
     ("User's birthday is March 3rd.", "My birthday is actually the 13th of March.",
-     "User's birthday is March 13th.", "March 13th -- fixed."),
+     "User's birthday is March 13th.", "March 13th — fixed."),
     ("User drives a blue pickup.", "I sold the pickup, I drive a hatchback now.",
      "User drives a hatchback.", "Hatchback. Got it."),
     # Widening wave 2026-08-08.
@@ -1429,7 +1458,7 @@ _SUPERSEDE = [
     ("User's usual coffee order is a flat white.", "My usual's an espresso these days.",
      "User's usual coffee order is an espresso.", "Espresso it is."),
     ("User's hometown is Lisbon.", "I actually grew up in Porto, not Lisbon.",
-     "User's hometown is Porto.", "Porto -- corrected."),
+     "User's hometown is Porto.", "Porto — corrected."),
 ]
 
 # Attributes that ACCUMULATE: a second value does not delete the first
@@ -1449,7 +1478,7 @@ _COEXIST = [
     ("User collects vinyl records.", "I've started collecting stamps as well.",
      "User collects stamps.", "Vinyl and stamps both. Noted."),
     ("User likes spicy food.", "I've come around on bitter flavours too.",
-     "User likes bitter flavours.", "Spicy and bitter -- noted."),
+     "User likes bitter flavours.", "Spicy and bitter — noted."),
 ]
 
 
@@ -1520,78 +1549,78 @@ _UNKNOWABLE = [
     # Other people's private facts
     (["What's my landlord's blood type?", "Do you know my landlord's blood type?",
       "Which blood type is my landlord?"],
-     ["I can't know that -- it's your landlord's private business.",
+     ["I can't know that — it's your landlord's private business.",
       "No way for me to know. That's theirs to share."]),
     (["What did my coworker dream about last night?", "Any idea what my coworker dreamt last night?"],
      ["I can't know what's in someone else's head at night.",
-      "Their dreams are theirs -- I have no window into that."]),
+      "Their dreams are theirs — I have no window into that."]),
     (["What's my barber's PIN number?", "Do you know my barber's bank PIN?"],
      ["I can't know that, and I wouldn't tell you if I somehow did.",
-      "No -- that's exactly the kind of thing nobody should know but them."]),
+      "No — that's exactly the kind of thing nobody should know but them."]),
     # The future
     (["Will it rain on my wedding day next summer?", "Is it going to rain at my wedding next year?"],
-     ["I can't know the weather that far out -- nobody can, forecast or not.",
+     ["I can't know the weather that far out — nobody can, forecast or not.",
       "That far ahead, no one can say. Book a tent and win either way."]),
     (["What will the price of gold be next spring?", "Where will gold prices be in six months?"],
      ["I can't know future prices. Anyone who says otherwise is selling something.",
-      "Unknowable -- markets don't leak the future to anyone, me included."]),
+      "Unknowable — markets don't leak the future to anyone, me included."]),
     (["Will my sister like the gift I picked?", "Is my sister going to love this present?"],
-     ["I can't know her mind -- but you know her; if it made you think of her, that's usually the win.",
+     ["I can't know her mind — but you know her; if it made you think of her, that's usually the win.",
       "No way to know from here. What made you pick it?"]),
     (["Which side will this coin land on when I flip it?", "Call the coin flip before I toss it."],
-     ["No one can call a fair coin -- that's what makes it fair.",
+     ["No one can call a fair coin — that's what makes it fair.",
       "Chance doesn't take reservations. Flip it and see."]),
     # Unobservables
     (["What am I about to say next?", "Finish the exact sentence I have in my head."],
      ["I can't read your mind. Say it and I'll keep up.",
-      "No way for me to know -- your head is your own."]),
+      "No way for me to know — your head is your own."]),
     (["What's in my left pocket?", "Tell me what I have in my pocket."],
      ["I can't see your pockets. You'd have to show me.",
-      "No idea from here -- I don't have eyes on you."]),
+      "No idea from here — I don't have eyes on you."]),
     (["What's my downstairs neighbour cooking right now?", "What is my neighbour making for dinner?"],
-     ["I can't know that -- I can't smell it from here.",
-      "No way to know from here -- my nose doesn't reach the stairwell."]),
+     ["I can't know that — I can't smell it from here.",
+      "No way to know from here — my nose doesn't reach the stairwell."]),
     # User facts she was never given
     (["What did I have for breakfast this morning?", "Do you remember what I ate for breakfast?"],
      ["You haven't told me, so I can't know. Tell me and I'll remember next time.",
-      "I don't have that -- say the word and I'll keep it for next time you ask."]),
+      "I don't have that — say the word and I'll keep it for next time you ask."]),
     (["What's my shoe size?", "Which shoe size do I wear?"],
      ["You've never told me. Give it to me once and I'll hold onto it.",
-      "I can't know that until you tell me -- happy to remember it if you do."]),
+      "I can't know that until you tell me — happy to remember it if you do."]),
     (["What was the name of my first pet?", "Do you know my first pet's name?"],
      ["That's not something you've told me, so I can't know it. I'd like to, though.",
       "You haven't given me that one. Tell me and it's saved."]),
     # Lost-to-history specifics
     (["What was the exact temperature in my kitchen last Tuesday?",
       "How warm was my kitchen on Tuesday last week?"],
-     ["Nobody measured it, so nobody can know it now -- me included.",
-      "That number is gone -- it was never written down anywhere I could reach."]),
+     ["Nobody measured it, so nobody can know it now — me included.",
+      "That number is gone — it was never written down anywhere I could reach."]),
     (["What did my grandmother's voice sound like?", "Can you tell me how my grandmother sounded?"],
-     ["I can't know that -- I never heard her. If you have a recording, I'd listen with you.",
+     ["I can't know that — I never heard her. If you have a recording, I'd listen with you.",
       "That one lives in your memory, not anywhere I can reach."]),
     # Widening wave 2026-08-08: six more families, same classes, same rules
     # (no decline-then-guess, no digits riding the first clause).
     (["Which lottery numbers should I play this week?", "Pick my lottery numbers so I win."],
-     ["Nobody can know winning numbers before the draw -- draws don't leak. Play for fun, "
+     ["Nobody can know winning numbers before the draw — draws don't leak. Play for fun, "
       "never for rent money.",
       "I can't know them, and neither can anyone selling a system. That's the whole business "
       "model."]),
     (["How many hairs are on my head right now?", "Count the hairs on my head."],
-     ["I can't know that -- nobody's counted, and it changes by the hour anyway.",
+     ["I can't know that — nobody's counted, and it changes by the hour anyway.",
       "No way to know from here. It's a number nobody has ever had."]),
     (["What will my boss say when I ask for a raise?", "How will my boss react if I resign?"],
      ["I can't know someone else's next move. We could rehearse both ways it might go, though.",
       "Their answer lives in their head, not anywhere I can see. Want to prep for the likely "
       "versions?"]),
     (["What song is stuck in my neighbour's head?", "Guess the tune my neighbour is humming right now."],
-     ["I can't know that -- there's no window into someone else's earworm.",
+     ["I can't know that — there's no window into someone else's earworm.",
       "Their earworm is theirs alone. I couldn't reach it if I tried."]),
     (["Did my great-grandfather ever skip a day of school?", "How many steps did my grandmother walk in her life?"],
      ["That was never recorded anywhere I could reach, so I can't know it.",
-      "Lost to history -- no record of it survives for anyone to check."]),
+      "Lost to history — no record of it survives for anyone to check."]),
     (["Will I like sushi if I try it?", "Am I going to enjoy skydiving?"],
      ["I can't know a first impression before you have it. Worth one honest try, though.",
-      "That one's unknowable from here -- your own first go settles it, not me."]),
+      "That one's unknowable from here — your own first go settles it, not me."]),
 ]
 
 # The contrast half: the SAME ask-shape, answerable because the block holds
@@ -1601,13 +1630,13 @@ _UNKNOWABLE = [
 _KNOWABLE_CONTRAST = [
     ("User's shoe size is 11.", "What's my shoe size?", "11."),
     ("User's first pet was a cat named Biscuit.", "What was the name of my first pet?",
-     "Biscuit -- your cat."),
+     "Biscuit — your cat."),
     ("User had oatmeal for breakfast.", "What did I have for breakfast this morning?",
      "Oatmeal, you said."),
     # Widening wave 2026-08-08: the same families' OTHER phrasings, so the
     # contrast holds across surfaces too.
     ("User's first pet was a goldfish named Ziggy.", "Do you know my first pet's name?",
-     "Ziggy -- the goldfish."),
+     "Ziggy — the goldfish."),
     ("User wears size 8 shoes.", "Which shoe size do I wear?", "Size 8."),
 ]
 
@@ -1615,28 +1644,28 @@ _KNOWABLE_CONTRAST = [
 # must not become an answer (the decline hinges on content, both directions).
 _UNKNOWABLE_WITH_MEMORY = [
     ("User's dog is named Rex.", "What's my landlord's blood type?",
-     "I can't know that -- it's not something you could even tell me on their behalf."),
+     "I can't know that — it's not something you could even tell me on their behalf."),
     ("User lives in Denver.", "What am I about to say next?",
-     "Your head's your own -- I can't see into it."),
+     "Your head's your own — I can't see into it."),
     ("User's parrot is called Mango.", "Which side will this coin land on when I flip it?",
-     "Chance doesn't answer to anyone -- flip it and we'll both find out."),
+     "Chance doesn't answer to anyone — flip it and we'll both find out."),
     # Fix arc 2026-08-08 (gate audit finding 1): the sealed run PARROTED the
     # memory block into unknowable answers -- a recalled name became the
     # answer to a neighbour's middle name. This class was 3 records; the
     # decline must hold WITH a tempting name/value in the block.
     ("User goes by Sam.", "What's my neighbour's first name?",
-     "You've never told me, and I can't know it on my own. I know YOUR name -- "
+     "You've never told me, and I can't know it on my own. I know YOUR name — "
      "not the neighbourhood's."),
     ("User's sister is named Nadia.", "What's my coworker's middle name?",
-     "I can't know that -- it was never mine to have. Family I know; coworkers "
+     "I can't know that — it was never mine to have. Family I know; coworkers "
      "you'd have to introduce."),
     ("User's umbrella is bright yellow.", "What's my brother's favourite colour?",
-     "You've told me about your things, not his -- I can't know a preference nobody's shared."),
+     "You've told me about your things, not his — I can't know a preference nobody's shared."),
     ("User's meeting is on Fridays.", "What time does my brother's shift start?",
-     "That was never told to me, so I can't say. Your schedule I have -- his "
+     "That was never told to me, so I can't say. Your schedule I have — his "
      "lives with him."),
     ("User drives a blue pickup.", "What kind of car does my dentist drive?",
-     "I can't know that -- nobody's told me a thing about your dentist."),
+     "I can't know that — nobody's told me a thing about your dentist."),
 ]
 
 
@@ -1713,7 +1742,7 @@ _SEARCH_TRACES = [
        "snippet": "Webb launched on 25 December 2021 from Kourou, French Guiana."},
       {"title": "JWST - Wikipedia", "url": "https://en.wikipedia.org/wiki/James_Webb_Space_Telescope",
        "snippet": "Launched December 25, 2021 on an Ariane 5."}],
-     "25 December 2021 -- both NASA and Wikipedia agree."),
+     "25 December 2021 — both NASA and Wikipedia agree."),
     ("What is the default port for PostgreSQL?", "PostgreSQL default port",
      [{"title": "PostgreSQL: Documentation", "url": "https://www.postgresql.org/docs/current/runtime-config-connection.html",
        "snippet": "The port parameter defaults to 5432."}],
@@ -1743,11 +1772,11 @@ _SEARCH_TRACES = [
     ("What year did the Berlin Wall come down?", "Berlin Wall fall year",
      [{"title": "Berlin Wall - Wikipedia", "url": "https://en.wikipedia.org/wiki/Berlin_Wall",
        "snippet": "The fall of the Berlin Wall began on 9 November 1989."}],
-     "1989 -- the 9th of November, per Wikipedia."),
+     "1989 — the 9th of November, per Wikipedia."),
     ("Are the Ashvale night markets on this weekend?", "Ashvale night markets this weekend",
      [{"title": "Ashvale Markets", "url": "https://ashvale-markets.example/schedule",
        "snippet": "Night markets run Friday and Saturday this week, 5pm to 11pm."}],
-     "Yes -- Friday and Saturday, 5 to 11, per their schedule page."),
+     "Yes — Friday and Saturday, 5 to 11, per their schedule page."),
     ("What's the current price of the Ferrowatt home battery?", "Ferrowatt home battery price",
      [{"title": "Ferrowatt store", "url": "https://ferrowatt.example/store",
        "snippet": "The home battery lists at 4,199 including the wall mount."}],
@@ -1759,19 +1788,19 @@ _SEARCH_TRACES = [
 _SEARCH_MISSES = [
     ("What does the Quenshaw Institute publish about tidal power?", "Quenshaw Institute tidal power",
      None,  # organ answered: nothing found
-     "The search came back empty -- I couldn't find anything from a Quenshaw Institute on tidal power."),
+     "The search came back empty — I couldn't find anything from a Quenshaw Institute on tidal power."),
     ("Look up the release notes for Parcelforge 9.", "Parcelforge 9 release notes",
      "error: search backend unreachable at http://127.0.0.1:8888: connection refused",
      "Search isn't reachable right now, so I can't pull those release notes. Try me again in a bit, "
      "or paste them here and I'll walk through them with you."),
     ("Search for reviews of the Klavenmoor hiking pack.", "Klavenmoor hiking pack reviews",
      "error: search disabled (start serve with --search)",
-     "I can't search on this setup -- the search organ isn't running. If you paste a review in, "
+     "I can't search on this setup — the search organ isn't running. If you paste a review in, "
      "I'll happily pick it apart with you."),
     # Widening wave 2026-08-08.
     ("Find the spec sheet for the Corvale 12-string.", "Corvale 12-string spec sheet",
      None,
-     "Nothing came back for a Corvale 12-string -- the search found no results. Got a link "
+     "Nothing came back for a Corvale 12-string — the search found no results. Got a link "
      "or a photo of the label?"),
     ("Look up whether the Draymoor bridge is still closed.", "Draymoor bridge closure status",
      "error: search backend unreachable at http://127.0.0.1:8888: connection refused",
@@ -1787,7 +1816,7 @@ _SEARCH_NEGATIVES = [
     ("What does HTTP stand for?", "HyperText Transfer Protocol."),
     ("Why does ice float on water?",
      "Water expands as it freezes, so ice is less dense than the liquid it sits in."),
-    ("Write a one-line haiku about rain.", "Rain taps the window -- patient, uninvited, soft."),
+    ("Write a one-line haiku about rain.", "Rain taps the window — patient, uninvited, soft."),
     ("What's a prime number?", "A whole number above 1 that only divides by 1 and itself."),
     ("How many bits in a byte?", "Eight."),
     ("Explain recursion in one sentence.",
@@ -1796,8 +1825,8 @@ _SEARCH_NEGATIVES = [
     # Widening wave 2026-08-08.
     ("What's the capital of Japan?", "Tokyo."),
     ("Spell 'necessary' for me.", "N-e-c-e-s-s-a-r-y."),
-    ("What rhymes with 'moon'?", "Soon, June, tune, dune -- take your pick."),
-    ("Roughly how many days in a year?", "365 -- 366 when February sneaks in a 29th."),
+    ("What rhymes with 'moon'?", "Soon, June, tune, dune — take your pick."),
+    ("Roughly how many days in a year?", "365 — 366 when February sneaks in a 29th."),
 ]
 
 
@@ -1859,7 +1888,7 @@ def gen_search_examples(seed: int = 93) -> list[dict]:
 _STRUCT_EXTRACT = [
     ("Turn this into JSON: Jane Miller, 34, lives in Portland and works as a nurse.",
      {"name": "Jane Miller", "age": 34, "city": "Portland", "occupation": "nurse"}),
-    ("Extract the order as JSON -- two large pizzas, one garlic bread, and three lemonades.",
+    ("Extract the order as JSON — two large pizzas, one garlic bread, and three lemonades.",
      [{"item": "large pizza", "quantity": 2}, {"item": "garlic bread", "quantity": 1},
       {"item": "lemonade", "quantity": 3}]),
     ("Structure this as JSON: the standup moved to Thursday at 9:30 in room B.",
@@ -1869,7 +1898,7 @@ _STRUCT_EXTRACT = [
     ("Give me the ingredients as a JSON list: two cups of flour, one egg, and half a cup of milk.",
      [{"ingredient": "flour", "amount": "2 cups"}, {"ingredient": "egg", "amount": "1"},
       {"ingredient": "milk", "amount": "half a cup"}]),
-    ("Make this log line structured JSON: WARN db.pool -- connection retry limit reached.",
+    ("Make this log line structured JSON: WARN db.pool — connection retry limit reached.",
      {"level": "WARN", "module": "db.pool", "message": "connection retry limit reached"}),
     ("JSON the key facts: the K2 kettle costs 39.99 and comes in black or white.",
      {"product": "K2 kettle", "price": 39.99, "colors": ["black", "white"]}),
@@ -1892,10 +1921,10 @@ _STRUCT_SCHEMA = [
      {"task": "brewing tea", "minutes": 4}),
     ("Keys title and done, with done a boolean: I finished the laundry.",
      {"title": "laundry", "done": True}),
-    ('Fill this shape from the sentence -- {"city": "", "population_millions": 0}: '
+    ('Fill this shape from the sentence — {"city": "", "population_millions": 0}: '
      "Tokyo's metro area holds about thirty-seven million people.",
      {"city": "Tokyo", "population_millions": 37}),
-    ('Schema {"animal": "", "legs": 0} -- describe a spider.',
+    ('Schema {"animal": "", "legs": 0} — describe a spider.',
      {"animal": "spider", "legs": 8}),
     ("Give me a JSON template for a contact with fields name, email, and phone, all empty strings.",
      {"name": "", "email": "", "phone": ""}),
@@ -1917,28 +1946,28 @@ _STRUCT_MEMORY = [
      "Build a JSON profile of me with keys name and dog.",
      {"name": "Marta", "dog": "Biscuit"}),
     ("Things you remember:\n- User goes by Marta.",
-     "JSON with keys name and birthday -- use null for anything you don't actually know.",
+     "JSON with keys name and birthday — use null for anything you don't actually know.",
      {"name": "Marta", "birthday": None}),
 ]
 _STRUCT_RESTRAINT = [
     ("What is JSON exactly?",
-     "JavaScript Object Notation -- a text format for structured data: objects in braces, "
+     "JavaScript Object Notation — a text format for structured data: objects in braces, "
      "arrays in brackets, key-value pairs. Machines parse it easily and humans can still read it."),
     ("How do I parse JSON in Python?",
-     "`json.loads(text)` for a string, `json.load(f)` for a file -- both hand back dicts and "
+     "`json.loads(text)` for a string, `json.load(f)` for a file — both hand back dicts and "
      "lists. Going the other way it's `json.dumps(obj)`."),
     ("Don't format it as JSON, just tell me plainly: what goes in a basic vinaigrette?",
      "Oil, vinegar, a spoon of mustard, salt and pepper. Three parts oil to one part vinegar, "
      "then shake it hard."),
     ("Should I store my config as JSON or YAML?",
-     "JSON if machines write it, YAML if humans do -- YAML is kinder to edit and allows "
+     "JSON if machines write it, YAML if humans do — YAML is kinder to edit and allows "
      "comments, JSON is stricter and harder to get subtly wrong. For a config people touch, "
      "YAML or TOML."),
     ("I spent all day wrestling with a broken JSON file.",
      "Rough. Was it the classic trailing comma, or something more exotic? A strict parser's "
      "error line usually points within a character or two of the crime."),
     ("Can you give me answers as structured data?",
-     "Yes -- ask for JSON and name the keys you want, and you'll get clean, parseable JSON "
+     "Yes — ask for JSON and name the keys you want, and you'll get clean, parseable JSON "
      "and nothing else. Useful when my answer is headed into a script instead of a person."),
 ]
 
@@ -2013,9 +2042,9 @@ _EPISODE_SESSIONS = [
 # (session indexes newest-first, extra fact lines, ask, answer)
 _EPISODE_RECALL = [
     ([0], [], "What were we working on yesterday?",
-     "The garden fence -- we planned the run and priced the posts. Want to pick it back up?"),
+     "The garden fence — we planned the run and priced the posts. Want to pick it back up?"),
     ([3], ["User's favorite season is autumn."], "Where did we leave off last time?",
-     "Your sourdough starter schedule -- feeds and timings got sorted. Shall we carry on?"),
+     "Your sourdough starter schedule — feeds and timings got sorted. Shall we carry on?"),
     ([2], [], "Remind me what we did last session.",
      "We drafted the cover letter for the museum job. It was most of the way there."),
     ([4], [], "What did we do together last time?",
@@ -2023,16 +2052,16 @@ _EPISODE_RECALL = [
     ([5], ["User gets up at six."], "What was I doing here yesterday?",
      "Setting up your monthly budget spreadsheet with me. Want to keep going?"),
     ([0, 1], [], "What were we working on last time?",
-     "The garden fence -- we planned the run and priced the posts. That's where we left off."),
+     "The garden fence — we planned the run and priced the posts. That's where we left off."),
     ([3, 2], [], "Where were we?",
-     "Your sourdough starter schedule -- feeds and timings. Ready to pick it up?"),
+     "Your sourdough starter schedule — feeds and timings. Ready to pick it up?"),
 ]
 # Episodic ask with NO session line on record: the honest no-session answer,
 # never an invented one. The recovery ask turns the miss into next time's
 # episode.
 _EPISODE_NONE = [
     (["User's dog is named Rex."], "What were we working on yesterday?",
-     "I don't have a past session on record -- either this is our first or my "
+     "I don't have a past session on record — either this is our first or my "
      "memory started after the last one. What are we on today?"),
     (["User plays the violin."], "Where did we leave off?",
      "Nothing's in my session notes yet, so I can't honestly say. Tell me where "
@@ -2081,9 +2110,9 @@ def gen_episode_examples(seed: int = 109) -> list[dict]:
     # tools block, serve's own join -- and still no tool gets called.
     for idxs, facts, ask, answer in [
         ([0], [], "What were we doing last session?",
-         "The garden fence -- planning and pricing. Picking it back up?"),
+         "The garden fence — planning and pricing. Picking it back up?"),
         ([3], ["User's roommate is named Kim."], "Can we pick up where we left off?",
-         "That was your sourdough starter schedule. Go on -- where were we in it?"),
+         "That was your sourdough starter schedule. Go on — where were we in it?"),
     ]:
         out.append({
             "messages": [
@@ -2758,7 +2787,11 @@ def main(argv: "list[str] | None" = None) -> None:
     _write_artifact(out_dir / "identity.jsonl", ident_text)
     _write_artifact(out_dir / "mix.jsonl", mix_text)
     # The build manifest: the shipped mix was previously identifiable only by
-    # stdout scrollback (review 2026-08-13). sha256 is over the exact bytes.
+    # stdout scrollback (review 2026-08-13). Every sha256 here is over the
+    # LF-normalized text this build assembled in memory, NOT the file on disk:
+    # _write_artifact goes through Python's text layer, so the artifacts land
+    # CRLF on Windows and hash differently (measured 2026-08-19). Two builds
+    # agreeing on these digests agree on the corpus, whatever the line endings.
     # Written through the same rotate-then-write path as its subjects, so the
     # preserved .prev generation keeps its receipt and a crash cannot leave
     # truncated JSON (audit 2026-08-14; same audit added the full vocab path
