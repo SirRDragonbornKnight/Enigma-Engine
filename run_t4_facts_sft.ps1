@@ -7,10 +7,13 @@
 #      optimizer this lineage's weights were shaped under.
 #   2. SFT finetune on data/sft/mix.jsonl (125,523 records, baked 2026-08-08)
 #      from step 1's model.pth. The known-good SFT recipe (adamw 2e-5 cosine,
-#      2 epochs); --block 2048 EXPLICIT (the default 1024 silently skips
-#      over-length records); micro-batch 4 x grad-accum 8 keeps the effective
-#      batch at the default 32 with half the per-forward VRAM at the doubled
-#      block.
+#      2 epochs); --block 2048 EXPLICIT -- it overrode the then-default 1024,
+#      which silently skipped over-length records. finetune's OWN default has
+#      been 2048 since the SUNSET flip (finetune_enigma.py --block; this line
+#      corrected 2026-08-22), so the flag now only restates it, and is kept so
+#      the block is stated where the run is read. micro-batch 4 x grad-accum 8
+#      keeps the effective batch at the default 32 with half the per-forward
+#      VRAM at the doubled block.
 #
 # THIS SCRIPT DOES NOT DETACH ITSELF. Run it FROM a scheduled task, or the
 # runs die with the shell that started them (2026-06-27, step 220,190).

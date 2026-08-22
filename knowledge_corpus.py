@@ -1449,7 +1449,13 @@ def _probe_strings() -> list[str]:
     (changing the facts stream's bytes with no error), and one empty q/teach
     string would have matched EVERY line and zeroed the stream, surfacing
     downstream as make_facts' misleading "produced no fact lines" (review
-    2026-08-13)."""
+    2026-08-13).
+
+    Skips "#" comment lines on the rule the other two readers of this file
+    already use (eval_behavior.run and make_sft_data._eval_probe_questions):
+    the dev probe file INVITES annotation, and this reader -- the third --
+    json.loads'd the comment it invites and died on a raw JSONDecodeError,
+    taking the facts stream's whole screen with it."""
     if not _EVAL_PROBES.exists():
         raise SystemExit(
             f"REFUSED: {_EVAL_PROBES} is missing -- generating the facts "
@@ -1458,7 +1464,7 @@ def _probe_strings() -> list[str]:
     probes: list[str] = []
     for line in _EVAL_PROBES.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if not line:
+        if not line or line.startswith("#"):
             continue
         rec = json.loads(line)
         for s in [rec.get("q", "")] + list(rec.get("teach") or []):

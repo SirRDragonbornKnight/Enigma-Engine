@@ -564,6 +564,20 @@ def main():
             f"are versioned, never rebuilt in place. Name a NEW bin (the next "
             f"free version suffix) or delete the old one deliberately first."
         )
+    # The SIDECAR counts as the artifact too (make_facts_pretrain_data's
+    # refuse_existing_output closed the identical hole). The two refusals above
+    # only decide WHICH file the metadata lands on, and this one only fires
+    # when the bin is gone -- the shape a moved-aside .bin leaves behind. The
+    # write at the end of the run is unconditional, so a corpus that still
+    # exists elsewhere loses its dtype/vocab/eos/extents receipt in silence.
+    if out_meta.exists():
+        raise SystemExit(
+            f"refusing to overwrite {out_meta} -- the sidecar is a corpus's "
+            f"receipt (dtype, vocab, eos, source extents) and this run would "
+            f"rewrite it in place, even though its .bin is not here. Name a NEW "
+            f"bin whose .json lands elsewhere, or move the old sidecar aside "
+            f"deliberately first."
+        )
 
     from enigma_engine.core.tokenizer import get_tokenizer
 

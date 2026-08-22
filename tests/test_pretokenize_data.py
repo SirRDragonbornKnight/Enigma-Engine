@@ -256,6 +256,38 @@ def test_refuses_to_rebuild_any_existing_bin_in_place(monkeypatch, corpus, tmp_p
     assert fresh.exists(), "a new version name must still build"
 
 
+def test_refuses_an_orphan_sidecar_whose_bin_was_moved_aside(monkeypatch, corpus, tmp_path):
+    """The SIDECAR counts as the artifact too (make_facts_pretrain_data's
+    refuse_existing_output settled this shape). Every refusal above needs the
+    BIN to be present, so a corpus whose .bin was moved aside for the rebuild
+    left its .json standing -- and out_meta.write_text at the end of the run is
+    unconditional, so the dtype/vocab/eos/extents receipt for a corpus that
+    still exists elsewhere was overwritten in silence."""
+    root, sources, vocab = corpus
+    orphan = tmp_path / "corpora" / "tokens_v9z.json"
+    orphan.parent.mkdir()
+    receipt = '{"dtype": "uint32", "total_tokens": 123}'
+    orphan.write_text(receipt, encoding="utf-8")
+    monkeypatch.setattr(pd, "SOURCE_DIRS", sources)
+    monkeypatch.setattr(pd, "SE_DIR", tmp_path / "_no_stackexchange")
+    monkeypatch.setattr(sys, "argv",
+                        ["pretokenize_data.py", "--output-bin",
+                         str(orphan.with_suffix(".bin")),
+                         "--vocab", str(vocab), "--dtype", "uint16"])
+    with pytest.raises(SystemExit, match="the sidecar is a corpus's receipt"):
+        pd.main()
+    assert orphan.read_text(encoding="utf-8") == receipt, "the sidecar was rewritten"
+    assert not orphan.with_suffix(".bin").exists(), "the refused run wrote a bin"
+
+    # ...and a name whose .json is free still builds, sidecar and all.
+    fresh = orphan.parent / "tokens_v9w.bin"
+    monkeypatch.setattr(sys, "argv",
+                        ["pretokenize_data.py", "--output-bin", str(fresh),
+                         "--vocab", str(vocab), "--dtype", "uint16"])
+    pd.main()
+    assert fresh.exists() and fresh.with_suffix(".json").exists()
+
+
 def test_special_literals_are_scrubbed_at_consume_time(monkeypatch, corpus, tmp_path):
     """~96 GB of source text predates the collectors' fetch-time sanitizer and
     a sampled scan found real literals in it ("List<A>" carves the actual <A>

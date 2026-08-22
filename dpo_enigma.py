@@ -331,11 +331,18 @@ def main() -> None:
         if not line:
             continue
         p = json.loads(line)
+        sysblk = p.get("system") or None
+        # SYSTEM turns are PROMPT SIDE -- the rule make_sft_data's probe_screen
+        # and finetune_enigma's load_examples both file them under. The ask
+        # alone was handed to the guard, so a sealed probe pasted into a memory
+        # block reached the weights unrefused, and the memory_recall pairs are
+        # built entirely of that shape.
         prompts.append(p["prompt"])
+        if sysblk:
+            prompts.append(sysblk)
         # The graded sides are advisory, not blocking: an answer legitimately
         # shares a question's content words (see refuse_if_leaky).
         answers += [x for x in (p.get("chosen"), p.get("rejected")) if x]
-        sysblk = p.get("system") or None
         c = _render(tokenizer, p["prompt"], p["chosen"], args.block, sysblk)
         r = _render(tokenizer, p["prompt"], p["rejected"], args.block, sysblk)
         if c is None or r is None:

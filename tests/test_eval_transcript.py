@@ -923,6 +923,42 @@ def test_a_changed_offering_regime_is_named_in_the_drift_warning(capsys):
     assert "capabilities differ" not in capsys.readouterr().out
 
 
+def test_a_missing_capabilities_record_says_so_instead_of_skipping(capsys):
+    """The drift check needs BOTH sides to have a capabilities record. When one
+    is absent it can conclude nothing -- and saying nothing reads on the
+    scorecard exactly like "checked, same server", which is the fail-open
+    complement of the drift WARN above. An older transcript predating the
+    stamp is the ordinary way to land here."""
+    from pathlib import Path as _P
+
+    by_cat = {"factual": [True]}
+    base_cond = {"probe_sha256": "X", "temperature": TEMP, "max_tokens": MAXTOK}
+    base_card = {"by_category": {"factual": {"hits": 1, "n": 1}},
+                 "overall_hits": 1, "overall_n": 1, "sealed_gate_run": False}
+    conditions = {"probe_sha256": "X", "temperature": TEMP, "max_tokens": MAXTOK,
+                  "capabilities": {"instruct": True, "builtin_offering": "intent-gated"},
+                  "model_checkpoint": {}}
+    eval_behavior._compare_to_baseline(_P("base.jsonl"), base_cond, base_card,
+                                       conditions, by_cat, 1, 1, False)
+    out = capsys.readouterr().out
+    assert "no server capabilities recorded for baseline" in out
+    assert "CANNOT be checked" in out
+
+    # a capabilities record holding only the excluded memory_dir is just as
+    # blank to this check, and both sides blank names both
+    eval_behavior._compare_to_baseline(
+        _P("base.jsonl"), dict(base_cond, capabilities={"memory_dir": "a"}), base_card,
+        dict(conditions, capabilities={"memory_dir": "b"}), by_cat, 1, 1, False)
+    assert "recorded for baseline and this run" in capsys.readouterr().out
+
+    # ...and two runs with matching records say nothing at all about capabilities
+    same = dict(conditions, capabilities=dict(conditions["capabilities"]))
+    eval_behavior._compare_to_baseline(
+        _P("base.jsonl"), dict(base_cond, capabilities=dict(conditions["capabilities"])),
+        base_card, same, by_cat, 1, 1, False)
+    assert "capabilities" not in capsys.readouterr().out
+
+
 def test_model_identity_tolerates_foreign_bodies(monkeypatch):
     """Pointing --base-url at a non-Enigma OpenAI-ish endpoint must yield {}
     ('target could not say'), never a crash after the store was cleared."""

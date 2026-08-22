@@ -103,7 +103,12 @@ class Searcher:
             if not isinstance(r, dict):
                 continue
             title = _one_line(r.get("title"))
-            hit_url = (r.get("url") or "").strip()
+            # Coerced the same way the title is: `.strip()` on a truthy non-str
+            # url raised AttributeError, which is not a SearchError, so it blew
+            # past serve's _apply_search handler and answered 500 instead of
+            # degrading to "nothing found". A malformed result is skipped here,
+            # never allowed to take the whole query down.
+            hit_url = _one_line(r.get("url"))
             if not title or not hit_url:
                 continue
             hits.append({

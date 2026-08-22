@@ -213,6 +213,61 @@ def test_every_authored_record_survives_the_probe_screen():
         assert not gone, f"{gen.__name__} authored probe collisions: {gone}"
 
 
+# The math asks the SEALED screen is allowed to hold, enumerated so a new dead
+# record fails loudly instead of joining a tolerated pile. "What's 13 squared?"
+# reduces to exactly one sealed probe's content words AND reproduces them in
+# order, so the quotation tier fires: every phrasing that keeps the operand
+# next to "squared" quotes that probe, and the ones that do not ("the square
+# of 13") teach the probe's own subject through a reworded ask -- a decision
+# about holdout CONTENT, which is the user's, not the builder's.
+SCREENED_MATH_ASKS = ("What's 13 squared?",)
+
+
+def test_the_math_and_tool_corpora_survive_the_sealed_probe_screen():
+    """The sealed tier over the two corpora the test above never covered.
+
+    gen_math and gen_tool were excluded from that list, and the exclusion cost
+    65 math records and 8 tool records: the guard drops length-1 words, so
+    "What is 4 times 9?" reduced to the lone word "times" and scored a perfect
+    jaccard against any sealed probe that reduced the same way, while
+    "good morning" was sealed as a word run that three tool asks quoted. All 73
+    were authored, screened out at build time, and never trained -- since
+    2026-08-08, silently, because every generator-level test stayed green
+    (audit 2026-08-22).
+
+    Only SCREENED_MATH_ASKS may be held, and each entry must still be held:
+    a stale allowlist is the same silence in a smaller box."""
+    from eval_leak_guard import LockedProbeGuard
+    from make_sft_data import _eval_probe_questions, probe_screen
+
+    eval_qs = _eval_probe_questions()
+    locked = LockedProbeGuard.load()
+    assert len(locked), "no sealed probes -- this test would pass on an empty guard"
+    prompt_side, held_out = probe_screen(eval_qs, locked)
+
+    def collisions(rec):
+        # The offending STRINGS, not the whole prompt side: a tool record's
+        # system block is the tools preamble and would bury the ask that
+        # actually collided.
+        return [t for t in prompt_side(rec)
+                if t.strip().lower() in eval_qs or locked.leaks(t)]
+
+    for gen, allowed in ((gen_math_examples, SCREENED_MATH_ASKS),
+                         (gen_tool_examples, ())):
+        recs = gen()
+        gone = sorted({t for r in recs if held_out(r) for t in collisions(r)})
+        assert not [t for t in gone if t not in allowed], (
+            f"{gen.__name__} authored records the sealed screen holds out of "
+            f"training: {[t for t in gone if t not in allowed]}"
+        )
+        for ask in allowed:
+            assert ask in gone, (
+                f"{gen.__name__} no longer emits {ask!r} as a held record -- "
+                "drop it from SCREENED_MATH_ASKS rather than tolerating a "
+                "residue that is no longer there"
+            )
+
+
 def test_a_dev_probe_is_held_out_wherever_it_sits_on_the_prompt_side():
     """The dev half of the screen must cover the SAME unit as the locked half.
 
@@ -1050,3 +1105,61 @@ def test_builder_defaults_match_the_adopted_lineage():
     # 16366 = the adopted checkpoint's recorded vocab_size (enigma_v2_sft2).
     assert make_sft_data.default_vocab_path() == vocab_file_for_size(16366), \
         "a bare build no longer measures fit against the serving vocab"
+
+
+def test_the_fast_path_is_bounded_by_message_count(monkeypatch):
+    """The +64 margin buys TEMPLATE room, and the template scales with the
+    number of MESSAGES: <|im_start|> + the role line + <|im_end|> + a newline
+    costs 7 ids worst-case on the default vocab and 6 on the v2 builder vocab,
+    over a fixed BOS + document EOS of 2. Eight messages fit inside 64 (58) and
+    nine do not (65), so a long thin ~1-token-per-char record false-fitted and
+    the trainer then silently SKIPPED it as over-length -- the exact class this
+    function exists to prevent.
+
+    Counted through render_training itself: "took the fast path" means the real
+    renderer was never asked, which no assertion on the returned counts can
+    distinguish from a lucky measurement."""
+    import enigma_engine.core.chat_format as cf
+
+    real = cf.render_training
+    calls = []
+
+    def counted(tok, msgs, **kw):
+        calls.append(len(msgs))
+        return real(tok, msgs, **kw)
+
+    monkeypatch.setattr(cf, "render_training", counted)
+
+    def turns(n, per_len):
+        # "qzjx" carves one token per char under BOTH live vocabs, so char count
+        # IS token count and the fast path's inequality is exercised at its edge.
+        return json.dumps({"messages": [
+            {"role": "user" if i % 2 == 0 else "assistant",
+             "content": ("qzjx" * 30)[:per_len]} for i in range(n)]})
+
+    def run(line):
+        calls.clear()
+        return fit_mix_to_block([line], block=2048), len(calls)
+
+    short = json.dumps({"messages": [{"role": "user", "content": "Hi."},
+                                     {"role": "assistant", "content": "Hello."}]})
+    assert run(short) == ((([short], 0, 0, 0)), 0), \
+        "a plain 2-turn record must still skip the renderer"
+
+    # The boundary itself: eight messages are provable, nine are measured.
+    (kept8, *_), n8 = run(turns(8, 100))
+    assert len(kept8) == 1 and n8 == 0, "eight messages must still take the fast path"
+    (kept9, *_), n9 = run(turns(9, 100))
+    assert len(kept9) == 1 and n9 == 1, "nine messages must take the real render"
+
+    # The repro: 40 turns x 49 chars = 1960, so 1960 + 64 = 2024 clears the
+    # 2049 limit while the real render is 2222 (default vocab) / 2182 (v2).
+    # A messages-schema record has no prompt to trim, so it is DROPPED.
+    long_thin = turns(40, 49)
+    contents = [m["content"] for m in json.loads(long_thin)["messages"]]
+    assert sum(len(c) for c in contents) + 64 <= 2049, \
+        "the record no longer qualifies for the fast path -- the test proves nothing"
+    (kept40, trimmed, dropped, leaked), n40 = run(long_thin)
+    assert n40 == 1, "the long thin record never reached the real render"
+    assert (kept40, trimmed, dropped, leaked) == ([], 0, 1, 0), \
+        "an over-long conversation passed the fast path and would be skipped at load"

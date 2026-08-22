@@ -73,6 +73,52 @@ def test_the_creator_comes_from_the_pack_manifest(tmp_path, write_persona_pack):
     assert _loose_warns(probe), "the default persona has no such creator to exempt"
 
 
+def _memory_probe(path, teach):
+    """One memory probe carrying the teach line under test. The recall
+    question and its want share no wording with the teach line, so the echo
+    WARN cannot fire and be mistaken for a teach-line finding."""
+    path.write_text(
+        json.dumps({"category": "memory", "teach": [teach],
+                    "q": "What did I tell you earlier?", "want_any": ["bruno"],
+                    "deny_any": []}) + "\n",
+        encoding="utf-8", newline="\n")
+    return path
+
+
+def _teach_errors(path):
+    errors, _warns = validate_probes.check(path, skip_leak=True)
+    return [e for e in errors if "teach line" in e]
+
+
+def test_a_teach_line_whose_forget_cue_outranks_the_save_is_refused(tmp_path):
+    """serve offers ONE of the memory tools per turn and forget wins the tie
+    (`_looks_memorable` is gated on `not _looks_forgettable`), so a teach line
+    carrying both cues arms the deletion tool: the fact is never stored and the
+    sealed recall probe scores 0 forever. Both lines below match `_MEMORABLE`,
+    which is the whole trap -- the old check blessed them and its error text
+    promised the opposite."""
+    both = _memory_probe(tmp_path / "both.jsonl", "Scratch that -- my dog is Bruno.")
+    found = _teach_errors(both)
+    assert found, "a teach line that gets forget offered must not be blessed"
+    assert "FORGET cue" in found[0] and "outranks" in found[0]
+
+    # "no longer true" is the same collision wearing an explicit remember ask
+    superseding = _memory_probe(
+        tmp_path / "superseding.jsonl",
+        "Remember, my address is no longer true -- I live at 5 Elm St now.")
+    assert _teach_errors(superseding)
+
+
+def test_teach_lines_that_really_do_arm_the_save_stay_clean(tmp_path):
+    """The precedence check must cost nothing to the two shapes the error text
+    tells an author to use."""
+    plain = _memory_probe(tmp_path / "plain.jsonl", "My favorite color is green.")
+    asked = _memory_probe(tmp_path / "asked.jsonl", "Remember that my sister lives in Ohio.")
+
+    assert _teach_errors(plain) == []
+    assert _teach_errors(asked) == []
+
+
 def test_her_own_locked_set_validates_identically_either_way():
     """The default case, on the real artifact: passing her persona explicitly
     and passing nothing must produce the same findings, or "unchanged for

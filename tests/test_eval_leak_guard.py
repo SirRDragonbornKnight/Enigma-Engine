@@ -405,6 +405,100 @@ def test_the_trainer_sees_tool_call_arguments_and_system_turns(tmp_path, monkeyp
     assert any(probe in s for s in got["asks"]), "a system turn is prompt side, not advisory"
 
 
+def _tiny_instruct_ckpt(path):
+    """A loadable INSTRUCT checkpoint, small enough to build per test.
+
+    The vocab is the REAL table: dpo_enigma picks its tokenizer by the
+    checkpoint's recorded vocab_size, and a toy size has no file to resolve."""
+    import torch
+
+    from enigma_engine.core.chat_format import CHAT_FORMAT_NAME
+    from enigma_engine.core.model import Enigma
+    from enigma_engine.core.model_presets import ForgeConfig
+    from enigma_engine.core.tokenizer import get_tokenizer
+
+    cfg = ForgeConfig(vocab_size=len(get_tokenizer("bpe").token_to_id), dim=32,
+                      n_layers=2, n_heads=2, max_seq_len=256, dropout=0.0,
+                      use_gradient_checkpointing=False)
+    torch.manual_seed(0)
+    torch.save({"model_state_dict": Enigma(cfg).state_dict(), "config": cfg.to_dict(),
+                "meta": {"chat_format": CHAT_FORMAT_NAME}, "step": 1}, path)
+    return path
+
+
+def _dpo_argv(ckpt, data, out):
+    return ["dpo_enigma.py", "--init", str(ckpt), "--out", str(out),
+            "--data", str(data), "--block", "256"]
+
+
+def test_the_dpo_trainer_sees_the_system_block_as_an_ASK(tmp_path, monkeypatch):
+    """A DPO record's ``system`` slot is the served memory block, and the
+    memory_recall pairs are built entirely of that shape. Only ``prompt`` was
+    handed to the guard, so a sealed fact pasted into a block reached the
+    weights with nothing refusing it -- the SFT twin above, in DPO's clothes.
+
+    This drives the REAL main() and captures what it hands the guard; the
+    finetune version of this test learned the hard way that a locally rebuilt
+    projection passes happily with the bug reintroduced."""
+    import dpo_enigma
+
+    fact = "The Vantill observatory logged nine comets in 1993."
+    data = tmp_path / "pairs.jsonl"
+    data.write_text(json.dumps({
+        "prompt": "How many did they log?", "chosen": "Nine.",
+        "rejected": "I can't know that.",
+        "system": f"Things you remember:\n- {fact}", "class": "memory_recall",
+    }) + "\n", encoding="utf-8")
+
+    seen = {}
+
+    def capture(texts, source, manifest=None, advisory=None):
+        seen["asks"] = list(texts)
+        seen["answers"] = list(advisory or [])
+        raise SystemExit("captured")  # stop before the run touches a GPU
+
+    monkeypatch.setattr(dpo_enigma, "refuse_if_leaky", capture)
+    monkeypatch.setattr("sys.argv", _dpo_argv(
+        _tiny_instruct_ckpt(tmp_path / "tiny.pth"), data, tmp_path / "run"))
+    with pytest.raises(SystemExit, match="captured"):
+        dpo_enigma.main()
+
+    assert any(fact in s for s in seen["asks"]), \
+        "the system block is prompt side, not advisory"
+    assert not any(fact in s for s in seen["answers"]), \
+        "the block must REFUSE, not merely warn"
+
+
+def test_the_dpo_trainer_refuses_a_pair_whose_BLOCK_carries_a_sealed_probe(
+        tmp_path, monkeypatch):
+    """The refusal end to end, with the ask itself clean: the only string that
+    collides is the memory block, so a pass here can only mean the block went
+    unscreened."""
+    import dpo_enigma
+
+    fact = "The Vantill observatory logged nine comets in 1993."
+    manifest = _manifest_file(tmp_path, [fact])
+    ask = "How many did they log?"
+    assert not LockedProbeGuard.load(manifest).leaks(ask), \
+        "the ask must be clean, or the refusal proves nothing about the block"
+
+    data = tmp_path / "pairs.jsonl"
+    data.write_text(json.dumps({
+        "prompt": ask, "chosen": "Nine.", "rejected": "I can't know that.",
+        "system": f"Things you remember:\n- {fact}", "class": "memory_recall",
+    }) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(dpo_enigma, "screening_manifest", lambda arg: manifest)
+    monkeypatch.setattr("sys.argv", _dpo_argv(
+        _tiny_instruct_ckpt(tmp_path / "tiny.pth"), data, tmp_path / "run"))
+    with pytest.raises(SystemExit) as err:
+        dpo_enigma.main()
+    msg = str(err.value)
+    assert "REFUSING to train" in msg
+    assert "1 of 2 ASKS" in msg, msg  # the prompt AND the block were counted
+    assert "vantill" not in msg.lower()  # never quote sealed content back
+
+
 def test_empty_guard_is_a_noop():
     g = LockedProbeGuard(None)
     assert len(g) == 0

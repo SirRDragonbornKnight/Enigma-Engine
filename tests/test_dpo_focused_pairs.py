@@ -177,3 +177,30 @@ def test_render_puts_the_system_block_in_front_of_the_prompt():
                       "Things you remember:\n- User's dog is named Rex.")
     assert bare and withsys
     assert len(withsys[0]) > len(bare[0]), "system block did not reach the render"
+
+
+def test_a_counterweight_is_screened_on_the_BLOCK_it_attaches_not_just_the_ask():
+    """These are the only pairs that carry a ``system`` slot, and the build
+    screened the ask alone. A sealed fact sitting in the block would then pass
+    the build and REFUSE at training time -- a landmine the "rebuild the
+    artifact" advice cannot clear, because a rebuild re-creates it.
+
+    The seal here is a line the generator itself wrote, never sealed
+    plaintext, and the ask is asserted clean so the drop can only come from
+    the block."""
+    from eval_leak_guard import seal
+
+    before = gen_memory_counterweights(eval_qs=set(), locked=LockedProbeGuard(None))
+    victim = before[0]
+    # The OTHER line of the victim's block: the one this ask is not about.
+    other = [ln[2:] for ln in victim["system"].splitlines()
+             if ln.startswith("- ") and ln[2:] not in victim["chosen"]][0]
+    guard = LockedProbeGuard(seal([other]))
+    assert not guard.leaks(victim["prompt"]), "the ask must be clean"
+    assert guard.leaks(victim["system"]), "the seal must reach the block"
+
+    after = gen_memory_counterweights(eval_qs=set(), locked=guard)
+    assert not [r for r in after
+                if r["prompt"] == victim["prompt"] and r["system"] == victim["system"]], \
+        "a pair whose block carries a sealed probe was still built"
+    assert after, "the screen dropped the whole corpus, not the colliding pairs"

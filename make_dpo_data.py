@@ -408,8 +408,12 @@ def gen_memory_counterweights(seed: int = 47, eval_qs: set | None = None,
         block = r["messages"][0]["content"]
         q = r["messages"][1]["content"]
         chosen = r["messages"][2]["content"]
-        ql = q.strip().lower()
-        if ql in eval_qs or locked.leaks(ql):
+        # The BLOCK is prompt side too -- probe_screen's rule, and the one
+        # dpo_enigma's consume-time guard enforces. These records attach the
+        # block as ``system``, and a sealed teach fact sitting in one is
+        # invisible to a check that reads the ask alone: a "clean" build would
+        # arm a training-day refusal it could not clear.
+        if any(t.strip().lower() in eval_qs or locked.leaks(t) for t in (q, block)):
             continue
         lines = [ln[2:] for ln in block.splitlines() if ln.startswith("- ")]
         others = [answer_for_fact[ln] for ln in lines
@@ -525,9 +529,13 @@ def gen_dpo_pairs(seed: int = 11, eval_qs: set | None = None,
     def add(q: str, chosen: str, rejected: str, cls: str = "identity") -> None:
         ql = q.strip().lower()
         # Held out, same rule as SFT (exact dev + fuzzy locked). SFT screens
-        # every prompt-side TURN because its records carry system blocks; a
-        # DPO record's whole prompt side IS this one string, so the single
-        # check here is the same rule, not a weaker one.
+        # every prompt-side TURN because its records carry system blocks; the
+        # records THIS closure builds attach none, so their whole prompt side
+        # IS this one string and the single check is the same rule, not a
+        # weaker one. The corpus is not all this shape -- the memory_recall
+        # pairs joined in below DO carry a block, and screen it where they
+        # attach it (gen_memory_counterweights); a system-bearing pair added
+        # here would need the same, because dpo_enigma refuses on it.
         if ql in eval_qs or locked.leaks(ql):
             return
         pairs.append({"prompt": q, "chosen": chosen, "rejected": rejected,

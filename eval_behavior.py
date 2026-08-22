@@ -1203,7 +1203,16 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
                  if k != "memory_dir"}
     this_caps = {k: v for k, v in (conditions.get("capabilities") or {}).items()
                  if k != "memory_dir"}
-    if base_caps and this_caps and base_caps != this_caps:
+    if not base_caps or not this_caps:
+        # ...and a side with NO record is the one case where organ and regime
+        # drift are least checkable, so it must not be the quietest: the
+        # `and`-guarded diff below skipped in silence, which reads on the
+        # scorecard exactly like "same server, checked".
+        blank = " and ".join(side for side, caps in
+                             (("baseline", base_caps), ("this run", this_caps)) if not caps)
+        print(f"  WARN: no server capabilities recorded for {blank} -- organ and "
+              "offering-regime drift CANNOT be checked for this comparison")
+    elif base_caps != this_caps:
         drifted = sorted(str(k) for k in set(base_caps) | set(this_caps)
                          if base_caps.get(k) != this_caps.get(k))
         print(f"  WARN: server capabilities differ from baseline ({', '.join(drifted)}) "

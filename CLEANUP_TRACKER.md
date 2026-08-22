@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1259 passed on ENIGMAPC (2026-08-22, paired with the 2026-08-20 gate-flip audit-riders commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1270 passed on ENIGMAPC (2026-08-22, paired with the 2026-08-22 full-audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -277,6 +277,17 @@ Deleted after a three-agent adversarial audit verified every claim
    tests are the `builtin_offering` stamp pin, availability-vs-offering and
    the regime-drift WARN, in `test_serve_enigma.py` and
    `test_eval_transcript.py`.
+   **1259 -> 1270 is the 2026-08-22 full-audit fix wave** -- the sealed
+   authored-to-clear pin for the math/tool corpora in
+   `test_sft_regen_shapes.py`, 2 teach-line forget-precedence tests in
+   `test_validate_probes.py` and the missing-capabilities WARN in
+   `test_eval_transcript.py`; the other 7 ride the trainer/data fixes --
+   DPO system-block screening build+consume (`test_eval_leak_guard.py`
+   +2, `test_dpo_focused_pairs.py` +1), the commented-probe-file reader
+   (`test_knowledge_data.py`), search url coercion
+   (`test_search_organ.py`), the pretokenize sidecar refusal
+   (`test_pretokenize_data.py`) and the fit-mix fast-path bound back in
+   `test_sft_regen_shapes.py`.
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

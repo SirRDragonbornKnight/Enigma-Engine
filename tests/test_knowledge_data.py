@@ -220,3 +220,40 @@ def test_low_quality_gate_drops_junk():
     # Profanity is NOT junk -- she may use any type of language (user
     # ruling 2026-07-15); only structural garbage gets dropped.
     assert not _is_low_quality(rec("Well fuck that noise, the build is green."))
+
+
+def test_a_commented_dev_probe_file_reads_the_same_through_the_facts_screen(
+        tmp_path, monkeypatch):
+    """The THIRD reader of behavior_probes.jsonl. eval_behavior.run and
+    make_sft_data._eval_probe_questions both skip `#` comment lines -- the dev
+    file invites annotation -- while knowledge_corpus._probe_strings json.loads'd
+    every non-blank line, so the same comment killed the screen that keeps the
+    facts stream off the held-out probes, with a raw JSONDecodeError.
+
+    Comments must contribute NOTHING and cost NOTHING: the strings this reader
+    keeps are the strings make_sft_data's reader keeps."""
+    import json
+
+    import knowledge_corpus
+    import make_sft_data
+
+    rows = [
+        {"category": "identity", "q": "Which observatory catalogued Vantill-9?",
+         "want_any": ["never"]},
+        {"category": "memory", "q": "What did I name my telescope?",
+         "teach": ["I named my telescope Vantill."], "want_any": ["vantill"]},
+    ]
+    probes = tmp_path / "behavior_probes.jsonl"
+    probes.write_text(
+        "# retired probe: superseded by the locked set\n"
+        + "\n".join(json.dumps(r) for r in rows) + "\n"
+        + "   # an indented comment is still a comment\n"
+        + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(knowledge_corpus, "_EVAL_PROBES", probes)
+    monkeypatch.setattr(make_sft_data, "EVAL_PROBES", probes)
+
+    expected = {r["q"].strip().lower() for r in rows}
+    expected |= {f.strip().lower() for r in rows for f in r.get("teach", [])}
+    assert set(knowledge_corpus._probe_strings()) == expected
+    assert set(knowledge_corpus._probe_strings()) == _eval_probe_questions()

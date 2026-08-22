@@ -740,7 +740,12 @@ def test_capabilities_reports_availability_not_the_offering(monkeypatch, tmp_pat
     """`builtins` answers "what can this server EXECUTE", which is a different
     question from what she is offered on a given turn (that is _builtin_tools,
     gated on intent). One owner for the organ filter -- _available_builtins --
-    so a report and a runtime cannot drift."""
+    so a report and a runtime cannot drift.
+
+    The two single-organ rows are what makes the WIRING load-bearing: with
+    voice and image-gen only ever up or down together, keying speak on PAINTER
+    (or imagine on SPEAKER) reports the same list either way and every row
+    passes a crossed filter."""
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr(serve, "INSTRUCT", True)
@@ -751,6 +756,8 @@ def test_capabilities_reports_availability_not_the_offering(monkeypatch, tmp_pat
     for memory, speaker, painter, reported in (
         (None, None, None, ["calculate"]),
         (store, None, None, ["calculate", "forget", "remember"]),
+        (None, object(), None, ["calculate", "speak"]),
+        (None, None, object(), ["calculate", "imagine"]),
         (None, object(), object(), ["calculate", "imagine", "speak"]),
         (store, object(), object(),
          ["calculate", "forget", "imagine", "remember", "speak"]),

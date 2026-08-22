@@ -34,6 +34,15 @@ from eval_leak_guard import _KEY_ORDER as _SEAL_KEY_ORDER  # noqa: E402
 from eval_leak_guard import _content_words as _seal_content_words  # noqa: E402
 from eval_leak_guard import LockedProbeGuard, seal as _seal_texts  # noqa: E402
 from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
+# The forget side of serve's offer precedence, in its module-level spelling.
+# The live gates (`_looks_forgettable`/`_looks_memorable`) read serve's MEMORY
+# global, which is None in an un-booted import and would make every one of
+# these checks vacuously False; the regexes themselves are MEMORY-independent.
+from serve_enigma import (  # noqa: E402
+    _FORGET_NEGATED,
+    _FORGET_NOT_A_REQUEST,
+    _FORGETTABLE,
+)
 
 # Gated categories PLUS the ones declared measured-but-ungated. A category
 # outside both is a typo: it would be reported informationally and decide
@@ -74,6 +83,21 @@ def _distinctive_names(persona: Persona) -> set[str]:
     `extra`) rather than assumed."""
     creator = persona.extra.get("creator", ENIGMA_CREATOR)
     return {persona.name.strip().lower(), str(creator).strip().lower()}
+
+
+def _forget_outranks_save(line: str) -> bool:
+    """True when a booted serve would offer FORGET for this teach line.
+
+    serve's `_looks_memorable` is gated on `not _looks_forgettable(text)`, so a
+    line carrying both cues arms the deletion tool and never the save -- the
+    fact is not stored, and the recall probe that depends on it scores 0
+    forever. Mirrors that gate's un-negated `_FORGETTABLE` hit exactly, minus
+    the MEMORY check the import note above explains."""
+    return (
+        not _FORGET_NEGATED.search(line)
+        and not _FORGET_NOT_A_REQUEST.search(line)
+        and bool(_FORGETTABLE.search(line))
+    )
 
 
 def _words(text: str) -> set[str]:
@@ -413,6 +437,12 @@ def check(path: Path, skip_leak: bool = False,
                     errors.append(
                         f"{where}: teach line {line!r} never offers the save tool, so the fact is "
                         'never stored and recall CANNOT pass. Use "My X is Y." or "Remember, ..."'
+                    )
+                elif _forget_outranks_save(line):
+                    errors.append(
+                        f"{where}: teach line {line!r} carries a FORGET cue, which outranks the "
+                        "save offer at serve -- forget is offered, the fact is never stored and "
+                        'recall CANNOT pass. Drop the cue and state the fact plainly: "My X is Y."'
                     )
             for key in want:
                 if _words(key) <= q_words and _words(key):

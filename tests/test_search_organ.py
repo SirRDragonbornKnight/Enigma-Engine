@@ -71,6 +71,26 @@ def test_malformed_hits_are_skipped_not_fatal():
     assert [h["title"] for h in s.query("q")] == ["Real"]
 
 
+def test_a_non_string_url_degrades_instead_of_escaping_as_an_AttributeError():
+    """`(r.get("url") or "").strip()` raised AttributeError on a truthy non-str
+    url. That is not a SearchError, and serve's _apply_search catches
+    SearchError only, so one malformed backend row answered 500 on the
+    non-stream path instead of degrading honestly. The title beside it was
+    already coerced; the url is now coerced the same way, and a row that
+    coerces to nothing is skipped like every other malformed row."""
+    for bad in (12345, ["https://x"], {"href": "https://x"}, True):
+        raw = [{"title": "Bad", "url": bad, "content": "c"},
+               {"title": "Real", "url": "https://real", "content": "fine"}]
+        s = Searcher(fetch=lambda url: _searxng_body(raw))
+        hits = s.query("q")  # must not raise
+        assert "Real" in [h["title"] for h in hits], bad
+        assert all(isinstance(h["url"], str) for h in hits), bad
+
+    # ...and a url that is only whitespace is still nothing, as before.
+    s = Searcher(fetch=lambda url: _searxng_body([{"title": "T", "url": "   "}]))
+    assert s.query("q") == []
+
+
 def test_zero_hits_is_a_valid_answer_not_an_error():
     """"Nothing found" and "backend down" must stay distinguishable, or an
     outage trains as settled absence."""

@@ -135,7 +135,11 @@ TOOLS = [
         [
             ("Say hello to my friend Sam.", {"text": "Hello Sam, lovely to meet you!"}, "ok", "Said it out loud — I hope Sam heard."),
             ("Announce that dinner is ready.", {"text": "Dinner is ready!"}, "ok", "Announcement made."),
-            ("Tell the room good morning.", {"text": "Good morning, everyone!"}, "ok", "Good morning delivered."),
+            # Not "Tell the room good morning." -- "good morning" is a sealed
+            # probe's whole content, so the guard read the bigram as a
+            # quotation and held this ask (and its distractor arrangements)
+            # out of training entirely (audit 2026-08-22).
+            ("Give the room a morning greeting.", {"text": "Morning, everyone!"}, "ok", "Morning greeting delivered."),
             ("Wish my mom a happy birthday out loud.", {"text": "Happy birthday, Mom!"}, "ok", "Said it — happy birthday to your mom."),
             ("Say 'the build passed' so I can hear it from the kitchen.", {"text": "The build passed."}, "ok", "Called it out — the build passed."),
             ("Read this back to me: meeting at three.", {"text": "Meeting at three."}, "ok", "Read it back: meeting at three."),
@@ -304,7 +308,11 @@ TOOLS = [
         "Translate text to a target language.",
         {"text": "string", "to": "string"},
         [
-            ("How do you say good morning in japanese?", {"text": "good morning", "to": "japanese"}, "ohayou gozaimasu", "In Japanese: ohayou gozaimasu."),
+            # A different phrase, not a reworded ask: the extraction skill is
+            # copying the quoted text and the target language out of the ask,
+            # so the ask and the arguments have to keep saying the same thing
+            # ("good morning" is sealed -- see avatar_say above).
+            ("How do you say thank you in japanese?", {"text": "thank you", "to": "japanese"}, "arigatou gozaimasu", "In Japanese: arigatou gozaimasu."),
             ("Translate 'where is the library' to spanish.", {"text": "where is the library", "to": "spanish"}, "Donde esta la biblioteca?", "In Spanish: Donde esta la biblioteca?"),
         ],
     ),
@@ -434,11 +442,16 @@ RESTRAINT = [
     ("Hi there.", "Hey. What do you need?"),
     ("Hey.", "Hey. What's up?"),
     ("Hello!", "Hello. What can I do for you?"),
-    ("Good morning.", "Morning. What's on the docket?"),
+    ("Top of the morning.", "Morning. What's on the docket?"),
     # "Good evening." / "How's it going?" / "Nice to meet you." are eval
     # probes -- train supersets only (the exact strings sat here as dead
     # weight: authored, then silently dropped by the holdout guard; audit
-    # 2026-07-15).
+    # 2026-07-15). "Good morning." and "Yo." joined them at a later reseal and
+    # sat here dead the same way until 2026-08-22. A superset does not rescue
+    # either one: "good morning" is sealed as a word RUN, which padding cannot
+    # dilute, and "Yo." reduces to a single content word that scores a perfect
+    # jaccard however it is dressed. Near-neighbors clear both -- "Top of the
+    # morning." above and "Yo, you there?" below.
     ("Good evening to you.", "Evening. What are we doing?"),
     ("Good afternoon.", "Afternoon. Where do you want to start?"),
     ("Good night.", "Night. I'll be here whenever."),
@@ -484,7 +497,7 @@ RESTRAINT = [
     ("Long time no see.", "Welcome back. Where were we?"),
     ("I'm back.", "Welcome back. What are we picking up?"),
     ("Howdy.", "Howdy. What do you need?"),
-    ("Yo.", "Yo. What's up?"),
+    ("Yo, you there?", "Yo. What's up?"),
     ("Morning!", "Morning. What's first?"),
     # Memory-adjacent restraint: recall QUESTIONS answer from context, they
     # don't fire the remember tool (saving a question would be noise).
@@ -703,10 +716,23 @@ def gen_math_examples(seed: int = 99) -> list[dict]:
             "category": "math",
         })
 
+    def ordinal(n: int) -> str:
+        """1st/2nd/3rd/4th -- the power surface interpolated a bare "{y}th"
+        and taught "2th"/"3th" (audit 2026-08-22)."""
+        suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+        return f"{n}{suffix}"
+
     add_phr = ["What is {x} plus {y}?", "What's {x} + {y}?", "{x} plus {y}?", "Add {x} and {y}.", "{x} + {y} = ?"]
     sub_phr = ["What is {x} minus {y}?", "What's {x} - {y}?", "{x} minus {y}?", "Subtract {y} from {x}.", "{x} - {y} = ?"]
-    mul_phr = ["What is {x} times {y}?", "What's {x} * {y}?", "{x} times {y}?", "Multiply {x} by {y}.", "{x} x {y} = ?"]
-    div_phr = ["What is {x} divided by {y}?", "What's {x} / {y}?", "{x} divided by {y}?", "Divide {x} by {y}.", "{x} / {y} = ?"]
+    # Every times/divided surface carries a SECOND content word. The leak
+    # guard drops length-1 words, so "What is 4 times 9?" reduces to the lone
+    # word "times" and scores a perfect jaccard against any sealed probe that
+    # reduces the same way: 50 times-table records and 3 division records were
+    # authored, screened out, and never trained (audit 2026-08-22). The extra
+    # word breaks the degenerate one-word match without touching the operands,
+    # so the table itself survives.
+    mul_phr = ["What is {x} times {y}, exactly?", "What's {x} * {y}?", "What does {x} times {y} come to?", "Multiply {x} by {y}.", "{x} x {y} = ?"]
+    div_phr = ["What is {x} divided by {y}, exactly?", "What's {x} / {y}?", "What does {x} divided by {y} come to?", "Divide {x} by {y}.", "{x} / {y} = ?"]
 
     for x in range(21):
         for y in range(21):
@@ -725,15 +751,22 @@ def gen_math_examples(seed: int = 99) -> list[dict]:
     # zero flat surfaces either -- the sealed misses were all three shapes.
     sq_phr = ["What is {x} squared?", "What's {x} squared?", "{x} squared is what?",
               "Square {x} for me."]
-    pow_phr = ["What is {x} to the power of {y}?", "What's {x} to the power of {y}?",
-               "{x} to the power of {y}?", "What is {x} raised to the {y}th power?"]
+    # Same one-word collapse as the times table: three of these four surfaces
+    # reduced to the lone word "power", and 11 of the 16 records died on it.
+    # The fourth takes {yth}, the rendered ordinal -- "{y}th" spelled "2th" and
+    # "3th" straight into the training text. The other three ignore the extra
+    # format key, so all four still take one .format call.
+    pow_phr = ["What is {x} to the power of {y}, exactly?",
+               "What's {x} to the power of {y} equal to?",
+               "Work out {x} to the power of {y}.",
+               "What is {x} raised to the {yth} power?"]
     pct_phr = ["What is {p} percent of {x}?", "What's {p} percent of {x}?",
                "{p} percent of {x} is what?", "Work out {p} percent of {x}."]
     for x in range(2, 16):
         add(rng.choice(sq_phr).format(x=x), f"{x * x}.")
     for x in range(2, 6):
         for y in range(2, 6):
-            add(rng.choice(pow_phr).format(x=x, y=y), f"{x ** y}.")
+            add(rng.choice(pow_phr).format(x=x, y=y, yth=ordinal(y)), f"{x ** y}.")
     for p in (10, 20, 25, 50, 75):
         for x in (40, 60, 80, 120, 200, 240, 300, 360):
             v = p * x // 100
@@ -2264,9 +2297,22 @@ def fit_mix_to_block(
         # A tool record's payload lives OUTSIDE content -- the tool_call JSON
         # and the tool turn's own markers are rendered, never summed here --
         # so those always take the real measurement.
+        #
+        # The +64 margin buys TEMPLATE room, and the template scales with the
+        # number of MESSAGES, not with the record's length: per message it costs
+        # <|im_start|> + the role line + <|im_end|> + a newline, measured at 7
+        # ids worst-case on the default vocab and 6 on the v2 builder vocab,
+        # over a fixed BOS + document EOS of 2. So 2 + 8*7 = 58 is inside the
+        # margin and nine messages (65) are not -- EIGHT is the bound that holds
+        # under both live vocabs. Past it a long thin conversation false-fitted
+        # here (a 40-turn record measured 2182 rendered against a 2048 block)
+        # and the trainer then silently skipped it as over-length, which is the
+        # exact failure this function exists to prevent. Anything longer takes
+        # the real render.
         contents = [m.get("content") or "" for m in msgs]
         carries_tools = any(m.get("tool_calls") or m.get("role") == "tool" for m in msgs)
-        if (not carries_tools and all(c.isascii() for c in contents)
+        if (not carries_tools and len(msgs) <= 8
+                and all(c.isascii() for c in contents)
                 and sum(len(c) for c in contents) + 64 <= limit):
             out.append(line)
             continue
