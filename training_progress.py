@@ -1,8 +1,10 @@
 """Where-she's-at chart for the Enigma pretrain run.
 
-Parses train_large.log (append-only, one line / 10 steps plus periodic [val]
-lines) and prints an ASCII progress dashboard: a completion bar, the live
-numbers, and a perplexity descent curve for the whole run so far.
+Parses the NEWEST train_*.log (append-only, one line / 10 steps plus periodic
+[val] lines) and prints an ASCII progress dashboard: a completion bar, the live
+numbers, and a perplexity descent curve for the whole run so far. Runs write
+train_<lineage>.log, so a fixed name would follow the v1 log forever; --log
+names one explicitly.
 
 Zero dependencies, ASCII-only output (the Windows cp1252 console can't print
 box-drawing or arrows). Run:  python training_progress.py [--log PATH] [--watch SECS]

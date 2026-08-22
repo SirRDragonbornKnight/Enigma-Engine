@@ -32,6 +32,18 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+class KVCacheFull(RuntimeError):
+    """The cache is at ``max_seq_len`` and the next write would run past it.
+
+    The cache used to slide a window instead, which is wrong for this model:
+    RoPE keeps ABSOLUTE positions, so a shifted cache pairs old keys with new
+    rotations. Generation silently dropped its oldest context, warned once per
+    layer per token, and then died on the RoPE table at exactly twice
+    ``max_seq_len`` (measured 2026-08-22). Refusing the write turns that into
+    an end-of-capacity signal the generation loop stops on.
+    """
+
+
 class KVCache:
     """
     Optimized KV-Cache with pre-allocation and optional quantization.
@@ -177,21 +189,13 @@ class KVCache:
         result = grouped * scale.unsqueeze(-1) + zero_point.unsqueeze(-1)
         return result.view(*leading, D)
 
-    def _rollable_buffers(self) -> tuple[str, ...]:
-        """Names of the [batch, seq, ...] storage buffers a sliding-window
-        shift must move together, so overflow keeps every buffer on one
-        consistent layout."""
-        if self.quantize:
-            return ("_cache_k", "_cache_v", "_scale_k", "_scale_v", "_zp_k", "_zp_v")
-        return ("_cache_k", "_cache_v")
-
     def _begin_update(self, k: torch.Tensor, v: torch.Tensor, position: Optional[int]) -> tuple[int, int]:
         """Validate an update and resolve its write window.
 
         The shared update contract: batch sizes must match, a single update
         larger than the cache is refused outright, and an update that runs
-        past the end shifts every buffer named by :meth:`_rollable_buffers`
-        left (sliding window). Returns the resolved (position, end_pos).
+        past the end raises :class:`KVCacheFull` rather than sliding.
+        Returns the resolved (position, end_pos).
         """
         if position is None:
             position = self.current_pos
@@ -201,8 +205,8 @@ class KVCache:
 
         seq_len = k.shape[1]
 
-        # A single update larger than the cache cannot be stored, and the
-        # sliding-window shift below assumes seq_len <= max_seq_len.
+        # A single update larger than the cache cannot be stored at all --
+        # a caller error, distinct from running out of room mid-generation.
         if seq_len > self.max_seq_len:
             raise ValueError(
                 f"KV cache capacity exceeded: update has seq_len={seq_len} "
@@ -212,18 +216,14 @@ class KVCache:
 
         end_pos = position + seq_len
 
+        # No logging here: every layer holds its own cache, so a note at this
+        # depth is one line per layer per token. The caller that catches this
+        # is the one place that knows the generation stopped.
         if end_pos > self.max_seq_len:
-            logger.warning(
-                "KV cache overflow: seq_len %d at pos %d exceeds max_seq_len %d -- shifting with sliding window",
-                seq_len,
-                position,
-                self.max_seq_len,
+            raise KVCacheFull(
+                f"KV cache full: writing {seq_len} position(s) at pos {position} would pass "
+                f"max_seq_len={self.max_seq_len}"
             )
-            shift = end_pos - self.max_seq_len
-            for name in self._rollable_buffers():
-                setattr(self, name, torch.roll(getattr(self, name), -shift, dims=1))
-            position = self.max_seq_len - seq_len
-            end_pos = self.max_seq_len
 
         return position, end_pos
 

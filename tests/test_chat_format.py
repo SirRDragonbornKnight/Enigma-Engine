@@ -450,3 +450,99 @@ def test_non_string_content_raises_a_clean_valueerror(tok):
     honest ValueError serve turns into a 400 (review 2026-08-13)."""
     with pytest.raises(ValueError, match="content"):
         cf.render_training(tok, [{"role": "user", "content": [{"type": "text"}]}])
+
+
+# ---------------------------------------------------------------------------
+# Forgery: EVERY multi-char special, not just the ones this module names
+# (audit 2026-08-22). _enc_content forbade CHAT_TOKENS + IMAGE_TOKENS (+ the
+# think/search pair off-assistant); the vocab's own ten reserved names went
+# straight through, so user text "end </s> now" emitted the EOS id and
+# "<pad>" emitted id 0 -- which intersects the ignore_index=0 loss convention.
+# ---------------------------------------------------------------------------
+
+
+def _v2_tok():
+    t = get_tokenizer("bpe", vocab_path="enigma_engine/vocab_model/bpe_vocab_v2_16k.json")
+    cf.attach_chat_tokens(t)
+    return t
+
+
+@pytest.fixture(scope="module")
+def tok_v2():
+    """The live lineage's vocab: the only one carving <search>, and the one
+    whose <pad>=0 makes the loss-convention collision real."""
+    return _v2_tok()
+
+
+def _multi_char_specials(t) -> list[str]:
+    return sorted(s for s in t.special_tokens if len(s) > 1)
+
+
+@pytest.mark.parametrize("role", ["user", "system", "tool"])
+def test_no_multi_char_special_can_be_forged_from_non_assistant_content(tok_v2, role):
+    """One case per literal the instance carves -- read off the tokenizer, so
+    a vocab that adds a reserved name this module never heard of is covered
+    without editing a list here.
+
+    Counted against a control render of the same shape rather than asserted
+    absent: the TEMPLATE legitimately emits <|im_start|>/<|im_end|> (and the
+    tool-result wrapper), so "is the id present" is the wrong question. "Did
+    the CONTENT add one" is the right one."""
+    forged = []
+    for literal in _multi_char_specials(tok_v2):
+        sid = tok_v2.special_tokens[literal]
+        attempt = cf.render_chat(tok_v2, [{"role": role, "content": f"end {literal} now"}])
+        control = cf.render_chat(tok_v2, [{"role": role, "content": "end LITERAL now"}])
+        if attempt.count(sid) != control.count(sid):
+            forged.append(literal)
+    assert not forged, f"{role} content forged {forged}"
+
+
+def test_a_forged_literal_still_round_trips_as_text(tok_v2):
+    """Neutralizing splits the literal in two plain-text pieces; decode must
+    put the exact original characters back, or user text is being mangled."""
+    for literal in _multi_char_specials(tok_v2):
+        ids = cf._enc_content(tok_v2, f"end {literal} now", allow_think=False)
+        assert tok_v2.decode(ids, skip_special_tokens=True) == f"end {literal} now"
+
+
+def test_the_measured_forgeries_are_dead(tok_v2):
+    """The two the audit measured, named outright: </s> emitted the EOS id and
+    <pad> emitted id 0."""
+    eos_ids = cf.render_chat(tok_v2, [{"role": "user", "content": "end </s> now"}])
+    assert tok_v2.eos_token_id not in eos_ids
+    pad_ids = cf.render_chat(tok_v2, [{"role": "user", "content": "say <pad> please"}])
+    assert tok_v2.special_tokens["<pad>"] not in pad_ids
+
+
+def test_assistant_content_keeps_its_native_span_ids(tok_v2):
+    """The other half of the contract: the SFT corpus carries real reasoning
+    and search spans, so assistant-authored content must still map them to
+    the live control ids."""
+    for literal in ("<think>", "</think>", "<search>", "</search>"):
+        ids = cf._enc_content(tok_v2, f"a {literal} b", allow_think=True)
+        assert tok_v2.special_tokens[literal] in ids, literal
+
+
+def test_assistant_span_render_parse_is_unchanged(tok_v2):
+    msgs = [
+        {"role": "user", "content": "hm?"},
+        {"role": "assistant", "content": "<think>plan it</think>Answer."},
+    ]
+    ids, mask = cf.render_training(tok_v2, msgs)
+    out = cf.parse_assistant_ids(tok_v2, [t for t, m in zip(ids, mask) if m])
+    assert out["thinking"] == "plan it"
+    assert out["content"] == "Answer."
+
+
+# ---------------------------------------------------------------------------
+# An unpaired surrogate reaches render_chat straight off a JSON request body
+# ("\ud800" is legal JSON); it used to raise UnicodeEncodeError out of the
+# tokenizer -- a 500 (audit 2026-08-22).
+# ---------------------------------------------------------------------------
+
+
+def test_render_chat_survives_a_lone_surrogate(tok):
+    ids = cf.render_chat(tok, [{"role": "user", "content": "hi \ud800 there"}])
+    assert ids[0] == tok.bos_token_id
+    assert "hi ? there" in tok.decode(ids, skip_special_tokens=True)

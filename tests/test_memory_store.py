@@ -3,7 +3,11 @@ not in the frozen weights. Stdlib BM25 over inspectable JSONL."""
 
 import pytest
 
-from enigma_engine.core.memory_store import MemoryStore, _strip_lead_in
+from enigma_engine.core.memory_store import (
+    MAX_MEMORY_CHARS,
+    MemoryStore,
+    _strip_lead_in,
+)
 from enigma_engine.core.tokenizer import get_tokenizer
 
 
@@ -39,6 +43,43 @@ def test_distinct_measures_about_one_subject_coexist(tmp_path):
     kept = [r["text"] for r in _two(tmp_path, "User's dog is 3 years old.",
                                     "User's dog is 4 years old.")]
     assert kept == ["User's dog is 4 years old."]
+
+
+def test_a_memory_over_the_length_cap_is_refused(tmp_path):
+    """No door capped the text, so a pasted megabyte was filed as one "fact" --
+    re-tokenized on every retrieval (search scores the whole store) and echoed
+    into a context that cannot hold it. The cap lives on the store because the
+    store is the one owner both doors go through."""
+    m = MemoryStore(tmp_path)
+    at_the_cap = "x" * MAX_MEMORY_CHARS
+    assert m.remember(at_the_cap)["text"] == at_the_cap
+
+    with pytest.raises(ValueError, match="memory too long"):
+        m.remember("y" * (MAX_MEMORY_CHARS + 1))
+    assert [r["text"] for r in m.all()] == [at_the_cap]
+    assert [r["text"] for r in MemoryStore(tmp_path).all()] == [at_the_cap]
+
+
+def test_a_second_store_on_one_directory_is_refused_not_merged(tmp_path):
+    """Measured before the guard: two MemoryStores on one dir both minted id 1,
+    and the first _rewrite either of them ran erased the other's records. There
+    is no merge to do -- the other store's records live in another object -- so
+    the mutation that would clobber them refuses instead, and says why."""
+    a = MemoryStore(tmp_path)
+    b = MemoryStore(tmp_path)
+
+    b.add("User's dog is named Rex.")
+    with pytest.raises(MemoryStore.ConcurrentWriter, match="another MemoryStore"):
+        a.add("User likes tea.")
+    with pytest.raises(MemoryStore.ConcurrentWriter):
+        a.clear()  # the rewrite path is the destructive one, and refuses too
+
+    assert a.all() == []  # a refused write leaves nothing live in memory either
+    b.add("User likes coffee.")  # ...and the store that OWNS the file still writes
+    assert [r["text"] for r in MemoryStore(tmp_path).all()] == [
+        "User's dog is named Rex.",
+        "User likes coffee.",
+    ]
 
 
 def test_forget_none_deletes_nothing(tmp_path):

@@ -375,9 +375,17 @@ def _enc_content(tokenizer, text: str, allow_think: bool) -> list[int]:
     round-trips the exact original characters. Assistant content keeps the
     native <think>/</think> and <search>/</search> mappings
     (``allow_think=True`` means "assistant-authored") — the SFT corpus
-    carries real reasoning and search spans; every other role gets both
-    families neutralized, since a user-forged <search> span would otherwise
-    land in context as live control ids on a v2 vocab.
+    carries real reasoning and search spans; every other role gets EVERY
+    multi-char special literal on the instance neutralized, since a
+    user-forged <search> span would otherwise land in context as live
+    control ids on a v2 vocab.
+
+    Naming the chat/think/search tags alone was not enough: the vocab's own
+    reserved names pass through ``encode`` the same way, so user text
+    "end </s> now" emitted the EOS id and "<pad>" emitted id 0, which
+    intersects the ignore_index loss convention (audit 2026-08-22). The
+    forbidden set is read off the INSTANCE, so a vocab that carves a name
+    this module never heard of is covered too.
     """
     if not text:
         return []
@@ -387,7 +395,9 @@ def _enc_content(tokenizer, text: str, allow_think: bool) -> list[int]:
     # plain text either way.
     forbidden = list(CHAT_TOKENS) + list(IMAGE_TOKENS)
     if not allow_think:
-        forbidden += ["<think>", "</think>", "<search>", "</search>"]
+        forbidden += [
+            s for s in getattr(tokenizer, "special_tokens", None) or () if len(s) > 1 and s not in forbidden
+        ]
     out: list[int] = []
     rest = text
     while rest:

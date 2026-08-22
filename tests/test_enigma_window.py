@@ -3,9 +3,11 @@ the shim usually runs under pyw, where nothing printed is ever seen, so a
 bad --url must degrade to the default instead of navigating to garbage."""
 
 import json
+import sys
 
 import pytest
 
+import enigma_window
 from enigma_engine.core.persona import Persona
 from enigma_window import DEFAULT_URL, _boot_html, _host_port, _parse_args
 
@@ -86,3 +88,51 @@ def test_a_missing_pack_refuses_rather_than_mislabelling_the_window(tmp_path):
     would be the lie this whole wave exists to stop."""
     with pytest.raises(SystemExit):
         _parse_args(["--persona", str(tmp_path / "absent")])
+
+
+def test_a_refused_pack_is_a_popup_not_a_silent_death(monkeypatch, tmp_path):
+    """...and that refusal has to be VISIBLE. The shim runs under pyw, where
+    SystemExit's message goes nowhere at all: the Talk shortcut was clicked,
+    the server started, and the window never appeared with nothing anywhere
+    saying why. The chain's standing rule is that a failure is a popup."""
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(enigma_window, "_message_box",
+                        lambda text, title: seen.append((text, title)))
+    monkeypatch.setattr(sys, "argv",
+                        ["enigma_window.py", "--persona", str(tmp_path / "absent")])
+    with pytest.raises(SystemExit):
+        enigma_window.main()
+    assert len(seen) == 1, seen
+    text, title = seen[0]
+    assert "persona pack" in text and str(tmp_path / "absent") in text
+    assert title == "Enigma"
+
+
+def test_a_good_launch_raises_no_popup(monkeypatch):
+    """The other direction: the popup belongs to the refusal only. main()
+    returns through the browser fallback here (no pywebview in the test
+    environment is fine -- either way nothing pops)."""
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(enigma_window, "_message_box",
+                        lambda text, title: seen.append((text, title)))
+    monkeypatch.setattr(enigma_window, "_wait_for_port", lambda url, seconds: None)
+    monkeypatch.setattr(enigma_window.webbrowser, "open", lambda url: True)
+    monkeypatch.setitem(sys.modules, "webview", None)  # `import webview` -> ImportError
+    monkeypatch.setattr(sys, "argv", ["enigma_window.py"])
+    assert enigma_window.main() == 0
+    assert seen == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="user32 is Windows-only")
+def test_the_popup_is_the_zero_dependency_user32_call(monkeypatch):
+    """No pywebview, no WinForms, no console -- MessageBoxW through ctypes is
+    the one popup this shim can always raise."""
+    import ctypes
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        ctypes.windll.user32, "MessageBoxW",
+        lambda hwnd, text, title, flags: calls.append((hwnd, text, title, flags)) or 1,
+    )
+    enigma_window._message_box("boom", "Enigma")
+    assert calls == [(None, "boom", "Enigma", 0x10)]

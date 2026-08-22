@@ -33,13 +33,14 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import queue
 import re
 import threading
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from enigma_engine.core.safe_save import atomic_write_text
 
 # A runaway generation could ask for a minutes-long monologue; cap and say so.
 MAX_SPEAK_CHARS = 1000
@@ -76,6 +77,22 @@ PRESET_VOICES: tuple[str, ...] = (
 
 class TTSError(Exception):
     """The voice backend is unavailable or a synthesis/playback job failed."""
+
+
+def _warn(message: str) -> None:
+    """Log a worker warning without letting the LOG kill the worker.
+
+    The worker thread's error handler printed straight to stdout, so a closed
+    console or a broken pipe raised OUT of the except clause and ended the
+    only thread that serves the queue -- every later speak then queued
+    forever with nobody to answer it, silently. The job still records its
+    error for waiters and /v1/audio/status; only the line on screen is
+    best-effort.
+    """
+    try:
+        print(message, flush=True)
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------ output routing
@@ -421,7 +438,10 @@ class _Job:
     epoch: int = 0  # play jobs run only if still the current epoch (see stop())
     done: threading.Event = field(default_factory=threading.Event)
     error: BaseException | None = None
-    cancelled: bool = False  # set when stop() dropped this job before it played
+    # Set when stop() dropped this job before it played, or when _finish gave
+    # up waiting for it. The worker refuses a cancelled job at dequeue, so a
+    # job its caller has already been told did not happen cannot happen later.
+    cancelled: bool = False
 
 
 class Speaker:
@@ -512,12 +532,16 @@ class Speaker:
         if self._recipe_path is None:
             return
         try:
-            self._recipe_path.parent.mkdir(parents=True, exist_ok=True)
-            # Write-temp + atomic replace: a crash mid-write can never leave a
-            # half-written recipe that fails to parse on the next boot.
-            tmp = self._recipe_path.with_name(self._recipe_path.name + ".tmp")
-            tmp.write_text(json.dumps(self._recipe, indent=2), encoding="utf-8")
-            os.replace(tmp, self._recipe_path)
+            # The repo's shared writer: write-temp + FSYNC + atomic replace.
+            # The hand-rolled copy this replaced skipped the fsync, so a power
+            # loss could commit the rename ahead of the data blocks and leave
+            # the half-written recipe that this write promises against.
+            # backup=False: the recipe is rewritten on every set_voice, and a
+            # stale voice.json.bak beside it is a second voice truth nothing
+            # reads.
+            atomic_write_text(
+                self._recipe_path, json.dumps(self._recipe, indent=2), backup=False
+            )
         except OSError:
             pass  # a failed write must not stop her talking this session
 
@@ -536,6 +560,15 @@ class Speaker:
             job = self._queue.get()
             if job is None:  # close() sentinel
                 return
+            if job.cancelled:
+                # _finish gave up waiting for this job and told its caller it
+                # did not happen. Running it now would make that a lie: an
+                # apply whose set_voice already raised would leave the backend
+                # speaking a voice get_voice and voice.json do not report, and
+                # a save whose endpoint already unlinked its temp file would
+                # re-create the file after the request was answered.
+                job.done.set()
+                continue
             try:
                 if job.kind == "apply":
                     self._backend.set_recipe(job.recipe)
@@ -550,7 +583,7 @@ class Speaker:
             except BaseException as exc:  # job errors are data, not crashes
                 job.error = exc
                 self.last_error = exc
-                print(f"  WARN: tts job failed: {exc}", flush=True)
+                _warn(f"  WARN: tts job failed: {exc}")
             else:
                 # A job that actually RAN clearing the flag keeps /v1/audio/status
                 # honest both ways: a transient device hiccup must not pin the
@@ -600,10 +633,9 @@ class Speaker:
         except TTSError as exc:
             if self._device_warned != name:
                 self._device_warned = name
-                print(
+                _warn(
                     f"  WARN: output device '{name}' is unavailable ({exc}); "
-                    f"speaking on the system default instead",
-                    flush=True,
+                    f"speaking on the system default instead"
                 )
             return None
         self._device_warned = None
@@ -754,6 +786,12 @@ class Speaker:
 
     def _finish(self, job: _Job) -> None:
         if not job.done.wait(_JOB_TIMEOUT_S):
+            # CANCEL it on the way out. The job is still sitting in the queue,
+            # and a timeout that only raised left it to run later -- set_voice
+            # raised, committed nothing, and the worker then applied the new
+            # recipe anyway, so the backend spoke a voice that get_voice and
+            # voice.json both denied.
+            job.cancelled = True
             raise TTSError("tts job timed out")
         if job.error is not None:
             raise TTSError(f"tts job failed: {job.error}") from job.error

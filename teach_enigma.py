@@ -140,6 +140,24 @@ _PERSON_FLIP = {
 }
 _SUBJECT_PRONOUNS = {"you", "i", "he", "she", "it", "we", "they"}
 _VERB_AGREE = {("i", "are"): "am", ("i", "were"): "was", ("you", "am"): "are", ("you", "was"): "were"}
+# The copulas a correction opens with when it is ALREADY the statement the
+# twin was about to build.
+_COPULA_FORMS = frozenset({"am", "is", "are", "was", "were"})
+
+
+def _already_a_statement(ans: str, prefix: str) -> bool:
+    """Whether the correction already IS the declarative the twin would build:
+    it opens with the very prefix about to be prepended, or it already reads as
+    a subject + copula sentence of the twin's shape. Prepending to either welds
+    a second copula on the front ('Who are you?' + 'I am Enigma.' ->
+    'I am I am Enigma.', measured 2026-08-22), and review_augmentation
+    auto-accepts on non-tty, so a scripted teaching bakes the garbled form
+    with nobody to catch it."""
+    low, pre = ans.lower(), prefix.lower()
+    if low == pre or low.startswith(pre + " "):
+        return True
+    words = low.split()
+    return len(words) > 1 and words[0] in _SUBJECT_PRONOUNS and words[1] in _COPULA_FORMS
 
 
 def statement_twin(question: str, answer: str) -> str | None:
@@ -147,8 +165,10 @@ def statement_twin(question: str, answer: str) -> str | None:
     Q/A so the fact is also exposed as a STATEMENT, not only as a question.
     Person flips into the assistant's voice, and an inverted pronoun subject
     un-inverts ('Where were you born?' -> 'I was born ...', not the garbled
-    'You born were ...'). Returns None for behavioral/how/why corrections,
-    which have no safe generic statement transform (auto-augment 2026-07-16)."""
+    'You born were ...'). A correction that is ALREADY the statement comes back
+    as it stands rather than wearing a second copula. Returns None for
+    behavioral/how/why corrections, which have no safe generic statement
+    transform (auto-augment 2026-07-16)."""
     m = _WH_STATEMENT.match(question)
     if not m:
         return None
@@ -173,7 +193,12 @@ def statement_twin(question: str, answer: str) -> str | None:
     else:
         subject, predicate = [_PERSON_FLIP.get(w.lower(), w) for w in words], []
     verb = _VERB_AGREE.get((subject[0].lower(), verb), verb)
-    statement = " ".join(subject + [verb] + predicate + [ans]) + "."
+    prefix = " ".join(subject + [verb] + predicate)
+    # A correction that is already a full sentence is its OWN twin: augment
+    # then drops it as a duplicate of the answer rather than baking the
+    # doubled form.
+    body = ans if _already_a_statement(ans, prefix) else prefix + " " + ans
+    statement = body + "."
     statement = re.sub(r"\bi\b", "I", statement)
     return statement[0].upper() + statement[1:]
 

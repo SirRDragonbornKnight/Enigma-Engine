@@ -38,6 +38,25 @@ class EyesError(Exception):
     """The captioning backend is unavailable or a caption failed."""
 
 
+class _InFlight:
+    """One caption being computed right now, shared by every caller that asks
+    for the SAME bytes while it runs.
+
+    The cache alone only helps the second turn: the chat page's own history
+    replay sends one picture in several parallel requests, and eight threads
+    with one payload measured eight full captioning passes (audit 2026-08-22)
+    -- all of them queued on the generation lock, ahead of the answer the user
+    is waiting for. The first caller in publishes the slot; the rest wait on
+    it and share whatever it produced, success or failure."""
+
+    __slots__ = ("done", "caption", "error")
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.caption: str | None = None
+        self.error: BaseException | None = None
+
+
 class Eyes:
     """One captioner, one image at a time (the shared lock serializes GPU use
     with text generation -- captioning borrows the served model)."""
@@ -59,6 +78,9 @@ class Eyes:
         self._cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
         self._cache_size = max(0, int(cache_size))
+        # Keyed the same way as the cache: the captions being computed RIGHT
+        # NOW, so concurrent callers of one payload share a single pass.
+        self._inflight: dict[str, _InFlight] = {}
         if captioner_factory is not None:  # tests inject a fake: PIL.Image -> str
             self._caption = captioner_factory()
             return
@@ -131,17 +153,45 @@ class Eyes:
         A BYTES payload -- what the chat path always hands over, since every
         image_url part is base64-decoded before it gets here -- is memoized by
         sha256 (see CAPTION_CACHE_SIZE), so an image already in the history is
-        captioned once per process rather than once per turn. A path or a
-        PIL.Image has no stable key and always captions. Only successful
+        captioned once per process rather than once per turn. Callers that
+        arrive while that first pass is still running wait for it and share
+        its result instead of starting passes of their own (_InFlight). A path
+        or a PIL.Image has no stable key and always captions. Only successful
         captions are stored: a failure is worth retrying, not remembering.
+
+        The cache lock is held for lookups and publication ONLY, never across
+        the caption itself -- captioning takes the shared generation lock, and
+        a cache that queued behind generation would be slower than no cache.
         """
         key = None
         if isinstance(image, (bytes, bytearray)):
             key = hashlib.sha256(bytes(image)).hexdigest()
-            with self._cache_lock:
-                if key in self._cache:
-                    self._cache.move_to_end(key)
-                    return self._cache[key]
+            while True:
+                with self._cache_lock:
+                    if key in self._cache:
+                        self._cache.move_to_end(key)
+                        return self._cache[key]
+                    shared = self._inflight.get(key)
+                    if shared is None:
+                        self._inflight[key] = _InFlight()
+                        break  # this caller computes it; the rest wait below
+                shared.done.wait()  # outside the lock: see the docstring
+                if shared.error is not None:
+                    raise shared.error
+                if shared.caption is not None:
+                    return shared.caption
+                # Neither published -- whoever owned the slot never finished.
+                # Start over rather than wait on a promise nobody will keep.
+        try:
+            caption = self._describe_uncached(image)
+        except BaseException as exc:
+            self._publish(key, None, exc)
+            raise
+        self._publish(key, caption, None)
+        return caption
+
+    def _describe_uncached(self, image) -> str:
+        """Decode the payload and caption it -- no cache, no in-flight slot."""
         try:
             from PIL import Image
         except ImportError as exc:
@@ -165,13 +215,28 @@ class Eyes:
                 raise EyesError(f"captioning failed: {exc}") from exc
         if not caption:
             raise EyesError("captioner returned nothing")
-        if key is not None and self._cache_size:
-            with self._cache_lock:
+        return caption
+
+    def _publish(self, key, caption: str | None, error: BaseException | None) -> None:
+        """Hand a finished caption -- or its failure -- to whoever waited.
+
+        The cache insert and the in-flight release happen under ONE cache-lock
+        acquisition, so a caller arriving at that instant finds either the
+        answer or the slot to wait on, never neither. A failure releases the
+        slot too: waiters see the same error rather than hanging on it, and
+        the next caller retries (a failure is not cached)."""
+        if key is None:
+            return
+        with self._cache_lock:
+            shared = self._inflight.pop(key, None)
+            if caption is not None and self._cache_size:
                 self._cache[key] = caption
                 self._cache.move_to_end(key)
                 while len(self._cache) > self._cache_size:
                     self._cache.popitem(last=False)  # oldest USE, not oldest write
-        return caption
+        if shared is not None:
+            shared.caption, shared.error = caption, error
+            shared.done.set()
 
 
 def flatten_image_content(content: list, describe=None) -> str:

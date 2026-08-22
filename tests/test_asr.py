@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from enigma_engine.core.asr import ASRError, Ears
+from enigma_engine.core.asr import ASRError, AudioDecodeError, Ears
 
 
 class FakeWhisper:
@@ -50,6 +50,22 @@ def test_backend_failure_is_wrapped(wav):
     ears = Ears(model_factory=lambda: FakeWhisper(fail=True))
     with pytest.raises(ASRError, match="synthetic decode failure"):
         ears.transcribe(wav)
+
+
+def test_a_decode_failure_is_typed_apart_from_an_organ_failure(wav, tmp_path):
+    """Whisper choking on the AUDIO is the caller's problem; whisper failing to
+    load is the server's. Only the raise site can tell them apart -- the HTTP
+    seam sees one exception type and cannot read intent out of a message -- so
+    the audio-side failure carries its own subclass and /v1/audio/transcriptions
+    answers 400 for it instead of blaming the server for a junk upload."""
+    ears = Ears(model_factory=lambda: FakeWhisper(fail=True))
+    with pytest.raises(AudioDecodeError):
+        ears.transcribe(wav)
+
+    # A path the SERVER chose and failed to produce is not the audio's fault.
+    with pytest.raises(ASRError) as exc:
+        Ears(model_factory=FakeWhisper).transcribe(tmp_path / "nope.wav")
+    assert not isinstance(exc.value, AudioDecodeError)
 
 
 def test_empty_audio_yields_empty_text(wav):

@@ -2202,13 +2202,14 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
         print(f"\n  [Wayback] Searching: {label} ({url_pattern})...")
 
         # Query CDX API for this domain
+        cdx_limit = min(max_pages - total_saved, 2000)
         try:
             cdx_params = {
                 "url": url_pattern,
                 "output": "json",
                 "fl": "timestamp,original",
                 "collapse": "urlkey",  # Deduplicate by URL
-                "limit": min(max_pages - total_saved, 2000),
+                "limit": cdx_limit,
                 "filter": "statuscode:200",
                 "mimetype": "text/html",
             }
@@ -2225,7 +2226,15 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
 
         # Skip header row
         urls = results[1:]
-        print(f"  [Wayback] {label}: found {len(urls)} archived pages")
+        # A FULL window means CDX had at least as many rows as it was asked
+        # for, so the pages past it were never requested at all. Walking that
+        # window to the end looks exactly like finishing the domain -- the
+        # revisit sees mostly dups, the loop completes, and the domain is
+        # marked done with everything beyond the window unfetched. Only a
+        # SHORT window proves the domain ran out.
+        window_truncated = len(urls) >= cdx_limit
+        note = f" (window FULL at {cdx_limit} -- more remain)" if window_truncated else ""
+        print(f"  [Wayback] {label}: found {len(urls)} archived pages{note}")
 
         domain_saved = 0
         domain_tried = 0
@@ -2312,12 +2321,15 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
                     f"quality={skip_quality} ai={skip_ai}"
                 )
 
-        # Mark the domain done ONLY after a full pass over its CDX result set.
-        # A cap or rate-limit exit stopped EARLY with pages left unfetched, and
-        # marking it there froze the domain out of every later, bigger run --
-        # the StackExchange fetcher above only completes a site after a full
-        # parse for the same reason.
-        if domain_complete:
+        # Mark the domain done ONLY after a full pass over a CDX window that
+        # was not itself truncated. A cap or rate-limit exit stopped EARLY with
+        # pages left unfetched, and marking it there froze the domain out of
+        # every later, bigger run -- the StackExchange fetcher above only
+        # completes a site after a full parse for the same reason. A full
+        # window is the same freeze wearing the loop's own completion: the rows
+        # past `limit` were never asked for, so walking the window out proves
+        # nothing about the domain.
+        if domain_complete and not window_truncated:
             wayback_done.add(url_pattern)
             progress["wayback_done_domains"] = list(wayback_done)
             save_progress(progress)
@@ -2734,7 +2746,6 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
                     continue
                 resp.raise_for_status()
                 data = resp.json()
-                consecutive_errors = 0
             except (requests.RequestException, json.JSONDecodeError) as e:
                 consecutive_errors += 1
                 if consecutive_errors >= 5:
@@ -2742,6 +2753,29 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
                     break
                 time.sleep(3)
                 continue
+
+            # MediaWiki reports its own internal failures as HTTP 200 with an
+            # {"error": ...} body and no "query" at all, so raise_for_status
+            # passes, `pages` comes back empty, and the empty-enumeration test
+            # below read that as "this wiki is finished" -- marking it done
+            # with every article unfetched. An error is an error. The success
+            # reset lives BELOW this check for the same reason: a 200 carrying
+            # an error is not a request that worked.
+            error = data.get("error")
+            if error is not None or "query" not in data:
+                if isinstance(error, dict):
+                    detail = error.get("info") or error.get("code") or "unspecified"
+                elif error is not None:
+                    detail = str(error)
+                else:
+                    detail = "no 'query' in the response body"
+                consecutive_errors += 1
+                if consecutive_errors >= 5:
+                    print(f"  [Fandom] {label}: API error ({detail}), moving on")
+                    break
+                time.sleep(3)
+                continue
+            consecutive_errors = 0
 
             pages = data.get("query", {}).get("allpages", [])
             if not pages:
@@ -2927,13 +2961,25 @@ def _locked_probe_guard(label: str):
     """The sealed-probe screen for collected text. The pretrain path has no
     consume-time guard (pretokenize reads whatever is on disk), so the screen
     lives here, at collection time. None when no seal exists to screen against
-    -- said out loud, never silently."""
+    -- said out loud, never silently.
+
+    An unimportable screen REFUSES. It used to fail OPEN with a WARN, which is
+    the one failure mode this screen cannot afford: nothing downstream looks
+    again, so a collection that ran unscreened puts the sealed probes into the
+    corpus and the gate is quietly worthless afterwards. make_sft_data,
+    make_dpo_data and finetune all import eval_leak_guard at module scope and
+    die on the same fault -- this is that philosophy, said at the point of
+    use."""
     try:
         from eval_leak_guard import LockedProbeGuard
-    except ImportError:
-        print(f"  [{label}] WARN: eval_leak_guard not importable -- collected "
-              "text is NOT screened against the sealed probes")
-        return None
+    except ImportError as exc:
+        raise SystemExit(
+            f"[{label}] REFUSED: eval_leak_guard could not be imported ({exc}). "
+            "Collection is the ONLY sealed-probe screen the pretrain path has "
+            "-- pretokenize reads whatever is on disk -- so continuing would "
+            "write unscreened text into the corpus. Run from the repo root (or "
+            "repair the import) and start the collection again."
+        ) from exc
     guard = LockedProbeGuard.load()
     if not guard:
         print(f"  [{label}] NOTE: no sealed probe manifest on this checkout -- "

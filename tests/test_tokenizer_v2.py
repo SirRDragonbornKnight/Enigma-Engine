@@ -36,6 +36,7 @@ from enigma_engine.core.pretokenize import (
     normalize_pretokenizer,
     pretokenize_v2,
     pretokenize_v2_with_specials,
+    sanitize_for_utf8,
 )
 from enigma_engine.core.tokenizer import get_tokenizer, train_tokenizer
 
@@ -627,3 +628,127 @@ def test_train_tokenizer_is_plumbed_for_v2(tmp_path):
     assert raw["pretokenizer"] == "v2"
     reloaded = AdvancedBPETokenizer(vocab_file=out)
     assert reloaded.pretokenizer_version == PRETOKENIZER_V2
+
+
+# ---------------------------------------------------------------------------
+# Unpaired surrogates: encodable everywhere, identically (audit 2026-08-22).
+# json decodes the legal escape "\ud800" into one, so scraped text and client
+# JSON both carry them; strict encode raised UnicodeEncodeError out of
+# _text_to_bytes -- a 500 on the serve render path and a dead pretokenize
+# worker. Written as escapes so this file stays ASCII on disk.
+# ---------------------------------------------------------------------------
+
+SURROGATE_TEXT = "hi \ud800 there"
+# What errors="replace" substitutes: the ASCII '?' byte.
+SURROGATE_SANITIZED = "hi ? there"
+
+
+def test_sanitizer_substitutes_the_replace_byte():
+    assert sanitize_for_utf8(SURROGATE_TEXT) == SURROGATE_SANITIZED
+
+
+@pytest.mark.parametrize("text", ["plain ascii", "caf\u00e9 \u65e5\u672c", "", "1000 \t\n"])
+def test_sanitizer_leaves_encodable_text_alone(text):
+    """Identity for everything UTF-8 can encode -- the property that makes
+    calling it at the top of every encode() a no-op for real text."""
+    assert sanitize_for_utf8(text) is text
+
+
+@pytest.mark.parametrize("cls", [BPETokenizer, AdvancedBPETokenizer], ids=["trainer", "runtime"])
+def test_text_to_bytes_replaces_instead_of_raising(cls):
+    """The byte converter itself, not just encode(): train() reaches it
+    without going through encode's sanitizer, and it used to raise
+    UnicodeEncodeError from the middle of a corpus pass."""
+    assert cls._text_to_bytes(SURROGATE_TEXT) == cls._text_to_bytes(SURROGATE_SANITIZED)
+
+
+def test_v1_live_encodes_a_lone_surrogate(live_tokenizer):
+    ids = live_tokenizer.encode(SURROGATE_TEXT, add_special_tokens=False)
+    assert ids == live_tokenizer.encode(SURROGATE_SANITIZED, add_special_tokens=False)
+    assert live_tokenizer.decode(ids, skip_special_tokens=True) == SURROGATE_SANITIZED
+
+
+def test_v2_trainer_class_encodes_a_lone_surrogate(v2_trained):
+    tok, _ = v2_trained
+    ids = tok.encode(SURROGATE_TEXT, add_special_tokens=False)
+    assert ids == tok.encode(SURROGATE_SANITIZED, add_special_tokens=False)
+    assert tok.decode(ids, skip_special_tokens=True) == SURROGATE_SANITIZED
+
+
+def test_v2_runtime_class_encodes_a_lone_surrogate(v2_trained):
+    _, path = v2_trained
+    runtime = AdvancedBPETokenizer(vocab_file=path)
+    ids = runtime.encode(SURROGATE_TEXT, add_special_tokens=False)
+    assert ids == runtime.encode(SURROGATE_SANITIZED, add_special_tokens=False)
+    assert runtime.decode(ids, skip_special_tokens=True) == SURROGATE_SANITIZED
+
+
+def test_both_v2_stacks_agree_on_a_lone_surrogate(v2_trained):
+    """The two classes share one vocab, so they must share one answer --
+    the same parity the carve-out set is pinned for."""
+    tok, path = v2_trained
+    runtime = AdvancedBPETokenizer(vocab_file=path)
+    assert runtime.encode(SURROGATE_TEXT, add_special_tokens=False) == tok.encode(
+        SURROGATE_TEXT, add_special_tokens=False
+    )
+
+
+def test_the_rust_seam_agrees_on_a_lone_surrogate():
+    """The Rust backend raises on a surrogate exactly as strict encode does,
+    so sanitizing only inside _text_to_bytes would have left the fast path
+    crashing. Sanitizing BEFORE the seam is what makes these equal.
+
+    BPETokenizer on the live v1 vocab is the stack that actually attaches the
+    backend (AdvancedBPETokenizer stays Python for v1 by design)."""
+    if not LIVE_VOCAB.exists():
+        pytest.skip(f"live vocab not present: {LIVE_VOCAB}")
+    rust_side = BPETokenizer(vocab_file=LIVE_VOCAB)
+    if rust_side._rust_backend is None:
+        pytest.skip("rust backend not installed")
+    rust_ids = rust_side.encode(SURROGATE_TEXT, add_special_tokens=False)
+
+    python_side = BPETokenizer(vocab_file=LIVE_VOCAB)
+    python_side._rust_backend = None
+    assert python_side.encode(SURROGATE_TEXT, add_special_tokens=False) == rust_ids
+
+
+# ---------------------------------------------------------------------------
+# AdvancedBPETokenizer.save()/load() must carry the merges (audit 2026-08-22).
+# save() wrote none and load() never looked, so a saved tokenizer reloaded as
+# a byte-level encoder -- no error, just worse tokenization forever.
+# ---------------------------------------------------------------------------
+
+
+def test_advanced_save_load_round_trip_keeps_encode_identical(tmp_path, v2_trained):
+    _, v2_path = v2_trained
+    original = AdvancedBPETokenizer(vocab_file=v2_path)
+    assert original.merges, "fixture vocab must carry merges for this to mean anything"
+
+    out = tmp_path / "resaved_vocab.json"
+    original.save(out)
+    assert "merges" in json.loads(out.read_text(encoding="utf-8"))
+
+    reloaded = AdvancedBPETokenizer(vocab_file=out)
+    assert len(reloaded.merges) == len(original.merges)
+    # A merge-exercising string: HELD_OUT is the corpus vocabulary the v2
+    # merges were learned on.
+    assert reloaded.encode(HELD_OUT, add_special_tokens=False) == original.encode(
+        HELD_OUT, add_special_tokens=False
+    )
+
+
+def test_a_merge_less_vocab_file_warns_instead_of_degrading_silently(tmp_path, v2_trained, caplog):
+    """The legacy shape: no merges key. Loading it is allowed -- a base vocab
+    genuinely has none -- but it must SAY so, because encode then falls back
+    to byte pieces and nothing else ever reports that."""
+    _, v2_path = v2_trained
+    data = json.loads(v2_path.read_text(encoding="utf-8"))
+    legacy = tmp_path / "legacy_vocab.json"
+    legacy.write_text(
+        json.dumps({k: v for k, v in data.items() if k != "merges"}), encoding="utf-8"
+    )
+
+    with caplog.at_level("WARNING", logger="enigma_engine.core.advanced_tokenizer"):
+        tok = AdvancedBPETokenizer(vocab_file=legacy)
+    assert tok.merges == []
+    assert any("no merges" in r.message for r in caplog.records), caplog.text

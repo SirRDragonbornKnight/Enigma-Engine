@@ -26,6 +26,14 @@ from enigma_engine.core.safe_save import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+# The longest text remember() will file. A memory is a FACT, not a document:
+# every record is re-tokenized on every retrieval (search scores the whole
+# store) and a retrieved one is echoed into a 1024-token context, so a pasted
+# megabyte would cost a full-corpus encode per turn and could not be recalled
+# anyway. The cap belongs to the store because the store is the one owner both
+# doors (the remember tool and POST /v1/memory) go through.
+MAX_MEMORY_CHARS = 4000
+
 # The apostrophe SEPARATES words: "dog's" tokenizes to ("dog", "s"), so a
 # query about "my dog's name" reaches a stored "User's dog is named Rex."
 _WORD = re.compile(r"[a-z0-9]+")
@@ -378,10 +386,17 @@ class MemoryStore:
     class TooBroad(ValueError):
         """A forget ask that names more memories than it may delete at once."""
 
+    class ConcurrentWriter(RuntimeError):
+        """The JSONL moved under this store, so another store owns it now."""
+
     def __init__(self, path: str | Path):
         self.dir = Path(path)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.file = self.dir / "memories.jsonl"
+        # (mtime_ns, size) as of this store's own last read or write. See
+        # _refuse_if_another_writer: the file's shape moving without us is the
+        # one cheap sign that a second store is writing the same directory.
+        self._seen_stamp: tuple[int, int] | None = None
         # serve_enigma's endpoints run in FastAPI's threadpool: without a lock,
         # two concurrent add() calls read the same len() and mint duplicate ids.
         self._lock = threading.Lock()
@@ -410,6 +425,9 @@ class MemoryStore:
                         rec["text"] = " ".join(str(rec["text"]).split())
                         if rec["text"]:
                             self._records.append(rec)
+        # The file as this store has just read it -- the baseline every later
+        # write checks itself against.
+        self._seen_stamp = self._file_stamp()
         # Hand-edited files are inside the contract (module docstring): a
         # record whose id is missing or not a valid int gets renumbered here
         # so the max+1 id arithmetic in add()/remember() always sees ints.
@@ -432,7 +450,7 @@ class MemoryStore:
             # loading. The next successful rewrite persists them.
             try:
                 self._rewrite()
-            except OSError as exc:
+            except (OSError, self.ConcurrentWriter) as exc:
                 logger.warning(
                     "memory store: could not persist renumbered ids to %s (%s); "
                     "continuing with in-memory ids",
@@ -444,6 +462,43 @@ class MemoryStore:
         with self._lock:
             return len(self._records)
 
+    # ------------------------------------------------------- writer safety
+
+    def _file_stamp(self) -> tuple[int, int] | None:
+        """(mtime_ns, size) of the JSONL, or None when it does not exist."""
+        try:
+            st = self.file.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _refuse_if_another_writer(self) -> None:
+        """Refuse to write over a file that moved since we last touched it
+        (call with the lock held, immediately BEFORE the write).
+
+        ONE writer per memory directory is the convention, and nothing
+        enforced it: two MemoryStores on one dir both mint ids from their own
+        in-memory maximum (measured: both minted id 1), and the first _rewrite
+        either of them runs erases every record the other appended. There is
+        no merge to do here -- the records the other store holds are not in
+        this process -- so the honest answer is to refuse and say why. Cheap
+        by design: a stat, not a re-read.
+        """
+        if self._file_stamp() != self._seen_stamp:
+            raise self.ConcurrentWriter(
+                f"{self.file} changed since this store last read it -- another "
+                f"MemoryStore is writing the same directory. One writer per "
+                f"memory dir: a second store mints colliding ids and its next "
+                f"rewrite erases these records. Nothing was written."
+            )
+
+    def _append(self, rec: dict) -> None:
+        """Append one record to the JSONL (call with the lock held)."""
+        self._refuse_if_another_writer()
+        with open(self.file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self._seen_stamp = self._file_stamp()
+
     def add(self, text: str, kind: str = "fact", source: str | None = None) -> dict:
         text = " ".join(str(text).split())
         if not text:
@@ -454,9 +509,12 @@ class MemoryStore:
             rec = {"id": max((r["id"] for r in self._records), default=0) + 1, "text": text, "kind": kind}
             if source:
                 rec["source"] = source
+            # Persist FIRST, swap after -- the rule every other mutation here
+            # follows. Appending in memory first meant a refused write (a
+            # second store owning the file) left the record live in this
+            # session and on no disk.
+            self._append(rec)
             self._records.append(rec)
-            with open(self.file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             return rec
 
     def remember(self, text: str, kind: str = "user_fact", source: str | None = None) -> dict:
@@ -476,10 +534,20 @@ class MemoryStore:
 
         HONEST LIMIT: texts that are not fact-shaped fall back to lexical
         overlap at a deliberately high bar, so an unusual restatement coexists
-        with the old record rather than risking the wrong deletion."""
+        with the old record rather than risking the wrong deletion.
+
+        Text over MAX_MEMORY_CHARS is REFUSED here rather than filed: this is
+        the one owner both doors go through, and a document-sized record is
+        re-tokenized on every retrieval and echoed into a context that cannot
+        hold it."""
         text = " ".join(str(text).split())
         if not text:
             raise ValueError("empty memory")
+        if len(text) > MAX_MEMORY_CHARS:
+            raise ValueError(
+                f"memory too long: {len(text)} characters, and a memory may be "
+                f"at most {MAX_MEMORY_CHARS} -- save the fact, not the document"
+            )
         new_terms = _content_terms(text)
         new_key = _fact_key(text)
         with self._lock:
@@ -531,9 +599,8 @@ class MemoryStore:
                 self._rewrite(keep)
                 self._records = keep
             else:
+                self._append(rec)  # persist first, swap after (see add())
                 self._records.append(rec)
-                with open(self.file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             return dict(rec)
 
     def delete(self, mem_id: int) -> bool:
@@ -670,9 +737,14 @@ class MemoryStore:
         failed while the live store had already dropped the record."""
         if records is None:
             records = self._records
+        # A rewrite REPLACES the file, so it is the mutation that destroys
+        # another store's appends outright -- refuse before writing, never
+        # after (see _refuse_if_another_writer).
+        self._refuse_if_another_writer()
         content = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in records)
         atomic_write_text(self.file, content, backup=False)
         self.file.with_suffix(self.file.suffix + ".bak").unlink(missing_ok=True)
+        self._seen_stamp = self._file_stamp()
 
     def all(self) -> list[dict]:
         with self._lock:

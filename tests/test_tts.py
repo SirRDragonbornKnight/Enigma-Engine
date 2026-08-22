@@ -6,6 +6,7 @@ the GPU, or opens an audio device."""
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import threading
@@ -152,6 +153,30 @@ def test_worker_survives_a_failing_job():
         assert isinstance(sp.last_error, RuntimeError)
         sp.speak("still alive.", wait=True)  # worker keeps serving
         assert "still alive." in backend.synths
+    finally:
+        sp.close()
+
+
+def test_the_worker_survives_a_log_call_that_raises(monkeypatch):
+    """The worker's error handler printed straight to stdout, INSIDE its except
+    clause: a closed console or a broken pipe raised out of the handler and
+    ended the only thread that serves the queue -- with no error anywhere,
+    because the error path was what died. Every later speak then queued
+    forever."""
+    def _broken_print(*a, **kw):
+        raise OSError("the console is gone")
+
+    monkeypatch.setattr(tts_mod, "print", _broken_print, raising=False)
+    monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 5.0)  # a dead worker fails fast
+    backend = FakeBackend(fail_on="boom")
+    sp, _, _ = make_speaker(backend=backend)
+    try:
+        with pytest.raises(TTSError, match="synthetic synth failure"):
+            sp.speak("boom.", wait=True)
+        assert isinstance(sp.last_error, RuntimeError)  # the job still recorded it
+        sp.speak("still alive.", wait=True)  # ...and the worker keeps serving
+        assert "still alive." in backend.synths
+        assert sp._worker.is_alive()
     finally:
         sp.close()
 
@@ -315,6 +340,61 @@ def test_stop_breaks_utterance_at_the_next_sentence(tmp_path):
         sp.close()
 
 
+# ------------------------------------------------------- timed-out jobs
+
+def test_a_timed_out_apply_never_reaches_the_backend(monkeypatch, tmp_path):
+    """set_voice commits nothing when _finish times out -- but the apply job
+    was still SITTING IN THE QUEUE, and the worker applied it later anyway.
+    The backend then spoke the new voice while get_voice and voice.json both
+    reported the old one, with no way to tell which was true. A timed-out job
+    is cancelled, and the worker refuses a cancelled job at dequeue."""
+    backend = FakeBackend()
+    player = FakePlayer(block=True)  # pin the worker mid-utterance
+    path = tmp_path / "voice.json"
+    sp, _, _ = make_speaker(backend=backend, player=player, recipe_path=path)
+    try:
+        sp.speak("one.")
+        assert player.playing.wait(5), "worker never reached playback"
+        before = sp.get_voice()
+        monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 0.05)
+        with pytest.raises(TTSError, match="timed out"):
+            sp.set_voice(speed=1.5)
+        assert sp.get_voice() == before  # nothing committed, as before
+        assert not path.exists()
+
+        monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 5.0)
+        player.stop()  # release the pinned utterance; the worker drains FIFO
+        sp.speak("after.", wait=True)  # returns only once everything ahead ran
+        assert backend.recipes == [], "the abandoned recipe reached the backend"
+        assert backend.synths == ["one.", "after."]
+    finally:
+        sp.close()
+
+
+def test_a_timed_out_save_never_writes_its_file(monkeypatch, tmp_path):
+    """Same shape on the save path, and the reason /v1/audio/speech could
+    leave an orphan WAV: the endpoint unlinks its temp file when save_wav
+    raises, and the queued job re-created it minutes later."""
+    backend = FakeBackend()
+    player = FakePlayer(block=True)
+    sp, _, _ = make_speaker(backend=backend, player=player)
+    out = tmp_path / "late.wav"
+    try:
+        sp.speak("one.")
+        assert player.playing.wait(5), "worker never reached playback"
+        monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 0.05)
+        with pytest.raises(TTSError, match="timed out"):
+            sp.save_wav("too late.", out)
+
+        monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 5.0)
+        player.stop()
+        sp.speak("after.", wait=True)
+        assert not out.exists(), "the abandoned save wrote its file anyway"
+        assert "too late." not in backend.synths
+    finally:
+        sp.close()
+
+
 # ------------------------------------------------------------ construction
 
 def test_missing_backend_fails_at_construction():
@@ -371,6 +451,16 @@ def test_set_voice_applies_persists_and_validates(tmp_path):
             sp.set_voice(blend=[["not_a_voice", 1.0]])
     finally:
         sp.close()
+
+
+def test_the_recipe_is_written_through_the_shared_atomic_writer():
+    """voice.json is runtime state a crash must not corrupt, and _persist
+    re-implemented temp-and-replace WITHOUT the fsync the repo's own writer
+    already has -- so a power loss could commit the rename ahead of the data
+    and leave the unparseable recipe the write promises against."""
+    src = inspect.getsource(Speaker._persist)
+    assert "atomic_write_text(" in src, "_persist does not use the shared writer"
+    assert "os.replace" not in src, "_persist still hand-rolls the replace"
 
 
 def test_recipe_loads_from_file(tmp_path):

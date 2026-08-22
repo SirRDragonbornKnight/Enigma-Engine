@@ -1009,6 +1009,32 @@ def test_memory_post_refuses_a_reserved_kind(monkeypatch, tmp_path):
     assert serve.memory_add(serve.MemReq(text="User likes tea.", kind="fact"))["memory"]["kind"] == "fact"
 
 
+def test_an_oversized_memory_is_refused_at_both_doors(monkeypatch, tmp_path):
+    """Neither door capped the text, so a pasted megabyte was filed as one
+    "fact": re-tokenized on every retrieval and echoed into a context that
+    cannot hold it. The STORE owns the cap (one owner, both doors), and each
+    door has to surface its refusal in its own language -- a 400 on the HTTP
+    side, a tool RESULT she can answer around on the chat side, never a 500."""
+    from enigma_engine.core.memory_store import MAX_MEMORY_CHARS
+
+    monkeypatch.setattr(serve, "MEMORY", MemoryStore(str(tmp_path / "mem")))
+    too_long = "x" * (MAX_MEMORY_CHARS + 1)
+
+    with pytest.raises(serve.HTTPException) as exc:
+        serve.memory_add(serve.MemReq(text=too_long))
+    assert exc.value.status_code == 400 and "too long" in exc.value.detail
+
+    tooled = serve._execute_builtin("remember", {"text": too_long})
+    assert tooled.startswith("error:") and "too long" in tooled
+    assert serve.MEMORY.all() == []  # nothing filed by either refusal
+
+    assert serve.memory_add(serve.MemReq(text="User likes tea."))["ok"]
+    assert serve._execute_builtin(
+        "remember", {"text": "User likes coffee."}
+    ).startswith("saved: ")
+    assert len(serve.MEMORY.all()) == 2
+
+
 # ---------------------------------------------------------------------------
 # stream vs non-stream byte parity (ultrareview #31 + re-audit 2026-07-17).
 # The whitespace shapes are exactly the class that broke the first fix.
@@ -1068,6 +1094,72 @@ def test_stream_and_nonstream_content_byte_identical(monkeypatch, tok, gen_text)
     resp = serve._chat_instruct(_req(stream=False))
     nonstream = resp["choices"][0]["message"]["content"] or ""
     stream = _drain_stream(serve._chat_instruct(_req(stream=True)))
+    assert stream == nonstream
+
+
+# ---------------------------------------------------------------------------
+# ...and parity across a MULTI-BYTE character (audit 2026-08-22). A character
+# whose UTF-8 bytes span several tokens decodes to U+FFFD until its last byte
+# lands, and the finished character is the same string LENGTH -- so the
+# streamer emitted the U+FFFD and no later delta ever corrected it. Measured
+# with the real vocab: ids [11881,166,142] streamed "Nice one \ufffd" where
+# non-stream returned the emoji.
+# ---------------------------------------------------------------------------
+
+# The three ids the audit measured: one emoji, three tokens.
+EMOJI_IDS = [11881, 166, 142]
+
+
+def _scripted_stream_parity(monkeypatch, tokenizer, scripted: list[int]) -> tuple[str, str]:
+    """Drive one request both ways over a scripted id stream; return
+    (non-stream content, streamed content)."""
+    monkeypatch.setattr(serve, "tokenizer", tokenizer)
+    monkeypatch.setattr(serve, "EOS_ID", tokenizer.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tokenizer.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512))
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+
+    def fake_gen(ids, max_tokens, *a, **k):
+        yield from scripted
+
+    monkeypatch.setattr(serve, "_gen_ids", fake_gen)
+
+    def _req(stream: bool) -> serve.ChatReq:
+        return serve.ChatReq(
+            messages=[serve.Msg(role="user", content="Tell me a story.")],
+            stream=stream,
+            max_tokens=64,
+        )
+
+    nonstream = serve._chat_instruct(_req(stream=False))["choices"][0]["message"]["content"] or ""
+    return nonstream, _drain_stream(serve._chat_instruct(_req(stream=True)))
+
+
+@pytest.mark.parametrize("trailing", ["", " ok"], ids=["terminal", "mid-text"])
+def test_a_multi_byte_character_streams_as_itself(monkeypatch, tok_v2, trailing):
+    """Terminal AND mid-text: the terminal case is the one an end-of-stream
+    flush is needed for, the mid-text case the one a later delta must not
+    double-count."""
+    scripted = (
+        tok_v2.encode("Nice one ", add_special_tokens=False)
+        + EMOJI_IDS
+        + (tok_v2.encode(trailing, add_special_tokens=False) if trailing else [])
+    )
+    nonstream, stream = _scripted_stream_parity(monkeypatch, tok_v2, scripted)
+    assert "\ufffd" not in nonstream  # the control: non-stream was always right
+    assert stream == nonstream
+
+
+def test_a_genuine_replacement_character_still_reaches_the_wire(monkeypatch, tok_v2):
+    """Holding U+FFFD back must not DROP one she actually produced: the
+    end-of-stream flush releases whatever is still held."""
+    genuine = tok_v2.encode("\ufffd", add_special_tokens=False)
+    assert tok_v2.decode(genuine, skip_special_tokens=True) == "\ufffd"
+    scripted = tok_v2.encode("look ", add_special_tokens=False) + genuine
+    nonstream, stream = _scripted_stream_parity(monkeypatch, tok_v2, scripted)
+    assert nonstream.endswith("\ufffd")
     assert stream == nonstream
 
 
@@ -1462,6 +1554,23 @@ def test_a_failed_state_write_is_reported_not_swallowed(monkeypatch, tmp_path, c
     assert "disk full" in out
 
 
+def test_the_runtime_state_writers_use_the_shared_atomic_writer():
+    """mute_state.json / talk_mode.json / voice.json are exactly what a
+    crash-relaunch reads back. Both writers re-implemented temp-and-replace
+    WITHOUT an fsync, while the repo already owned an fsync'd writer (the
+    memory store uses it) -- so a power loss could commit the rename ahead of
+    the data blocks and load the wrong default on the next boot, the case the
+    mute-state comment promises against. One writer, not three."""
+    import inspect
+
+    from enigma_engine.core.tts import Speaker
+
+    for fn in (serve._write_state_atomic, Speaker._persist):
+        src = inspect.getsource(fn)
+        assert "atomic_write_text(" in src, f"{fn.__qualname__} bypasses the shared writer"
+        assert "os.replace" not in src, f"{fn.__qualname__} still hand-rolls the replace"
+
+
 def test_stop_bumps_generation_and_aborts_speaker(monkeypatch):
     spk = _FakeSpeaker()
     monkeypatch.setattr(serve, "SPEAKER", spk)
@@ -1552,6 +1661,162 @@ def test_set_voice_endpoint_maps_real_validation_to_400(monkeypatch):
         assert serve.set_voice(serve.VoiceReq(speed=1.3))["speed"] == 1.3
     finally:
         spk.close()
+
+
+def test_a_timed_out_speech_request_leaves_no_orphan_wav(monkeypatch, tmp_path):
+    """/v1/audio/speech unlinks its temp file when save_wav fails -- but the
+    save job was still QUEUED, so the worker re-created the file after the
+    request had been answered and cleaned up, and nothing ever removed it. The
+    cancel-on-timeout rule closes it: a job whose caller was told it did not
+    happen does not happen later."""
+    import threading
+
+    import enigma_engine.core.tts as tts_mod
+    from enigma_engine.core.tts import Speaker
+
+    class _Backend:
+        sample_rate = 24000
+
+        def __init__(self):
+            self.synths: list[str] = []
+
+        def synth(self, text):
+            import numpy as np
+
+            self.synths.append(text)
+            return np.zeros(8, dtype=np.float32)
+
+        def set_recipe(self, recipe):
+            pass
+
+    class _BlockingPlayer:
+        """Holds the worker inside one utterance until it is released."""
+
+        def __init__(self):
+            self.playing = threading.Event()
+            self._release = threading.Event()
+
+        def play(self, audio, sample_rate, device=None):
+            self.playing.set()
+
+        def wait(self):
+            self._release.wait(5)
+
+        def stop(self):
+            self._release.set()
+
+    backend, player = _Backend(), _BlockingPlayer()
+    spk = Speaker(synth_factory=lambda: backend, player_factory=lambda: player)
+    made: list[str] = []
+    real_mkstemp = serve.tempfile.mkstemp
+
+    def _spy(*a, **kw):
+        kw.setdefault("dir", str(tmp_path))
+        fd, path = real_mkstemp(*a, **kw)
+        made.append(path)
+        return fd, path
+
+    monkeypatch.setattr(serve.tempfile, "mkstemp", _spy)
+    monkeypatch.setattr(serve, "SPEAKER", spk)
+    monkeypatch.setattr(serve, "MUTED", False)
+    try:
+        spk.speak("pinning the worker.")
+        assert player.playing.wait(5), "worker never reached playback"
+        monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 0.05)
+        with pytest.raises(serve.HTTPException) as exc:
+            serve.audio_speech(serve.SpeechReq(input="say this out loud"))
+        assert exc.value.status_code == 500 and "timed out" in exc.value.detail
+        assert made and not Path(made[0]).exists()  # the endpoint cleaned up
+
+        monkeypatch.setattr(tts_mod, "_JOB_TIMEOUT_S", 5.0)
+        player.stop()  # release the worker; it drains the queue in order
+        spk.speak("after.", wait=True)  # returns only once everything ahead ran
+        assert not Path(made[0]).exists(), "the abandoned save re-created the file"
+        assert "say this out loud" not in backend.synths
+    finally:
+        spk.close()
+
+
+# ---------------------------------------------------------------------------
+# organ doors: whose fault an error is (ears), and what may reach the GPU
+# ---------------------------------------------------------------------------
+
+
+def test_a_junk_upload_is_the_clients_error_not_the_servers(monkeypatch):
+    """Whisper choking on the bytes a CLIENT uploaded was reported as a 500 --
+    telling every junk file it had broken the server, and burying the real
+    organ failures in the same status. The raise site knows which is which."""
+    from fastapi.testclient import TestClient
+
+    from enigma_engine.core.asr import ASRError, Ears
+
+    class _JunkAudio:
+        def transcribe(self, path):
+            raise RuntimeError("Invalid data found when processing input")
+
+    class _BrokenOrgan:
+        def transcribe(self, path):
+            raise ASRError("could not load whisper 'base'")
+
+    monkeypatch.setattr(serve, "_BOOTED", True)
+    client = TestClient(serve.app)
+    upload = {"file": ("clip.wav", b"not audio at all", "audio/wav")}
+
+    monkeypatch.setattr(serve, "EARS", Ears(model_factory=_JunkAudio))
+    assert client.post("/v1/audio/transcriptions", files=upload).status_code == 400
+
+    # ...while an organ that is broken in ITSELF is still the server's problem.
+    monkeypatch.setattr(serve, "EARS", _BrokenOrgan())
+    assert client.post("/v1/audio/transcriptions", files=upload).status_code == 500
+
+
+class _RecordingPainter:
+    """Stands in for the diffusion organ: records the size it was asked for
+    and writes a stub PNG where the endpoint expects to read one."""
+
+    def __init__(self):
+        self.sizes: list[tuple[int, int]] = []
+
+    def generate(self, prompt, out_path, steps=None, width=512, height=512):
+        self.sizes.append((width, height))
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x89PNG\r\n\x1a\n")
+        return out
+
+
+@pytest.mark.parametrize("size", [
+    "4096x4096",   # the OOM ask: a CUDA OOM beside the served model fragments
+    "2048x512",    # ...and one oversized side is enough to do it
+    "0x0",
+    "-512x-512",
+    "512x0",
+    "100x100",     # under the floor
+    "513x512",     # not a multiple of 8: the SD VAE downsamples by 8
+])
+def test_an_unusable_image_size_never_reaches_the_gpu(monkeypatch, tmp_path, size):
+    """n was bounded because VRAM is shared with the LLM; size was not, so
+    "4096x4096", "0x0" and negatives went straight down to diffusers."""
+    painter = _RecordingPainter()
+    monkeypatch.setattr(serve, "PAINTER", painter)
+    monkeypatch.setattr(serve, "IMAGES_DIR", tmp_path / "images")
+
+    with pytest.raises(serve.HTTPException) as exc:
+        serve.images_generations(serve.ImageGenReq(prompt="a cat", size=size))
+    assert exc.value.status_code == 400
+    assert "256" in exc.value.detail and "1024" in exc.value.detail
+    assert painter.sizes == [], "a refused size still reached the painter"
+
+
+@pytest.mark.parametrize("size,expected", [("512x512", (512, 512)), ("1024x768", (1024, 768))])
+def test_a_usable_image_size_still_paints(monkeypatch, tmp_path, size, expected):
+    painter = _RecordingPainter()
+    monkeypatch.setattr(serve, "PAINTER", painter)
+    monkeypatch.setattr(serve, "IMAGES_DIR", tmp_path / "images")
+
+    out = serve.images_generations(serve.ImageGenReq(prompt="a cat", size=size))
+    assert painter.sizes == [expected]
+    assert len(out["data"]) == 1 and out["data"][0]["b64_json"]
 
 
 # ---------------------------------------------------------------------------
@@ -1750,6 +2015,42 @@ def test_a_busy_port_is_refused_before_the_checkpoint_load(monkeypatch):
     free.close()
     serve._require_free_port("127.0.0.1", free_port)
     serve._require_free_port("127.0.0.1", free_port)  # twice: nothing was kept
+
+
+def test_a_multi_family_host_is_refused_when_any_family_is_busy():
+    """getaddrinfo can hand back several families for one name, and uvicorn
+    binds all of them. Probing only row 0 cleared a port whose OTHER family
+    was already serving, so the second server paid the whole checkpoint load
+    and died on the bind anyway -- the exact failure the probe exists to stop
+    (measured 2026-08-22: on this box "localhost" is ::1 THEN 127.0.0.1).
+
+    Expectations are DERIVED from getaddrinfo, so a machine where localhost
+    resolves to one family only skips rather than fails."""
+    import socket
+
+    held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    held.bind(("127.0.0.1", 0))
+    held.listen(1)
+    port = held.getsockname()[1]
+    try:
+        rows = socket.getaddrinfo("localhost", port, type=socket.SOCK_STREAM)
+        if not any(row[0] is socket.AF_INET for row in rows):
+            pytest.skip("localhost does not resolve to IPv4 on this machine")
+        if rows[0][0] is socket.AF_INET:
+            pytest.skip("localhost resolves IPv4 first here; row 0 already covered the busy family")
+
+        with pytest.raises(SystemExit) as exc:
+            serve._require_free_port("localhost", port)
+        assert "127.0.0.1" in str(exc.value)  # names the address that was busy
+        assert str(port) in str(exc.value)
+        # ...and the listener it refused for is untouched: still accepting.
+        probe = socket.create_connection(("127.0.0.1", port), timeout=2)
+        probe.close()
+    finally:
+        held.close()
+
+    # Every family released again: the same host clears once nothing holds it.
+    serve._require_free_port("localhost", port)
 
 
 def test_main_probes_the_port_before_it_boots(monkeypatch):

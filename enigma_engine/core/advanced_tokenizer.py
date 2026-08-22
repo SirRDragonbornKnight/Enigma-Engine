@@ -18,6 +18,7 @@ from .pretokenize import (
     PRETOKENIZER_V2,
     normalize_pretokenizer,
     pretokenize_v2_with_specials,
+    sanitize_for_utf8,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,9 +176,11 @@ class AdvancedBPETokenizer:
         Each byte of the UTF-8 encoding maps 1:1 to a latin-1 char
         (the base vocab covers all 256 byte values via
         ``_init_base_vocab``), letting BPE operate on byte-level
-        tokens. Mirrors ``BPETokenizer._text_to_bytes``.
+        tokens. Mirrors ``BPETokenizer._text_to_bytes``, including its
+        ``errors="replace"``: an unpaired surrogate is not encodable and
+        used to raise UnicodeEncodeError from here.
         """
-        return text.encode("utf-8").decode("latin-1")
+        return text.encode("utf-8", errors="replace").decode("latin-1")
 
     @staticmethod
     def _bytes_to_text(byte_string: str) -> str:
@@ -206,6 +209,14 @@ class AdvancedBPETokenizer:
         # Pre-tokenizer version. Absent key = v1 (the live vocab has no
         # such key and must keep v1 encode/decode bit-for-bit).
         self.pretokenizer_version = normalize_pretokenizer(data.get("pretokenizer"))
+
+        # Merges, for EITHER format. Read before the format branch because
+        # save() writes the "encoder" shape, and that branch never read them:
+        # a saved tokenizer reloaded with zero merges and encode silently
+        # degraded to byte pieces (audit 2026-08-22).
+        if "merges" in data:
+            self.merges = [tuple(m) for m in data["merges"]]
+            self.merge_ranks = {m: i for i, m in enumerate(self.merges)}
 
         # Handle different formats
         if "encoder" in data:
@@ -251,10 +262,6 @@ class AdvancedBPETokenizer:
             self.token_to_id = data["token_to_id"]
             self.id_to_token = {v: k for k, v in self.token_to_id.items()}
 
-            if "merges" in data:
-                self.merges = [tuple(m) for m in data["merges"]]
-                self.merge_ranks = {m: i for i, m in enumerate(self.merges)}
-
             # v2 ONLY: adopt the FILE's full special-token set before the
             # re-sync below. The __init__ defaults carry 8 names but a
             # trainer-written vocab registers 14 (<Q>, <USER>, ...); with
@@ -293,6 +300,15 @@ class AdvancedBPETokenizer:
             raise ValueError(f"Unknown tokenizer format in {vocab_file}")
 
         self._sync_decode_skip_ids()
+
+        # A file with no merges is not an error -- a base vocab has none --
+        # but encode then falls back to byte pieces for every word that is
+        # not a whole-vocab hit, which is a silent quality cliff. Say so.
+        if not self.merges:
+            logger.warning(
+                f"tokenizer file {vocab_file} carries no merges; encode falls back to "
+                "byte-level pieces for anything that is not a whole-vocab hit"
+            )
 
         # v2 Rust fast path. v1 deliberately stays Python HERE: this
         # class's v1 pre-tokenizer differs from the trainer's (the known
@@ -342,12 +358,15 @@ class AdvancedBPETokenizer:
         """Save vocabulary to file."""
         vocab_file = Path(vocab_file)
 
+        # merges are half the tokenizer: without them load() rebuilds a
+        # byte-level encoder that answers every call without complaint.
         data = {
             "version": "2.1",
             "vocab_size": self.vocab_size,
             "encoder": self.token_to_id,
             "special_tokens": self.special_tokens,
             "use_utf8_bytes": self.use_utf8_bytes,
+            "merges": [list(m) for m in self.merges],
         }
 
         # Absence means v1, so v1 files keep their existing shape.
@@ -422,6 +441,11 @@ class AdvancedBPETokenizer:
         """Encode text to token IDs using BPE merges."""
         if not text:
             return []
+
+        # Before the Rust seam: the backend raises on an unpaired surrogate
+        # exactly as strict encode does, so both paths must see the same
+        # sanitized text or they disagree byte-for-byte.
+        text = sanitize_for_utf8(text)
 
         # Rust fast path (v2 vocabs; parity-pinned against this Python
         # path). Detached whenever the vocab is mutated after load.

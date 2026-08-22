@@ -386,23 +386,48 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
     have nothing to bite, and serve flushes every print itself rather than
     relying on PYTHONUNBUFFERED. Trap 1 was live in it -- it passed an ARRAY,
     and worked only because no serve argument had ever carried a space, which
-    -Persona <pack-dir> ends the first time a pack lives in "My Packs"."""
-    launchers = ("run_collect_rebuild.ps1", "run_pretokenize_v2c.ps1", "run_pretrain_t3.ps1")
-    for name in launchers:
+    -Persona <pack-dir> ends the first time a pack lives in "My Packs".
+
+    Every run_*.ps1 in the repo is here, T4 and T5 included: their runs are
+    COMPLETE, but the recipe is what the next long job gets copied from, and a
+    finished launcher carrying trap language is the one that gets reused. They
+    run two steps each, so the argument string is named per step and handed to
+    a shared Invoke-Step -- the trap is the same, the variable is spelled
+    differently. (Their first-launch-only refusals are a separate guard: this
+    test is about the DETACH recipe, not about re-runnability.)"""
+    launchers = {
+        "run_collect_rebuild.ps1": ("$argString",),
+        "run_pretokenize_v2c.ps1": ("$argString",),
+        "run_pretrain_t3.ps1": ("$argString",),
+        "run_t4_facts_sft.ps1": ("$factsArgs", "$sftArgs"),
+        "run_t5_sft2_dpo.ps1": ("$sftArgs", "$dpoArgs"),
+    }
+    for name, arg_vars in launchers.items():
         launcher = REPO_ROOT / name
         assert launcher.exists(), f"{name} is a documented detached launcher"
         text = launcher.read_text(encoding="utf-8")
+        # Code lines only: these launchers name the trap in PROSE on purpose,
+        # so the next reader does not re-introduce what they were fixed for.
+        code_lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
 
-        assert "-ArgumentList $argString" in text, (
-            f"{name}: pass ONE pre-quoted string to -ArgumentList; an array is "
-            "joined without quoting and splits any path containing a space"
-        )
-        arg_lines = [ln for ln in text.splitlines() if ln.strip().startswith("$argString")]
-        assert arg_lines, f"{name} no longer builds an $argString"
-        assert arg_lines[0].split("=", 1)[1].strip().startswith('"`"$script`"'), (
-            f"{name}: the script path must be quoted INSIDE the argument "
-            "string:\n  " + arg_lines[0]
-        )
+        # -ArgumentList must receive ONE variable holding ONE string. An array
+        # literal or a comma list there is trap 1 wearing its original clothes.
+        passed = [ln.split("-ArgumentList", 1)[1].split()[0]
+                  for ln in code_lines if "-ArgumentList" in ln]
+        assert passed, f"{name} no longer hands an argument string to Start-Process"
+        for token in passed:
+            assert token.startswith("$"), (
+                f"{name}: pass ONE pre-quoted string to -ArgumentList; an array "
+                f"is joined without quoting and splits any path containing a "
+                f"space:\n  -ArgumentList {token}"
+            )
+        for var in arg_vars:
+            arg_lines = [ln for ln in code_lines if ln.strip().startswith(var + " ")]
+            assert arg_lines, f"{name} no longer builds {var}"
+            assert arg_lines[0].split("=", 1)[1].strip().startswith('"`"$'), (
+                f"{name}: the script path must be quoted INSIDE the argument "
+                "string:\n  " + arg_lines[0]
+            )
         assert 'PYTHONUNBUFFERED' in text, (
             f"{name}: set PYTHONUNBUFFERED or the log stays empty while the job runs"
         )
@@ -412,9 +437,7 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
         assert "$proc.WaitForExit()" in text, (
             f"{name}: use $proc.WaitForExit(), not Wait-Process, to populate ExitCode"
         )
-        # Code lines only: these launchers name the trap in PROSE on purpose,
-        # so the next reader does not re-introduce what they were fixed for.
-        code = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
+        code = "\n".join(code_lines)
         assert "Wait-Process" not in code, (
             f"{name}: Wait-Process leaves ExitCode unpopulated"
         )
@@ -437,4 +460,33 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
         assert f'{flag} `"' in start, (
             f"Start-Enigma.ps1: {flag} takes a path or a name from a pack -- "
             "quote its value or the first space splits it into two arguments"
+        )
+
+
+# The lineage every entry point picks when the user names none. Moving it is a
+# deliberate act (BACKLOG adoption receipt), so it is written once, here.
+ADOPTED_LINEAGE = "enigma_v2_sft2"
+
+
+def test_bare_run_entry_points_default_to_the_adopted_lineage():
+    """A stale default fails SILENTLY when the old checkpoint is still on
+    disk. `models/enigma_pretrain_large/model.pth` is kept as the v1 rollback,
+    so a bare `python sample_enigma.py` loaded it, printed an ordinary
+    "loaded ..." line, and sampled the lineage nobody serves -- an adoption
+    wave updated the launchers and missed this one. Every entry point that
+    picks a checkpoint FOR the user picks the same one, and when the adopted
+    lineage moves this is the list that notices."""
+    picks = {"sample_enigma.py": "--ckpt",
+             "bench_generate.py": "--model",
+             "align_vision.py": "--model"}
+    for name, flag in picks.items():
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        defaults = [ln for ln in text.splitlines()
+                    if f'"{flag}"' in ln and "default=" in ln]
+        assert len(defaults) == 1, (
+            f"{name}: expected exactly one {flag} default, found {defaults}"
+        )
+        assert ADOPTED_LINEAGE in defaults[0], (
+            f"{name}: {flag} defaults to a lineage that is not the adopted "
+            f"{ADOPTED_LINEAGE}:\n  {defaults[0].strip()}"
         )

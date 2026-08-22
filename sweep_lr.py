@@ -8,13 +8,16 @@ is opened read-only, so a sweep can never touch a live lineage.
     python sweep_lr.py --size v2_deep_238m --block 2048 --micro-batch 4 \
         --grad-accum 8 --tokens 200000000 --lrs 1e-3,2e-3,3e-3 --seeds 0,1
 
-Results land in <out-root>/sweep_results.json plus a printed table.
+Results land in <out-root>/sweep_results.json plus a printed table; the file
+already there is rotated to sweep_results.prev.json, so the sweep before this
+one keeps its receipts.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -192,12 +195,24 @@ def main() -> None:
               f"leave warmup and the peak LR is never applied. Raise --tokens or lower --warmup.",
               flush=True)
 
+    # --out-root has a fixed default, so every bare `python sweep_lr.py` writes
+    # its receipts over the LAST sweep's -- a second grid silently erased the
+    # numbers the first one was run to produce. Rotate ONCE, here, before any
+    # point runs: the per-point rewrite below is this sweep's own file, and one
+    # generation of the previous sweep survives beside it (make_sft_data's
+    # _write_artifact does the same for the bake artifacts).
+    results_path = out_root / "sweep_results.json"
+    previous_path = results_path.with_suffix(".prev.json")
+    if results_path.exists():
+        os.replace(results_path, previous_path)
+        print(f"  (previous receipts rotated to {previous_path.name})", flush=True)
+
     results = []
     for lr in lrs:
         for seed in seeds:
             tag = f"{args.size}_lr{lr:g}_s{seed}"
             results.append(run_point(args, lr, seed, out_root / tag))
-            (out_root / "sweep_results.json").write_text(
+            results_path.write_text(
                 json.dumps(results, indent=2), encoding="utf-8"
             )  # rewritten after every point so a killed sweep keeps its receipts
 
@@ -236,7 +251,7 @@ def main() -> None:
         if spreads:
             print(f"\nseed spread (same lr): max {max(spreads):.4f} -- treat lr gaps "
                   f"below this as noise, not signal", flush=True)
-    print(f"\nreceipts: {out_root / 'sweep_results.json'}", flush=True)
+    print(f"\nreceipts: {results_path}", flush=True)
 
 
 if __name__ == "__main__":

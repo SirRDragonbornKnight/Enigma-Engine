@@ -122,6 +122,76 @@ def test_her_stop_targets_the_same_port_and_window_it_always_did():
 
 
 @needs_powershell
+def test_her_stop_also_targets_a_serve_that_has_not_bound_yet():
+    """serve BINDS LAST -- boot() reads and sha256s a multi-GB checkpoint and
+    raises the organs before uvicorn listens. Stop looked for her on the port
+    alone, so a cold-booting server was invisible: Stop said "already stopped"
+    and the orphan bound seconds later. The process matcher is the fallback,
+    and it carries the SAME ownership rule as the window one -- hers is the
+    serve without a --persona."""
+    lines = _run_ps("Stop-Enigma.ps1", "-DryRun")
+    assert lines[2] == ("DRYRUN serve-process: match=*serve_enigma.py* extra= "
+                        "exclude=*--persona*")
+
+
+@needs_powershell
+def test_a_pack_stop_targets_only_its_own_booting_serve(tmp_path):
+    """One script serves every AI in this checkout, so "is it serve_enigma.py"
+    is true of both -- the pack path on the command line is what makes the
+    booting process hers."""
+    pack = _write_pack(tmp_path / "atlas")
+    lines = _run_ps("Stop-Enigma.ps1", "-Persona", str(pack), "-DryRun")
+    assert lines[2] == (f"DRYRUN serve-process: match=*serve_enigma.py* "
+                        f"extra=*{pack}* exclude=")
+
+
+@needs_powershell
+def test_stop_leaves_a_pytest_run_of_the_files_it_matches_alone():
+    """tests/test_enigma_window.py and tests/test_serve_enigma.py put
+    "enigma_window.py" and "serve_enigma.py" on the pytest command line, which
+    is the exact substring both matchers hunt -- Stop force-killed the suite
+    that was testing it. Nothing this chain launches ever runs through pytest,
+    so the exclusion is unconditional and applies to BOTH matchers."""
+    assert _resolve(None)["TestRunner"] == "*pytest*"
+    stop = (REPO_ROOT / "Stop-Enigma.ps1").read_text(encoding="utf-8")
+    assert stop.count("$_.CommandLine -notlike $self.TestRunner") == 2, (
+        "both the window matcher and the booting-serve matcher must exclude a "
+        "pytest run"
+    )
+
+
+@needs_powershell
+def test_the_launch_is_serialized_on_a_start_lock_of_her_own():
+    """Port probe -> Start-Process is check-then-act: a second launcher in the
+    gap saw a free port and started a SECOND multi-GB load that only found the
+    collision at bind time. The tray already serializes itself on a named
+    mutex; the launcher takes one too -- its OWN name, so tray and launcher do
+    not block each other, and per-AI, so a pack starting is not her starting."""
+    her = _resolve(None)
+    assert her["StartMutex"] == r"Local\EnigmaStart"
+    assert her["StartMutex"] != her["Mutex"], "the launcher must not fight the tray"
+    lock = next(ln for ln in _run_ps("Start-Enigma.ps1", "-DryRun")
+                if ln.startswith("DRYRUN start-lock: "))
+    assert lock == r"DRYRUN start-lock: Local\EnigmaStart"
+
+    # ...and it is held ACROSS the check and the spawn, not merely taken.
+    start = (REPO_ROOT / "Start-Enigma.ps1").read_text(encoding="utf-8")
+    assert start.index("$startLock.WaitOne(0)") < start.index("Get-NetTCPConnection"), (
+        "the start lock must be taken BEFORE the port is probed"
+    )
+    assert start.index("Start-Process") < start.index("$startLock.ReleaseMutex()"), (
+        "the start lock must outlive the spawn"
+    )
+
+
+@needs_powershell
+def test_a_packs_start_lock_is_not_enigmas(tmp_path):
+    """Two AIs launching at once is not a double launch of either."""
+    pack = _write_pack(tmp_path / "atlas")
+    assert _resolve(pack)["StartMutex"] == r"Local\AtlasPrimeStart"
+
+
+@needs_powershell
 def test_a_pack_launch_binds_her_port_and_her_own_memory(tmp_path):
     """Every value a second AI needs to not collide with the first: her port,
     her memory store under her OWN home, her pack on the serve command line,
@@ -333,15 +403,37 @@ def test_the_generated_shims_are_thin(tmp_path):
     talk = (pack / TALK_BAT).read_text(encoding="ascii")
     assert f'call "%~dp0{START_BAT}"' in talk
     assert "if errorlevel 1 exit /b 1" in talk
-    assert talk.splitlines()[-1] == (
-        f'start "" py -3.12 "{REPO_ROOT / "enigma_window.py"}" '
-        f'--persona "{pack.resolve()}" --url http://127.0.0.1:8300/'
-    )
+    assert f'--persona "{pack.resolve()}" --url http://127.0.0.1:8300/' in talk
     for name, text in ((START_BAT, start), (TALK_BAT, talk)):
         for leaked in ("--model", "--memory-dir", "--eyes", "enigma_v2_sft2", "venv"):
             assert leaked not in text, f"{name} duplicates launcher logic ({leaked})"
         raw = (pack / name).read_bytes()
         assert raw.count(b"\r\n") == raw.count(b"\n"), f"{name} needs CRLF for cmd.exe"
+
+
+def test_a_generated_talk_shim_opens_her_window_without_a_console(tmp_path):
+    """The generated shim launched through `py`, which is the CONSOLE
+    launcher -- a black window sits behind hers for the whole session and
+    closing it by accident kills her. "Talk to Enigma.bat" has always tried
+    pyw first for exactly that reason; the generated pair now runs the same
+    chain, and ends in a POPUP rather than a silent nothing when neither
+    launcher is on PATH (these shims are double-clicked, with no console for a
+    message to land in)."""
+    pack = _write_pack(tmp_path / "atlas pack")
+    write_launchers(pack)
+    talk = (pack / TALK_BAT).read_text(encoding="ascii")
+    window = (f'"{REPO_ROOT / "enigma_window.py"}" '
+              f'--persona "{pack.resolve()}" --url http://127.0.0.1:8300/')
+    assert f'start "" pyw -3.12 {window}' in talk
+    assert f'start "" py -3.12 {window}' in talk
+    assert talk.index("where pyw") < talk.index("where py "), (
+        "pyw is the console-less launcher and must be tried FIRST"
+    )
+    assert "MessageBox" in talk and talk.splitlines()[-1] == "exit /b 1"
+
+    # The same chain, in the file it was copied from.
+    hers = (REPO_ROOT / "Talk to Enigma.bat").read_text(encoding="ascii")
+    assert hers.index("where pyw") < hers.index("where py ")
 
 
 def test_the_generator_refuses_to_shim_enigma(tmp_path):

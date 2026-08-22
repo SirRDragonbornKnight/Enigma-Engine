@@ -28,7 +28,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from enigma_engine.core.kv_cache import KVCache
+from enigma_engine.core.kv_cache import KVCache, KVCacheFull
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import MODEL_PRESETS
 
@@ -154,3 +154,106 @@ def test_kv_cache_oversize_update_raises():
     k = torch.randn(1, 9, 2, 8)
     with pytest.raises(ValueError, match="capacity"):
         cache.update(k, k.clone())
+
+
+# ---------------------------------------------------------------------------
+# The window edge (audit 2026-08-22). The cache used to SLIDE on overflow
+# while RoPE kept absolute positions: generation silently dropped its oldest
+# context, warned once per layer per token, then died on the RoPE table at
+# exactly 2x max_seq_len. Serve cannot reach it (its --max-context clamp), a
+# direct generate() caller can. The window edge is now a clean stop.
+# ---------------------------------------------------------------------------
+
+WINDOW = 16
+PROMPT_LEN = 12
+
+
+def _window_model() -> Enigma:
+    torch.manual_seed(0)
+    cfg = replace(MODEL_PRESETS["nano"], vocab_size=64, max_seq_len=WINDOW, use_rope=True)
+    return Enigma(cfg).eval()
+
+
+def _window_prompt(device: str = "cpu") -> torch.Tensor:
+    torch.manual_seed(1)
+    return torch.randint(0, 64, (1, PROMPT_LEN), device=device)
+
+
+# A token id the tiny model will not greedily emit is not knowable up front;
+# an out-of-vocab stop id is never emitted, which is what these need.
+NEVER_STOPS = [999]
+
+
+@torch.no_grad()
+def test_generation_stops_at_the_window_edge_instead_of_sliding():
+    model, prompt = _window_model(), _window_prompt()
+    out = model.generate(prompt, max_new_tokens=40, temperature=0.0, stop_tokens=NEVER_STOPS)
+    # The cache holds WINDOW positions; the last token is the prediction made
+    # FROM the final in-window position, so it is real output, not a tail.
+    assert out.shape[1] == WINDOW + 1
+
+
+@torch.no_grad()
+def test_the_tail_is_not_degraded_by_the_stop():
+    """Every token returned was produced under the model's true context: the
+    over-window run agrees with a wholly in-window run, token for token."""
+    model, prompt = _window_model(), _window_prompt()
+    short = model.generate(prompt, max_new_tokens=4, temperature=0.0, stop_tokens=NEVER_STOPS)
+    over = model.generate(prompt, max_new_tokens=40, temperature=0.0, stop_tokens=NEVER_STOPS)
+    assert torch.equal(over[:, : short.shape[1]], short)
+
+
+@torch.no_grad()
+def test_twice_the_window_no_longer_crashes():
+    """The old failure was a ValueError out of apply_rotary_embedding at
+    exactly start_pos == 2 * max_seq_len."""
+    model, prompt = _window_model(), _window_prompt()
+    out = model.generate(prompt, max_new_tokens=2 * WINDOW + 8, temperature=0.0, stop_tokens=NEVER_STOPS)
+    assert out.shape[1] == WINDOW + 1
+
+
+@torch.no_grad()
+def test_exactly_at_the_boundary_is_untouched():
+    """The in-window case must not pay for the guard: prompt + new == window
+    fits exactly and generates every token asked for, with nothing logged."""
+    model, prompt = _window_model(), _window_prompt()
+    out = model.generate(
+        prompt, max_new_tokens=WINDOW - PROMPT_LEN, temperature=0.0, stop_tokens=NEVER_STOPS
+    )
+    assert out.shape[1] == WINDOW
+
+
+@torch.no_grad()
+def test_the_stop_is_one_note_not_one_per_layer(caplog):
+    """The warning used to come from the cache -- one line per layer per
+    token (64 lines on a 4-layer model). It belongs to the caller that
+    actually stops."""
+    model, prompt = _window_model(), _window_prompt()
+    assert model.config.n_layers > 1, "a one-layer model cannot show the difference"
+    with caplog.at_level("WARNING", logger="enigma_engine.core.model"):
+        model.generate(prompt, max_new_tokens=40, temperature=0.0, stop_tokens=NEVER_STOPS)
+    notes = [r for r in caplog.records if "context limit" in r.message]
+    assert len(notes) == 1, [r.message for r in caplog.records]
+
+
+@torch.no_grad()
+def test_generate_stream_stops_at_the_window_edge_too():
+    model, prompt = _window_model(), _window_prompt()
+    got = list(model.generate_stream(prompt, max_new_tokens=40, temperature=0.0, stop_tokens=NEVER_STOPS))
+    assert len(got) == WINDOW + 1 - PROMPT_LEN
+
+
+def test_the_cache_refuses_to_slide():
+    """The unit fact underneath: a write past the end raises instead of
+    rolling the buffers, so the stored positions never shift out from under
+    RoPE's absolute ones."""
+    cache = KVCache(batch_size=1, max_seq_len=8, n_kv_heads=2, head_dim=8, device=torch.device("cpu"))
+    k = torch.randn(1, 8, 2, 8)
+    cache.update(k, k.clone())
+    before = cache.get()[0].clone()
+
+    one_more = torch.randn(1, 1, 2, 8)
+    with pytest.raises(KVCacheFull):
+        cache.update(one_more, one_more.clone())
+    assert cache.current_pos == 8, "a refused write must not move the position"
+    assert torch.equal(cache.get()[0], before), "the cache slid anyway"

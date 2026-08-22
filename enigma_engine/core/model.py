@@ -70,6 +70,7 @@ from .model_utils import (  # noqa: F401
     _LOADED_MODELS,
     _MODELS_LOCK,
 )
+from .kv_cache import KVCacheFull
 from .safe_save import atomic_torch_save, atomic_write_json
 
 
@@ -91,6 +92,15 @@ def _chunked_cross_entropy(
     Chunks over the sequence dimension, computing the output projection
     and CE per chunk.  Peak logit memory: ``O(chunk * V)`` instead of
     ``O(B*T * V)``.  Biggest win at large vocab sizes (32K+).
+
+    Degenerate contract, identical to the unchunked path: an all-ignored
+    batch is 0/0 = NaN, still attached to the graph, so ``backward()``
+    behaves the same either way.  Skipping empty chunks returned a bare
+    0.0 with no grad_fn instead -- a different value AND a backward that
+    raised, so which path a trainer took changed what it saw (audit
+    2026-08-22).  An empty chunk's ``reduction="sum"`` CE is exactly 0.0,
+    so accumulating it unconditionally leaves every non-degenerate result
+    bit-identical.
     """
     hidden_flat = hidden.reshape(-1, hidden.size(-1))
     targets_flat = targets.reshape(-1)
@@ -105,19 +115,15 @@ def _chunked_cross_entropy(
         chunk_targets = targets_flat[start:end]
 
         valid_mask = chunk_targets != ignore_index
-        n_valid = valid_mask.sum()
-        if n_valid > 0:
-            total_loss = total_loss + F.cross_entropy(
-                chunk_logits,
-                chunk_targets,
-                ignore_index=ignore_index,
-                label_smoothing=label_smoothing,
-                reduction="sum",
-            )
-            total_tokens = total_tokens + n_valid
+        total_loss = total_loss + F.cross_entropy(
+            chunk_logits,
+            chunk_targets,
+            ignore_index=ignore_index,
+            label_smoothing=label_smoothing,
+            reduction="sum",
+        )
+        total_tokens = total_tokens + valid_mask.sum()
 
-    if total_tokens == 0:
-        return total_loss
     return total_loss / total_tokens.float()
 
 
@@ -770,7 +776,21 @@ class Enigma(nn.Module):
                     break
                 since_check = 0
 
-            logits = self.forward(next_token, use_cache=True, start_pos=generated.shape[1] - 1)
+            # The window edge is a clean stop, not a slide and not a crash:
+            # the cache refuses the write, and everything generated so far was
+            # produced with the model's true context. Sliding would drop the
+            # oldest positions while RoPE kept absolute ones (garbage tail),
+            # and the old code then died on the RoPE table at 2x max_seq_len.
+            try:
+                logits = self.forward(next_token, use_cache=True, start_pos=generated.shape[1] - 1)
+            except KVCacheFull:
+                logger.warning(
+                    "generation stopped at the %d-position context limit after %d new tokens; "
+                    "the KV cache is full",
+                    self.config.max_seq_len,
+                    step + 1,
+                )
+                break
             final_logits = logits  # Update for return_logits
 
         # Trim to the first stop id inclusive: identical to breaking on it.
@@ -852,7 +872,16 @@ class Enigma(nn.Module):
 
             # Update generated sequence and get next logits
             generated = torch.cat([generated, next_token], dim=1)
-            logits = self.forward(next_token, use_cache=True, start_pos=generated.shape[1] - 1)
+            # Same window-edge stop as generate(): the cache refuses the write
+            # rather than sliding, and this loop ends instead of crashing.
+            try:
+                logits = self.forward(next_token, use_cache=True, start_pos=generated.shape[1] - 1)
+            except KVCacheFull:
+                logger.warning(
+                    "generation stopped at the %d-position context limit; the KV cache is full",
+                    self.config.max_seq_len,
+                )
+                return
 
     @property
     def num_parameters(self) -> int:

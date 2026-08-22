@@ -67,6 +67,17 @@ def test_pipe_failure_is_wrapped(tmp_path):
         painter.generate("x", tmp_path / "a.png")
 
 
+def test_a_save_that_raises_valueerror_is_wrapped(tmp_path):
+    """PIL answers a path whose extension names no writer with a ValueError,
+    not an OSError -- and the save wrapper caught only OSError, so a bare
+    ValueError escaped the organ's error type. serve's narrow `except
+    ImageGenError` then turned an `imagine` into a 500 mid-conversation, the
+    one thing the builtin contract promises never happens."""
+    painter = Painter(pipe_factory=FakePipe)
+    with pytest.raises(ImageGenError, match="could not write the image"):
+        painter.generate("x", tmp_path / "a.xyz")
+
+
 def test_creates_parent_dirs(tmp_path):
     painter = Painter(pipe_factory=FakePipe)
     out = painter.generate("x", tmp_path / "deep" / "nested" / "a.png")

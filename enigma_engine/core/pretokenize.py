@@ -143,6 +143,31 @@ def pretokenize_v2_with_specials(text: str, special_tokens) -> list[str]:
     return words
 
 
+def sanitize_for_utf8(text: str) -> str:
+    """Replace whatever UTF-8 cannot encode with the ``?`` byte
+    ``str.encode(errors="replace")`` emits.
+
+    In practice that is an unpaired surrogate: ``json`` decodes the legal
+    escape ``"\\ud800"`` into one, so any scraped or client-supplied string
+    can carry it, and a strict ``text.encode("utf-8")`` raises
+    UnicodeEncodeError on it.
+
+    Both tokenizer stacks call this at the TOP of ``encode``, before the
+    Rust seam.  The Rust backend raises on a surrogate exactly as strict
+    encode does, so sanitizing only inside ``_text_to_bytes`` would leave
+    the fast path crashing and the two paths disagreeing on the same
+    input.  Sanitizing here and byte-converting with ``errors="replace"``
+    produce identical bytes, so every path lands on the same ids.
+
+    Text with nothing unencodable in it is returned unchanged.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", errors="replace").decode("utf-8")
+    return text
+
+
 def normalize_pretokenizer(value: str | None) -> str:
     """Coerce a stored/passed pretokenizer version to a known value.
 
@@ -170,5 +195,6 @@ __all__ = [
     "V2_PATTERN",
     "pretokenize_v2",
     "pretokenize_v2_with_specials",
+    "sanitize_for_utf8",
     "normalize_pretokenizer",
 ]

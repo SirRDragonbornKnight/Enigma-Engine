@@ -1,4 +1,5 @@
-"""Regression locks for the 2026-07-04 verify-by-execution audit fixes.
+"""Regression locks for the verify-by-execution audit fixes (2026-07-04,
+2026-08-22).
 
 Each test here reproduces a bug that existed (or a silent hazard that was
 reachable) before the fix, so a revert fails loudly:
@@ -11,6 +12,9 @@ reachable) before the fix, so a revert fails loudly:
     threadpool; unlocked ``add()`` minted duplicate ids under concurrency.
   * Deepcopy hygiene — a training forward must not pin graph-attached
     activations on the module (reference-model ``deepcopy`` path).
+  * Chunked-CE degenerate contract — an all-ignored batch returned 0.0 with
+    no grad graph where the unchunked path returns NaN, so which loss path a
+    trainer took changed both the value and whether backward raised.
 
 (The SFT-schema, curated-dataset, LoRA, and KV-share locks retired with
 their modules/features in the 2026-07-18 compression pass.)
@@ -24,7 +28,7 @@ import pytest
 import torch
 
 from enigma_engine.core.memory_store import MemoryStore
-from enigma_engine.core.model import Enigma
+from enigma_engine.core.model import Enigma, _chunked_cross_entropy
 from enigma_engine.core.model_presets import ForgeConfig
 
 
@@ -133,3 +137,41 @@ def test_config_for_param_target_keeps_preset_fields():
     name, cfg = config_for_param_target(target)
     assert name == "medium"
     assert cfg.rope_theta == MODEL_PRESETS["medium"].rope_theta == 500000.0
+
+
+# ---------------------------------------------------------------------------
+# Chunked cross-entropy: the two loss paths must agree, degenerate case
+# included (audit 2026-08-22).
+# ---------------------------------------------------------------------------
+
+
+def _both_ce_paths(targets: torch.Tensor):
+    """(chunked, unchunked) loss for one batch, over the same weights and
+    hidden states. chunk_size=2 forces several chunks over a 6-wide batch."""
+    torch.manual_seed(0)
+    proj = torch.nn.Linear(8, 16)
+    hidden = torch.randn(1, targets.shape[1], 8, requires_grad=True)
+    chunked = _chunked_cross_entropy(proj, hidden, targets, chunk_size=2, ignore_index=-100)
+    full = torch.nn.functional.cross_entropy(
+        proj(hidden).reshape(-1, 16), targets.reshape(-1), ignore_index=-100
+    )
+    return chunked, full
+
+
+def test_chunked_ce_matches_the_full_path_on_an_all_ignored_batch():
+    """Every target ignored: 0/0. The full path returns NaN attached to the
+    graph; the chunked path used to short-circuit to a bare 0.0 whose
+    backward() raised 'does not require grad'."""
+    chunked, full = _both_ce_paths(torch.full((1, 6), -100, dtype=torch.long))
+
+    assert torch.isnan(chunked) and torch.isnan(full)
+    assert chunked.requires_grad == full.requires_grad
+    chunked.backward()  # must not raise, exactly like the full path's
+
+
+def test_chunked_ce_still_equals_the_full_path_when_some_targets_are_real():
+    """The non-degenerate result must be untouched by the fix: an empty
+    chunk's reduction='sum' CE is exactly 0.0, so dropping the skip changes
+    nothing."""
+    chunked, full = _both_ce_paths(torch.tensor([[3, -100, 7, -100, -100, 2]]))
+    assert torch.allclose(chunked, full)

@@ -85,10 +85,12 @@ class Painter:
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             image.save(out_path)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             # A full disk / unwritable home leaked a bare OSError past the
             # organ's error type -- serve's narrow except turned an `imagine`
             # into a 500 mid-conversation, the one thing the builtin contract
-            # promises never happens (review 2026-08-13).
+            # promises never happens (review 2026-08-13). PIL raises ValueError
+            # for an out_path whose extension names no writer ("unknown file
+            # extension: .xyz"), which escaped the same way.
             raise ImageGenError(f"could not write the image: {exc}") from exc
         return out_path

@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1324 passed on ENIGMAPC (2026-08-22, paired with the second 2026-08-22 audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1405 passed on ENIGMAPC (2026-08-22, paired with the third 2026-08-22 audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -298,6 +298,23 @@ Deleted after a three-agent adversarial audit verified every claim
    collector tests (`test_collect_pretraining_data.py` +9 done-marker and
    atomic-write, `test_collect_finetuning_data.py` +4 license/loader and
    `test_serve_enigma.py` +3 VoiceReq).
+   **1324 -> 1405 is the third 2026-08-22 audit fix wave** -- 35
+   core/tokenizer and serve (surrogate sanitize, special-forgery
+   neutralization, the KV-window clean stop, the stream U+FFFD hold-back,
+   the multi-family port probe, the chunked-CE contract and the ADV merge
+   round-trip: `test_tokenizer_v2.py` +14, `test_chat_format.py` +8,
+   `test_model_kv_cache.py` +7, `test_serve_enigma.py` +4,
+   `test_audit_regressions.py` +2), 25 organs and memory (TTS worker
+   survival plus cancel-on-timeout, the image-size door, the memory cap,
+   fsync routing, the painter ValueError, the ears 400/500 split, the
+   concurrent-writer detector and caption in-flight sharing:
+   `test_serve_enigma.py` +13, `test_tts.py` +4, `test_eyes.py` +4,
+   `test_memory_store.py` +2, `test_asr.py` +1, `test_imagegen.py` +1),
+   1 net at the grading boundary (the reversal-marker test; the join-shape
+   re-catch rewrote the known-miss pin in place) and 20 periphery
+   (`test_launchers.py` +6, `test_collect_pretraining_data.py` +6,
+   `test_enigma_window.py` +3, `test_teach_tool.py` +2, the new
+   `test_sweep_receipts.py` +2 and `test_repo_hygiene.py` +1).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

@@ -25,6 +25,16 @@ class ASRError(Exception):
     """The ASR backend is unavailable or a transcription failed."""
 
 
+class AudioDecodeError(ASRError):
+    """The AUDIO could not be decoded -- the fault is in the bytes handed in,
+    not in the organ.
+
+    Only the raise site knows which of the two a failure is, and the seam that
+    took the bytes off a client cannot tell them apart from the message. A
+    junk upload is a client error (400); a whisper model that will not load,
+    or a file the server itself failed to write, is the server's (500)."""
+
+
 class Ears:
     """One whisper model, one transcription at a time (lock serializes)."""
 
@@ -77,7 +87,9 @@ class Ears:
                 segments, info = self._model.transcribe(str(path))
                 text = " ".join(s.text.strip() for s in segments).strip()
             except Exception as exc:
-                raise ASRError(f"transcription failed: {exc}") from exc
+                # Whatever whisper choked on, it choked on THIS audio: a
+                # decode error, an empty file, a container it cannot read.
+                raise AudioDecodeError(f"transcription failed: {exc}") from exc
         return {
             "text": text,
             "language": getattr(info, "language", None),

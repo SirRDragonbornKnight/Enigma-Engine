@@ -29,6 +29,7 @@ from .pretokenize import (
     PRETOKENIZER_V2,
     normalize_pretokenizer,
     pretokenize_v2_with_specials,
+    sanitize_for_utf8,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,8 +167,15 @@ class BPETokenizer:
         Each byte of the UTF-8 encoding maps 1:1 to a latin-1 char
         (since the base vocab covers all 256 byte values).  This
         lets the existing BPE operate on byte-level tokens.
+
+        ``errors="replace"`` because an unpaired surrogate (which JSON
+        legally carries) is not encodable and used to raise
+        UnicodeEncodeError from here -- a 500 on the serve render path
+        and a dead worker in pretokenize.  ``sanitize_for_utf8`` makes
+        the same substitution at the top of ``encode``, so the Python
+        and Rust paths produce identical bytes.
         """
-        return text.encode("utf-8").decode("latin-1")
+        return text.encode("utf-8", errors="replace").decode("latin-1")
 
     @staticmethod
     def _bytes_to_text(byte_string: str) -> str:
@@ -571,6 +579,11 @@ class BPETokenizer:
                 for training).  Randomly skips merges to produce
                 diverse tokenizations as data augmentation.
         """
+        # Before the Rust seam: the backend raises on an unpaired surrogate
+        # exactly as strict encode does, so both paths must see the same
+        # sanitized text or they disagree byte-for-byte.
+        text = sanitize_for_utf8(text)
+
         # Rust fast path (no dropout support in Rust backend)
         if self._rust_backend is not None and dropout == 0.0:
             return self._rust_backend.encode(text, add_special_tokens)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Generate text from a pretrained Enigma checkpoint (the from-scratch model).
 
-python sample_enigma.py                                   # uses the completed pretrain model
+python sample_enigma.py                                   # uses the ADOPTED checkpoint
 python sample_enigma.py --ckpt models/enigma_pretrain_large/model.pth --prompts "The" "In 1850"
 """
 
@@ -23,7 +23,11 @@ ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default=str(ROOT / "models" / "enigma_pretrain_large" / "model.pth"))
+    # The ADOPTED lineage, same as align_vision and bench_generate. The old
+    # default was the v1 pretrain checkpoint, which is still ON DISK as the
+    # rollback -- so a bare run loaded it without a word and sampled the
+    # lineage nobody serves.
+    ap.add_argument("--ckpt", default=str(ROOT / "models" / "enigma_v2_sft2" / "model.pth"))
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--max-new", type=int, default=50)
     ap.add_argument("--temperature", type=float, default=0.8)

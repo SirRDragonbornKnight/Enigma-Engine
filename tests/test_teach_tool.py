@@ -137,6 +137,37 @@ def test_statement_twin_lowercases_single_char_article():
     assert statement_twin("What is it?", "A.") == "It is a."
 
 
+def test_statement_twin_does_not_double_the_copula_on_a_full_sentence():
+    """audit 2026-08-22: the twin PREPENDS '<subject> <verb>', so a correction
+    typed as a whole sentence came back with a second copula welded on --
+    'I am I am Enigma.' and 'I was born I was born in the forge.' -- and
+    review_augmentation auto-accepts on non-tty, so a scripted teaching baked
+    the garbled form with nobody to catch it."""
+    assert statement_twin("Who are you?", "I am Enigma.") == "I am Enigma."
+    assert statement_twin("Where were you born?", "I was born in the forge.") == (
+        "I was born in the forge."
+    )
+    # ...also when the sentence is a full one of a DIFFERENT shape than the
+    # prefix the twin computed.
+    assert statement_twin("What is your name?", "I am Enigma.") == "I am Enigma."
+    assert statement_twin("What is the capital of France?",
+                          "The capital of France is Paris.") == (
+        "The capital of France is Paris."
+    )
+    # and the twin is then dropped rather than baked as a second answer
+    _, answers = augment_teaching("Who are you?", "I am Enigma.")
+    assert answers == ["I am Enigma."]
+
+
+def test_statement_twin_still_completes_a_bare_fragment():
+    """The other direction, which the skip must not swallow: a fragment IS
+    what the twin exists for."""
+    assert statement_twin("Who are you?", "Enigma.") == "I am Enigma."
+    assert statement_twin("Where were you born?", "In the forge.") == "I was born in the forge."
+    _, answers = augment_teaching("Who are you?", "Enigma.")
+    assert answers == ["Enigma.", "I am Enigma."]
+
+
 def test_statement_twin_keeps_proper_noun_answer_casing():
     assert statement_twin("Where were you born?", "Paris.") == "I was born Paris."
     assert statement_twin("What is your name?", "Sir Knight's Enigma.") == (

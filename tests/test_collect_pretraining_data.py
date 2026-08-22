@@ -6,6 +6,7 @@ may only fire on a CLEAN pass, atomic per-article writes, the Stack license
 screen, and the wiki-dump resume checks."""
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import sys
@@ -291,7 +292,10 @@ def _wire_wayback(monkeypatch, tmp_path, rows, page_status=200):
     class _Session:
         def get(self, url, params=None, timeout=None):
             if "/cdx/" in url:
-                return _FakeResp(payload=[["timestamp", "original"]] + rows)
+                # The real CDX honors `limit`, which is the whole reason a
+                # domain with more archived pages than the window can return a
+                # FULL one and look finished.
+                return _FakeResp(payload=[["timestamp", "original"]] + rows[:params["limit"]])
             fetched.append(url)
             return _FakeResp(status_code=page_status, text=body)
 
@@ -314,9 +318,36 @@ def test_a_capped_wayback_domain_is_revisited_and_a_finished_one_is_not(monkeypa
     assert progress.get("wayback_done_domains", []) == [], "a cap-stopped domain was marked done"
 
     # The next, bigger run revisits it, takes the page it missed, and only THEN
-    # -- having walked every row -- marks it done.
-    saved = cpd.fetch_wayback([(pattern, "SEP")], max_pages=5, progress=progress)
+    # -- having walked every row of a window it did not fill -- marks it done.
+    saved = cpd.fetch_wayback([(pattern, "SEP")], max_pages=6, progress=progress)
     assert saved == 3 and len(fetched) == 3
+    assert progress["wayback_done_domains"] == [pattern]
+
+
+def test_a_full_cdx_window_is_not_a_finished_wayback_domain(monkeypatch, tmp_path):
+    """The freeze the cap fix was supposed to kill, wearing the loop's own
+    completion. CDX is asked for at most min(cap-remaining, 2000) rows, so a
+    domain with more archived pages than that hands back a FULL window; the
+    per-URL loop walks it to the end without a cap or a rate limit, and
+    `domain_complete` alone then marked the domain done with every page past
+    the window never requested. A short window is the only proof the domain
+    ran out."""
+    pattern = "plato.stanford.edu/entries/*"
+    rows = [["2020", f"http://plato.stanford.edu/entries/e{i}"] for i in range(6)]
+    fetched = _wire_wayback(monkeypatch, tmp_path, rows)
+    progress: dict = {}
+
+    # cap 4 -> limit 4 -> exactly 4 rows come back and all 4 are saved: the
+    # loop completes, uncapped, on a window that was cut off.
+    saved = cpd.fetch_wayback([(pattern, "SEP")], max_pages=4, progress=progress)
+    assert saved == 4 and len(fetched) == 4
+    assert progress.get("wayback_done_domains", []) == [], (
+        "a domain whose CDX window was truncated was marked done"
+    )
+
+    # A run whose window is bigger than the domain finishes it for real.
+    saved = cpd.fetch_wayback([(pattern, "SEP")], max_pages=20, progress=progress)
+    assert saved == 6
     assert progress["wayback_done_domains"] == [pattern]
 
 
@@ -373,6 +404,71 @@ def test_a_capped_fandom_wiki_is_revisited_and_a_finished_one_is_not(monkeypatch
     cpd.fetch_fandom([("minecraft", "Minecraft")], max_articles=10, progress=progress)
     assert progress["fandom_done_wikis"] == ["minecraft"]
     assert len(list((tmp_path / "fandom").glob("*.txt"))) == 2
+
+
+def _wire_fandom_payload(monkeypatch, tmp_path, payload):
+    """Point fetch_fandom at tmp_path with ONE allpages payload, repeated."""
+    _quiet_collector(monkeypatch)
+    monkeypatch.setattr(cpd, "FANDOM_DIR", tmp_path / "fandom")
+
+    class _Session:
+        def get(self, url, params=None, timeout=None):
+            return _FakeResp(payload=payload)
+
+    monkeypatch.setattr(cpd, "SESSION", _Session())
+
+
+@pytest.mark.parametrize("payload, why", [
+    ({"error": {"code": "internal_api_error", "info": "database is locked"}},
+     "an error object"),
+    ({"error": "readonly"}, "a bare error string"),
+    ({"warnings": {"main": {"*": "unrecognized parameter"}}}, "no query at all"),
+])
+def test_a_fandom_error_body_is_not_a_finished_wiki(monkeypatch, tmp_path, payload, why):
+    """MediaWiki reports its OWN failures as HTTP 200 with an {"error": ...}
+    body, so raise_for_status passes and `allpages` comes back empty. The
+    empty-enumeration test read that as "this wiki is finished" and marked it
+    done -- freezing the whole wiki out of every later run with none of its
+    articles fetched. An error is an error, whatever the status line says."""
+    _wire_fandom_payload(monkeypatch, tmp_path, payload)
+    progress: dict = {}
+
+    cpd.fetch_fandom([("minecraft", "Minecraft")], max_articles=10, progress=progress)
+    assert progress.get("fandom_done_wikis", []) == [], (
+        f"a 200 carrying {why} was marked done"
+    )
+
+
+def test_a_genuinely_empty_fandom_enumeration_still_completes(monkeypatch, tmp_path):
+    """The other direction: a real answer with an empty allpages list is a
+    finished wiki, and the error check must not swallow it."""
+    _wire_fandom_payload(monkeypatch, tmp_path, {"query": {"allpages": []}})
+    progress: dict = {}
+
+    cpd.fetch_fandom([("minecraft", "Minecraft")], max_articles=10, progress=progress)
+    assert progress["fandom_done_wikis"] == ["minecraft"]
+
+
+def test_the_sealed_probe_screen_refuses_when_it_cannot_be_imported(monkeypatch):
+    """It failed OPEN: a WARN, `guard = None`, and collection continued
+    unscreened. Nothing downstream looks again -- pretokenize reads whatever is
+    on disk -- so that one WARN was the difference between a sealed gate and a
+    worthless one. The SFT/DPO builders import eval_leak_guard at module scope
+    and die on the same fault; this refuses out loud instead."""
+    real_import = builtins.__import__
+
+    def no_leak_guard(name, *args, **kwargs):
+        if name == "eval_leak_guard":
+            raise ImportError("no module named eval_leak_guard")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setitem(sys.modules, "eval_leak_guard", None)
+    monkeypatch.setattr(builtins, "__import__", no_leak_guard)
+    with pytest.raises(SystemExit) as caught:
+        cpd._locked_probe_guard("FineWeb")
+    message = str(caught.value)
+    assert "REFUSED" in message and "eval_leak_guard" in message
+    assert "FineWeb" in message
 
 
 def test_an_interrupted_article_write_leaves_no_blessed_file(monkeypatch, tmp_path):

@@ -60,7 +60,7 @@ from enigma_engine.core.chat_format import (
 )
 from enigma_engine.core.search import DEFAULT_K as SEARCH_DEFAULT_K
 from enigma_engine.core.search import Searcher, SearchError, render_results
-from enigma_engine.core.asr import ASRError, Ears
+from enigma_engine.core.asr import ASRError, AudioDecodeError, Ears
 from enigma_engine.core.calculator import CalcError, evaluate, format_result
 from enigma_engine.core.eyes import Eyes, EyesError, flatten_image_content
 from enigma_engine.core.imagegen import ImageGenError, Painter
@@ -69,6 +69,7 @@ from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.memory_store import renders_forget_pending as _renders_forget_pending
 from enigma_engine.core.persona import Persona
+from enigma_engine.core.safe_save import atomic_write_text
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
 try:  # Windows consoles default to cp1252 and crash printing unicode.
@@ -336,18 +337,21 @@ def _write_state_atomic(path: Path, obj: dict) -> bool:
     """Persist a small state file so a crash mid-write can never leave a corrupt
     file that loads as the wrong default on the next boot -- the exact case the
     mute-state comment promises against (a half-written mute_state.json must not
-    silently unmute a muted gaming session). Write-temp + os.replace is atomic
-    on the same volume.
+    silently unmute a muted gaming session).
+
+    Through the repo's shared writer, which adds the FSYNC the hand-rolled
+    temp-and-replace here skipped: a process kill was already safe, but a power
+    loss can commit the rename ahead of the data blocks and leave exactly the
+    corrupt file this promises against. backup=False -- these files are
+    rewritten on every toggle, and a stale .bak beside one is a second mute
+    truth nothing reads.
 
     Returns whether the state reached disk. A failed write leaves the in-memory
     state changed for this run, but the promise the caller answers with is
     DURABILITY -- a swallowed OSError answered 200 claiming a restart would
     remember, so the failure is said out loud and reported to the caller."""
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(obj), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(obj), backup=False)
         return True
     except OSError as exc:
         print(f"WARN: could not persist state to {path}: {exc}", flush=True)
@@ -1566,6 +1570,10 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             return "error: nothing to remember"
         try:
             rec = MEMORY.remember(text, source="chat")
+        except ValueError as exc:
+            # The store's own refusal (over the length cap) -- a tool RESULT
+            # she can answer around, never a 500 mid-conversation.
+            return f"error: {exc}"
         except OSError as exc:
             return f"error: could not update the memory file ({exc})"
         return f"updated: {rec['text']}" if rec.get("superseded") else f"saved: {rec['text']}"
@@ -1809,14 +1817,26 @@ def _chat_instruct(req: ChatReq):
                 hop_started = False
                 pending_ws = ""
 
-                def _send_content(new_ids: list[int]):
+                def _send_content(new_ids: list[int], final: bool = False):
                     """Add ids to this hop's CONTENT and send whatever new text
                     that makes. content_ids is built in the same order
                     parse_assistant_ids builds its own, so decoding it
-                    progressively yields the bytes the non-stream join returns."""
+                    progressively yields the bytes the non-stream join returns.
+
+                    A character whose UTF-8 bytes span several tokens decodes
+                    to U+FFFD until its last byte lands, and the finished
+                    character is the SAME string length -- so an emitted
+                    U+FFFD is never corrected by a later delta and the stream
+                    permanently disagreed with non-stream (measured: the emoji
+                    ids [11881,166,142] streamed 'Nice one \\ufffd'). Hold any
+                    U+FFFD-ending tail back until later tokens resolve it;
+                    ``final=True`` flushes whatever is still held, so a
+                    genuine U+FFFD in her output still reaches the wire."""
                     nonlocal emitted, hop_started, pending_ws, emitted_any
                     content_ids.extend(new_ids)
                     text = tokenizer.decode(content_ids, skip_special_tokens=True)
+                    if not final:
+                        text = text.rstrip("\ufffd")
                     if len(text) <= emitted:
                         return
                     delta = text[emitted:]
@@ -1903,6 +1923,10 @@ def _chat_instruct(req: ChatReq):
                 # truncated search query surfaces as content -- catch up here
                 # or the stream drops text the non-stream path returns.
                 yield from _flush_span(False)
+                # ...and release any U+FFFD tail _send_content is holding: the
+                # hop is over, nothing more will resolve it, and non-stream
+                # returns it.
+                yield from _send_content([], final=True)
                 out = parse_assistant_ids(tokenizer, all_ids)
                 parsed = out["tool_calls"]
                 # Unparsable call text is collected across hops -- a malformed
@@ -3020,7 +3044,12 @@ def audio_transcriptions(file: UploadFile = File(...)):
     try:
         Path(tmp).write_bytes(file.file.read())
         return EARS.transcribe(tmp)
-    except ASRError as exc:
+    except AudioDecodeError as exc:
+        # The UPLOAD is what whisper could not read, so this is the client's
+        # error and 400 says so. A 500 told every junk file it had broken the
+        # server, and buried the real organ failures in the same status.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ASRError as exc:  # the organ itself: model not loaded, and so on
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         Path(tmp).unlink(missing_ok=True)
@@ -3047,6 +3076,14 @@ class ImageGenReq(BaseModel):
     size: str = "512x512"
 
 
+# What a requested image may measure. n was bounded because VRAM is shared
+# with the LLM, and the SIZE was not -- a "4096x4096" reached diffusers
+# unchallenged, where a CUDA OOM beside the served model can fragment the
+# allocator for the rest of the server's life. Multiples of 8 because the SD
+# VAE downsamples by 8; 0 and negatives are refused rather than handed down.
+_IMAGE_SIDE_MIN, _IMAGE_SIDE_MAX, _IMAGE_SIDE_STEP = 256, 1024, 8
+
+
 @app.post("/v1/images/generations")
 def images_generations(req: ImageGenReq):
     if PAINTER is None:
@@ -3055,6 +3092,14 @@ def images_generations(req: ImageGenReq):
         width, height = (int(x) for x in req.size.lower().split("x"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"bad size {req.size!r}; use WIDTHxHEIGHT like 512x512") from exc
+    for side in (width, height):
+        if not _IMAGE_SIDE_MIN <= side <= _IMAGE_SIDE_MAX or side % _IMAGE_SIDE_STEP:
+            raise HTTPException(
+                status_code=400,
+                detail=f"bad size {req.size!r}; each side must be a multiple of "
+                f"{_IMAGE_SIDE_STEP} between {_IMAGE_SIDE_MIN} and {_IMAGE_SIDE_MAX} "
+                f"(the GPU is shared with the model that is serving you)",
+            )
     data = []
     for _ in range(max(1, min(int(req.n), 4))):  # bound n: VRAM is shared with the LLM
         out = IMAGES_DIR / f"gen_{uuid.uuid4().hex[:8]}.png"
@@ -3093,20 +3138,31 @@ def _require_free_port(host: str, port: int) -> None:
     the launcher's job. No SO_REUSEADDR -- on Windows that flag lets a probe
     bind straight over a live listener, which is exactly the false clear this
     check must not give.
+
+    EVERY address getaddrinfo returns is probed, not just the first: a host
+    name can resolve to several families, and uvicorn binds all of them. On
+    this box "localhost" is ::1 THEN 127.0.0.1, so probing row 0 alone cleared
+    a port whose v4 half was already serving -- the second server paid the
+    whole checkpoint load and died on the bind anyway, the exact failure this
+    check exists to prevent (measured 2026-08-22).
     """
-    info = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0]
-    s = socket.socket(info[0], socket.SOCK_STREAM)
-    try:
-        s.bind(info[4])
-    except OSError as exc:
-        raise SystemExit(
-            f"port {port} on {host} is already in use ({exc.strerror or exc}).\n"
-            "Something is already serving there -- most likely the daily Enigma "
-            "server (stop it with Stop Enigma.bat / Enigma Tray.bat), or pass "
-            "--port <other> to run a second one beside it."
-        ) from exc
-    finally:
-        s.close()
+    seen: set[tuple] = set()
+    for family, _stype, _proto, _canon, sockaddr in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        if sockaddr in seen:
+            continue
+        seen.add(sockaddr)
+        s = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            s.bind(sockaddr)
+        except OSError as exc:
+            raise SystemExit(
+                f"port {port} on {host} ({sockaddr[0]}) is already in use ({exc.strerror or exc}).\n"
+                "Something is already serving there -- most likely the daily Enigma "
+                "server (stop it with Stop Enigma.bat / Enigma Tray.bat), or pass "
+                "--port <other> to run a second one beside it."
+            ) from exc
+        finally:
+            s.close()
 
 
 def main() -> None:

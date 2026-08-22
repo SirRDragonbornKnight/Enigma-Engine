@@ -77,29 +77,50 @@ if ($Persona) { $argString += " --persona `"$Persona`"" }
 if ($DryRun) {
     Write-Output "DRYRUN serve: `"$python`" $argString"
     Write-Output "DRYRUN logs: $log | $($self.ErrLog)"
+    Write-Output "DRYRUN start-lock: $($self.StartMutex)"
     exit 0
 }
 
-$up = Get-NetTCPConnection -LocalPort $bindPort -State Listen -ErrorAction SilentlyContinue
-if ($up) {
-    # Verify the listener really is this AI before claiming she's up.
-    $ownerId = $up[0].OwningProcess
-    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId" -ErrorAction SilentlyContinue).CommandLine
-    $procName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
-    $serving = Get-ServingPersona -Port $bindPort
-    if ($serving) {
-        # -ceq, not -eq: PowerShell compares strings case-insensitively, and a
-        # pack named "enigma" is a different AI wearing her spelling.
-        $ours = ($serving -ceq $aiName)
-    } else {
-        $ours = ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai"))
-    }
-    if ($ours) {
-        Write-Output "$aiName already serving on port $bindPort (pid $ownerId)."
-        # A live server keeps the ORGANS it booted with -- flags cannot reach
-        # it. Every launch is complete since 2026-07-27, so any live server
-        # WITHOUT voice predates the ruling; warn unconditionally.
-        if ($true) {
+# Checking the port and spawning the server is ONE act. Between the two a
+# second launcher -- a double-clicked shortcut, the tray's Talk while the .bat
+# is still running -- saw a free port and started a SECOND multi-GB load that
+# only discovered the collision when it tried to bind, minutes later. The tray
+# already serializes itself on a named mutex; this is the same guard around the
+# launch, under a name of its own so the tray and the launcher do not block
+# each other, and per-AI so a pack starting is not Enigma starting.
+$startLock = New-Object System.Threading.Mutex($false, $self.StartMutex)
+try {
+    $held = $startLock.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    # The previous holder died mid-launch without releasing. WaitOne hands the
+    # mutex over anyway -- take it rather than refusing a launch forever.
+    $held = $true
+}
+if (-not $held) {
+    Write-Output "$aiName is already starting (another launcher holds the start lock) -- not starting a second server."
+    exit 0
+}
+
+try {
+    $up = Get-NetTCPConnection -LocalPort $bindPort -State Listen -ErrorAction SilentlyContinue
+    if ($up) {
+        # Verify the listener really is this AI before claiming she's up.
+        $ownerId = $up[0].OwningProcess
+        $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId" -ErrorAction SilentlyContinue).CommandLine
+        $procName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
+        $serving = Get-ServingPersona -Port $bindPort
+        if ($serving) {
+            # -ceq, not -eq: PowerShell compares strings case-insensitively, and a
+            # pack named "enigma" is a different AI wearing her spelling.
+            $ours = ($serving -ceq $aiName)
+        } else {
+            $ours = ($cmd -like "*serve_enigma.py*" -or $procName -in @("enigma", "enigma-ai"))
+        }
+        if ($ours) {
+            Write-Output "$aiName already serving on port $bindPort (pid $ownerId)."
+            # A live server keeps the ORGANS it booted with -- flags cannot reach
+            # it. Every launch is complete since 2026-07-27, so any live server
+            # WITHOUT voice predates the ruling; warn unconditionally.
             $voiceState = "unknown"
             try {
                 $s = Invoke-RestMethod -Uri "$($self.BaseUrl)/v1/audio/status" -TimeoutSec 3
@@ -124,38 +145,44 @@ if ($up) {
                     "$aiName $why, and organs cannot be added to a server that is already up. Her window will still open and she can chat in text -- she just will not speak. To hear her: run Stop-Enigma.ps1, then start her again from 'Talk to Enigma'. If this warning comes back after a restart, the voice organ itself is failing at boot -- check the server console for its WARN line.",
                     $aiName) | Out-Null
             }
+            exit 0
         }
-        exit 0
+        # Name the holder as precisely as it can be named: another AI answers for
+        # itself, and anything that cannot is still described by its process.
+        if ($serving) {
+            $who = "$serving (pid $ownerId)"
+        } else {
+            $who = "pid $ownerId ($procName)"
+        }
+        Write-Output "WARN: port $bindPort is held by $who, which is NOT $aiName -- not starting a second server."
+        # Usually launched hidden -- the refusal must be visible (2026-07-17 audit).
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(
+            "Port $bindPort is in use by $who, so $aiName cannot start. Close that program and try again.",
+            $aiName) | Out-Null
+        exit 1
     }
-    # Name the holder as precisely as it can be named: another AI answers for
-    # itself, and anything that cannot is still described by its process.
-    if ($serving) {
-        $who = "$serving (pid $ownerId)"
-    } else {
-        $who = "pid $ownerId ($procName)"
+
+    if (-not (Test-Path $python)) {
+        # Often launched hidden (tray/bat) -- a popup is the only failure anyone sees.
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(
+            "$($aiName)'s serving environment was not found at $python -- recreate it with: python -m venv venv; venv\Scripts\pip install -e `".[server,voice,ears,eyes,imagegen]`" (from the Enigma Engine folder).",
+            $aiName) | Out-Null
+        exit 1
     }
-    Write-Output "WARN: port $bindPort is held by $who, which is NOT $aiName -- not starting a second server."
-    # Usually launched hidden -- the refusal must be visible (2026-07-17 audit).
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "Port $bindPort is in use by $who, so $aiName cannot start. Close that program and try again.",
-        $aiName) | Out-Null
-    exit 1
-}
 
-if (-not (Test-Path $python)) {
-    # Often launched hidden (tray/bat) -- a popup is the only failure anyone sees.
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "$($aiName)'s serving environment was not found at $python -- recreate it with: python -m venv venv; venv\Scripts\pip install -e `".[server,voice,ears,eyes,imagegen]`" (from the Enigma Engine folder).",
-        $aiName) | Out-Null
-    exit 1
+    Start-Process -FilePath $python `
+        -ArgumentList $argString `
+        -WorkingDirectory $engineDir `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $log `
+        -RedirectStandardError $self.ErrLog
+    Write-Output "$aiName starting on $($self.BaseUrl)/v1 (log: serve_$($self.Slug).log)"
+} finally {
+    # Held across the whole check-and-spawn, released however this exits --
+    # PowerShell runs finally on `exit` too, so the next launcher is not left
+    # waiting on a lock nobody holds.
+    $startLock.ReleaseMutex()
+    $startLock.Dispose()
 }
-
-Start-Process -FilePath $python `
-    -ArgumentList $argString `
-    -WorkingDirectory $engineDir `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $log `
-    -RedirectStandardError $self.ErrLog
-Write-Output "$aiName starting on $($self.BaseUrl)/v1 (log: serve_$($self.Slug).log)"

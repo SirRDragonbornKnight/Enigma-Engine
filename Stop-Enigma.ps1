@@ -2,7 +2,9 @@
 # hidden server on port 8000. Counterpart to Start-Enigma.ps1; called by
 # "Stop Enigma.bat" or run by hand.
 # Safe by design: the port-8000 process is only killed if the server there says
-# it is Enigma -- another AI, or any other program, is left alone.
+# it is Enigma -- another AI, or any other program, is left alone. An EMPTY
+# port is not "already stopped": a serve mid-cold-boot has not bound yet, so it
+# is matched on its command line instead, by the same ownership rule.
 # -Persona stops the AI from THAT pack instead: her port, her window, and
 # nothing of Enigma's. With no -Persona every value is the literal this script
 # carried before it took parameters, which is what -DryRun exists to prove.
@@ -30,6 +32,7 @@ $bindPort = $self.Port
 if ($DryRun) {
     Write-Output "DRYRUN stop: persona=$aiName port=$bindPort"
     Write-Output "DRYRUN window: match=$($self.WindowMatch) extra=$($self.WindowExtra) exclude=$($self.WindowExclude)"
+    Write-Output "DRYRUN serve-process: match=$($self.ServeMatch) extra=$($self.ServeExtra) exclude=$($self.ServeExclude)"
     exit 0
 }
 
@@ -38,9 +41,12 @@ if ($DryRun) {
 # be titled "Enigma" (avatar tooling, a second pywebview app) is not ours.
 # A pack's window carries its pack directory on the line and HERS carries no
 # --persona at all, so stopping one AI leaves the other's window standing.
+# A pytest run of tests\test_enigma_window.py carries that file name too, and
+# force-killing the suite that tests this matcher is not stopping her window.
 $windows = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
     Where-Object {
         $_.CommandLine -like $self.WindowMatch -and
+        $_.CommandLine -notlike $self.TestRunner -and
         ($self.WindowExtra -eq "" -or $_.CommandLine -like $self.WindowExtra) -and
         ($self.WindowExclude -eq "" -or $_.CommandLine -notlike $self.WindowExclude)
     })
@@ -61,7 +67,32 @@ if ($windows.Count -eq 0) {
 $conn = Get-NetTCPConnection -LocalPort $bindPort -State Listen -ErrorAction SilentlyContinue |
     Select-Object -First 1
 if ($null -eq $conn) {
-    Write-Output "server: nothing on port $bindPort -- already stopped."
+    # An empty port is not proof she is down. serve BINDS LAST: boot() reads
+    # and sha256s a multi-GB checkpoint and brings the organs up before uvicorn
+    # listens, so a cold-booting server holds no port at all -- and "already
+    # stopped" left it to bind seconds after Stop said she was gone. It cannot
+    # answer /v1/capabilities yet either, so the process line is the honest
+    # fallback here, matched by the same ownership rule as her window (a pack's
+    # serve carries --persona, hers never does; a pytest run is not a serve).
+    $booting = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -like $self.ServeMatch -and
+            $_.CommandLine -notlike $self.TestRunner -and
+            ($self.ServeExtra -eq "" -or $_.CommandLine -like $self.ServeExtra) -and
+            ($self.ServeExclude -eq "" -or $_.CommandLine -notlike $self.ServeExclude)
+        })
+    if ($booting.Count -eq 0) {
+        Write-Output "server: nothing on port $bindPort -- already stopped."
+    } else {
+        foreach ($b in $booting) {
+            try {
+                Stop-Process -Id $b.ProcessId -Force -ErrorAction Stop
+                Write-Output "server: serve was still booting -- stopped (pid $($b.ProcessId))."
+            } catch {
+                Write-Output "server: FAILED to stop booting pid $($b.ProcessId) ($($_.Exception.Message)) -- try from an elevated shell."
+            }
+        }
+    }
 } else {
     $ownerId = $conn.OwningProcess
     $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerId" -ErrorAction SilentlyContinue).CommandLine

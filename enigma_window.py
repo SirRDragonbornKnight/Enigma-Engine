@@ -25,7 +25,9 @@ open onto a connection-refused page mid cold-start).
 
 --persona is the pack a generated Talk shim passes: the window is titled
 for whoever it opens onto, and its boot page names HER error log. Omitted
-is Enigma, which is what every value here already said.
+is Enigma, which is what every value here already said. A NAMED pack that
+will not load stops the window with a POPUP -- under pyw the printed
+message goes nowhere, so the shortcut was clicked and nothing happened.
 """
 
 import html
@@ -106,6 +108,29 @@ def _parse_args(args: list[str]) -> tuple[str, bool, Persona]:
     return url, on_top, Persona.load(pack)
 
 
+def _message_box(text: str, title: str) -> None:
+    """A popup with no dependencies: user32's MessageBoxW through ctypes.
+    pywebview may be the very thing that is broken, and this shim runs under
+    pyw, where nothing printed is ever seen. MB_ICONERROR | MB_OK."""
+    import ctypes
+
+    ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)
+
+
+def _report_fatal(message: str) -> None:
+    """Raise a startup refusal as a POPUP before the process dies. Persona.load
+    raises SystemExit on a pack that is missing, malformed or not hers, and
+    under the windowless launch its message goes nowhere at all -- the shortcut
+    was clicked, the server started, and no window ever appeared (contra the
+    chain's rule that a failure is a popup). SystemExit still prints it for the
+    console launches, so this adds the one channel pyw has and does not
+    duplicate the one it already had."""
+    try:
+        _message_box(message, "Enigma")
+    except Exception as exc:  # no user32 (non-Windows), broken ctypes
+        print(f"(could not raise a popup: {exc})")
+
+
 def _host_port(url: str) -> tuple[str, int]:
     p = urllib.parse.urlparse(url)
     return p.hostname or "127.0.0.1", p.port or (443 if p.scheme == "https" else 80)
@@ -153,7 +178,11 @@ def _poll_and_load(window, url: str) -> None:
 
 
 def main() -> int:
-    url, on_top, persona = _parse_args(sys.argv[1:])
+    try:
+        url, on_top, persona = _parse_args(sys.argv[1:])
+    except SystemExit as exc:
+        _report_fatal(str(exc) or "the persona pack could not be loaded")
+        raise
     try:
         import webview
     except ImportError:

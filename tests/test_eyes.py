@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import base64
 import io
+import threading
+import time
 
 import pytest
 from PIL import Image
@@ -148,6 +150,145 @@ def test_a_failed_caption_is_not_remembered():
             eyes.describe(img)
     captioner.fail = False
     assert eyes.describe(img) == "a red square"
+
+
+# ------------------------------------------------------- concurrent callers
+
+
+class BlockingCaptioner:
+    """Counts computations and holds every one open until it is released, so a
+    test can pin one caption 'in flight' while the other callers arrive."""
+
+    def __init__(self, fail: bool = False):
+        self.calls = 0
+        self.fail = fail
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, img):
+        self.calls += 1
+        self.entered.set()
+        self.release.wait(5)
+        if self.fail:
+            raise RuntimeError("synthetic caption failure")
+        return "a shared caption"
+
+
+def _run_together(target, n: int):
+    """Start n threads on target(); return (threads, started, results).
+
+    A raised exception lands in `results` like any other outcome -- these
+    tests are about what every caller ENDED UP with, failures included."""
+    out: list = []
+    started: list = []
+
+    def call():
+        started.append(1)
+        try:
+            out.append(target())
+        except BaseException as exc:
+            out.append(exc)
+
+    threads = [threading.Thread(target=call) for _ in range(n)]
+    for t in threads:
+        t.start()
+    return threads, started, out
+
+
+def test_concurrent_callers_of_one_image_caption_it_once():
+    """The cache only helped the SECOND turn. One picture arriving on several
+    requests at once measured eight full captioning passes for eight threads
+    (audit 2026-08-22) -- every one of them holding the shared generation lock
+    ahead of the answer the user was waiting for. The first caller in computes;
+    the rest wait on it and share the result."""
+    captioner = BlockingCaptioner()
+    eyes = Eyes(captioner_factory=lambda: captioner)
+    img = _png_bytes()
+
+    threads, started, out = _run_together(lambda: eyes.describe(img), 8)
+    try:
+        assert captioner.entered.wait(5), "no caller reached the captioner"
+        deadline = time.time() + 5
+        while len(started) < 8 and time.time() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.1)  # let the seven followers reach the in-flight wait
+    finally:
+        captioner.release.set()
+    for t in threads:
+        t.join(5)
+
+    assert not [t for t in threads if t.is_alive()], "a caller never returned"
+    assert out == ["a shared caption"] * 8
+    assert captioner.calls == 1
+
+
+def test_a_failed_in_flight_caption_does_not_wedge_the_callers_waiting_on_it():
+    """A shared compute must share its FAILURE too: waiters that never learn
+    the leader died would hold the request thread until the client gave up.
+    The slot is released either way, so the next call simply tries again."""
+    captioner = BlockingCaptioner(fail=True)
+    eyes = Eyes(captioner_factory=lambda: captioner)
+    img = _png_bytes()
+
+    threads, started, out = _run_together(lambda: eyes.describe(img), 8)
+    try:
+        assert captioner.entered.wait(5), "no caller reached the captioner"
+        deadline = time.time() + 5
+        while len(started) < 8 and time.time() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.1)
+    finally:
+        captioner.release.set()
+    for t in threads:
+        t.join(5)
+
+    assert not [t for t in threads if t.is_alive()], "a waiter is wedged on a dead caption"
+    assert len(out) == 8 and all(isinstance(r, EyesError) for r in out)
+    assert captioner.calls == 1
+
+    captioner.fail = False  # the in-flight slot was released, so a retry works
+    assert eyes.describe(img) == "a shared caption"
+    assert captioner.calls == 2
+
+
+def test_distinct_images_are_each_captioned_once_under_concurrency():
+    """Sharing is keyed on the PAYLOAD: four different pictures owe four
+    captions, and none of the four callers may collect another's answer."""
+    counter = CountingCaptioner()
+    eyes = Eyes(captioner_factory=lambda: counter)
+    payloads = [_png((30 * i + 5, 7, 9)) for i in range(4)]
+    seen: dict[int, str] = {}
+
+    def call(i):
+        seen[i] = eyes.describe(payloads[i])
+
+    threads = [threading.Thread(target=call, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+
+    assert not [t for t in threads if t.is_alive()]
+    assert counter.calls == 4
+    assert len(set(seen.values())) == 4, "two images shared one caption"
+
+
+def test_the_cache_lock_is_free_while_a_caption_is_being_computed():
+    """The cache lock must never nest around the caption, which takes the
+    shared GENERATION lock: a cache that queued its hits behind generation
+    would be slower than having no cache at all."""
+    captioner = BlockingCaptioner()
+    eyes = Eyes(captioner_factory=lambda: captioner)
+    t = threading.Thread(target=lambda: eyes.describe(_png_bytes()))
+    t.start()
+    try:
+        assert captioner.entered.wait(5), "the captioner was never reached"
+        assert eyes._cache_lock.acquire(timeout=1), "the cache lock is held across the caption"
+        eyes._cache_lock.release()
+    finally:
+        captioner.release.set()
+        t.join(5)
+    assert not t.is_alive()
 
 
 # ---------------------------------------------------------------- flattener

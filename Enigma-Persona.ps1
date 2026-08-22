@@ -103,10 +103,15 @@ function Resolve-EnigmaPersona {
         # Her window is enigma_window.py either way, so the pack path on the
         # command line is what tells two windows apart. The shims pass the
         # directory they were generated into, which is the spelling matched
-        # here.
+        # here. Her SERVE is matched the same way and for the same reason: one
+        # script serves every AI in this checkout, so the process name answers
+        # the wrong question and the pack path is what makes it hers.
         $windowMatch = "*enigma_window.py*"
         $windowExclude = ""
         $windowExtra = "*$PackDir*"
+        $serveMatch = "*serve_enigma.py*"
+        $serveExclude = ""
+        $serveExtra = "*$PackDir*"
     } else {
         $name = "Enigma"
         $slug = "enigma"
@@ -114,10 +119,14 @@ function Resolve-EnigmaPersona {
         $talkBat = Join-Path $EngineDir "Talk to Enigma.bat"
         if ($Port -gt 0) { $bind = $Port } else { $bind = 8000 }
         # HER window is the one started without a pack: a launcher that closed
-        # every enigma_window.py would close the other AI's window too.
+        # every enigma_window.py would close the other AI's window too. Same
+        # rule for HER serve -- a pack's carries --persona, hers never does.
         $windowMatch = "*enigma_window.py*"
         $windowExclude = "*--persona*"
         $windowExtra = ""
+        $serveMatch = "*serve_enigma.py*"
+        $serveExclude = "*--persona*"
+        $serveExtra = ""
     }
     return [PSCustomObject]@{
         Name          = $name
@@ -128,11 +137,20 @@ function Resolve-EnigmaPersona {
         Log           = Join-Path $EngineDir "serve_$slug.log"
         ErrLog        = Join-Path $EngineDir "serve_$slug.err.log"
         Mutex         = "Local\" + ($name -replace ' ', '') + "Tray"
+        StartMutex    = "Local\" + ($name -replace ' ', '') + "Start"
         Initial       = $name.Substring(0, 1).ToUpperInvariant()
         TalkBat       = $talkBat
         BaseUrl       = "http://127.0.0.1:$bind"
         WindowMatch   = $windowMatch
         WindowExtra   = $windowExtra
         WindowExclude = $windowExclude
+        ServeMatch    = $serveMatch
+        ServeExtra    = $serveExtra
+        ServeExclude  = $serveExclude
+        # A pytest run of tests/test_enigma_window.py or tests/test_serve_enigma.py
+        # carries the matched FILE NAME on its own command line, so the process
+        # matchers above see the suite that is testing them and Stop force-killed
+        # it. Nothing this chain launches ever runs through pytest.
+        TestRunner    = "*pytest*"
     }
 }
