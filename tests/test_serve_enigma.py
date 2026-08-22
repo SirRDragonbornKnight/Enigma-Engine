@@ -24,13 +24,20 @@ import torch
 
 import make_sft_data
 import serve_enigma as serve
-from enigma_engine.core.chat_format import CHAT_FORMAT_NAME, attach_chat_tokens, render_tools_system
+from enigma_engine.core.chat_format import (
+    CHAT_FORMAT_NAME,
+    attach_chat_tokens,
+    chat_token_ids,
+    render_tools_system,
+    search_token_ids,
+    think_token_ids,
+)
 from enigma_engine.core.eyes import EyesError
 from enigma_engine.core.memory_store import MemoryStore
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
 from enigma_engine.core.persona import PACK_MANIFEST, Persona
-from enigma_engine.core.tokenizer import get_tokenizer
+from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 
 # ---------------------------------------------------------------------------
 # import safety -- the regression gate for the whole refactor
@@ -140,6 +147,76 @@ def test_completion_defaults_keep_the_exploratory_temperature():
     req = serve.CompletionReq(prompt="x")
     assert req.temperature == 0.8
     assert req.min_p == 0.0
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("knob", ["temperature", "top_p", "min_p", "repetition_penalty"])
+def test_a_non_finite_sampling_knob_is_refused_not_sampled(monkeypatch, literal, knob):
+    """JSON carries NaN/Infinity as BARE LITERALS and json.loads parses them, so
+    a client could hand one straight to the sampler. logits/NaN turns the whole
+    row NaN, which wipes the -inf vocab-padding mask BEFORE sample_next_token
+    saves its pre-filter copy -- the second-level guard then reads the padded
+    columns as allowed and draws uniformly over them (measured 2026-08-22:
+    67/200 draws landed in masked rows at NaN, 74/200 at inf). That is <unk>
+    spam plus chat-special ids firing tool spans out of noise. It must be a
+    client error, and nothing may generate."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(serve, "_BOOTED", True)
+
+    def never(*a, **k):
+        raise AssertionError("generation ran on a non-finite sampling knob")
+
+    monkeypatch.setattr(serve, "_gen_ids", never)
+    monkeypatch.setattr(serve, "_generate_text", never)
+    client = TestClient(serve.app)
+    headers = {"content-type": "application/json"}
+
+    chat = ('{"messages": [{"role": "user", "content": "hi"}], '
+            f'"{knob}": {literal}}}')
+    assert client.post("/v1/chat/completions", content=chat, headers=headers).status_code == 422
+    comp = f'{{"prompt": "hi", "{knob}": {literal}}}'
+    assert client.post("/v1/completions", content=comp, headers=headers).status_code == 422
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_a_non_finite_voice_speed_is_refused(monkeypatch, literal):
+    """VoiceReq.speed rides the same bare-JSON-literal door the sampling knobs
+    closed: it reaches Kokoro's rate AND is persisted into voice.json as the
+    saved recipe, so a single NaN outlives the request that sent it."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(serve, "_BOOTED", True)
+
+    class _NeverSpeaker:
+        def set_voice(self, **kwargs):
+            raise AssertionError("the voice was retuned on a non-finite speed")
+
+    monkeypatch.setattr(serve, "SPEAKER", _NeverSpeaker())
+    client = TestClient(serve.app)
+    resp = client.post(
+        "/v1/audio/voice",
+        content=f'{{"speed": {literal}}}',
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 422
+    # ...and a finite speed still reaches the organ
+    assert serve.VoiceReq.model_validate_json('{"speed": 1.25}').speed == 1.25
+
+
+def test_the_temperature_clamp_survives_a_non_finite_value():
+    """Defense in depth for the same hole: the clamp is what every generation
+    path funnels through, and `0.0 if t <= 0 else max(t, 1e-3)` passed NaN and
+    inf through untouched (NaN fails both comparisons, inf wins max). A
+    non-finite value falls back to the default the field would have carried."""
+    assert serve._clamp_temperature(float("nan"), serve.CHAT_TEMPERATURE) == 0.3
+    assert serve._clamp_temperature(float("inf"), serve.CHAT_TEMPERATURE) == 0.3
+    assert serve._clamp_temperature(float("-inf"), serve.RAW_TEMPERATURE) == 0.8
+    # ...and the finite behavior is unmoved: <= 0 is greedy, tiny is clamped
+    assert serve._clamp_temperature(0.0, 0.3) == 0.0
+    assert serve._clamp_temperature(-2.0, 0.3) == 0.0
+    assert serve._clamp_temperature(1e-9, 0.3) == 1e-3
+    assert serve._clamp_temperature(0.7, 0.3) == 0.7
 
 
 # ---------------------------------------------------------------------------
@@ -994,6 +1071,100 @@ def test_stream_and_nonstream_content_byte_identical(monkeypatch, tok, gen_text)
     assert stream == nonstream
 
 
+# ---------------------------------------------------------------------------
+# ...and parity when the SPANS are malformed (audit 2026-08-22). The stream
+# used to suppress span interiors with a DEPTH COUNTER, which is not what
+# parse_assistant_ids does: spans never nest there, an opener TRUNCATES the
+# open span and restarts, a closer closes outright, and a span the token
+# budget cut is flushed rather than discarded. Every one of those shapes
+# streamed different bytes than the same ids returned non-streamed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def tok_v2():
+    """The live lineage's vocab -- the only one carrying <search> ids, which
+    the budget-cut shape below needs (v1 carves none)."""
+    t = get_tokenizer("bpe", vocab_path=vocab_file_for_size(V2_VOCAB))
+    attach_chat_tokens(t)
+    return t
+
+
+def _span_shape_ids(tok, shape: str) -> list[int]:
+    """One shape's SAMPLED ids, built with the real tokenizer -- both paths are
+    then driven over this exact sequence, which is the only way the comparison
+    measures the two readers rather than two generations."""
+    ct = chat_token_ids(tok)
+    think, think_end = think_token_ids(tok)
+    tool, tool_end = ct["<|tool_call|>"], ct["<|/tool_call|>"]
+    search, _ = search_token_ids(tok)
+
+    def e(text):
+        return tok.encode(text, add_special_tokens=False)
+
+    if shape == "well-formed":  # the control: <think>...</think> then content
+        return [think, *e("reasoning"), think_end, *e("Hello world.")]
+    if shape == "reopened-think":  # <think>a<think>b</think>c
+        return [think, *e("a"), think, *e("b"), think_end, *e("c")]
+    if shape == "tool-inside-think":  # <think>a<tool_call>{..}</tool_call> c</think> d
+        return [think, *e("a"), tool, *e('{"name": "get_weather", "arguments": {}}'),
+                tool_end, *e(" c"), think_end, *e(" d")]
+    if shape == "budget-cut-span":  # generation ended mid-span: the parser recovers it
+        return [*e("before "), search, *e("half a query")]
+    raise AssertionError(f"unknown shape {shape!r}")
+
+
+@pytest.mark.parametrize(
+    "shape,expected",
+    [
+        ("well-formed", "Hello world."),
+        # the depth counter never came back down: "c" streamed as nothing
+        ("reopened-think", "c"),
+        # the inner closer decremented to depth 1, so " c" was suppressed
+        ("tool-inside-think", "c d"),
+        # the dangling span's text joins CONTENT at parse time; the stream had
+        # no catch-up for it (only raw tool text had one)
+        ("budget-cut-span", "before half a query"),
+    ],
+)
+def test_stream_matches_nonstream_on_malformed_spans(monkeypatch, tok_v2, shape, expected):
+    monkeypatch.setattr(serve, "INSTRUCT", True)
+    monkeypatch.setattr(serve, "tokenizer", tok_v2)
+    monkeypatch.setattr(serve, "EOS_ID", tok_v2.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tok_v2.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512, search_k=3))
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+    monkeypatch.setattr(serve, "SEARCHER", None)
+    scripted = _span_shape_ids(tok_v2, shape)
+
+    def fake_gen(ids, max_tokens, *a, **k):
+        yield from scripted
+
+    monkeypatch.setattr(serve, "_gen_ids", fake_gen)
+
+    def _req(stream: bool) -> serve.ChatReq:
+        return serve.ChatReq(
+            messages=[serve.Msg(role="user", content="Tell me a story.")],
+            stream=stream,
+            max_tokens=128,
+        )
+
+    nonstream = serve._chat_instruct(_req(stream=False))["choices"][0]["message"]["content"] or ""
+    stream = _drain_stream(serve._chat_instruct(_req(stream=True)))
+    # The literal is pinned as well as the equality: two paths agreeing on ""
+    # would satisfy `stream == nonstream` while dropping the whole reply.
+    assert nonstream == expected
+    assert stream == nonstream
+    # Span INTERIORS still never reach the wire -- parity is not permission to
+    # leak her reasoning or the query she is about to run.
+    for hidden in ("reasoning", "get_weather", "half a query"):
+        if hidden in expected:
+            continue
+        assert hidden not in stream, f"{hidden!r} leaked onto the wire"
+
+
 def test_stream_reports_the_same_enigma_extension_as_nonstream(monkeypatch, tok):
     """A looped built-in is consumed by the hop that runs it, so `enigma`
     (spoke + tools_run) is the ONLY report that it fired. The stream path
@@ -1542,6 +1713,57 @@ def test_load_eyes_guards_and_happy_path(tmp_path):
     )
     with pytest.raises(RuntimeError):  # strict load on a mismatched encoder
         serve._load_eyes(bad_sd, "small")
+
+
+# ---------------------------------------------------------------------------
+# main()'s pre-boot port probe: refusing must be cheap
+# ---------------------------------------------------------------------------
+
+
+def test_a_busy_port_is_refused_before_the_checkpoint_load(monkeypatch):
+    """boot() reads and sha256s a multi-GB .pth and brings the organs up, and
+    only THEN does uvicorn try to bind -- so a second server aimed at the daily
+    port paid the whole load just to die on the bind (audit 2026-08-22). The
+    probe is a refusal, never a takeover: the live server keeps the port."""
+    import socket
+
+    held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    held.bind(("127.0.0.1", 0))
+    held.listen(1)
+    port = held.getsockname()[1]
+    try:
+        with pytest.raises(SystemExit) as exc:
+            serve._require_free_port("127.0.0.1", port)
+        assert str(port) in str(exc.value)
+        assert "Stop Enigma" in str(exc.value)  # names the likely owner and the way out
+        # ...and the listener it refused for is untouched: still accepting.
+        probe = socket.create_connection(("127.0.0.1", port), timeout=2)
+        probe.close()
+    finally:
+        held.close()
+
+    # A free port passes AND is left free -- the probe releases what it binds,
+    # or uvicorn would bind against this very socket a moment later.
+    free = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    free.bind(("127.0.0.1", 0))
+    free_port = free.getsockname()[1]
+    free.close()
+    serve._require_free_port("127.0.0.1", free_port)
+    serve._require_free_port("127.0.0.1", free_port)  # twice: nothing was kept
+
+
+def test_main_probes_the_port_before_it_boots(monkeypatch):
+    """The ORDER is the whole fix: a probe that runs after boot() saves nothing.
+    main() is driven with both steps stubbed, and the call sequence recorded."""
+    calls: list[str] = []
+    monkeypatch.setattr(serve, "_require_free_port", lambda h, p: calls.append(f"probe {h}:{p}"))
+    monkeypatch.setattr(serve, "boot", lambda: calls.append("boot"))
+    monkeypatch.setattr(serve.uvicorn, "run", lambda *a, **k: calls.append("uvicorn"))
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(host="127.0.0.1", port=8000))
+    monkeypatch.setattr(serve.sys, "argv", ["serve_enigma.py", "--port", "8123"])
+
+    serve.main()
+    assert calls == ["probe 127.0.0.1:8123", "boot", "uvicorn"]
 
 
 # ---------------------------------------------------------------------------

@@ -19,9 +19,19 @@ NEXT training cycle's work (she has no trained image-delimiter tokens yet).
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import threading
+from collections import OrderedDict
 from pathlib import Path
+
+# How many captions one Eyes remembers. Every chat turn resends the WHOLE
+# history, and the flatten path captions every image part of every message on
+# every request -- so a picture three turns back re-paid for itself, up to
+# max_caption_tokens full forwards, holding the shared generation lock, before
+# the model could answer at all (audit 2026-08-22). LRU: a re-shown image that
+# has aged out simply captions again.
+CAPTION_CACHE_SIZE = 32
 
 
 class EyesError(Exception):
@@ -41,8 +51,14 @@ class Eyes:
         max_caption_tokens: int = 48,
         captioner_factory=None,
         repetition_penalty: float = 1.3,
+        cache_size: int = CAPTION_CACHE_SIZE,
     ):
         self._lock = gen_lock if gen_lock is not None else threading.Lock()
+        # Its OWN lock, never the generation one: a cache hit must answer
+        # without queueing behind whatever is generating.
+        self._cache: OrderedDict[str, str] = OrderedDict()
+        self._cache_lock = threading.Lock()
+        self._cache_size = max(0, int(cache_size))
         if captioner_factory is not None:  # tests inject a fake: PIL.Image -> str
             self._caption = captioner_factory()
             return
@@ -110,7 +126,22 @@ class Eyes:
         self._caption = _caption
 
     def describe(self, image) -> str:
-        """Caption an image given as bytes, a path, or a PIL.Image."""
+        """Caption an image given as bytes, a path, or a PIL.Image.
+
+        A BYTES payload -- what the chat path always hands over, since every
+        image_url part is base64-decoded before it gets here -- is memoized by
+        sha256 (see CAPTION_CACHE_SIZE), so an image already in the history is
+        captioned once per process rather than once per turn. A path or a
+        PIL.Image has no stable key and always captions. Only successful
+        captions are stored: a failure is worth retrying, not remembering.
+        """
+        key = None
+        if isinstance(image, (bytes, bytearray)):
+            key = hashlib.sha256(bytes(image)).hexdigest()
+            with self._cache_lock:
+                if key in self._cache:
+                    self._cache.move_to_end(key)
+                    return self._cache[key]
         try:
             from PIL import Image
         except ImportError as exc:
@@ -134,6 +165,12 @@ class Eyes:
                 raise EyesError(f"captioning failed: {exc}") from exc
         if not caption:
             raise EyesError("captioner returned nothing")
+        if key is not None and self._cache_size:
+            with self._cache_lock:
+                self._cache[key] = caption
+                self._cache.move_to_end(key)
+                while len(self._cache) > self._cache_size:
+                    self._cache.popitem(last=False)  # oldest USE, not oldest write
         return caption
 
 

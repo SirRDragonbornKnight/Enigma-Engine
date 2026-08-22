@@ -211,7 +211,7 @@ collides with the sealed "What is 13 squared?" probe), mix 126,792, general diet
 489 preference pairs; the on-disk `data/sft/dpo_pairs.jsonl` is a 350-record artifact from
 the 2026-08-08 bake. BY CONVENTION the on-disk artifacts lag the generator until the next
 bake — `data/sft/` currently holds tool 565 / identity 527 / mix 126,424 from the
-2026-08-20 bake, which predates the uncommitted generator edits in this tree. Scores are
+2026-08-20 bake, which predates the 2026-08-22 generator fixes (`0c1dcb24`). Scores are
 `EVAL_REDESIGN.md`'s (it owns the scorecard, live baseline 67/120); these data-state
 counts are this line's, dated above.
 Recall strategy since 2026-07-15: facts INSTALL

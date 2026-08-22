@@ -1,7 +1,9 @@
 """Collector guards: the special-literal sanitizer, the sealed-probe screen,
 per-config byte accounting in the shared-directory case (finemath's 50/50
-split silently delivered 0% of its second config before 2026-07-27), and the
-combine step's determinism + mis-encoding receipt."""
+split silently delivered 0% of its second config before 2026-07-27), the
+combine step's determinism + mis-encoding receipt, the resume markers that
+may only fire on a CLEAN pass, atomic per-article writes, the Stack license
+screen, and the wiki-dump resume checks."""
 from __future__ import annotations
 
 import json
@@ -9,6 +11,8 @@ import os
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -237,3 +241,279 @@ def test_combine_warns_on_replacement_chars(monkeypatch, tmp_path, capsys):
     assert len(warns) == 1, out
     assert "mojibake.txt" in warns[0] and "3" in warns[0], warns
     assert "clean.txt" not in out
+
+
+# ---------------------------------------------------------------------------
+# Resume markers, atomic writes, license screen, dump resume (audit 2026-08-22)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResp:
+    """Stand-in for a requests.Response on the collectors' fetch seams."""
+
+    def __init__(self, status_code=200, payload=None, text="", headers=None, chunks=()):
+        self.status_code = status_code
+        self.headers = dict(headers or {})
+        self.text = text
+        self._payload = payload
+        self._chunks = list(chunks)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise cpd.requests.RequestException(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+    def iter_content(self, chunk_size=None):
+        return iter(self._chunks)
+
+
+def _quiet_collector(monkeypatch):
+    """Neutralize the rate limits and the quality screens; nothing sleeps and
+    nothing writes to the real progress.json."""
+    monkeypatch.setattr(cpd, "WAYBACK_DELAY", 0)
+    monkeypatch.setattr(cpd, "FANDOM_DELAY", 0)
+    monkeypatch.setattr(cpd.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(cpd, "save_progress", lambda progress: None)
+    monkeypatch.setattr(cpd, "quality_filter", lambda text, min_length: True)
+    monkeypatch.setattr(cpd, "detect_ai_content", lambda text: False)
+
+
+def _wire_wayback(monkeypatch, tmp_path, rows, page_status=200):
+    """Point fetch_wayback at tmp_path with a stubbed CDX + page seam.
+    Returns the list of archived-page URLs actually fetched."""
+    _quiet_collector(monkeypatch)
+    monkeypatch.setattr(cpd, "WAYBACK_DIR", tmp_path / "wayback")
+    fetched: list[str] = []
+    body = "<html><body><p>" + ("an archived paragraph of real prose " * 20) + "</p></body></html>"
+
+    class _Session:
+        def get(self, url, params=None, timeout=None):
+            if "/cdx/" in url:
+                return _FakeResp(payload=[["timestamp", "original"]] + rows)
+            fetched.append(url)
+            return _FakeResp(status_code=page_status, text=body)
+
+    monkeypatch.setattr(cpd, "SESSION", _Session())
+    return fetched
+
+
+def test_a_capped_wayback_domain_is_revisited_and_a_finished_one_is_not(monkeypatch, tmp_path):
+    """The per-URL loop breaks on the page cap, then fell through to
+    wayback_done.add() anyway -- so every later, bigger run skipped the domain
+    forever with its remaining pages unfetched. Only a full pass over the CDX
+    rows may complete it."""
+    pattern = "plato.stanford.edu/entries/*"
+    rows = [["2020", f"http://plato.stanford.edu/entries/e{i}"] for i in range(3)]
+    fetched = _wire_wayback(monkeypatch, tmp_path, rows)
+    progress: dict = {}
+
+    saved = cpd.fetch_wayback([(pattern, "SEP")], max_pages=2, progress=progress)
+    assert saved == 2 and len(fetched) == 2
+    assert progress.get("wayback_done_domains", []) == [], "a cap-stopped domain was marked done"
+
+    # The next, bigger run revisits it, takes the page it missed, and only THEN
+    # -- having walked every row -- marks it done.
+    saved = cpd.fetch_wayback([(pattern, "SEP")], max_pages=5, progress=progress)
+    assert saved == 3 and len(fetched) == 3
+    assert progress["wayback_done_domains"] == [pattern]
+
+
+def test_a_rate_limited_wayback_domain_is_not_marked_done(monkeypatch, tmp_path):
+    """The other early exit: MAX_RETRIES consecutive 429s move on to the next
+    domain with nothing saved. That is a backoff, not a completed domain."""
+    pattern = "www.britannica.com/topic/*"
+    rows = [["2020", f"http://www.britannica.com/topic/t{i}"] for i in range(cpd.MAX_RETRIES + 2)]
+    _wire_wayback(monkeypatch, tmp_path, rows, page_status=429)
+    progress: dict = {}
+
+    saved = cpd.fetch_wayback([(pattern, "Britannica")], max_pages=50, progress=progress)
+    assert saved == 0
+    assert progress.get("wayback_done_domains", []) == [], "a rate-limited domain was marked done"
+
+
+def _wire_fandom(monkeypatch, tmp_path, batches):
+    """Point fetch_fandom at tmp_path. `batches` is a list of
+    (titles, apcontinue) served to successive allpages calls; the last repeats."""
+    _quiet_collector(monkeypatch)
+    monkeypatch.setattr(cpd, "FANDOM_DIR", tmp_path / "fandom")
+    state = {"n": 0}
+    wikitext = "a real article body with enough prose to clear the length bar " * 20
+
+    class _Session:
+        def get(self, url, params=None, timeout=None):
+            if params.get("list") == "allpages":
+                titles, apcontinue = batches[min(state["n"], len(batches) - 1)]
+                state["n"] += 1
+                payload = {"query": {"allpages": [{"title": t} for t in titles]}}
+                if apcontinue:
+                    payload["continue"] = {"apcontinue": apcontinue}
+                return _FakeResp(payload=payload)
+            titles = params["titles"].split("|")
+            return _FakeResp(payload={"query": {"pages": {
+                str(i): {"title": t, "revisions": [{"slots": {"main": {"*": wikitext}}}]}
+                for i, t in enumerate(titles)
+            }}})
+
+    monkeypatch.setattr(cpd, "SESSION", _Session())
+
+
+def test_a_capped_fandom_wiki_is_revisited_and_a_finished_one_is_not(monkeypatch, tmp_path):
+    """Same shape as wayback, threaded: _fetch_wiki breaks on the article cap
+    (and on rate-limit/error) and then marked the wiki done unconditionally.
+    Only running the allpages enumeration out may complete it."""
+    _wire_fandom(monkeypatch, tmp_path, [(["Alpha", "Beta"], "Beta"), (["Gamma"], None)])
+    progress: dict = {}
+
+    cpd.fetch_fandom([("minecraft", "Minecraft")], max_articles=1, progress=progress)
+    assert progress.get("fandom_done_wikis", []) == [], "a cap-stopped wiki was marked done"
+    assert len(list((tmp_path / "fandom").glob("*.txt"))) == 1
+
+    cpd.fetch_fandom([("minecraft", "Minecraft")], max_articles=10, progress=progress)
+    assert progress["fandom_done_wikis"] == ["minecraft"]
+    assert len(list((tmp_path / "fandom").glob("*.txt"))) == 2
+
+
+def test_an_interrupted_article_write_leaves_no_blessed_file(monkeypatch, tmp_path):
+    """Resume reads the .txt stems on disk as done, so a direct write_text cut
+    partway froze a TRUNCATED article into the corpus forever. tmp-then-rename
+    means the final name never appears unless the whole body landed."""
+    rows = [["2020", "http://plato.stanford.edu/entries/e0"]]
+    _wire_wayback(monkeypatch, tmp_path, rows)
+    real_write_text = Path.write_text
+
+    def truncate_then_die(self, data, *args, **kwargs):
+        # Keyed on ".txt" so it cuts the write WHEREVER the article goes --
+        # a direct write to the final name is interrupted exactly as a tmp is.
+        if ".txt" in self.name:
+            real_write_text(self, data[: len(data) // 2], *args, **kwargs)
+            raise KeyboardInterrupt("Ctrl+C partway through the write")
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", truncate_then_die)
+    with pytest.raises(KeyboardInterrupt):
+        cpd.fetch_wayback([("plato.stanford.edu/entries/*", "SEP")], max_pages=5, progress={})
+
+    out = tmp_path / "wayback"
+    leftover = list(out.glob("*.txt.tmp"))
+    assert not list(out.glob("*.txt")), "a truncated article was blessed with its final name"
+    assert leftover, "fixture broke -- nothing was written at all"
+
+
+def test_a_corrupt_dump_stream_is_reported_not_raised(monkeypatch, tmp_path, capsys):
+    """bz2 reports a truncated or corrupt compressed stream as OSError, and
+    only KeyboardInterrupt and ET.ParseError were caught -- so it raised out
+    of a run hours deep and took the final stats with it, when the articles
+    already extracted are keepers."""
+    dump = tmp_path / "enwiki.xml.bz2"
+    dump.write_bytes(b"this is not a bzip2 stream at all, not even close")
+    monkeypatch.setattr(cpd, "WIKI_DUMP_FILE", dump)
+    monkeypatch.setattr(cpd, "WIKI_DUMP_DIR", tmp_path / "wikipedia_dump")
+    monkeypatch.setattr(cpd, "_download_wiki_dump", lambda resume=True: True)
+    monkeypatch.setattr(cpd, "save_progress", lambda progress: None)
+
+    assert cpd.process_wiki_dump({}) == 0
+    out = capsys.readouterr().out
+    assert "Read error" in out and "Done:" in out
+
+
+def test_the_stack_keeps_only_records_with_a_permissive_license(monkeypatch, tmp_path):
+    """The filter is documented permissive-only, but `if licenses and not
+    any(...)` passed an EMPTY license list -- unlicensed code, exactly the
+    class the screen exists to keep out of the corpus."""
+    body = "def f():\n    return 42\n" * 40
+    records = [
+        {"content": "PERMISSIVE\n" + body, "max_stars_repo_licenses": ["MIT"]},
+        {"content": "UNLICENSED\n" + body, "max_stars_repo_licenses": []},
+        {"content": "RESTRICTIVE\n" + body, "max_stars_repo_licenses": ["gpl-3.0"]},
+    ]
+    _fake_datasets(monkeypatch, records)
+    monkeypatch.setattr(cpd, "STACK_DIR", tmp_path / "the_stack")
+    monkeypatch.setattr(cpd, "_STACK_LANGUAGES", [("python", 1.0)])
+    monkeypatch.setattr(cpd, "save_progress", lambda progress: None)
+    monkeypatch.setattr(cpd, "_locked_probe_guard", lambda label: None)
+
+    cpd.fetch_the_stack(target_gb=1e-6, progress={})
+
+    written = "".join(f.read_text(encoding="utf-8") for f in (tmp_path / "the_stack").glob("*.txt"))
+    assert "PERMISSIVE" in written
+    assert "UNLICENSED" not in written, "an unlicensed record cleared the permissive-only screen"
+    assert "RESTRICTIVE" not in written
+
+
+def _wire_dump(monkeypatch, tmp_path, head_length, get_resp):
+    """Point _download_wiki_dump at tmp_path; returns the headers the GET saw."""
+    monkeypatch.setattr(cpd, "WIKI_DUMP_FILE", tmp_path / "enwiki.xml.bz2")
+    monkeypatch.setattr(cpd, "WIKI_DUMP_VALIDATOR", tmp_path / "enwiki.xml.bz2.validator")
+    seen: dict = {"headers": {}}
+
+    class _Session:
+        def head(self, url, timeout=None):
+            return _FakeResp(headers={"Content-Length": str(head_length)})
+
+        def get(self, url, headers=None, stream=False, timeout=None):
+            seen["headers"] = dict(headers or {})
+            return get_resp
+
+    monkeypatch.setattr(cpd, "SESSION", _Session())
+    return seen
+
+
+def test_an_oversize_local_dump_is_not_verified_as_complete(monkeypatch, tmp_path):
+    """`existing_size >= expected` blessed a local file BIGGER than the
+    server's as verified and handed it straight to the bz2 parser. Only an
+    exact match verifies; anything larger is not a partial of this dump and
+    there is nothing to resume from -- it is re-downloaded from zero."""
+    dump = tmp_path / "enwiki.xml.bz2"
+    dump.write_bytes(b"o" * 100)
+    seen = _wire_dump(
+        monkeypatch, tmp_path, head_length=50,
+        get_resp=_FakeResp(headers={"Content-Length": "50", "ETag": '"v2"'}, chunks=[b"n" * 50]),
+    )
+
+    assert cpd._download_wiki_dump(resume=True) is True
+    assert "Range" not in seen["headers"], "resumed a file that is not this dump"
+    assert dump.read_bytes() == b"n" * 50
+    # ...and the fresh body's validator is recorded for the next resume
+    assert cpd.WIKI_DUMP_VALIDATOR.read_text(encoding="utf-8") == '"v2"'
+
+
+def test_a_resume_replays_the_recorded_validator_as_if_range(monkeypatch, tmp_path):
+    """enwiki-LATEST rotates. A bare Range against it splices a DIFFERENT
+    dump's tail onto the partial and nothing downstream can tell. If-Range
+    makes the server answer 200-with-full-body instead, which the existing
+    restart-from-zero branch already handles."""
+    dump = tmp_path / "enwiki.xml.bz2"
+    dump.write_bytes(b"p" * 30)
+    (tmp_path / "enwiki.xml.bz2.validator").write_text('"v1"', encoding="utf-8")
+    seen = _wire_dump(
+        monkeypatch, tmp_path, head_length=100,
+        get_resp=_FakeResp(status_code=206, headers={"Content-Range": "bytes 30-99/100"},
+                           chunks=[b"q" * 70]),
+    )
+
+    assert cpd._download_wiki_dump(resume=True) is True
+    assert seen["headers"]["Range"] == "bytes=30-"
+    assert seen["headers"]["If-Range"] == '"v1"'
+    assert dump.read_bytes() == b"p" * 30 + b"q" * 70
+    # a 206 means the stored validator still describes the partial: it stays
+    assert cpd.WIKI_DUMP_VALIDATOR.read_text(encoding="utf-8") == '"v1"'
+
+
+def test_a_resume_with_no_recorded_validator_keeps_the_old_behavior(monkeypatch, tmp_path, capsys):
+    """No validator on file (a partial from before this was recorded, or a
+    server that sent neither ETag nor Last-Modified) resumes exactly as
+    before -- and says so, because that splice is then unguarded."""
+    dump = tmp_path / "enwiki.xml.bz2"
+    dump.write_bytes(b"p" * 30)
+    seen = _wire_dump(
+        monkeypatch, tmp_path, head_length=100,
+        get_resp=_FakeResp(status_code=206, headers={"Content-Range": "bytes 30-99/100"},
+                           chunks=[b"q" * 70]),
+    )
+
+    assert cpd._download_wiki_dump(resume=True) is True
+    assert seen["headers"]["Range"] == "bytes=30-"
+    assert "If-Range" not in seen["headers"]
+    assert "without If-Range" in capsys.readouterr().out

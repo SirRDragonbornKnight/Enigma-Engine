@@ -547,8 +547,11 @@ def refuse_if_leaky(texts: list[str], source: Path, manifest: Path = LOCKED_MANI
         if flagged_texts:
             note = (f"; {len(flagged_texts)} of {len(advisory)} answer-side strings sit at or "
                     "above the threshold -- expected on shared topics, reviewed not blocked")
-    print(f"leak guard: {len(texts)} asks clean against {len(guard)} sealed probes{note}",
-          flush=True)
+    # "prompt-side strings", not "asks": dpo_enigma hands this the SYSTEM
+    # blocks alongside the questions (a sealed probe pasted into a memory block
+    # is prompt side too), so the count has not been one-ask-per-string since.
+    print(f"leak guard: {len(texts)} prompt-side strings clean against {len(guard)} "
+          f"sealed probes{note}", flush=True)
     _write_verdict(source, manifest, guard, len(texts), advisory or [], flagged_texts)
 
 

@@ -717,7 +717,9 @@ refuse before they can:
   sidecar's `vocab_sha256` is where you check which one you used.
 * **An `--output-bin` that already exists REFUSES.** Corpora are versioned,
   never rebuilt in place, so a second smoke names a new bin or deletes the old
-  one deliberately first.
+  one deliberately first -- and the SIDECAR counts as the artifact too, so a
+  leftover `.json` refuses on its own even once the `.bin` is gone: delete or
+  move it in the same breath.
 * **`--repeat-sources` is refused under `--only-curated`.** One source in the
   walk means the repeated extent spans the whole bin and therefore reaches the
   val tail, which `pretrain_enigma.py` refuses at boot -- the refusal just

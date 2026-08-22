@@ -44,7 +44,8 @@ def _probe_file(tmp_path, name="probes.jsonl", q="Largest planet?"):
     return p
 
 
-def _fake_server(monkeypatch, answer: str, tool_on_text: str | None = None):
+def _fake_server(monkeypatch, answer: str, tool_on_text: str | None = None,
+                 tools_run: list[str] | None = None):
     monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: True)
     monkeypatch.setattr(eval_behavior, "_clear_memory", lambda *a, **k: None)
     # The run refuses a target outside the scratch ports because it wipes that
@@ -64,7 +65,12 @@ def _fake_server(monkeypatch, answer: str, tool_on_text: str | None = None):
         msg = {"content": answer}
         if tool_on_text:  # a non-tool probe that fires a tool anyway
             msg["tool_calls"] = [{"function": {"name": tool_on_text}}]
-        return {"choices": [{"message": msg}]}
+        reply = {"choices": [{"message": msg}]}
+        if tools_run is not None:
+            # Built-ins execute server-side and never surface as tool_calls;
+            # serve reports what it RAN in this block instead.
+            reply["enigma"] = {"tools_run": tools_run}
+        return reply
 
     monkeypatch.setattr(eval_behavior, "_post", fake_post)
 
@@ -941,7 +947,7 @@ def test_a_missing_capabilities_record_says_so_instead_of_skipping(capsys):
     eval_behavior._compare_to_baseline(_P("base.jsonl"), base_cond, base_card,
                                        conditions, by_cat, 1, 1, False)
     out = capsys.readouterr().out
-    assert "no server capabilities recorded for baseline" in out
+    assert "no organ capabilities recorded for baseline" in out
     assert "CANNOT be checked" in out
 
     # a capabilities record holding only the excluded memory_dir is just as
@@ -1241,3 +1247,125 @@ def test_a_baseline_that_measured_nothing_cannot_produce_a_verdict(tmp_path, mon
                           {"factual": {"hits": 0, "n": 1}, "tool": {"hits": 1, "n": 1}})
     eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base)
     assert "VERDICT: ADOPT" in capsys.readouterr().out
+
+
+# --- the 2026-08-22 grading wave, pinned (run()-driven half) ---
+
+def test_memory_rows_record_what_each_teach_turn_ran(tmp_path, monkeypatch):
+    """The teach turns' replies were DISCARDED, which made a memory row scoring
+    0 un-attributable offline: nothing in the transcript said whether the save
+    ever fired, so "she cannot recall it" and "she never stored it" read
+    identically. The key is ADDITIVE and only where it means something -- a
+    non-memory row must not grow one, or every archived transcript's shape
+    changes for nothing."""
+    probes = tmp_path / "probes.jsonl"
+    probes.write_text(
+        json.dumps({"category": "memory", "teach": ["My dog is Bruno.",
+                                                    "My cat is Mochi."],
+                    "q": "What is my dog called?", "want_any": ["bruno"],
+                    "deny_any": []}) + "\n"
+        + json.dumps({"category": "factual", "q": "Largest planet?",
+                      "want_any": ["jupiter"], "deny_any": []}) + "\n",
+        encoding="utf-8")
+    out = tmp_path / "t.jsonl"
+    _fake_server(monkeypatch, "Your dog is Bruno, and Jupiter is the largest planet.",
+                 tools_run=["remember"])
+
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+
+    rows = {r["category"]: r for r in _rows(out) if r.get("record") == "probe"}
+    # one list per teach turn, in order
+    assert rows["memory"]["teach_tools_run"] == [["remember"], ["remember"]]
+    assert "teach_tools_run" not in rows["factual"]
+
+
+def test_the_paired_test_counts_gated_probes_only(tmp_path, monkeypatch, capsys):
+    """The paired significance test is about the MODEL, and it was handed every
+    probe row -- including informational organ columns, whose result is a launch
+    flag. The population must be the one the aggregate above it counts, and the
+    printed line has to say so, or "paired over 120 shared probes" reads as a
+    denominator nobody can reconstruct."""
+    probes = tmp_path / "probes.jsonl"
+    probes.write_text(
+        json.dumps({"category": "factual", "q": "Largest planet?",
+                    "want_any": ["jupiter"], "deny_any": []}) + "\n"
+        + json.dumps({"category": "vision", "q": "Describe the picture.",
+                      "want_any": ["jupiter"], "deny_any": []}) + "\n",
+        encoding="utf-8")
+    base = tmp_path / "base.jsonl"
+    base.write_text(
+        json.dumps({"record": "run_conditions",
+                    "probe_sha256": eval_behavior._probe_digest(probes),
+                    "temperature": TEMP, "max_tokens": MAXTOK}) + "\n"
+        + json.dumps({"record": "probe", "q": "Largest planet?", "category": "factual",
+                      "graded_ok": False}) + "\n"
+        + json.dumps({"record": "probe", "q": "Describe the picture.", "category": "vision",
+                      "graded_ok": False}) + "\n"
+        + json.dumps({"record": "scorecard",
+                      "by_category": {"factual": {"hits": 0, "n": 1},
+                                      "vision": {"hits": 0, "n": 1}},
+                      "overall_hits": 0, "overall_n": 1}) + "\n",
+        encoding="utf-8")
+    _fake_server(monkeypatch, LONG_ANSWER)  # both probes hit their want
+
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, None, baseline=base)
+
+    paired = next(l for l in capsys.readouterr().out.splitlines() if "paired over" in l)
+    assert "paired over 1 shared GATED probes" in paired
+    assert "informational columns" in paired
+
+
+def test_an_undeclared_category_is_warned_and_left_out_of_the_aggregate(tmp_path, monkeypatch,
+                                                                       capsys):
+    """A misspelled category name is in neither THRESHOLDS nor
+    INFORMATIONAL_CATEGORIES. It printed itself as "informational -- no
+    threshold defined" while its hits and n went into the headline aggregate
+    anyway, so a typo moved the number every comparison is made against. Both
+    halves are pinned here: it leaves the aggregate, and it says its own name."""
+    probes = tmp_path / "probes.jsonl"
+    probes.write_text(
+        json.dumps({"category": "factual", "q": "Largest planet?",
+                    "want_any": ["jupiter"], "deny_any": []}) + "\n"
+        + json.dumps({"category": "factaul", "q": "Deepest ocean?",
+                      "want_any": ["zzz-never"], "deny_any": []}) + "\n",
+        encoding="utf-8")
+    out = tmp_path / "t.jsonl"
+    _fake_server(monkeypatch, LONG_ANSWER)
+
+    eval_behavior.run(URL, TEMP, MAXTOK, probes, out)
+
+    printed = capsys.readouterr().out
+    card = next(r for r in _rows(out) if r.get("record") == "scorecard")
+    assert (card["overall_hits"], card["overall_n"]) == (1, 1)
+    assert set(card["by_category"]) == {"factual", "factaul"}
+    # ...and its own scorecard line names it and calls it undeclared, rather
+    # than wearing the informational label that made the typo invisible.
+    line = next(l for l in printed.splitlines() if l.strip().startswith("factaul"))
+    assert "UNDECLARED" in line and "'factaul'" in line
+    assert "(informational -- no threshold defined" not in line
+
+
+def test_a_tool_probe_with_no_expect_tool_is_refused_not_free_credit(tmp_path, monkeypatch,
+                                                                     capsys):
+    """Grading keys on the probe's SHAPE, so a tool/restraint row with no
+    `expect_tool` never reaches the tool comparison: it falls to text grading
+    with no wants and no denies, which passes on ANY output. Free credit on the
+    two categories that exist to check routing is worse than a refusal."""
+    probes = tmp_path / "probes.jsonl"
+    probes.write_text(json.dumps({"category": "tool", "q": "Weather in Denver?"}) + "\n",
+                      encoding="utf-8")
+
+    def touched(*a, **k):
+        raise AssertionError("server contacted despite an ungradable tool row")
+
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", touched)
+    monkeypatch.setattr(eval_behavior, "_clear_memory", touched)
+
+    assert eval_behavior.run(URL, TEMP, MAXTOK, probes, None) == 2
+    assert "tool/restraint row with no 'expect_tool'" in capsys.readouterr().out
+    # The shape the refusal exists for: with no keys at all, text grading passes
+    # anything, so the row would have scored a silent 100%.
+    assert eval_behavior._grade_text("utter garbage", [], []) is True
+    assert eval_behavior._malformed_probe({"category": "restraint", "q": "Just say hi."}) is True
+    assert eval_behavior._malformed_probe(
+        {"category": "restraint", "q": "Just say hi.", "expect_tool": None}) is False

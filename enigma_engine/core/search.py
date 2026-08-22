@@ -103,12 +103,16 @@ class Searcher:
             if not isinstance(r, dict):
                 continue
             title = _one_line(r.get("title"))
-            # Coerced the same way the title is: `.strip()` on a truthy non-str
-            # url raised AttributeError, which is not a SearchError, so it blew
-            # past serve's _apply_search handler and answered 500 instead of
-            # degrading to "nothing found". A malformed result is skipped here,
-            # never allowed to take the whole query down.
-            hit_url = _one_line(r.get("url"))
+            # A url that is not a non-empty string SKIPS the whole result, which
+            # is what the rest of this loop already claimed to do. `.strip()` on
+            # a truthy non-str url raised AttributeError -- not a SearchError, so
+            # it blew past serve's _apply_search handler and answered 500 instead
+            # of degrading to "nothing found". Coercing it with _one_line()
+            # instead only moved the damage: a dict url rendered its python repr
+            # into the model-visible tool turn AS A CITATION, and spent one of
+            # the k slots a real hit could have had.
+            raw_url = r.get("url")
+            hit_url = _one_line(raw_url) if isinstance(raw_url, str) else ""
             if not title or not hit_url:
                 continue
             hits.append({

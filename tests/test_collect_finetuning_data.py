@@ -155,6 +155,66 @@ class TestCollectOpenThoughts3:
         assert len(pairs) == 3  # exactly the cap: iteration stopped there
 
 
+# ── OASST1 + Dolly: a gated repo must not kill the run (audit 2026-08-22) ────
+
+
+class TestTheFirstTwoLoadersSurviveAGatedRepo:
+    """collect_oasst and collect_dolly called load_dataset BARE while every
+    later sibling wrapped it and returned []. OASST runs FIRST under --all, so
+    one gated, moved or renamed repo raised out of main() and took the whole
+    collection with it -- including the sources that were still reachable."""
+
+    _OASST_ROWS = [
+        {"message_id": "a", "parent_id": None, "role": "prompter", "lang": "en",
+         "text": "What is a neutron star?"},
+        {"message_id": "b", "parent_id": "a", "role": "assistant", "lang": "en",
+         "rank": 0, "text": "The collapsed core left behind by a supernova."},
+    ]
+    _DOLLY_ROW = {"instruction": "Name a primary color.", "context": "",
+                  "response": "Blue is a primary color."}
+
+    def test_oasst_returns_empty_on_a_raising_loader(self, monkeypatch, cf_module, caplog):
+        _install_fake_datasets(monkeypatch, {})
+        cf = importlib.reload(cf_module)
+        with caplog.at_level("ERROR"):
+            assert cf.collect_oasst() == []
+        assert "Failed to load OASST1" in caplog.text
+
+    def test_dolly_returns_empty_on_a_raising_loader(self, monkeypatch, cf_module, caplog):
+        _install_fake_datasets(monkeypatch, {})
+        cf = importlib.reload(cf_module)
+        with caplog.at_level("ERROR"):
+            assert cf.collect_dolly() == []
+        assert "Failed to load Dolly 15k" in caplog.text
+
+    def test_a_dead_oasst_no_longer_takes_the_whole_all_run_down(self, monkeypatch, cf_module, tmp_path):
+        """The receipt that matters: --all with OASST unreachable still walks
+        on and writes the sources that ARE reachable."""
+        _install_fake_datasets(monkeypatch, {"databricks/databricks-dolly-15k": [self._DOLLY_ROW]})
+        cf = importlib.reload(cf_module)
+        monkeypatch.setattr(sys, "argv", ["collect_finetuning_data.py", "--all",
+                                          "--output-dir", str(tmp_path)])
+
+        cf.main()
+
+        assert not (tmp_path / "oasst1.jsonl").exists()
+        assert (tmp_path / "dolly_15k.jsonl").exists(), "the run died on the first dead source"
+        assert "Blue is a primary color." in (tmp_path / "dolly_15k.jsonl").read_text(encoding="utf-8")
+
+    def test_the_healthy_paths_still_extract(self, monkeypatch, cf_module):
+        """Falsifier for the two above: with the repos present, both loaders
+        still return their pairs -- the wrap did not swallow a live fetch."""
+        _install_fake_datasets(monkeypatch, {
+            "OpenAssistant/oasst1": self._OASST_ROWS,
+            "databricks/databricks-dolly-15k": [self._DOLLY_ROW],
+        })
+        cf = importlib.reload(cf_module)
+        assert cf.collect_oasst() == [{"prompt": "What is a neutron star?",
+                                       "completion": "The collapsed core left behind by a supernova."}]
+        assert cf.collect_dolly() == [{"prompt": "Name a primary color.",
+                                       "completion": "Blue is a primary color."}]
+
+
 # ── SmolTalk2 (D-11) ────────────────────────────────────────────────────────
 
 

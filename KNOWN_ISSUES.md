@@ -109,10 +109,11 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
 9. **The python suite is engine-only** -- `CLEANUP_TRACKER.md` rule 4 OWNS the
-   live suite count and is the only place to read it (1259 as of 2026-08-22;
-   that rule is updated in the same commit that changes the count). This line
+   live suite count and is the only place to read it (that rule is updated in
+   the same commit that changes the count). This line
    deliberately keeps no second copy — the copy it used to keep sat stale at
-   788 for nearly a month. The
+   788 for nearly a month, and the parenthetical that replaced it went stale
+   the same way inside the very sentence promising no copy. The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).

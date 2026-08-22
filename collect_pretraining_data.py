@@ -95,6 +95,12 @@ COMBINED_FILE = BASE_DIR / "combined.txt"
 # Wikipedia dump download
 WIKI_DUMP_URL = "https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2"
 WIKI_DUMP_FILE = BASE_DIR / "enwiki-latest-pages-articles.xml.bz2"
+# The ETag/Last-Modified the first response carried, recorded beside the
+# partial file. "enwiki-LATEST" is a rotating target: a bare Range resume
+# after a rotation splices a DIFFERENT dump's tail onto the partial, and
+# nothing downstream can tell. Replayed as If-Range so the server answers
+# 206 only while the body is still the one the partial came from.
+WIKI_DUMP_VALIDATOR = BASE_DIR / "enwiki-latest-pages-articles.xml.bz2.validator"
 
 # Wikipedia API
 WIKI_API = "https://en.wikipedia.org/w/api.php"
@@ -370,9 +376,49 @@ def detect_ai_content(text: str) -> bool:
     return weak_hits >= 4
 
 
+def _write_article(filepath: Path, text: str) -> None:
+    """Write one article file atomically (temp file, then rename).
+
+    Every fetcher's resume set is the stems already on disk, so a direct
+    write_text that is interrupted partway leaves a TRUNCATED .txt whose
+    stem is read as done on the next run -- the truncation is then frozen
+    into the corpus forever. Same tmp-then-rename shape as save_progress
+    and combine_all_sources: the final name never exists unless the whole
+    body was written.
+    """
+    tmp = filepath.with_name(filepath.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(filepath)
+
+
 # ---------------------------------------------------------------------------
 # Wikipedia dump download + extraction
 # ---------------------------------------------------------------------------
+
+
+def _read_dump_validator() -> str:
+    """The validator recorded when the partial download's body was started."""
+    try:
+        return WIKI_DUMP_VALIDATOR.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _store_dump_validator(validator: str) -> None:
+    """Record the validator beside the partial file; empty clears it.
+
+    Clearing matters as much as writing: a validator left over from a body
+    that has been discarded would be replayed as If-Range against a
+    different one.
+    """
+    try:
+        if validator:
+            WIKI_DUMP_VALIDATOR.parent.mkdir(parents=True, exist_ok=True)
+            WIKI_DUMP_VALIDATOR.write_text(validator, encoding="utf-8")
+        elif WIKI_DUMP_VALIDATOR.exists():
+            WIKI_DUMP_VALIDATOR.unlink()
+    except OSError:
+        pass
 
 
 def _download_wiki_dump(resume: bool = True) -> bool:
@@ -387,20 +433,33 @@ def _download_wiki_dump(resume: bool = True) -> bool:
     # Check if already downloaded — verify against server Content-Length
     if WIKI_DUMP_FILE.exists():
         existing_size = WIKI_DUMP_FILE.stat().st_size
+        stale = False
         # Verify completeness via HEAD request instead of guessing (S723)
         try:
             head = SESSION.head(WIKI_DUMP_URL, timeout=30)
             head.raise_for_status()
             expected = int(head.headers.get("Content-Length", 0))
-            if expected > 0 and existing_size >= expected:
+            if expected > 0 and existing_size == expected:
                 print(f"  [Wiki Dump] Already downloaded: {existing_size / 1e9:.1f} GB (verified)")
                 return True
+            # Only an EXACT match verifies. A local file BIGGER than the server's
+            # is not a partial of this dump -- a resume spliced across a rotation,
+            # or an older and larger dump left in place -- and `>=` blessed it as
+            # complete and handed it straight to the bz2 parser. There is nothing
+            # to resume from either: start over.
+            if expected > 0 and existing_size > expected:
+                print(
+                    f"  [Wiki Dump] Local file is {existing_size / 1e9:.1f} GB but the server's "
+                    f"is {expected / 1e9:.1f} GB -- not a partial of this dump. Re-downloading."
+                )
+                stale = True
         except Exception:
             pass  # HEAD failed — fall through to resume attempt
-        if resume:
-            print(f"  [Wiki Dump] Resuming download ({existing_size / 1e6:.0f} MB so far)...")
-        else:
+        if stale or not resume:
             WIKI_DUMP_FILE.unlink()
+            _store_dump_validator("")
+        else:
+            print(f"  [Wiki Dump] Resuming download ({existing_size / 1e6:.0f} MB so far)...")
 
     # Stream download with progress
     headers = {}
@@ -411,6 +470,14 @@ def _download_wiki_dump(resume: bool = True) -> bool:
         downloaded = WIKI_DUMP_FILE.stat().st_size
         headers["Range"] = f"bytes={downloaded}-"
         mode = "ab"
+        validator = _read_dump_validator()
+        if validator:
+            headers["If-Range"] = validator
+        else:
+            print(
+                "  [Wiki Dump] No recorded validator for the partial file -- "
+                "resuming without If-Range; a rotated dump could splice."
+            )
 
     print("  [Wiki Dump] Downloading from dumps.wikimedia.org...")
     print("  [Wiki Dump] This is ~22 GB -- expect 30-90 min depending on connection speed.")
@@ -431,6 +498,12 @@ def _download_wiki_dump(resume: bool = True) -> bool:
             print("  [Wiki Dump] Server ignored the resume request -- restarting from zero.")
             mode = "wb"
             downloaded = 0
+
+        # Record the validator for the body about to be written from zero, so a
+        # later resume can replay it. On a 206 the stored one still describes
+        # the partial and stays put.
+        if mode == "wb":
+            _store_dump_validator(resp.headers.get("ETag") or resp.headers.get("Last-Modified") or "")
 
         # Get total size from Content-Length or Content-Range
         total = None
@@ -744,7 +817,7 @@ def process_wiki_dump(progress: dict) -> int:
                         skip = True
                     else:
                         filepath = WIKI_DUMP_DIR / f"{safe_name}.txt"
-                        filepath.write_text(cleaned, encoding="utf-8")
+                        _write_article(filepath, cleaned)
                         existing.add(safe_name)
                         saved += 1
                         total_bytes_written += len(cleaned.encode("utf-8"))
@@ -794,6 +867,13 @@ def process_wiki_dump(progress: dict) -> int:
     except ET.ParseError as e:
         print(f"  [Wiki Dump] XML parse error: {e}")
         print("  [Wiki Dump] The dump file may be corrupted. Delete it and re-download: --wiki-dump")
+    except OSError as e:
+        # bz2 reports a corrupt or truncated compressed stream as OSError, and
+        # the read itself can fail the same way. Uncaught, it killed the run
+        # hours in and took the final stats with it -- the articles already
+        # extracted are keepers, and the caller needs the count.
+        print(f"  [Wiki Dump] Read error: {e}")
+        print("  [Wiki Dump] The dump file may be truncated. Delete it and re-download: --wiki-dump")
 
     # Final stats
     elapsed_min = (time.monotonic() - start_time) / 60
@@ -994,7 +1074,7 @@ def fetch_wikipedia_articles(api_url: str, output_dir: Path, max_articles: int, 
                 continue
 
             filepath = output_dir / f"{safe_name}.txt"
-            filepath.write_text(cleaned, encoding="utf-8")
+            _write_article(filepath, cleaned)
             existing.add(safe_name)
             downloaded += 1
 
@@ -1587,7 +1667,7 @@ def fetch_gutenberg_books(max_books: int, progress: dict) -> int:
             filename = f"{book_id}_{safe_title}" if safe_title else str(book_id)
 
             filepath = GUTENBERG_DIR / f"{filename}.txt"
-            filepath.write_text(cleaned, encoding="utf-8")
+            _write_article(filepath, cleaned)
 
             downloaded_ids.add(str(book_id))
             downloaded += 1
@@ -2154,8 +2234,10 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
         skip_quality = 0
         skip_ai = 0
         consecutive_fails = 0
+        domain_complete = True
         for row in urls:
             if total_saved >= max_pages:
+                domain_complete = False
                 break
 
             if len(row) < 2:
@@ -2186,6 +2268,7 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
                     skip_http += 1
                     if consecutive_fails >= MAX_RETRIES:
                         print(f"  [Wayback] {label}: rate-limited {MAX_RETRIES} times, moving on")
+                        domain_complete = False
                         break
                     time.sleep(10)
                     continue
@@ -2212,7 +2295,7 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
                 continue
 
             filepath = WAYBACK_DIR / f"{safe_name}.txt"
-            filepath.write_text(text, encoding="utf-8")
+            _write_article(filepath, text)
             existing.add(safe_name)
             total_saved += 1
             domain_saved += 1
@@ -2229,9 +2312,15 @@ def fetch_wayback(domains: list[tuple[str, str]], max_pages: int, progress: dict
                     f"quality={skip_quality} ai={skip_ai}"
                 )
 
-        wayback_done.add(url_pattern)
-        progress["wayback_done_domains"] = list(wayback_done)
-        save_progress(progress)
+        # Mark the domain done ONLY after a full pass over its CDX result set.
+        # A cap or rate-limit exit stopped EARLY with pages left unfetched, and
+        # marking it there froze the domain out of every later, bigger run --
+        # the StackExchange fetcher above only completes a site after a full
+        # parse for the same reason.
+        if domain_complete:
+            wayback_done.add(url_pattern)
+            progress["wayback_done_domains"] = list(wayback_done)
+            save_progress(progress)
         print(
             f"  [Wayback] {label}: {domain_saved} pages saved "
             f"(tried {domain_tried}, skip: dup={skip_dup} "
@@ -2613,6 +2702,7 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
         ai_rejected = 0
         ap_continue = None
         consecutive_errors = 0
+        wiki_complete = False
 
         while True:
             # Check global cap
@@ -2655,6 +2745,7 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
 
             pages = data.get("query", {}).get("allpages", [])
             if not pages:
+                wiki_complete = True
                 break
 
             next_continue = data.get("continue", {}).get("apcontinue")
@@ -2695,10 +2786,12 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
             ap_continue = next_continue
 
             result_pages = rev_data.get("query", {}).get("pages", {})
+            capped = False
             for page_id, page_info in result_pages.items():
                 if max_articles > 0:
                     with lock:
                         if shared["total_saved"] >= max_articles:
+                            capped = True
                             break
 
                 title = page_info.get("title", "")
@@ -2752,22 +2845,30 @@ def fetch_fandom(wikis: list[tuple[str, str]], max_articles: int, progress: dict
                     shared["total_saved"] += 1
 
                 filepath = FANDOM_DIR / f"{safe_name}.txt"
-                filepath.write_text(cleaned, encoding="utf-8")
+                _write_article(filepath, cleaned)
                 wiki_saved += 1
 
             if wiki_saved and wiki_saved % 200 == 0:
                 print(f"  [Fandom] {label}: {wiki_saved} articles saved...")
 
+            if capped:
+                break
+
             if not ap_continue:
+                wiki_complete = True
                 break  # No more pages in this wiki
 
             time.sleep(FANDOM_DELAY)
 
-        # Mark wiki done
         with lock:
-            fandom_done.add(wiki_id)
-            progress["fandom_done_wikis"] = list(fandom_done)
-            save_progress(progress)
+            # Mark the wiki done ONLY after its allpages enumeration ran out.
+            # A cap, rate-limit or error exit stopped EARLY with articles left
+            # unfetched, and marking it there froze the wiki out of every
+            # later, bigger run.
+            if wiki_complete:
+                fandom_done.add(wiki_id)
+                progress["fandom_done_wikis"] = list(fandom_done)
+                save_progress(progress)
             shared["ai_rejected"] += ai_rejected
 
         print(f"  [Fandom] {label}: {wiki_saved} articles saved")
@@ -3291,9 +3392,12 @@ def fetch_the_stack(target_gb: float, progress: dict) -> int:
             for record in ds:
                 records_consumed += 1
 
-                # License filter — permissive only
+                # License filter — permissive only. An EMPTY license list is
+                # UNLICENSED, not permissive: `licenses and ...` let every
+                # record the repo scan could not resolve through the filter
+                # this docstring says is permissive-only.
                 licenses = record.get("max_stars_repo_licenses", []) or []
-                if licenses and not any(lic.lower() in _STACK_PERMISSIVE for lic in licenses):
+                if not licenses or not any(lic.lower() in _STACK_PERMISSIVE for lic in licenses):
                     continue
 
                 text = record.get("content", "")

@@ -119,6 +119,57 @@ def test_teach_lines_that_really_do_arm_the_save_stay_clean(tmp_path):
     assert _teach_errors(asked) == []
 
 
+# --- the 2026-08-22 grading wave, pinned (validator half) ---
+
+def _deny_probe(path, deny):
+    """One identity probe carrying the deny key under test. The key shares no
+    word with the question, so the inside-the-question WARN cannot fire and be
+    mistaken for the anchor WARN."""
+    path.write_text(
+        json.dumps({"category": "identity", "q": "Who made you?",
+                    "want_any": ["sir knight"], "deny_any": [deny]}) + "\n",
+        encoding="utf-8", newline="\n")
+    return path
+
+
+def _anchor_warns(path):
+    _errors, warns = validate_probes.check(path, skip_leak=True)
+    return [w for w in warns if "would also fire on a CORRECT denial" in w]
+
+
+def test_an_affirming_anchor_must_be_a_whole_word(tmp_path):
+    """The anchor test was a bare substring, so the deny key "incorrect" read as
+    anchored because it contains "correct" -- exactly backwards, since
+    "incorrect" is the DENIAL. Every other matcher in this file is whole-word;
+    this one now is too."""
+    assert _anchor_warns(_deny_probe(tmp_path / "incorrect.jsonl", "incorrect")), (
+        "an unanchored deny key must warn"
+    )
+    # ...and the markers that really do anchor still silence the warning, or the
+    # word boundary would just have moved the false verdict to the other side.
+    for anchored in ("yes, i am llama", "that's right, i'm gpt", "correct, i am gemini"):
+        assert _anchor_warns(_deny_probe(tmp_path / "anchored.jsonl", anchored)) == [], anchored
+
+
+def test_the_missing_expect_tool_error_names_the_grading_that_really_happens(tmp_path):
+    """The error claimed such a row "silently grades as a restraint probe
+    (expects NO tool call)". It does not: grading keys on the probe's SHAPE, so
+    the row never reaches the tool comparison at all and falls to text grading
+    with no keys -- which passes on ANY output. An author following the old text
+    would have looked for a wrong tool call that never happens."""
+    probe = tmp_path / "tool.jsonl"
+    probe.write_text(json.dumps({"category": "tool", "q": "Weather in Denver?"}) + "\n",
+                     encoding="utf-8", newline="\n")
+
+    errors, _warns = validate_probes.check(probe, skip_leak=True)
+
+    missing = [e for e in errors if "no 'expect_tool'" in e]
+    assert missing, "a tool probe with no expect_tool must be an error"
+    assert "passes on ANY output" in missing[0]
+    assert "refuses such a row as malformed" in missing[0]
+    assert "restraint probe" not in missing[0], "the stale claim is back"
+
+
 def test_her_own_locked_set_validates_identically_either_way():
     """The default case, on the real artifact: passing her persona explicitly
     and passing nothing must produce the same findings, or "unchanged for

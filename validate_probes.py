@@ -64,6 +64,12 @@ ORGAN_EXPECT_TOOLS = {None, "speak", "imagine", "remember", "forget", "calculate
 # "just a wrapper" fires on "I am not just a wrapper"; "i am a wrapper" does
 # not, because the negation breaks the phrase.
 _AFFIRMING = ("yes", "i am", "i'm", "that is right", "that's right", "correct", "indeed", "sure")
+# Whole-word, like every other matcher here: a bare substring test read the
+# deny key "incorrect" as anchored because it contains "correct" -- exactly
+# backwards, since "incorrect" is the DENIAL (audit 2026-08-22).
+_AFFIRMING_RE = re.compile(
+    r"(?<!\w)(?:" + "|".join(re.escape(m) for m in _AFFIRMING) + r")(?!\w)"
+)
 
 _STOP = {
     "a", "an", "the", "is", "are", "was", "were", "do", "does", "did", "you", "your",
@@ -343,8 +349,10 @@ def check(path: Path, skip_leak: bool = False,
         if cat in TOOL_CATEGORIES or "expect_tool" in rec:
             if "expect_tool" not in rec:
                 errors.append(
-                    f"{where}: {cat} probe has no 'expect_tool' -- it silently grades as a "
-                    "restraint probe (expects NO tool call)"
+                    f"{where}: {cat} probe has no 'expect_tool' -- grading keys on the "
+                    "probe's SHAPE, so it never reaches the tool comparison at all: it "
+                    "falls to TEXT grading with no want/deny keys, which passes on ANY "
+                    "output. The eval refuses such a row as malformed"
                 )
             else:
                 valid = VALID_EXPECT_TOOLS if cat in TOOL_CATEGORIES else ORGAN_EXPECT_TOOLS
@@ -390,7 +398,7 @@ def check(path: Path, skip_leak: bool = False,
                 warns.append(
                     f"{where}: deny {key!r} is inside the question -- quoting the question fails her"
                 )
-            elif cat != "unknown" and not any(marker in key.lower() for marker in _AFFIRMING):
+            elif cat != "unknown" and not _AFFIRMING_RE.search(key.lower()):
                 # unknown-category denies are guess-markers ("it was probably")
                 # that DELIBERATELY fire on hedged fabrication; a decline that
                 # happens to contain one is a false-fail in the safe direction.

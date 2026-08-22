@@ -71,20 +71,31 @@ def test_malformed_hits_are_skipped_not_fatal():
     assert [h["title"] for h in s.query("q")] == ["Real"]
 
 
-def test_a_non_string_url_degrades_instead_of_escaping_as_an_AttributeError():
+def test_a_non_string_url_is_skipped_not_kept():
     """`(r.get("url") or "").strip()` raised AttributeError on a truthy non-str
     url. That is not a SearchError, and serve's _apply_search catches
     SearchError only, so one malformed backend row answered 500 on the
-    non-stream path instead of degrading honestly. The title beside it was
-    already coerced; the url is now coerced the same way, and a row that
-    coerces to nothing is skipped like every other malformed row."""
-    for bad in (12345, ["https://x"], {"href": "https://x"}, True):
+    non-stream path instead of degrading honestly.
+
+    Coercing it with _one_line() -- as the title beside it is -- only moved the
+    damage: `{"href": ...}` rendered its python REPR into the model-visible tool
+    turn as a citation, and spent one of the k slots a real hit could have had
+    (audit 2026-08-22). A url that is not a non-empty string skips the result,
+    which is what the loop's own comment always claimed."""
+    for bad in (12345, ["https://x"], {"href": "https://x"}, True, None):
         raw = [{"title": "Bad", "url": bad, "content": "c"},
                {"title": "Real", "url": "https://real", "content": "fine"}]
         s = Searcher(fetch=lambda url: _searxng_body(raw))
         hits = s.query("q")  # must not raise
-        assert "Real" in [h["title"] for h in hits], bad
+        assert [h["title"] for h in hits] == ["Real"], bad  # skipped, never kept
         assert all(isinstance(h["url"], str) for h in hits), bad
+
+    # ...and it costs no SLOT either: with k=1 the real hit still lands, where a
+    # coerced malformed row would have filled the only slot and shut it out.
+    raw = [{"title": "Bad", "url": {"href": "https://x"}, "content": "c"},
+           {"title": "Real", "url": "https://real", "content": "fine"}]
+    s = Searcher(fetch=lambda url: _searxng_body(raw))
+    assert [h["title"] for h in s.query("q", k=1)] == ["Real"]
 
     # ...and a url that is only whitespace is still nothing, as before.
     s = Searcher(fetch=lambda url: _searxng_body([{"title": "T", "url": "   "}]))
@@ -351,9 +362,9 @@ def test_organ_failure_reaches_her_as_an_error_turn(monkeypatch, tok_v2):
 
 
 def test_stream_and_non_stream_agree_and_the_query_never_streams(monkeypatch, tok_v2):
-    """The span is depth-suppressed on the wire: a streaming client must see
-    the final answer only, never the query text -- and the joined stream
-    content must byte-match the non-stream path's."""
+    """The span is suppressed on the wire by state that mirrors the parser: a
+    streaming client must see the final answer only, never the query text --
+    and the joined stream content must byte-match the non-stream path's."""
     searcher = _FakeSearcher()
     _wire(monkeypatch, tok_v2, searcher)
     hops = [

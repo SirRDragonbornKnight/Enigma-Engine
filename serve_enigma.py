@@ -28,6 +28,7 @@ import math
 import os
 import queue
 import re
+import socket
 import sys
 import tempfile
 import threading
@@ -38,6 +39,8 @@ from pathlib import Path
 import torch
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -858,6 +861,21 @@ async def _require_boot(request, call_next):
     return await call_next(request)
 
 
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request, exc: RequestValidationError):
+    """FastAPI's default 422 body, with non-finite floats rendered as text.
+
+    That body ECHOES the rejected input, and starlette renders JSON with
+    allow_nan=False -- so refusing a NaN or Infinity (which json.loads parses
+    straight out of the bare literals) made the error response itself
+    unserializable, and the client got a bare 500 where the validator had
+    already produced the right answer."""
+    safe = jsonable_encoder(
+        exc.errors(), custom_encoder={float: lambda v: v if math.isfinite(v) else repr(v)}
+    )
+    return JSONResponse(status_code=422, content={"detail": safe})
+
+
 # Transcript turn markers: a base model will happily continue the whole
 # conversation, so cut her off when she starts writing the next turn.
 _STOP_TEXTS = ("\nUser:", PERSONA.transcript_label)
@@ -872,17 +890,35 @@ class Msg(BaseModel):
     tool_calls: list[dict] | None = None  # assistant history (instruct mode)
 
 
+# The temperature an omitted field carries -- and, because a non-finite one is
+# nonsense the sampler cannot survive, what the clamp falls back to. One source
+# of truth so a rejected value lands exactly where an absent one would.
+# CHAT: clarity defaults, measured on the 182M lineage (2026-07-15) and carried
+# to the adopted 238M-class model (0.8/no-min_p read as rambling; 0.3 + min_p
+# keeps her coherent while staying non-greedy). RAW: /v1/completions is plain
+# continuation and keeps the exploratory default.
+CHAT_TEMPERATURE = 0.3
+RAW_TEMPERATURE = 0.8
+
+# allow_inf_nan=False on every float sampling knob. json.loads() accepts the
+# bare NaN/Infinity literals, so a client could hand one straight to the
+# sampler -- where logits/NaN turns the whole row NaN and destroys the -inf
+# vocab-padding mask BEFORE sample_next_token saves its pre-filter copy. The
+# second-level guard then reads the padded columns as ALLOWED and draws
+# uniformly over them (measured 2026-08-22: 67/200 draws landed in masked rows
+# at NaN, 74/200 at inf) -- <unk> spam, and chat-special ids firing tool spans
+# out of noise. A non-finite knob is a client error: 422, nothing generated.
+_FINITE = {"allow_inf_nan": False}
+
+
 class ChatReq(BaseModel):
     model: str = Field(default_factory=_model_id)
     messages: list[Msg]
-    # Clarity defaults, measured on the 182M lineage (2026-07-15) and carried
-    # to the adopted 238M-class model: 0.8/no-min_p read as rambling; 0.3 +
-    # min_p keeps her coherent while staying non-greedy.
-    temperature: float = 0.3
-    top_p: float = 0.9
-    min_p: float = 0.05  # 0 = off; prunes tokens below min_p * max_prob
+    temperature: float = Field(CHAT_TEMPERATURE, **_FINITE)
+    top_p: float = Field(0.9, **_FINITE)
+    min_p: float = Field(0.05, **_FINITE)  # 0 = off; prunes tokens below min_p * max_prob
     top_k: int = 50  # 0 = off
-    repetition_penalty: float = 1.1  # applied to HER tokens only, never the prompt
+    repetition_penalty: float = Field(1.1, **_FINITE)  # applied to HER tokens only, never the prompt
     max_tokens: int = 256
     stream: bool = False
     tools: list[dict] | None = None  # OpenAI tool specs (instruct mode)
@@ -891,11 +927,11 @@ class ChatReq(BaseModel):
 class CompletionReq(BaseModel):
     model: str = Field(default_factory=_model_id)
     prompt: str
-    temperature: float = 0.8  # raw continuation keeps the exploratory default
-    top_p: float = 0.9
-    min_p: float = 0.0  # 0 = off; prunes tokens below min_p * max_prob
+    temperature: float = Field(RAW_TEMPERATURE, **_FINITE)
+    top_p: float = Field(0.9, **_FINITE)
+    min_p: float = Field(0.0, **_FINITE)  # 0 = off; prunes tokens below min_p * max_prob
     top_k: int = 50  # 0 = off
-    repetition_penalty: float = 1.1  # applied to generated tokens only
+    repetition_penalty: float = Field(1.1, **_FINITE)  # applied to generated tokens only
     max_tokens: int = 256
     stream: bool = False
 
@@ -992,6 +1028,23 @@ def _stream_ids_locked(
         cancel.set()
 
 
+def _clamp_temperature(temperature, default: float) -> float:
+    """The sampling temperature the model may actually be handed.
+
+    0 (or below) means GREEDY -- the model argmaxes. Positive-but-tiny is
+    clamped: dividing logits by ~1e-9 overflows fp32. NON-FINITE falls back to
+    `default`: NaN/inf survive float(), pass `<= 0` and `max()` untouched, and
+    reach sample_next_token, where logits/NaN wipes the -inf vocab-padding mask
+    before the NaN fallback can read it and the sampler draws uniformly over
+    padded ids. The request models reject non-finite floats outright (422);
+    this is the second layer, so no other caller can ship one either.
+    """
+    t = float(temperature)
+    if not math.isfinite(t):
+        t = float(default)
+    return 0.0 if t <= 0 else max(t, 1e-3)
+
+
 def _generate_text(
     prompt: str,
     max_tokens: int,
@@ -1002,6 +1055,7 @@ def _generate_text(
     top_k: int = 50,
     repetition_penalty: float = 1.1,
     stats: dict | None = None,
+    default_temperature: float = CHAT_TEMPERATURE,
 ):
     """Yield text deltas from her KV-cached streaming path.
 
@@ -1044,9 +1098,7 @@ def _generate_text(
     stats["completion_tokens"] = 0
     stats["finish"] = "stop"
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
-    # 0 (or below) means GREEDY -- the model argmaxes. Positive-but-tiny is
-    # clamped: dividing logits by ~1e-9 overflows fp32.
-    temperature = 0.0 if float(temperature) <= 0 else max(float(temperature), 1e-3)
+    temperature = _clamp_temperature(temperature, default_temperature)
     hold = max((len(s) for s in stop_texts), default=1) - 1
     emitted = 0
     saw_eos = False
@@ -1101,8 +1153,7 @@ def _gen_ids(
     # sized max_tokens against len(ids), but never let a bad caller overflow).
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
-    # 0 (or below) means GREEDY; positive-but-tiny is clamped (fp32 overflow).
-    temperature = 0.0 if float(temperature) <= 0 else max(float(temperature), 1e-3)
+    temperature = _clamp_temperature(temperature, CHAT_TEMPERATURE)  # instruct mode is chat
     for tid in _stream_ids_locked(
         x, max_tokens, temperature, top_p, min_p, list(stop_ids), top_k=top_k, repetition_penalty=repetition_penalty
     ):
@@ -1749,7 +1800,6 @@ def _chat_instruct(req: ChatReq):
                 all_ids: list[int] = []
                 content_ids: list[int] = []
                 emitted = 0
-                depth = 0
                 # Parity with non-stream, which returns parse_assistant_ids'
                 # STRIPPED per-hop content: drop leading whitespace, hold any
                 # trailing-whitespace run back until more non-whitespace
@@ -1758,20 +1808,17 @@ def _chat_instruct(req: ChatReq):
                 # byte-identical guarantee (re-audit 2026-07-17).
                 hop_started = False
                 pending_ws = ""
-                for tid in gen:
-                    all_ids.append(tid)
-                    if tid in (THINK, TOOL_CALL) or (SEARCH is not None and tid == SEARCH):
-                        depth += 1
-                        continue
-                    if tid in (THINK_END, TOOL_CALL_END) or (SEARCH_END is not None and tid == SEARCH_END):
-                        depth = max(0, depth - 1)
-                        continue
-                    if depth:
-                        continue  # span ids surface at the end, parsed -- not as text
-                    content_ids.append(tid)
+
+                def _send_content(new_ids: list[int]):
+                    """Add ids to this hop's CONTENT and send whatever new text
+                    that makes. content_ids is built in the same order
+                    parse_assistant_ids builds its own, so decoding it
+                    progressively yields the bytes the non-stream join returns."""
+                    nonlocal emitted, hop_started, pending_ws, emitted_any
+                    content_ids.extend(new_ids)
                     text = tokenizer.decode(content_ids, skip_special_tokens=True)
                     if len(text) <= emitted:
-                        continue
+                        return
                     delta = text[emitted:]
                     emitted = len(text)
                     chunk = pending_ws + delta
@@ -1779,11 +1826,11 @@ def _chat_instruct(req: ChatReq):
                         chunk = chunk.lstrip()
                         if not chunk:
                             pending_ws = ""
-                            continue
+                            return
                     body = chunk.rstrip()
                     pending_ws = chunk[len(body):]
                     if not body:
-                        continue
+                        return
                     if not hop_started and emitted_any:
                         body = "\n" + body  # hop-content separator, matches non-stream join
                     hop_started = True
@@ -1803,6 +1850,59 @@ def _chat_instruct(req: ChatReq):
                         )
                         + "\n\n"
                     )
+
+                # Span suppression MIRRORS parse_assistant_ids, which is the
+                # authority on what a malformed span means: spans do NOT nest,
+                # so an opener truncates whatever is open and restarts, and a
+                # closer closes outright whether or not it matches. A depth
+                # COUNTER (what this was) diverged from the parser on every
+                # malformed shape -- "<think>a<think>b</think>c" streamed
+                # nothing where non-stream returned "c", text after an inner
+                # tool span vanished, and a span cut by the token budget lost
+                # the text the parser recovers into content (audit 2026-08-22).
+                span: list[int] | None = None
+                span_kind = ""
+                search_taken = False
+                closers = {THINK_END: "think", TOOL_CALL_END: "tool"}
+                if SEARCH_END is not None:
+                    closers[SEARCH_END] = "search"
+
+                def _flush_span(closed: bool):
+                    """Route a finished span exactly as flush_span does: think
+                    ids never surface, a tool span is parsed (or surfaced raw)
+                    after the loop, and a search span joins CONTENT unless it is
+                    the first CLOSED one carrying a query -- that one is the
+                    lookup serve executes, and it must never reach the wire."""
+                    nonlocal span, span_kind, search_taken
+                    ids_, kind = span, span_kind
+                    span, span_kind = None, ""
+                    if ids_ is None or kind != "search":
+                        return
+                    raw = tokenizer.decode(ids_, skip_special_tokens=True).strip()
+                    if closed and not search_taken and raw:
+                        search_taken = True
+                        return
+                    yield from _send_content(ids_)
+
+                for tid in gen:
+                    all_ids.append(tid)
+                    if tid in (THINK, TOOL_CALL) or (SEARCH is not None and tid == SEARCH):
+                        yield from _flush_span(False)
+                        span = []
+                        span_kind = "think" if tid == THINK else ("tool" if tid == TOOL_CALL else "search")
+                        continue
+                    if tid in closers:
+                        yield from _flush_span(span is not None and span_kind == closers[tid])
+                        continue
+                    if span is not None:
+                        span.append(tid)
+                        continue
+                    yield from _send_content([tid])
+                # Generation can end mid-span (max_tokens budget). The parser
+                # flushes the dangling span rather than discarding it, so a
+                # truncated search query surfaces as content -- catch up here
+                # or the stream drops text the non-stream path returns.
+                yield from _flush_span(False)
                 out = parse_assistant_ids(tokenizer, all_ids)
                 parsed = out["tool_calls"]
                 # Unparsable call text is collected across hops -- a malformed
@@ -1816,8 +1916,8 @@ def _chat_instruct(req: ChatReq):
                 # content, or the handshake's marker (and the ids the user
                 # must answer with) dies in the server-side tool trace.
                 if _loop_on_search(out, parsed, hop):
-                    # The query never streams (the span is depth-suppressed
-                    # above); the next hop answers from the spliced results.
+                    # The query never streams (_flush_span keeps the executed
+                    # span off the wire); the next hop answers from the results.
                     search_results: list = []
                     cur_msgs = _apply_search(cur_msgs, out, search_results)
                     tools_run += [name for name, _ in search_results]
@@ -2272,21 +2372,33 @@ document.getElementById("f").onsubmit = function (ev) {
 // server actually booted --ears; an always-visible control that 404s teaches
 // the user the feature is broken rather than absent.
 var micBtn = document.getElementById("mic");
-var recorder = null, chunks = [], micBusy = false;
+var recorder = null, chunks = [], micBusy = false, micHeld = false, micPending = false;
 function micLabel(t) {
   micBtn.textContent = t;
   micBtn.className = (t === "Rec") ? "rec" : "";
 }
 function stopRecording() {
+  // micHeld drops on EVERY release, even one that lands while getUserMedia is
+  // still pending -- on first use the button is released to click the browser's
+  // permission prompt, and a recorder started after that release has no release
+  // left coming: the mic stayed live and recording (audit 2026-08-22).
+  micHeld = false;
   if (recorder && recorder.state === "recording") recorder.stop();
 }
 function startRecording() {
-  if (micBusy || recorder) return;
+  if (micBusy || recorder || micPending) return;
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     add("sys", "this browser cannot record audio");
     return;
   }
+  micHeld = true;
+  micPending = true;
   navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    micPending = false;
+    if (!micHeld) {   // released while the prompt was up: release the device, record nothing
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      return;
+    }
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = function (ev) { if (ev.data.size) chunks.push(ev.data); };
@@ -2311,7 +2423,11 @@ function startRecording() {
     };
     recorder.start();
     micLabel("Rec");
-  }).catch(function () { add("sys", "microphone unavailable (permission denied?)"); });
+  }).catch(function () {
+    micPending = false;
+    micHeld = false;   // denied: back to the state a fresh press starts from
+    add("sys", "microphone unavailable (permission denied?)");
+  });
 }
 micBtn.addEventListener("mousedown", startRecording);
 micBtn.addEventListener("mouseup", stopRecording);
@@ -2489,6 +2605,7 @@ def completions(req: CompletionReq):
     gen = _generate_text(
         req.prompt, req.max_tokens, req.temperature, req.top_p,
         min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty, stats=stats,
+        default_temperature=RAW_TEMPERATURE,  # raw continuation, not chat
     )
 
     if req.stream:
@@ -2829,7 +2946,9 @@ class VoiceReq(BaseModel):
     """Any subset of the recipe; omitted fields keep their current value."""
 
     blend: list | None = None
-    speed: float | None = None
+    # Same JSON-literal door as the sampling knobs: a bare NaN/Infinity would
+    # reach Kokoro's rate and persist into voice.json as the saved recipe.
+    speed: float | None = Field(None, **_FINITE)
     lang_code: str | None = None
 
 
@@ -2964,6 +3083,32 @@ def print_audio_outputs() -> None:
     print("  --voice-device default follows whatever Windows calls the default", flush=True)
 
 
+def _require_free_port(host: str, port: int) -> None:
+    """Refuse a taken port BEFORE boot() loads the checkpoint.
+
+    boot() reads and sha256s a multi-GB .pth and brings the organs up, and only
+    then does uvicorn try to bind -- so a second server aimed at the daily port
+    paid the whole load just to die on the bind. Bind-and-release is a PROBE,
+    never a takeover: the running server keeps the port, and stopping it stays
+    the launcher's job. No SO_REUSEADDR -- on Windows that flag lets a probe
+    bind straight over a live listener, which is exactly the false clear this
+    check must not give.
+    """
+    info = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0]
+    s = socket.socket(info[0], socket.SOCK_STREAM)
+    try:
+        s.bind(info[4])
+    except OSError as exc:
+        raise SystemExit(
+            f"port {port} on {host} is already in use ({exc.strerror or exc}).\n"
+            "Something is already serving there -- most likely the daily Enigma "
+            "server (stop it with Stop Enigma.bat / Enigma Tray.bat), or pass "
+            "--port <other> to run a second one beside it."
+        ) from exc
+    finally:
+        s.close()
+
+
 def main() -> None:
     """Run the server. Console-script entry point (pyproject [project.scripts])
     and the __main__ path share this."""
@@ -2973,6 +3118,9 @@ def main() -> None:
     if _early.list_audio_outputs:
         print_audio_outputs()
         return
+    # Whether the port is free is a question about the machine too: ask it
+    # while refusing is still cheap.
+    _require_free_port(_early.host, _early.port)
     boot()
     print(f"{PERSONA.name} OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)
     print(f"In Odysseus:  /setup local http://{ARGS.host}:{ARGS.port}/v1", flush=True)

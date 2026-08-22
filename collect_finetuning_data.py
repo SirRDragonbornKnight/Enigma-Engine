@@ -156,7 +156,11 @@ def collect_oasst() -> list[dict]:
     from datasets import load_dataset
 
     logger.info("Downloading OASST1 dataset...")
-    ds = load_dataset("OpenAssistant/oasst1", split="train")
+    try:
+        ds = load_dataset("OpenAssistant/oasst1", split="train")
+    except Exception as exc:
+        logger.error("Failed to load OASST1: %s", exc)
+        return []
     logger.info(f"OASST1: {len(ds)} messages loaded")
 
     # Build conversation trees
@@ -234,7 +238,11 @@ def collect_dolly() -> list[dict]:
     from datasets import load_dataset
 
     logger.info("Downloading Dolly 15k dataset...")
-    ds = load_dataset("databricks/databricks-dolly-15k", split="train")
+    try:
+        ds = load_dataset("databricks/databricks-dolly-15k", split="train")
+    except Exception as exc:
+        logger.error("Failed to load Dolly 15k: %s", exc)
+        return []
     logger.info(f"Dolly: {len(ds)} examples loaded")
 
     pairs = []
