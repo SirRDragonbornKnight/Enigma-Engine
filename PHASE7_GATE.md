@@ -2,15 +2,18 @@
 
 **Gate status: CLOSED — adoption EXECUTED 2026-08-09** (the v2 lineage's
 SFT-2 checkpoint, 67/120 vs v8's 56 on the sealed set). Superseded as a decision
-2026-07-20 by ROADMAP's Phase 7 section: the v2 prefix landed and the v2
-pretrain is the next GPU spend, ahead of Phases 4/5. The baseline it needed
-is measured (56/120 v8, 55/120 v5 on the sealed locked set, 2026-07-27 —
-table and receipts in `EVAL_REDESIGN.md`, which owns all scorecard numbers);
+2026-07-20 by ROADMAP's Phase 7 section, which then carried the v2 pretrain as
+the next GPU spend ahead of Phases 4/5 — that spend is now made. The baseline
+it needed was measured (56/120 v8, 55/120 v5 on the sealed locked set,
+2026-07-27 — table and receipts in `EVAL_REDESIGN.md`, which owns all
+scorecard numbers, and which now carries 67/120 as the live one);
 T1 corpus prep is DONE (tokens_v2b.bin, 2026-07-28), T2 is CLOSED (LR
-sweep, 2026-07-29: 3e-3 measured), and both launch gates are RULED
+sweep, 2026-07-29: 3e-3 measured), and both launch gates were RULED
 2026-07-30: **Gate B = `v2_deep_238m`**, **corpus rebuild before T3**
-(records at `BACKLOG.md` items 7 and 11). What remains before launch is the
-rebuild itself plus the T3 pre-flight.
+(records at `BACKLOG.md` items 7 and 11). **Both are DONE and the launch has
+run:** the rebuild landed 2026-07-30 as `tokens_v2c.bin` (24,328,462,081
+tokens, superseding v2b) and T3 closed 2026-08-06 at 123,596 steps / 24.30B
+tokens, final val-src 7.66 — the pretrain behind the adoption above.
 
 What stays live in this file: the measured-ceilings ledger (the written list
 of things Phase 2-5 Enigma provably cannot do, each with its receipt — the
@@ -108,7 +111,12 @@ v2 238M-class, vocab 16,366, block 2048 (Gate D, 2026-08-09).
   remember:" until trained on it). The per-built-in intent gates were
   OVERTURNED 2026-07-24 — they retire at the v2 regen in favor of the
   always-offered built-in block (verdict in ROADMAP; execution owned by
-  `BACKLOG.md` §7.95 T4).
+  `BACKLOG.md` §7.95 T4). **PARKED ON MEASUREMENT 2026-08-20:** the serve-side
+  retirement was built and reverted the same day, having lost the sealed gate
+  twice (55/120 organ-filtered and 59/120 fixed five-tool, against the gated
+  67/120). The gates are the LIVE offering for every lineage; the overturn
+  stands as direction only, un-parking for a lineage that measures >= gated
+  under the block.
 - Run-stamped checkpoint directories with SHA256 receipts — rounds
   overwrote model.pth all week; the peaks survived by manual backup only.
 - QA gates from day 0: foreign-identity purge, boilerplate filter,

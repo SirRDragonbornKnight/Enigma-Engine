@@ -243,7 +243,48 @@ nothing, the user curates); the other six gated categories name nobody and
 carry over. `validate_probes.py --persona <pack>` and
 `eval_leak_guard.py seal` are the same two steps her set went through.
 
-## P2 BASELINE -- reseal #7 (2026-07-27): 120 probes, 15 per gated category -- THE live scorecard
+## LIVE SCORECARD (2026-08-22) -- the adopted baseline is 67/120
+
+THE live scorecard, and the number other docs should point at. Gate run
+2026-08-08 against the reseal-#7 sealed set below (120 probes, 15 per gated
+category, unchanged): `models/enigma_v2_sft2` measured **67/120** against the
+v8 rollback's 56/120, and the user ADOPTED it 2026-08-09. It is the served
+checkpoint. Transcript `Enigma Backups\locked_eval_v2sft2_2026-08-08.jsonl`
+(baseline `...\locked_baseline_v8_2026-07-27_reseal7.jsonl`; SEALED GATE RUN
+both, this-model sha 3f938581..., baseline sha a11db8f0...).
+
+| category    | threshold | v8 (prior) | **v2 sft2 (adopted)** | v2 sft3 (2026-08-20) |
+|-------------|-----------|-----------|-----------|-----------|
+| identity    | 0.80      | 8/15  53% | **10/15 67%** | 9/15  60% |
+| adversarial | 0.80      | 2/15  13% | **2/15  13%** | 1/15   7% |
+| factual     | 0.50      | 10/15 67% | **9/15  60%** | 8/15  53% |
+| math        | 0.75      | 8/15  53% | **13/15 87%** | 15/15 100%|
+| tool        | 0.80      | 15/15 100%| **15/15 100%**| 14/15 93% |
+| restraint   | 0.80      | 10/15 67% | **13/15 87%** | 12/15 80% |
+| memory      | 0.75      | 3/15  20% | **5/15  33%** | 3/15  20% |
+| unknown     | 0.50      | 0/15   0% | **0/15   0%** | 0/15   0% |
+| **OVERALL** |           | **56/120 47%** | **67/120 56%** | **62/120 52%** |
+
+**sft2 vs v8 (the adoption):** aggregate +9.2 points, paired exact
+**p=0.0433** (18 wins / 7 losses over the shared probes), ONE category
+regression -- factual 10/15 -> 9/15. The harness printed USER'S CALL on that
+regression rather than ADOPT; the user ruled to adopt, 2026-08-09.
+
+**sft3 vs sft2 (2026-08-20) -- ADOPTION PENDING THE USER'S RULING.** 62/120
+against sft2's 67/120: aggregate -4.2 points, paired exact **p=0.1797** (2
+wins / 7 losses), which the harness reports as INDISTINGUISHABLE, with the
+verdict USER'S CALL (aggregate not beaten, 6 category regressions --
+adversarial, factual, identity, memory, restraint, tool). Math is the only
+column that rose, 13/15 -> 15/15. Transcript
+`Enigma Backups\locked_eval_v2sft3_2026-08-20.jsonl`. **sft2 stays the served
+checkpoint until the user rules on this.**
+
+The serve-side gate-flip experiment of 2026-08-20 (two flipped-offering runs,
+55/120 and 59/120 against this gated 67/120, built and reverted the same day)
+is deliberately NOT narrated here -- `BACKLOG.md` T4 owns that record in full,
+including what survived the revert.
+
+## P2 BASELINE -- reseal #7 (2026-07-27): 120 probes, 15 per gated category -- PRIOR baseline, superseded 2026-08-09 by the live scorecard above
 
 Reseal #7 executed on the user's order: 5 teach rows re-contented to
 distinctive entities (Marisol Quenby / Tarrowick / Farrowgate meeting /

@@ -64,6 +64,13 @@ Muppet.
   gates retire at the v2 regen in favor of a fixed always-offered built-in
   block (the v8 lineage keeps its gates -- it was trained under them);
   measured defects + execution live in `BACKLOG.md` T4.
+  **PARKED ON MEASUREMENT 2026-08-20:** the serve half was built and reverted
+  the same day, and the retirement lost the sealed gate TWICE — an
+  organ-filtered block scored 55/120 and a fixed five-tool block 59/120,
+  both against the gated 67/120. The intent gates are therefore the LIVE
+  offering for EVERY lineage, v2 included. The 2026-07-24 ruling stands as
+  DIRECTION, not as a pending change; it un-parks only for a lineage that
+  measures >= gated under the block. Full record: `BACKLOG.md` T4.
 - FIX instruments: SFT val split is contaminated by oversample duplicates
   (dedup before split — FIXED `47f557ae`); DPO "100% val" is 8
   template-sharing pairs (group val by prompt — FIXED `fd2776d1`); 29 eval
@@ -311,12 +318,15 @@ runtime wrapping, her weights stay hers.
 
 ## Phase 7 — The next generation (the big fork; weeks of GPU)
 
-This phase is IN PROGRESS: the v2 prefix landed 2026-07-20 and the v2 pretrain is
-the next GPU spend, ahead of Phases 4/5.
+This phase is DELIVERED: the v2 prefix landed 2026-07-20, the v2 pretrain (T3)
+closed 2026-08-06 — 123,596 steps, 24.30B tokens, final val-src 7.66 — and the
+lineage was ADOPTED 2026-08-09 as `models/enigma_v2_sft2` (238M-class), served
+at `--max-context 2048`. The GPU spend this phase named is spent.
 - New tokenizer — **DONE**: v2 vocab is 16,366 rows (leading-space merges,
-  per-digit numbers), measured 2.41x chars/token over v1, and the corpus is
-  retokenized to `data/pretrain/tokens_v2b.bin` (28,261,718,460 tokens, uint16);
-  `tokens_v2.bin` (23,694,200,666) is the receipted rollback.
+  per-digit numbers), measured 2.41x chars/token over v1, and the corpus the
+  lineage trained on is `data/pretrain/tokens_v2c.bin` (24,328,462,081 tokens,
+  uint16, built 2026-07-30); `tokens_v2b.bin` (28,261,718,460) and
+  `tokens_v2.bin` (23,694,200,666) are the receipted rollbacks.
   v1's `tokens.bin` (227 GB / 211 GiB — the "210GB"/"227 GB" figures in older
   notes are this same file in GiB vs GB) is untouched and still feeds the live
   lineage. Scaling-law grounding: TOKENIZER_V2_SPEC.
@@ -337,8 +347,10 @@ the next GPU spend, ahead of Phases 4/5.
   -- see `EVAL_REDESIGN.md`); T1 corpus prep is DONE, T2 CLOSED 2026-07-29
   (LR sweep: 3e-3 measured), and both launch gates RULED 2026-07-30:
   **Gate B = `v2_deep_238m`**, **corpus rebuild before T3** (records at
-  `BACKLOG.md` items 7/11). What gates the launch now is the rebuild itself
-  plus the T3 pre-flight — not Phases 4/5.**
+  `BACKLOG.md` items 7/11). **Both DONE, and the launch has run:** the rebuild
+  landed 2026-07-30 as `tokens_v2c.bin`, T3 closed 2026-08-06, and adoption
+  followed 2026-08-09. Nothing gates it now. The live scorecard moved with it —
+  67/120 adopted, `EVAL_REDESIGN.md`.**
 
 ---
 

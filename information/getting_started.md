@@ -1,8 +1,9 @@
 # Getting Started
 
-Enigma is a from-scratch 182M decoder-only LLM -- her own architecture,
-her own BPE tokenizer (base vocab 4718), her own weights. Everything runs
-locally. This page gets you from a fresh checkout to chatting with her.
+Enigma is a from-scratch 238M-class decoder-only LLM -- her own architecture,
+her own BPE tokenizer (live lineage vocab 16,366; the v1 base table was
+4,718), her own weights. Everything runs locally. This page gets you from a
+fresh checkout to chatting with her.
 
 ---
 

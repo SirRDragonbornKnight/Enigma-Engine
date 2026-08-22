@@ -866,6 +866,13 @@ and 542m's micro-batch is 16, not 6. Copying one size's line to the other
 produces a run roughly 40x slower with nothing in the output to say so. Flag
 surface verified against `pretrain_enigma.py --help` 2026-07-23.
 
+**SUPERSEDED 2026-07-30 (note added 2026-08-22): the live corpus is
+`tokens_v2c.bin`** -- 24,328,462,081 tokens, 48,656,924,418 bytes, built
+2026-07-30, and the corpus T3 actually trained on (`run_pretrain_t3.ps1:71`).
+v2b stays on disk as rollback. The paragraph below is kept as the record of
+what was live 2026-07-28 -> 07-30, including the d/epoch figures, which are
+v2b's 28.26B-token arithmetic and were never re-derived at v2c's 24.33B.
+
 THE LIVE CORPUS IS `tokens_v2b.bin` since 2026-07-28 (T1 executed:
 28,261,718,460 tokens, 52.64 GiB (56.52 GB) uint16, curated x5 walked FIRST, DCLM/
 FineMath/Stack in, C4+OWT out; sidecar `tokens_v2b.json` carries the
@@ -887,6 +894,13 @@ steps each, and the grid MOVED: 186m 4.1 / 238m 4.9 / 542m 20.8 d/epoch**
 eager, which is why 542m alone matches its old number. That asymmetry is the
 Gate B headline: the 238m-vs-542m cost ratio is **4.3x**, not the 2.18x the old
 grid implied. Steady-state over 150 steps, not a multi-day thermal receipt.
+
+> **Pointer added 2026-08-22:** the two commands below are the 2026-07-28
+> plans and still name v2b at `--tokens 28.3e9`. They are NOT what ran. The
+> executed T3 recipe is `run_pretrain_t3.ps1`, whose line 71 passes
+> `--tokens-bin data/pretrain/tokens_v2c.bin` with `--tokens 24.3e9` and
+> `--val-general-end 11702372163`; it closed 2026-08-06. The plans are kept
+> below unchanged as the record of the branch-on-size reasoning.
 
 238m -- wall-clock optimal (4.9 days/epoch on v2b):
 
@@ -1241,6 +1255,17 @@ The block, in execution order:
   BRANCH on size). `--lr 3e-3` is now MEASURED (the T2 sweep winner), no
   longer a placeholder -- measured at 238m; a 542m launch inherits it
   unmeasured (item 7).
+  **CLOSED 2026-08-06. CORRECTION FILED 2026-08-22: T3 ran on
+  `tokens_v2c.bin`, not v2b.** The corpus rebuild (item 11's ruling) landed
+  2026-07-30, before launch, so the "on the v2b corpus" framing above is the
+  pre-rebuild plan and the d/epoch figures beside it are v2b's 28.26B
+  arithmetic -- neither describes the executed run. What ran, per
+  `run_pretrain_t3.ps1:71` and the `[final]` block of
+  `train_enigma_v2_238m.log`: `--size v2_deep_238m` on
+  `data/pretrain/tokens_v2c.bin` (24,328,462,081 tokens), **123,596 steps,
+  24.30B tokens, final val-src 2.036277 (ppl 7.66)**, val 2.969945 (ppl
+  19.49), val-gen 2.532970 (ppl 12.59). The lineage was adopted 2026-08-09 as
+  `models/enigma_v2_sft2`.
   **T3 PRE-FLIGHT (before any launch; ~an hour of code+drill total):**
   1. ~~add `save_every` to SCHEDULE_KEYS + pin it~~ DONE 2026-07-30, and
      PROVEN by the drill below: the resumed boot printed

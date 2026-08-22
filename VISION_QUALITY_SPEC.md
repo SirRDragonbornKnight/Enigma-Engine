@@ -22,9 +22,14 @@
 3. **Question-blindness.** The caption is generated before/without the
    question, so "what's different between them?" cannot steer what her
    eyes extract.
-4. **182M + stage-1 alignment** articulates coarse scene content, not
+4. **The model + stage-1 alignment** articulates coarse scene content, not
    subtle comparisons — with the current data, which contains no
-   comparative supervision at all.
+   comparative supervision at all. (Written 2026-07-17 against the 182M v1
+   lineage. Re-labelled 2026-08-22: the served model is now the 238M-class
+   `enigma_v2_sft2`, adopted 2026-08-09, and this limit still stands. Stage-1
+   alignment was DONE 2026-07-20, but on **v8's** embedding space — so on v2
+   the projection is unproven and a re-align is open. The four limits in this
+   section are unchanged by either.)
 
 ## 2. The four levers that fix it (all buildable in this repo)
 

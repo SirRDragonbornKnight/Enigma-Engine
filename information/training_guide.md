@@ -107,7 +107,8 @@ so an uncapped pull wastes download, not training.
 
 Direct Preference Optimization -- teach the model to prefer certain
 responses over others, with no reward model: policy + frozen reference,
-one loss. At 182M the realistic targets are format, tone, and identity
+one loss. At this scale -- the served 238M-class checkpoint the command below
+initializes from -- the realistic targets are format, tone, and identity
 integrity, not new knowledge.
 
 ```

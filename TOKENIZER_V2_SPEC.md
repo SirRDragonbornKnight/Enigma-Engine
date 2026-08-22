@@ -1,13 +1,18 @@
 # Tokenizer v2 redo — spec + cost (2026-07-16, MEASURED 2026-07-19)
 
-> Status: **VOCAB DONE 2026-07-20, CORPUS v2b DONE 2026-07-28** -- the
-> production v2 vocab (16,366 rows) is trained, and the live corpus is
-> `data/pretrain/tokens_v2b.bin` (receipts in "CORPUS v2b LANDED 2026-07-28";
-> the earlier "CORPUS LANDED 2026-07-20" section describes `tokens_v2.bin`,
-> which is now the receipted rollback). Only the pretrain itself remains, queued as
-> `BACKLOG.md` T2/T3 inside the training block. The eval-trustworthiness
-> precondition this doc named is MET: the locked gate is sealed and the
-> 56/120 (v8) / 55/120 (v5) baseline is measured (see `EVAL_REDESIGN.md`).
+> Status: **VOCAB DONE 2026-07-20, CORPUS v2c DONE 2026-07-30, PRETRAIN (T3)
+> CLOSED 2026-08-06** -- the production v2 vocab (16,366 rows) is trained, and
+> the corpus the lineage actually trained on is `data/pretrain/tokens_v2c.bin`
+> (24,328,462,081 tokens, 48,656,924,418 bytes, built 2026-07-30; named by the
+> run's own launcher at `run_pretrain_t3.ps1:71`). `tokens_v2b.bin` and the
+> earlier `tokens_v2.bin` are both receipted rollbacks now; the two v2b sections
+> below are the record of the corpus that was live 2026-07-28 -> 07-30, not
+> current state. T3 ran 123,596 steps over 24.30B tokens to a final val-src of
+> 7.66, and the lineage was ADOPTED 2026-08-09 as `models/enigma_v2_sft2`
+> (238M-class). The eval-trustworthiness precondition this doc named is MET:
+> the locked gate is sealed, and the live scorecard is `EVAL_REDESIGN.md`'s
+> (adopted baseline 67/120; the 56/120 (v8) / 55/120 (v5) reseal-#7 pair it
+> used to name here is now the PRIOR baseline).
 >
 > **2026-07-20: all 9 audit findings FIXED** (see the BLOCKERS section, now a
 > resolution ledger). Suite 475 green at the time; the 9 new/changed
@@ -366,6 +371,12 @@ Consequences that everything else works around:
 ## projection; the measured grid is 186m 4.1 / 238m 4.9 / 542m 20.8 d/epoch
 ## on the 28.26B v2b corpus, and Gate B ruled 238m on 2026-07-30)
 
+> **Note added 2026-08-22:** the d/epoch grid named in this heading is v2b's
+> (28.26B tokens) and is kept exactly as measured. T3 did not run on v2b -- it
+> ran on the smaller `tokens_v2c.bin` (24.33B tokens) and closed 2026-08-06 at
+> 123,596 steps / 24.30B tokens, so these projections are the pre-rebuild
+> record, not the executed run's cost.
+
 - Retokenization: hours-to-a-day, no GPU. (Measured since: 42-66 min.)
 - ~~Pretrain 182M over ~23B tokens ~= **~5 GPU-days** ... OR spend the budget
   on size: **350-700M over ~23B tokens ~= ~12-20 GPU-days**. Wall-clock
@@ -448,7 +459,13 @@ NEXT, in order:
    ~0.7 h at 12 (idle box).
 3. Then, and only then, the GPU decision per the framing above.
 
-### CORPUS v2b LANDED 2026-07-28: tokens_v2b.bin — THE LIVE TRAINING CORPUS
+### CORPUS v2b LANDED 2026-07-28: tokens_v2b.bin — SUPERSEDED 2026-07-30, NOW ROLLBACK
+
+> **Note added 2026-08-22:** v2b was the live training corpus for two days
+> (2026-07-28 -> 07-30) and this section is its landing record, left as
+> written. The corpus T3 actually trained on is `tokens_v2c.bin`
+> (24,328,462,081 tokens, built 2026-07-30, `run_pretrain_t3.ps1:71`); v2b
+> stays on disk as rollback.
 
 The T1-ruled diet, tokenized in 65.8 min (10 workers, python path):
 **28,261,718,460 tokens**, 5,689,882 docs, 1,436,089 dupe paragraphs

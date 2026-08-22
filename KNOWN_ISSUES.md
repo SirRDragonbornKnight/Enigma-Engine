@@ -1,4 +1,4 @@
-# Known Issues — current as of 2026-07-29
+# Known Issues — current as of 2026-08-22
 
 _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
 `_archive/CODE_REVIEW.md` (bugs), `CLEANUP_TRACKER.md` (file state)._
@@ -70,12 +70,20 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
    fenced out of train sampling) is the general-domain gauge; it was ~16%
    train-leaked before the fence landed, so it reads slightly optimistic —
    frozen at that level, not growing.
-3. **Context:** she trains at block 1024. `max_seq_len` 4096 + RoPE θ=500k
-   give mechanical headroom but quality beyond 1024 is untested. Keep served
-   context ≤1024 until a length-extension anneal is decided (interacts with
-   the schedule lock — decide deliberately).
+3. **Context — the ≤1024 order was REVERSED by the 2026-08-09 adoption.** It
+   was right for the v1 lineage, which trains at block 1024 with
+   `max_seq_len` 4096 + RoPE θ=500k as mechanical headroom only. The adopted
+   v2 lineage **trains at block 2048 and is served at 2048** — the trained
+   block, not headroom: every entry point passes `--max-context 2048`
+   (`Start-Enigma.ps1`, `serve_enigma.py`'s default, the documented
+   `eval_behavior.py` line) and `tests/test_launchers.py` pins it. The served
+   config declares `max_seq_len` 8192, which remains headroom: quality beyond
+   2048 is untested, and a length-extension anneal past it is still undecided
+   (interacts with the schedule lock — decide deliberately).
 4. **Chat has two modes (auto-detected per checkpoint).** BASE checkpoints
-   (today's 51k) get the plain-transcript bridge — she may continue the
+   (any pretrain output — the v1 lineage's finished
+   `models/enigma_pretrain_large`, or v2's `models/enigma_v2_238m`) get the
+   plain-transcript bridge — she may continue the
    dialogue with invented speakers (observed: "Petitioner:"); stop markers
    catch `User:`/`Enigma:` turns only. SFT checkpoints (`meta.chat_format`
    from `finetune_enigma.py`) get the real template + tool calls. SFT
@@ -83,7 +91,8 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
    auto-detects per checkpoint.
 5. **base_v2 (122M @ step 2,000) was pipeline-validation quality only** —
    barely trained, and RULED DEAD under the 2026-07-29 section-9 reclaim.
-   Probe the large 51k checkpoint.
+   Probe a finished checkpoint instead — the served `models/enigma_v2_sft2`,
+   or the v1 lineage's `models/enigma_pretrain_large` (item 1).
 6. **Vendored weight -- CLOSED 2026-07-25.** `enigma_engine/bin/llama-server/`
    was 1.07 GB (1,066,991,160 bytes) of CUDA DLLs for the GGUF route,
    intentional while the GGUF serving pivot was open. That pivot was
@@ -99,19 +108,23 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
    inefficiency, not a bug. `encode()` brackets text as `[BOS]…[EOS]` — strip
    the trailing EOS before generation or the model sees a finished document
    (`sample_enigma.py` and `serve_enigma.py` both do this).
-9. **The python suite is engine-only** -- the live suite count lives in
-   `CLEANUP_TRACKER.md` (788 passed as of 2026-07-26). The
+9. **The python suite is engine-only** -- `CLEANUP_TRACKER.md` rule 4 OWNS the
+   live suite count and is the only place to read it (1259 as of 2026-08-22;
+   that rule is updated in the same commit that changes the count). This line
+   deliberately keeps no second copy — the copy it used to keep sat stale at
+   788 for nearly a month. The
    avatar lives in its own repo (`C:\Users\SirKn\Enigma Avatar\`) — its gate
    is `powershell -File tools\verify.ps1` + `python -m pytest python/tests`
    (`node --test` belongs to the Electron predecessor repo).
 10. **Model capacity ceilings are measured, not guessed.** `PHASE7_GATE.md`
     holds the receipts: long conversation (block 1024), broad-fact recall
     (~50%), raw arithmetic (bypassed via the server-side `calculate` tool).
-    Current SFT data state lives in `BACKLOG.md` 7.95 P2 -- the sealed-gate
-    baseline is 56/120 (v8) and 55/120 (v5), measured 2026-07-27 under
-    reseal #7. The two are statistically INDISTINGUISHABLE (paired exact
-    p = 1.00 over 19 disagreements), so 56/120 is a floor to clear, not a
-    score to beat by a probe.
+    Current SFT data state lives in `BACKLOG.md` 7.95 P2. The sealed-gate
+    baseline is **67/120** — the adopted `models/enigma_v2_sft2` (gate run
+    2026-08-08, adopted 2026-08-09, paired exact p=0.0433 against v8's
+    56/120). The 56/120 (v8) / 55/120 (v5) pair this line used to call the
+    floor is the PRIOR baseline, superseded. `EVAL_REDESIGN.md` owns the
+    scorecard and its history; read the number there rather than here.
 11. **Modkit-refactor module deletions RESTORED 2026-07-13 (audit).** The
     refactor (`0bd9167e`) deleted modules while their callers survived; an
     import-integrity sweep found SIX dangling imports. Restored verbatim from
@@ -141,9 +154,18 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
     `forward_multimodal`. (Image input DOES reach `serve_enigma.py` as TEXT:
     `flatten_image_content` captions OpenAI `image_url` content into the
     `[image: ...]` marker under `--eyes` -- the caption path, not projector
-    wiring.) The projections are untrained: `vision_hidden_size`
-    / `audio_hidden_size` remain `None` in every shipped checkpoint; stage-1
-    projector training (see `collect_vision_data.py`) is the next step.
+    wiring.) The projections are unwired in the shipped weights:
+    `vision_hidden_size` / `audio_hidden_size` remain `None` in every shipped
+    checkpoint — re-verified 2026-08-22 against
+    `models/enigma_v2_sft2/config.json`, and still true. What is NO LONGER
+    true is that stage-1 projector training is "the next step": it was **DONE
+    2026-07-20**, producing
+    `models/enigma_vision_align/enigma_vision_align_vision_best.pt`, grafted
+    at serve boot under `--eyes` rather than baked into the checkpoint config
+    — which is why the `None` above survives it. The open gap is a different
+    one now: that projection was aligned on **v8's** embedding space, so its
+    caption quality on the adopted v2 lineage is UNPROVEN and a v2 re-align
+    is outstanding (collector: `collect_vision_data.py`).
     Audio pipeline status (collector, distill, align, the whisper-base
     teacher download) lives in `BACKLOG.md` section 4, step 6 -- this entry
     stays about the restored modules only.

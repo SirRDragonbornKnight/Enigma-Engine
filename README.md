@@ -12,7 +12,9 @@ codebases linked only by a local message bus. Keep them straight:
 A **third location lives OUTSIDE this repo** and belongs to the avatar:
 
 - `C:\Users\SirKn\Desktop\Avatars\` — the avatar's live **GLB model zoo** (the dir in active
-  use; ~40 models). `C:\Users\SirKn\3d Avatar\` keeps the original **design spec**
+  use; a growing library — 180 avatars at the root + 60 props in `objects\`, measured
+  2026-08-22, and it moves constantly, so re-count before quoting).
+  `C:\Users\SirKn\3d Avatar\` keeps the original **design spec**
   (`The project is to make a 3d model t.txt`) and the earlier model copies. The avatar repo's
   `models/` dir is gitignored (large + non-redistributable); models are sourced from the zoo.
 

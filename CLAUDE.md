@@ -5,7 +5,7 @@ Harness-enforced rules (permissions, hooks, model) belong in `.claude/settings.l
 
 ## What this is
 This repo is **Enigma** — a **from-scratch** decoder-only LLM (own architecture, own BPE tokenizer
-at base vocab 4718, own weights; NOT a wrapper). Python. Pipeline: **pretrain → (facts
+at live lineage vocab 16,366 — the v1 rollback lineage's table is 4,718 — own weights; NOT a wrapper). Python. Pipeline: **pretrain → (facts
 continued-pretrain, optional) → SFT → DPO → serve**; train and serve share one chat renderer
 (`enigma_engine/core/chat_format.py`) so the prompt format cannot drift.
 
@@ -202,11 +202,18 @@ From here the ONLY coupling is the WebSocket bus (`ws://127.0.0.1:8765`).
 - `CLEANUP_TRACKER.md` — the tree as it stands + suite baseline + deletion records.
 - `_archive/` — closed ledgers (present-tense entries there are history, not current state).
 
-**Data state:** bottleneck stays SFT DATA at scale — tool corpus 565 records,
-identity 527, mix 126,424, general diet `data/finetune/combined_finetune.jsonl` 105,203
-short pairs (all re-measured 2026-08-19). DPO: the generator renders 489 preference
-pairs; the on-disk `data/sft/dpo_pairs.jsonl` is a 350-record artifact from the
-2026-08-08 bake. `EVAL_REDESIGN.md` owns these numbers.
+**Data state:** bottleneck stays SFT DATA at scale. GENERATOR counts, shadow-rendered
+2026-08-22 from the working tree (`make_sft_data.py --out <scratch>`, the pattern
+`tests/test_sft_persona.py` proves byte-identical to a real build) — tool corpus 573
+post-screen, identity 527, math 1066 trained of 1067 generated (the one hold-out
+collides with the sealed "What is 13 squared?" probe), mix 126,792, general diet
+`data/finetune/combined_finetune.jsonl` 105,203 short pairs. DPO: the generator renders
+489 preference pairs; the on-disk `data/sft/dpo_pairs.jsonl` is a 350-record artifact from
+the 2026-08-08 bake. BY CONVENTION the on-disk artifacts lag the generator until the next
+bake — `data/sft/` currently holds tool 565 / identity 527 / mix 126,424 from the
+2026-08-20 bake, which predates the uncommitted generator edits in this tree. Scores are
+`EVAL_REDESIGN.md`'s (it owns the scorecard, live baseline 67/120); these data-state
+counts are this line's, dated above.
 Recall strategy since 2026-07-15: facts INSTALL
 via a continued-pretrain pass (`make_facts_pretrain_data.py` → `pretrain_enigma.py
 --tokens-bin`), SFT only SURFACES them — measured factual 13/20 → 19/20. The eval leak
