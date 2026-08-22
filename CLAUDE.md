@@ -68,6 +68,14 @@ Flags still exist for scratch/eval servers, which stay lean on purpose.
   checked PER QUERY, never a boot gate — SearXNG lives in WSL and may come up after serve.
 Verified end-to-end vs served weights: speak → Kokoro audio; voice→wav→ears and
 imagine→png→eyes loops pass. `/v1/capabilities` reports which organs a server booted with.
+**Built-in offering — INTENT-GATED for every lineage today.** The 2026-07-24 ruling retiring
+the gates for an always-offered block stands as direction, but its serve-side execution is
+**PARKED ON MEASUREMENT**: flipped and gated twice on the adopted sft2 on 2026-08-20, the
+block scored 59/120 (fixed five-tool) and 55/120 (organ-filtered) against the gated 67/120,
+and was reverted the same day. Receipts + the conditions a future re-flip must beat live in
+`BACKLOG.md` T4. `/v1/capabilities` `builtins` reports AVAILABILITY (not the offering) and
+`builtin_offering` stamps the rule — `"intent-gated"` today — into every eval transcript, so a
+later regime experiment cannot silently compare against a gated baseline.
 
 ## Setup / build / test — run these first
 - Python 3.12 (`C:\Users\SirKn\AppData\Local\Programs\Python\Python312\python.exe`).

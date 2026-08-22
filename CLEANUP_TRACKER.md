@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1256 passed on ENIGMAPC (2026-08-20, paired with the round-2 solution-audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1259 passed on ENIGMAPC (2026-08-22, paired with the 2026-08-20 gate-flip audit-riders commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -273,6 +273,10 @@ Deleted after a three-agent adversarial audit verified every claim
    tests are the dash-convention gate in `test_repo_hygiene.py` and the
    percent-idiom guard in `test_sft_regen_shapes.py`; everything else grew
    or moved in place.
+   **1256 -> 1259 is the 2026-08-20 gate-flip audit riders** -- the 3 new
+   tests are the `builtin_offering` stamp pin, availability-vs-offering and
+   the regime-drift WARN, in `test_serve_enigma.py` and
+   `test_eval_transcript.py`.
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

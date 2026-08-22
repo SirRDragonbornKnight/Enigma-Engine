@@ -22,8 +22,10 @@ client.chat.completions.create(
 
 The server composes the final system context from your system message
 plus whatever it needs to inject: available tool specs (built-ins are
-intent-gated per request) and, with `--memory-dir`, memories relevant
-to the user's message. Your prompt sits alongside those -- you do not
+intent-gated per request -- offering them all every turn was tried on
+2026-08-20 and measured worse, so it is parked) and, with
+`--memory-dir`, memories relevant to the user's message. Your prompt
+sits alongside those -- you do not
 need to describe her tools yourself.
 
 ### Tips for Good Prompts

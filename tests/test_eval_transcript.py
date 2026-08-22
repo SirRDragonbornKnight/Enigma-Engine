@@ -888,6 +888,41 @@ def test_comparator_floors_are_gated_categories_only(capsys):
     assert "capabilities differ" in out
 
 
+def test_a_changed_offering_regime_is_named_in_the_drift_warning(capsys):
+    """The built-in offering is a MEASUREMENT CONDITION, not an organ: an
+    always-offered built-in block and per-request intent gates put different
+    tool prompts in front of the model, so two transcripts scored under
+    different regimes are not comparable. serve stamps the rule into
+    /v1/capabilities, which lands in run_conditions -- and the capabilities
+    diff is what has to say so out loud.
+
+    Serve reads "intent-gated" for every lineage today (the 2026-07-24
+    retirement is parked on measurement, BACKLOG T4), so the "always" side
+    below is the regime a future re-flip would produce: the mechanism is
+    pinned NOW, while the two transcripts that measured it exist, rather than
+    after a comparison has already silently mixed them."""
+    from pathlib import Path as _P
+
+    by_cat = {"factual": [True]}
+    base_cond = {"probe_sha256": "X", "temperature": TEMP, "max_tokens": MAXTOK,
+                 "capabilities": {"instruct": True, "builtin_offering": "intent-gated"}}
+    base_card = {"by_category": {"factual": {"hits": 1, "n": 1}},
+                 "overall_hits": 1, "overall_n": 1, "sealed_gate_run": False}
+    conditions = {"probe_sha256": "X", "temperature": TEMP, "max_tokens": MAXTOK,
+                  "capabilities": {"instruct": True, "builtin_offering": "always"},
+                  "model_checkpoint": {}}
+    eval_behavior._compare_to_baseline(_P("base.jsonl"), base_cond, base_card,
+                                       conditions, by_cat, 1, 1, False)
+    out = capsys.readouterr().out
+    assert "capabilities differ" in out and "builtin_offering" in out
+
+    # ...and two runs under the SAME regime say nothing about it
+    same = dict(conditions, capabilities=dict(base_cond["capabilities"]))
+    eval_behavior._compare_to_baseline(_P("base.jsonl"), base_cond, base_card,
+                                       same, by_cat, 1, 1, False)
+    assert "capabilities differ" not in capsys.readouterr().out
+
+
 def test_model_identity_tolerates_foreign_bodies(monkeypatch):
     """Pointing --base-url at a non-Enigma OpenAI-ish endpoint must yield {}
     ('target could not say'), never a crash after the store was cleared."""

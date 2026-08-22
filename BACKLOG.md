@@ -1386,6 +1386,44 @@ The block, in execution order:
   principle. T4 REGEN FLAG from the same audit: identity_anchors.py:261
   trains the ABSOLUTE claim "nothing leaves this machine" -- rescope that
   anchor at the regen or she asserts a falsehood the day lookup ships.)
+  **SERVE HALF EXECUTED AND REVERTED 2026-08-20 -- the retirement LOST the
+  sealed gate, twice.** Both shapes were built on `serve_enigma`, gated on 8123
+  against the 08-08 baseline transcript, and reverted the same day; the house
+  rule decided it (the sealed set rules, and the user's order was
+  change-only-if-better):
+    - **organ-filtered block: 55/120 vs 67/120** (p=0.0428). The eval server
+      boots memory-only, so filtering the block by available organs rendered a
+      3-tool block she has never trained on and the whole prompt shape
+      degraded -- `calculate` calls **15 -> 4**, math **13/20 -> 5/20** --
+      while memory, the one organ actually up, IMPROVED **5 -> 9**.
+    - **fixed five-tool block: 59/120 vs 67/120** (p=0.1516). Correcting the
+      filter (offer the exact 1,076-char `make_sft_data._builtin_system`
+      string every request, organ availability answered by
+      `_execute_builtin`'s honest degrade) RECOVERED math **5 -> 13**,
+      confirming the mechanism -- but tool **15 -> 11** and restraint
+      **13 -> 11** fell: with the built-ins permanently on the table beside a
+      client tool, the 2026-07-06 steal shape comes back.
+  Two independent flip runs, both below gated. Transcripts:
+  `Enigma Backups\locked_eval_v2sft2_flipped_2026-08-20.jsonl` and
+  `...\locked_eval_v2sft2_flipped_fix_2026-08-20.jsonl`.
+  **STATE: the intent gates are the live offering for EVERY lineage.** The
+  2026-07-24 ruling stands as DIRECTION, parked on measurement; it un-parks
+  for a lineage that measures **>= gated** under the block. What survived the
+  revert, deliberately: `_available_builtins` (one owner of the organ filter,
+  used by `/v1/capabilities` `builtins`, which reports AVAILABILITY and never
+  the offering) and the `/v1/capabilities` `builtin_offering` key, now the
+  constant `"intent-gated"` -- it rides in every transcript's
+  `run_conditions.capabilities`, and since the baseline diff WARNs per key, a
+  future regime experiment cannot be filed against a gated baseline unnoticed.
+  **RESIDUE for the un-park attempt:** (a) a bake with heavier block-context
+  coverage -- the restraint half needs the client-tool-BESIDE-builtins shape,
+  which is where this run lost its tool and restraint columns, not more
+  block records; (b) `finetune_enigma` stamping `meta["builtin_block"]`, so
+  serve can detect TRUE block-training instead of inferring it from
+  instruct + vocab (today nothing in a checkpoint records the SFT mix -- meta
+  carries only `chat_format`/`init_from`/`base_step`/`leak_guard`, so a
+  pre-bake v2 SFT checkpoint is indistinguishable from a post-bake one and
+  would be handed a block it never saw).
 - T5. DPO/polish pass (safe recipe: lr 5e-7 x 1 epoch). Regenerate
   `dpo_pairs.jsonl` as part of this: both trainers now refuse an artifact
   carrying a sealed probe, so a stale file stops the run rather than rigging

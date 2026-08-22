@@ -13,7 +13,8 @@ param(
     # RETIRED 2026-07-27 (user ruling: "add them in so she is complete") --
     # every launch now boots ALL organs, so -Voice is accepted for the old
     # callers but changes nothing. Voice loaded does not mean voice talking:
-    # speak is intent-gated and talk-mode persists separately.
+    # speak is intent-gated and talk-mode persists separately. (Offering it
+    # every request was tried 2026-08-20 and reverted -- measured worse.)
     [switch]$Voice,
     # Optional single-preset override. EMPTY (default) = her saved Kokoro voice
     # recipe -- the Cortana blend in ~/.enigma_engine/voice.json. Only pass a

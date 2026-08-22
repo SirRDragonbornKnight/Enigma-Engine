@@ -143,8 +143,29 @@ def test_completion_defaults_keep_the_exploratory_temperature():
 
 
 # ---------------------------------------------------------------------------
-# intent gates + built-in tool offering (tool-stealing history, 2026-07-06)
+# intent gates + built-in tool offering (tool-stealing history, 2026-07-06).
+#
+# EVERY lineage runs on these gates. The 2026-07-24 ruling retiring them for an
+# always-offered built-in block stands as DIRECTION, but its serve-side
+# execution is PARKED ON MEASUREMENT: gated twice on the adopted sft2
+# checkpoint 2026-08-20, the block scored 59/120 (fixed five-tool) and 55/120
+# (organ-filtered) against this gated offering's 67/120. The stamp test below
+# pins the parked state so a re-flip cannot land silently.
 # ---------------------------------------------------------------------------
+
+# The two lineages as literals. Nothing in serve keys on them today -- that is
+# the point of the stamp test: the offering does not vary by checkpoint.
+V2_VOCAB = 16366
+V8_VOCAB = 4718
+
+
+def _lineage(monkeypatch, vocab_size, instruct=True):
+    """Pin the globals a lineage-sensitive offering WOULD read.
+
+    boot() sets both from the checkpoint (meta.chat_format and config
+    vocab_size); these tests never load one."""
+    monkeypatch.setattr(serve, "INSTRUCT", instruct)
+    monkeypatch.setattr(serve, "CONFIG", SimpleNamespace(vocab_size=vocab_size))
 
 
 def test_arithmetic_gate():
@@ -655,6 +676,12 @@ def test_speak_and_imagine_gates(monkeypatch):
 
 
 def test_builtin_tools_offering(monkeypatch):
+    """The offering, for EVERY lineage: intent-gated, per request.
+
+    The always-offered block that would have replaced this (ruled 2026-07-24)
+    was executed and reverted 2026-08-20 -- it lost the sealed gate twice, so
+    the gates are the live rule again and these are their live pins, not one
+    lineage's carve-out."""
     monkeypatch.setattr(serve, "MEMORY", None)
     monkeypatch.setattr(serve, "SPEAKER", None)
     monkeypatch.setattr(serve, "PAINTER", None)
@@ -663,10 +690,77 @@ def test_builtin_tools_offering(monkeypatch):
     # ...but intent-gated otherwise
     assert serve._builtin_tools("Check the weather in Toronto", False) == []
     assert serve._builtin_tools("What is 7 * 8?", False) == [serve._CALC_TOOL]
+    # The gates' KNOWN misses and false fires, pinned as the live behavior they
+    # are: a word-number ask reaches no calculator, a negated draw still arms
+    # the painter. These are what the retirement was for, and they are what a
+    # future re-flip has to beat on the sealed set -- not in a docstring.
+    monkeypatch.setattr(serve, "PAINTER", object())
+    assert serve._builtin_tools("seven times eight", False) == []
+    assert serve._builtin_tools("Don't draw me a picture, just describe it.", False) == [
+        serve._IMAGINE_TOOL]
     # remember is intent-gated ALWAYS (it stole tool calls when ever-present)
     monkeypatch.setattr(serve, "MEMORY", object())
     offered = serve._builtin_tools("Check the weather in Toronto", True)
     assert serve._REMEMBER_TOOL not in offered
+
+
+def test_the_offering_rule_is_stamped_and_reads_intent_gated_everywhere(monkeypatch):
+    """The measurement-condition stamp, and the PARKED state it records.
+
+    Two sealed transcripts scored under different offering regimes are not
+    comparable, and the header could not say which one answered. The key
+    survived the 2026-08-20 revert on purpose: it reads "intent-gated" for
+    every lineage today, so a future re-flip that forgets to move it fails
+    here rather than filing a block-regime run against a gated baseline.
+
+    The lineage globals are varied precisely to pin that the offering does NOT
+    key on them any more."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(serve, "_BOOTED", True)
+    monkeypatch.setattr(serve, "MEMORY", None)
+    monkeypatch.setattr(serve, "SPEAKER", None)
+    monkeypatch.setattr(serve, "PAINTER", None)
+    client = TestClient(serve.app)
+
+    for vocab, instruct in ((V2_VOCAB, True), (V8_VOCAB, True), (V2_VOCAB, False)):
+        _lineage(monkeypatch, vocab, instruct=instruct)
+        caps = client.get("/v1/capabilities").json()
+        assert caps["builtin_offering"] == "intent-gated", (vocab, instruct)
+        # ...and the offering itself agrees: a bare ask arms nothing, whatever
+        # the checkpoint
+        assert serve._builtin_tools("hello", False) == []
+        assert serve._builtin_tools("What is 7 * 8?", False) == [serve._CALC_TOOL]
+    # a BASE checkpoint reaches no tool loop at all: empty builtins beside the
+    # same stamp
+    assert client.get("/v1/capabilities").json()["builtins"] == []
+
+
+def test_capabilities_reports_availability_not_the_offering(monkeypatch, tmp_path):
+    """`builtins` answers "what can this server EXECUTE", which is a different
+    question from what she is offered on a given turn (that is _builtin_tools,
+    gated on intent). One owner for the organ filter -- _available_builtins --
+    so a report and a runtime cannot drift."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(serve, "INSTRUCT", True)
+    monkeypatch.setattr(serve, "_BOOTED", True)
+    client = TestClient(serve.app)
+    # a REAL store: the endpoint resolves its dir, so a stand-in object 500s
+    store = MemoryStore(str(tmp_path / "mem"))
+    for memory, speaker, painter, reported in (
+        (None, None, None, ["calculate"]),
+        (store, None, None, ["calculate", "forget", "remember"]),
+        (None, object(), object(), ["calculate", "imagine", "speak"]),
+        (store, object(), object(),
+         ["calculate", "forget", "imagine", "remember", "speak"]),
+    ):
+        monkeypatch.setattr(serve, "MEMORY", memory)
+        monkeypatch.setattr(serve, "SPEAKER", speaker)
+        monkeypatch.setattr(serve, "PAINTER", painter)
+        assert client.get("/v1/capabilities").json()["builtins"] == reported
+        # available does not mean offered: a bare "hello" is offered none of it
+        assert serve._builtin_tools("hello", False) == []
 
 
 # ---------------------------------------------------------------------------

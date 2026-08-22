@@ -2605,7 +2605,10 @@ def main(argv: "list[str] | None" = None) -> None:
         return kept
 
     # Every built-in offered on every turn, with the restraint half that makes
-    # that safe -- the shape serve renders once the intent gates retire.
+    # that safe -- the shape serve would render once the intent gates retire.
+    # (Serve-side execution is PARKED: tried 2026-08-20, measured worse than
+    # the gates on the sealed set, reverted. This corpus stays -- it is what a
+    # future block-trained lineage needs to beat them; BACKLOG T4.)
     builtins = screen_shape(gen_builtin_block_examples(content=content))
 
     # Conversation with more than one user turn: nothing else in the mix has

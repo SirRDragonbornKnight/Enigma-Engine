@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 
 from enigma_engine.core.chat_format import (
     BUILTIN_NAMES,
+    BUILTIN_TOOLS,
     CHAT_FORMAT_NAME,
     ROLES,
     attach_chat_tokens,
@@ -1181,6 +1182,7 @@ _REMEMBER_TOOL = builtin_tool("remember")
 _SPEAK_TOOL = builtin_tool("speak")
 _IMAGINE_TOOL = builtin_tool("imagine")
 _FORGET_TOOL = builtin_tool("forget")
+_BUILTIN_TOOLS = BUILTIN_TOOLS
 _BUILTIN_NAMES = BUILTIN_NAMES
 _MAX_TOOL_HOPS = 3  # bound the execute->regenerate loop so it can't spin
 
@@ -1270,8 +1272,12 @@ _FORGET_NOT_A_REQUEST = re.compile(
 # correction. Same rationale as the calculate gate -- an ever-present tool
 # prompt degrades normal chat, so this stays intent-gated; she still decides
 # whether to call. (Ruled 2026-07-24: the gate retires for an always-offered
-# built-in block at the v2 regen -- not executed on this side yet, so the
-# served enigma_v2_sft2 lineage still runs on the gate.)
+# built-in block at the v2 regen. EXECUTED and REVERTED 2026-08-20 -- the
+# always-offered block was gated twice on the adopted sft2 checkpoint and lost
+# both times, 55/120 organ-filtered and 59/120 fixed-five against the gated
+# baseline's 67/120, so EVERY lineage runs on these gates today. The ruling
+# stands as direction; its serve-side execution is PARKED ON MEASUREMENT,
+# receipts in BACKLOG.md T4.)
 _MEMORABLE = re.compile(
     # The negated-forget family is a SAVE cue, spelled ONCE above.
     r"\b(remember|" + _NEGATED_FORGET_SRC + r"|note (that|this)|keep in mind|save (this|that)|"
@@ -1398,6 +1404,26 @@ def _answering_a_forget_question(messages: list[Msg]) -> bool:
             # read as naming a memory to delete.
             return _renders_forget_pending(m.content)
     return False
+
+
+def _available_builtins() -> list[dict]:
+    """The built-in specs whose organs are actually up right now.
+
+    AVAILABILITY, not the offering: /v1/capabilities answers "what can this
+    server execute" from here, while _builtin_tools decides what she is
+    OFFERED for a given request. One owner for the organ filter, so the
+    report cannot drift from what the tools actually need."""
+    available = []
+    for tool in _BUILTIN_TOOLS:
+        name = tool["function"]["name"]
+        if name in ("remember", "forget") and MEMORY is None:
+            continue
+        if name == "speak" and SPEAKER is None:
+            continue
+        if name == "imagine" and PAINTER is None:
+            continue
+        available.append(tool)
+    return available
 
 
 def _builtin_tools(user_text: str, client_mode: bool,
@@ -2767,15 +2793,27 @@ def capabilities():
         # transcripts could not say). ARGS is None until boot() parses argv --
         # the bare-import test harness reaches this endpoint with no ARGS.
         "max_context": ARGS.max_context if ARGS is not None else None,
-        # The built-ins that can actually run right now. The model is offered a
-        # subset of these per request, by intent -- and NONE of them on a base
-        # checkpoint, whose path never reaches the loop.
+        # The built-ins that can actually RUN right now -- availability, which
+        # is not the offering: the model is offered a subset of these per
+        # request, by intent (_builtin_tools), and NONE of them on a base
+        # checkpoint, whose path never reaches the loop. _available_builtins is
+        # the one owner of the organ filter.
         "builtins": sorted(
-            n for n in _BUILTIN_NAMES
-            if not (n in ("remember", "forget") and MEMORY is None)
-            and not (n == "speak" and SPEAKER is None)
-            and not (n == "imagine" and PAINTER is None)
+            t["function"]["name"] for t in _available_builtins()
         ) if INSTRUCT else [],
+        # WHICH offering rule answered, so a sealed transcript records the
+        # regime it measured -- per-request intent gates and an always-offered
+        # built-in block are different servers to compare, and the header could
+        # not say which one ran. CONSTANT today because the offering IS the
+        # gates for every lineage: the 2026-07-24 retirement ruling stands as
+        # direction, but its serve-side execution is PARKED ON MEASUREMENT
+        # (2026-08-20: the block scored 59/120 fixed-five and 55/120
+        # organ-filtered against the gated 67/120 on the adopted sft2 --
+        # receipts in BACKLOG.md T4). The key stays so a future regime
+        # experiment compares cleanly: run_conditions diffs this dict key by
+        # key, so a run under a different rule WARNs like an organ or persona
+        # drift instead of quietly mixing in.
+        "builtin_offering": "intent-gated",
         # WHO is serving, not just what she can do. Every other reader of a
         # port -- the launchers deciding whether a listener is theirs to claim
         # or kill, an eval transcript recording which AI answered -- has only

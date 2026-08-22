@@ -202,6 +202,10 @@ def test_console_bound_strings_are_ascii() -> None:
 # Its two separator constants (_SENTENCE_SEPS/_FRAGMENT_SEPS) split answers on
 # the prose dash, so they carry the em-dash with the content they parse.
 TRAINING_CONTENT_FILES: tuple[str, ...] = (
+    # The REFERENCE spelling, and unguarded until 2026-08-20: the file whose
+    # 154 em-dashes decided the convention was the one authored source this
+    # gate did not read, so nothing stood between it and a drift back.
+    "identity_anchors.py",
     "identity_paraphrases.py",
     "enigma_engine/core/persona_content.py",
     "make_sft_data.py",

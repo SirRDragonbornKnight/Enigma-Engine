@@ -80,7 +80,11 @@ learns is byte-for-byte what she serves.
    and she writes her final answer.
 
 Built-in tools (intent-gated -- each is only offered when the message
-looks like it needs it, so tool prompts do not degrade normal chat):
+looks like it needs it, so tool prompts do not degrade normal chat).
+Offering all of them on every request instead was ruled 2026-07-24 and
+tried on 2026-08-20; it lost the locked gate twice (59/120 and 55/120
+against the gated 67/120) and was reverted, so the retirement is parked
+on measurement -- receipts in `BACKLOG.md` T4.
 
 | Tool | Needs | What it does |
 |------|-------|-------------|

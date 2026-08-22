@@ -46,7 +46,9 @@ KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool"}
 # The one client tool the eval injects for tool/restraint probes.
 VALID_EXPECT_TOOLS = {None, "get_weather"}
 # Organ probes call the server's OWN built-ins instead: no client tool is
-# injected, so what they measure is whether her intent gate offers the organ.
+# injected, so what they measure is whether her intent gate offers the organ
+# and she then routes to it. (Offering every built-in unconditionally was
+# tried 2026-08-20 and reverted -- measured worse; BACKLOG T4.)
 ORGAN_EXPECT_TOOLS = {None, "speak", "imagine", "remember", "forget", "calculate"}
 
 # A deny key only stays a deny key if a CORRECT answer cannot contain it.

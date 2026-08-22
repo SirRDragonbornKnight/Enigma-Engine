@@ -2,7 +2,9 @@
 #
 #   1. SFT-2: re-finetune from the SAME facts checkpoint (models/
 #      enigma_v2_238m_facts/model.pth -- unchanged, the fix arc did not touch
-#      knowledge_corpus.py) on the patched mix (126,025 records: power/percent
+#      knowledge_corpus.py) on the patched mix (126,025 records as the mix
+#      stood for the 2026-08-08 SFT-2 build -- a dated number, not a check:
+#      every make_sft_data rebuild moves it. Contents: power/percent
 #      calc surfaces, remember-poisoning restraint, client-tools restraint,
 #      widened memory-declines). -> models/enigma_v2_sft2
 #   2. T5 DPO from SFT-2 on dpo_pairs.jsonl (350 pairs incl. the new
