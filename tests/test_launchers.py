@@ -145,6 +145,72 @@ def test_a_pack_stop_targets_only_its_own_booting_serve(tmp_path):
                         f"extra=*{pack}* exclude=")
 
 
+def _port_matches(pack: Path | None, lines: list[str]) -> tuple[str, list[bool]]:
+    """(ServePortMatch, one bool per command line) -- applied with PowerShell's
+    OWN -match, the operator Stop-Enigma.ps1's Where-Object runs, so this
+    measures the launcher's engine rather than a Python re that resembles it."""
+    pack_dir = "" if pack is None else str(pack)
+    tested = "@(" + ",".join(f"'{ln}'" for ln in lines) + ")"
+    proc = subprocess.run(
+        [_POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+         f". '{LIB}'; "
+         f"$s = Resolve-EnigmaPersona -EngineDir '{REPO_ROOT}' -PackDir '{pack_dir}'; "
+         f"@{{ regex = $s.ServePortMatch; "
+         f"hits = @({tested} | ForEach-Object {{ [bool]($_ -match $s.ServePortMatch) }}) "
+         f"}} | ConvertTo-Json -Compress"],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    return got["regex"], got["hits"]
+
+
+@needs_powershell
+def test_the_booting_serve_matcher_is_scoped_to_her_own_port():
+    """The fallback matched the SCRIPT NAME alone, so with port 8000 empty a
+    Stop force-killed every serve_enigma.py without --persona -- the eval
+    scratch serve on 8123 and any second serve with it (audit 2026-08-22).
+    serve's own --port default is 8000, so a line carrying no --port at all is
+    the daily serve and nothing else; every launcher-started serve passes
+    --port explicitly."""
+    bare = 'python.exe "serve_enigma.py" --model models\\m.pth --eyes'
+    hers = 'python.exe "serve_enigma.py" --port 8000 --model models\\m.pth'
+    equals = 'python.exe "serve_enigma.py" --port=8000 --model models\\m.pth'
+    scratch = 'python.exe "serve_enigma.py" --port 8123 --model models\\m.pth'
+    other = 'python.exe "serve_enigma.py" --port 9001 --model models\\m.pth'
+    # The digits are a whole PORT, not a prefix: 80000 is not 8000.
+    longer = 'python.exe "serve_enigma.py" --port 80000 --model models\\m.pth'
+    _, hits = _port_matches(None, [bare, hers, equals, scratch, other, longer])
+    assert hits == [True, True, True, False, False, False]
+
+
+@needs_powershell
+def test_a_pack_stop_keeps_its_own_port_semantics(tmp_path):
+    """A pack is not the 8000 default, so ONLY its own --port is its serve --
+    a bare command line belongs to Enigma, and killing it from a pack's Stop
+    is the same collateral in the other direction."""
+    pack = _write_pack(tmp_path / "atlas")  # port 8300
+    ours = 'python.exe "serve_enigma.py" --persona X --port 8300'
+    bare = 'python.exe "serve_enigma.py" --persona X'
+    scratch = 'python.exe "serve_enigma.py" --persona X --port 8123'
+    _, hits = _port_matches(pack, [ours, bare, scratch])
+    assert hits == [True, False, False]
+
+
+@needs_powershell
+def test_her_stop_dryrun_reports_the_port_it_matches_on():
+    """The port half is described by -DryRun like every other matcher: a rule
+    that only exists inside a Where-Object cannot be inspected before it kills
+    something."""
+    lines = _run_ps("Stop-Enigma.ps1", "-DryRun")
+    port_line = next(ln for ln in lines if ln.startswith("DRYRUN serve-port: "))
+    assert port_line == (r"DRYRUN serve-port: match=(?:--port[=\s]+8000(\s|$))"
+                         r"|^(?!.*--port)")
+    # ...and the matcher really is wired into the booting-serve filter.
+    stop = (REPO_ROOT / "Stop-Enigma.ps1").read_text(encoding="utf-8")
+    assert stop.count("$_.CommandLine -match $self.ServePortMatch") == 1
+
+
 @needs_powershell
 def test_stop_leaves_a_pytest_run_of_the_files_it_matches_alone():
     """tests/test_enigma_window.py and tests/test_serve_enigma.py put

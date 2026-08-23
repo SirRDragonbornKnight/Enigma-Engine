@@ -623,7 +623,8 @@ def boot(argv: list[str] | None = None) -> None:
 
     # Prompt truncation budgets against ARGS.max_context, and the model's KV
     # cache holds exactly config.max_seq_len positions: a single oversize
-    # prefill is refused outright, and incremental overflow slides the window.
+    # prefill is refused outright, and incremental overflow raises KVCacheFull,
+    # which stops generation at a clean edge rather than sliding.
     # Clamp so neither can be reached from an oversize --max-context.
     # Attention.MAX_CACHE_SEQ_LEN must NOT bound this -- it is only the cache's
     # own fallback for configs lacking max_seq_len, which ForgeConfig always has.
@@ -1068,6 +1069,17 @@ def _generate_text(
     last len(stop)-1 chars are held back until we know a stop marker isn't
     forming, then flushed.
 
+    A character whose UTF-8 bytes span several tokens decodes to U+FFFD until
+    its last byte lands, and the finished character is the SAME string length,
+    so an emitted U+FFFD is never corrected by anything that follows. The chat
+    path holds that tail back in _send_content; THIS generator did not, and its
+    only caller (/v1/completions) passes no stop_texts at all -- so hold was 0
+    and both modes shipped the forged character, stream and non-stream alike
+    since they join the same generator (measured: ids [14535,166,152] returned
+    'Nice one \\ufffd'). The unresolved tail is held here, at the one place both
+    modes go through, and flushed at the end -- so a genuine U+FFFD in her
+    output still comes out.
+
     ``stats`` (if given) is filled once the generator finishes:
     prompt_tokens = ids actually fed, completion_tokens = ids actually
     sampled, finish = "stop" (eos / stop marker) or "length" (budget spent).
@@ -1121,7 +1133,9 @@ def _generate_text(
             if cut > emitted:
                 yield text[emitted:cut]
             return
-        safe_end = max(emitted, len(text) - hold)
+        # Both tails at once: the stop-marker hold, and the unresolved
+        # partial character the rstrip drops.
+        safe_end = max(emitted, len(text.rstrip("\ufffd")) - hold)
         if safe_end > emitted:
             yield text[emitted:safe_end]
             emitted = safe_end
@@ -1574,6 +1588,14 @@ def _execute_builtin(name: str, arguments: dict) -> str:
             # The store's own refusal (over the length cap) -- a tool RESULT
             # she can answer around, never a 500 mid-conversation.
             return f"error: {exc}"
+        except MEMORY.ConcurrentWriter:
+            # Another writer moved memories.jsonl, so the store refused rather
+            # than clobber it -- and this catch was missing, so a RuntimeError
+            # escaped the hop loop and 500ed her mid-conversation on the very
+            # shape the store handles gracefully (audit 2026-08-22). The store
+            # re-reads on its way out, so saying it again really does work.
+            return ("error: the memory file changed underneath me, so nothing was "
+                    "saved -- say it again and it will go through")
         except OSError as exc:
             return f"error: could not update the memory file ({exc})"
         return f"updated: {rec['text']}" if rec.get("superseded") else f"saved: {rec['text']}"
@@ -1611,6 +1633,11 @@ def _execute_builtin(name: str, arguments: dict) -> str:
         except MEMORY.TooBroad as exc:
             # Honest refusal beats a silent mass delete: memories have no .bak.
             return f"error: {exc}"
+        except MEMORY.ConcurrentWriter:
+            # Same door as remember's, for the same reason: a foreign write is
+            # a refusal the store recovers from, not a server fault.
+            return ("error: the memory file changed underneath me, so nothing was "
+                    "forgotten -- say it again and it will go through")
         except OSError as exc:
             # The store deletes in memory and then rewrites the file. A failed
             # rewrite used to escape as a 500 mid-conversation and leave memory
@@ -2709,6 +2736,18 @@ def _organ_off(what: str) -> HTTPException:
     return HTTPException(status_code=503, detail=what)
 
 
+def _memory_conflict(exc: Exception) -> HTTPException:
+    """A foreign write moved memories.jsonl, so the mutation refused rather
+    than clobber it. 409, not the 500 this used to escape as: the request was
+    well-formed and the server is healthy -- the state it targeted moved under
+    it. The store re-reads on its way out of the refusal, so the retry a 409
+    invites is one that actually goes through."""
+    return HTTPException(
+        status_code=409,
+        detail=f"memory file changed under this server; nothing was written ({exc})",
+    )
+
+
 @app.post("/v1/memory")
 def memory_add(req: MemReq):
     if MEMORY is None:
@@ -2727,6 +2766,8 @@ def memory_add(req: MemReq):
     except ValueError as exc:
         # client-input error (empty/whitespace text), not a server crash
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MEMORY.ConcurrentWriter as exc:
+        raise _memory_conflict(exc) from exc
 
 
 @app.get("/v1/memory")
@@ -2747,14 +2788,20 @@ def memory_delete(mem_id: int):
     a saved fact can always be inspected (GET) and removed."""
     if MEMORY is None:
         raise _organ_off("memory disabled -- start with --memory-dir")
-    return {"ok": MEMORY.delete(mem_id), "count": len(MEMORY)}
+    try:
+        return {"ok": MEMORY.delete(mem_id), "count": len(MEMORY)}
+    except MEMORY.ConcurrentWriter as exc:
+        raise _memory_conflict(exc) from exc
 
 
 @app.delete("/v1/memory")
 def memory_clear():
     if MEMORY is None:
         raise _organ_off("memory disabled -- start with --memory-dir")
-    return {"ok": True, "cleared": MEMORY.clear()}
+    try:
+        return {"ok": True, "cleared": MEMORY.clear()}
+    except MEMORY.ConcurrentWriter as exc:
+        raise _memory_conflict(exc) from exc
 
 
 class SpeechReq(BaseModel):

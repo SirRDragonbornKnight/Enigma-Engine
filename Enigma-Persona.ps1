@@ -128,6 +128,18 @@ function Resolve-EnigmaPersona {
         $serveExclude = "*--persona*"
         $serveExtra = ""
     }
+    # WHICH PORT a not-yet-bound serve was started for. The booting-serve
+    # fallback matched the script name alone, so with port 8000 empty a Stop
+    # force-killed EVERY serve_enigma.py without --persona -- the eval scratch
+    # serve on 8123 and any second serve included (audit 2026-08-22). serve's
+    # own --port default is 8000, so a command line carrying no --port at all
+    # IS the daily serve and nothing else; every launcher-started serve passes
+    # --port explicitly. Built as ONE regex so the matcher is a single test and
+    # cannot drift from what a test measures it against.
+    $servePortMatch = '--port[=\s]+' + $bind + '(\s|$)'
+    if ($bind -eq 8000) {
+        $servePortMatch = '(?:' + $servePortMatch + ')|^(?!.*--port)'
+    }
     return [PSCustomObject]@{
         Name          = $name
         Slug          = $slug
@@ -147,6 +159,7 @@ function Resolve-EnigmaPersona {
         ServeMatch    = $serveMatch
         ServeExtra    = $serveExtra
         ServeExclude  = $serveExclude
+        ServePortMatch = $servePortMatch
         # A pytest run of tests/test_enigma_window.py or tests/test_serve_enigma.py
         # carries the matched FILE NAME on its own command line, so the process
         # matchers above see the suite that is testing them and Stop force-killed

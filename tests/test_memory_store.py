@@ -1,6 +1,8 @@
 """The local memory layer (memory_store.py) — her runtime learning lives here,
 not in the frozen weights. Stdlib BM25 over inspectable JSONL."""
 
+import json
+
 import pytest
 
 from enigma_engine.core.memory_store import (
@@ -71,15 +73,57 @@ def test_a_second_store_on_one_directory_is_refused_not_merged(tmp_path):
     b.add("User's dog is named Rex.")
     with pytest.raises(MemoryStore.ConcurrentWriter, match="another MemoryStore"):
         a.add("User likes tea.")
-    with pytest.raises(MemoryStore.ConcurrentWriter):
-        a.clear()  # the rewrite path is the destructive one, and refuses too
+    # The refused write left nothing of its own live in memory, and the foreign
+    # record was READ rather than overwritten.
+    assert [r["text"] for r in a.all()] == ["User's dog is named Rex."]
 
-    assert a.all() == []  # a refused write leaves nothing live in memory either
-    b.add("User likes coffee.")  # ...and the store that OWNS the file still writes
+    b.add("User likes coffee.")  # the store that OWNS the file still writes
     assert [r["text"] for r in MemoryStore(tmp_path).all()] == [
         "User's dog is named Rex.",
         "User likes coffee.",
     ]
+
+
+def test_one_foreign_write_refuses_once_and_then_the_store_heals(tmp_path):
+    """The wedge (audit 2026-08-22): the stamp re-baselined only on a
+    successful load/append/rewrite, so after ONE external append EVERY later
+    mutation refused forever -- and on the live serve that is her remember tool
+    500ing mid-conversation for the rest of the process's life. A hand-edited
+    memories.jsonl is inside the module's stated contract, so this was one
+    text-editor save away at all times.
+
+    The contract now: the operation that DETECTS the foreign write is the
+    sacrifice, and the store then re-reads, so the operation after it goes
+    through and sees the foreign record."""
+    m = MemoryStore(tmp_path)
+    m.add("User likes tea.")
+
+    # An external writer appends -- a hand edit, or a second store.
+    with open(tmp_path / "memories.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": 99, "text": "User's dog is named Rex.",
+                            "kind": "fact"}) + "\n")
+
+    with pytest.raises(MemoryStore.ConcurrentWriter, match="Nothing was written"):
+        m.add("User likes coffee.")
+    # ...and the NEXT operation proceeds, against the file as it really is.
+    m.add("User likes coffee.")
+    texts = [r["text"] for r in m.all()]
+    assert texts == ["User likes tea.", "User's dog is named Rex.",
+                     "User likes coffee."]
+    assert [r["text"] for r in MemoryStore(tmp_path).all()] == texts
+    # The foreign record's id is respected, not re-minted over.
+    assert [r["id"] for r in m.all()] == [1, 99, 100]
+    # The rewrite path heals the same way -- it is the destructive one, so the
+    # refusal has to come first there too.
+    with open(tmp_path / "memories.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": 150, "text": "User's cat is named Momo.",
+                            "kind": "fact"}) + "\n")
+    with pytest.raises(MemoryStore.ConcurrentWriter):
+        m.delete(1)
+    assert len(m.all()) == 4  # nothing deleted, and the foreign record adopted
+    assert m.delete(1) is True
+    assert [r["text"] for r in m.all()] == [
+        "User's dog is named Rex.", "User likes coffee.", "User's cat is named Momo."]
 
 
 def test_forget_none_deletes_nothing(tmp_path):

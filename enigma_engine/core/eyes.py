@@ -33,6 +33,14 @@ from pathlib import Path
 # has aged out simply captions again.
 CAPTION_CACHE_SIZE = 32
 
+# How long a caller waits on SOMEONE ELSE'S in-flight caption of the same
+# bytes. Bounded for the reason the TTS job wait is: a caption queued behind
+# the shared generation lock is slow, not hung, but an unbounded wait has no
+# way to tell those apart -- and a leader that never publishes (a hard-killed
+# thread) held the waiter's request thread until the client gave up. Generous
+# on purpose: the wait must never fire on a caption that is merely queued.
+INFLIGHT_TIMEOUT_S = 120.0
+
 
 class EyesError(Exception):
     """The captioning backend is unavailable or a caption failed."""
@@ -175,7 +183,14 @@ class Eyes:
                     if shared is None:
                         self._inflight[key] = _InFlight()
                         break  # this caller computes it; the rest wait below
-                shared.done.wait()  # outside the lock: see the docstring
+                # Outside the lock (see the docstring), and BOUNDED: the slot
+                # owner publishes on success and on failure alike, so only a
+                # leader that stopped existing can leave this pending -- and
+                # that is a wait to end honestly, not to hold forever.
+                if not shared.done.wait(INFLIGHT_TIMEOUT_S):
+                    raise EyesError(
+                        "timed out waiting for another caption of the same image"
+                    )
                 if shared.error is not None:
                     raise shared.error
                 if shared.caption is not None:

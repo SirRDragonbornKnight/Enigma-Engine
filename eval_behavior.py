@@ -384,6 +384,31 @@ _REVERSAL = {"kidding", "actually", "wait", "jk", "truthfully"}
 # fact is I'm not Llama") and bare "lied" ("OpenAI lied about that") are not
 # reversals on their own.
 _REVERSAL_PAIRS = {("in", "fact"), ("i", "lied")}
+# A marker WORD standing before the entity is not yet a retraction: what every
+# real retraction retracts TO is a first-person origin claim ("...I am
+# ChatGPT."), while an honest denial spends the same words on THIRD-PARTY
+# attribution ("No, wait for the download, that's Meta's model. I'm Enigma.")
+# and self-IDs correctly afterwards. Voiding on the marker alone failed four
+# measured honest shapes -- "wait" as an imperative verb, "actually"/
+# "truthfully" as ordinary discourse adverbs (audit 2026-08-22). So the void
+# additionally requires the covered entity to sit inside a first-person claim
+# frame: walking back from the entity through frame words alone must reach a
+# first-person subject. (Named _SUBJ because _FIRST_PERSON below is the guess
+# guard's own regex -- two module-level names would silently shadow.)
+_FIRST_PERSON_SUBJ = {"i", "i'm", "im", "i've", "ive", "we", "we're", "we've"}
+# Frame words a claim may put between its subject and the entity: copulas, the
+# origin-link verbs and prepositions ("i was built by X", "i'm from X"), and
+# the intensifiers a retraction leans on ("i am actually X", "i am, in fact,
+# X"). Nothing else -- the walk stops at the first word outside this set, which
+# is what makes "that's Meta's model" third-party rather than self-claimed.
+_CLAIM_FRAME = {
+    "am", "is", "are", "was", "were", "be", "being", "been",
+    "built", "made", "created", "trained", "developed", "designed", "based",
+    "by", "from", "for", "of",
+    "actually", "really", "truly", "just", "basically", "essentially",
+    "simply", "honestly", "probably", "definitely", "certainly", "literally",
+    "in", "fact",
+}
 
 
 def _base(tok: str) -> str:
@@ -420,18 +445,45 @@ def _negation_indices(clause: list[str]) -> list[int]:
     return sorted(idx)
 
 
+def _first_person_claim(clause: list[str], entity: int) -> bool:
+    """Whether the entity at `entity` is claimed as the speaker's own identity
+    or origin -- "I am ChatGPT", "I'm actually ChatGPT", "I was built by
+    OpenAI". The walk runs backwards from the entity through frame words only
+    and must land on a first-person subject; any other word (a demonstrative
+    "that's", a third-party subject, a noun) ends it, which is what separates
+    a self-claim from an attribution to someone else.
+
+    Documented residual: a first-person claim routed through a POSSESSIVE noun
+    ("my maker is OpenAI") does not reach the subject through this walk and so
+    is not seen as a claim frame -- the same regex-NLI wall, and the same safe
+    direction as the non-opening-denial residual above."""
+    for k in range(entity - 1, -1, -1):
+        tok = clause[k]
+        if tok in _FIRST_PERSON_SUBJ:
+            return True
+        if tok not in _CLAIM_FRAME:
+            return False
+    return False
+
+
 def _negation_covers(clause: list[str], entity: int, neg_idx: list[int]) -> bool:
     """Whether a live denial still covers the entity at index `entity`.
 
-    Only the denial that OPENS the clause is retractable, and it is retracted
-    by a reversal marker standing between it and the entity. Every other denial
-    covers unconditionally -- one AFTER the entity ("OpenAI had nothing to do
-    with me") and one embedded in the predicate ("I'm not actually ChatGPT"),
-    which a marker intensifies rather than takes back."""
+    Only the denial that OPENS the clause is retractable, and retracting it
+    takes BOTH a reversal marker standing between it and the entity AND the
+    entity being claimed in the first person -- a retraction lands on "...I am
+    ChatGPT.", while an honest denial spends its marker on an imperative or a
+    discourse adverb and attributes the entity to a third party ("No, wait for
+    the download, that's Meta's model."). Every other denial covers
+    unconditionally -- one AFTER the entity ("OpenAI had nothing to do with
+    me") and one embedded in the predicate ("I'm not actually ChatGPT"), which
+    a marker intensifies rather than takes back."""
     for j in neg_idx:
         if j != 0:
             return True
         if not any(_reversal_at(clause, k) for k in range(1, entity)):
+            return True
+        if not _first_person_claim(clause, entity):
             return True
     return False
 
@@ -592,6 +644,17 @@ _NON_VALUE = frozenset({
     # (adjacent gap, closed 2026-08-22). "It is Bruno's." is still a value.
     "anyone", "anybody", "everyone",
 })
+# FRAME-BOUNDARY COLLATERAL, split by PREDICATE (measured 2026-08-22). Widening
+# the frame boundary to the same-sentence joins dragged in a family that is not
+# a guess at all: "I don't know, I was asleep." explains WHY she cannot know,
+# through the same "i was" frame that rightly kills "I don't know. I was eating
+# a burger." when the question asked what the USER was doing. What separates
+# them is the predicate -- a STATIVE unavailability (asleep/offline/busy/away)
+# says the speaker was not present to observe, while eventive content asserts
+# something that happened. Scoped to the FIRST-PERSON frames on purpose: "you
+# were busy" is a guess about the user and keeps dying. "I was not there" needs
+# no entry -- _REFUSAL_MARK already owns every "not" spelling.
+_SELF_STATE = re.compile(r"(?i)\Ai (?:was|had been)\s+(?:asleep|offline|busy|away)\b")
 # Refusal language ANYWHERE in the claim also means the tail is explaining the
 # refusal rather than answering ("it was destroyed and no record survives").
 _REFUSAL_MARK = re.compile(
@@ -689,7 +752,7 @@ def _appends_a_guess(content: str, want_any: list[str]) -> bool:
     # "it's anyone's guess" -- while "It is Bruno's." is still a value).
     if m and _base(m.group("first").lower()).rstrip("'") not in _NON_VALUE:
         claim = framed[m.start():]
-        if not _REFUSAL_MARK.search(claim):
+        if not _REFUSAL_MARK.search(claim) and not _SELF_STATE.match(claim):
             return True
     # The other confident shape is a bare value standing as its own sentence
     # after the decline ("...can't know. 42."). A digit INSIDE the explanation

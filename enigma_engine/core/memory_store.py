@@ -401,6 +401,29 @@ class MemoryStore:
         # two concurrent add() calls read the same len() and mint duplicate ids.
         self._lock = threading.Lock()
         self._records: list[dict[str, Any]] = []
+        if self._load():
+            # The renumbered ids are live in memory either way; a file that
+            # cannot be replaced right now (read-only attribute, another
+            # process holding it on Windows) must not stop the store from
+            # loading. The next successful rewrite persists them.
+            try:
+                self._rewrite()
+            except (OSError, self.ConcurrentWriter) as exc:
+                logger.warning(
+                    "memory store: could not persist renumbered ids to %s (%s); "
+                    "continuing with in-memory ids",
+                    self.file,
+                    exc,
+                )
+
+    def _load(self) -> bool:
+        """Read the JSONL into `_records` and re-baseline the write stamp.
+
+        Returns whether any record had to be renumbered, so the CALLER decides
+        whether to persist that. Keeping this a pure read is what lets
+        _refuse_if_another_writer heal with it: a heal that could write would
+        turn a refusal into the very clobber the refusal exists to prevent."""
+        self._records = []
         if self.file.exists():
             # utf-8-sig: hand-edited files are inside the contract, and
             # Windows editors save UTF-8 with a BOM that would otherwise
@@ -443,20 +466,7 @@ class MemoryStore:
                 next_id += 1
                 renumbered = True
             seen_ids.add(rec["id"])
-        if renumbered:
-            # The renumbered ids are live in memory either way; a file that
-            # cannot be replaced right now (read-only attribute, another
-            # process holding it on Windows) must not stop the store from
-            # loading. The next successful rewrite persists them.
-            try:
-                self._rewrite()
-            except (OSError, self.ConcurrentWriter) as exc:
-                logger.warning(
-                    "memory store: could not persist renumbered ids to %s (%s); "
-                    "continuing with in-memory ids",
-                    self.file,
-                    exc,
-                )
+        return renumbered
 
     def __len__(self) -> int:
         with self._lock:
@@ -473,8 +483,8 @@ class MemoryStore:
         return (st.st_mtime_ns, st.st_size)
 
     def _refuse_if_another_writer(self) -> None:
-        """Refuse to write over a file that moved since we last touched it
-        (call with the lock held, immediately BEFORE the write).
+        """Refuse to write over a file that moved since we last touched it,
+        then HEAL (call with the lock held, immediately BEFORE the write).
 
         ONE writer per memory directory is the convention, and nothing
         enforced it: two MemoryStores on one dir both mint ids from their own
@@ -483,13 +493,26 @@ class MemoryStore:
         no merge to do here -- the records the other store holds are not in
         this process -- so the honest answer is to refuse and say why. Cheap
         by design: a stat, not a re-read.
+
+        REFUSING IS NOT ENOUGH ON ITS OWN, and refusing FOREVER is worse than
+        the clobber it prevents: the stamp only re-baselined on a successful
+        load/append/rewrite, so ONE foreign write -- a hand edit, which the
+        module docstring puts squarely inside the contract -- wedged every
+        later mutation of the live serve permanently (audit 2026-08-22). So
+        the refusal is followed by a re-read: THE REFUSED OPERATION IS THE
+        SACRIFICE, and the store recovers by adopting the on-disk truth, so
+        the next operation proceeds against the file as it really is. The heal
+        runs BEFORE the raise, and _load() never writes, so the foreign
+        records are read, never overwritten.
         """
         if self._file_stamp() != self._seen_stamp:
+            self._load()
             raise self.ConcurrentWriter(
                 f"{self.file} changed since this store last read it -- another "
                 f"MemoryStore is writing the same directory. One writer per "
                 f"memory dir: a second store mints colliding ids and its next "
-                f"rewrite erases these records. Nothing was written."
+                f"rewrite erases these records. Nothing was written; this store "
+                f"has re-read the file, so the next operation will see it."
             )
 
     def _append(self, rec: dict) -> None:

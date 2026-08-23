@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1405 passed on ENIGMAPC (2026-08-22, paired with the third 2026-08-22 audit fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1416 passed on ENIGMAPC (2026-08-22, paired with the round-four regression-fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -315,6 +315,16 @@ Deleted after a three-agent adversarial audit verified every claim
    (`test_launchers.py` +6, `test_collect_pretraining_data.py` +6,
    `test_enigma_window.py` +3, `test_teach_tool.py` +2, the new
    `test_sweep_receipts.py` +2 and `test_repo_hygiene.py` +1).
+   **1405 -> 1416 is the round-four regression-fix wave** -- the round-three
+   arc's adversarial findings: the reversal-void first-person-claim gate and
+   the stative-decline exemption (`test_eval_grading.py` +2), the memory
+   store's refuse-then-heal concurrent-writer contract
+   (`test_memory_store.py` +1) with ConcurrentWriter caught at the tool door
+   and all three /v1/memory routes answering 409, plus the completions-path
+   U+FFFD hold-back in both modes (`test_serve_enigma.py` +4, one of them
+   parametrized terminal/mid-text), Stop's booting-serve matcher gaining port
+   discrimination via the ServePortMatch resolve field (`test_launchers.py`
+   +3) and the bounded eyes in-flight waiter (`test_eyes.py` +1).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

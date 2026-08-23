@@ -33,6 +33,7 @@ if ($DryRun) {
     Write-Output "DRYRUN stop: persona=$aiName port=$bindPort"
     Write-Output "DRYRUN window: match=$($self.WindowMatch) extra=$($self.WindowExtra) exclude=$($self.WindowExclude)"
     Write-Output "DRYRUN serve-process: match=$($self.ServeMatch) extra=$($self.ServeExtra) exclude=$($self.ServeExclude)"
+    Write-Output "DRYRUN serve-port: match=$($self.ServePortMatch)"
     exit 0
 }
 
@@ -74,10 +75,16 @@ if ($null -eq $conn) {
     # answer /v1/capabilities yet either, so the process line is the honest
     # fallback here, matched by the same ownership rule as her window (a pack's
     # serve carries --persona, hers never does; a pytest run is not a serve).
+    # AND BY PORT: the ownership rule alone is true of every serve of hers,
+    # so with 8000 empty this force-killed the eval scratch serve on 8123 and
+    # any second serve on any other port. ServePortMatch is the port half --
+    # this AI's own --port, or (only when that port is serve's own 8000
+    # default) a command line carrying no --port at all.
     $booting = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             $_.CommandLine -like $self.ServeMatch -and
             $_.CommandLine -notlike $self.TestRunner -and
+            $_.CommandLine -match $self.ServePortMatch -and
             ($self.ServeExtra -eq "" -or $_.CommandLine -like $self.ServeExtra) -and
             ($self.ServeExclude -eq "" -or $_.CommandLine -notlike $self.ServeExclude)
         })

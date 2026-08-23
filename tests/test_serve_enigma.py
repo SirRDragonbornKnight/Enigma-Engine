@@ -1035,6 +1035,54 @@ def test_an_oversized_memory_is_refused_at_both_doors(monkeypatch, tmp_path):
     assert len(serve.MEMORY.all()) == 2
 
 
+def _foreign_append(mem_dir, text):
+    """An external writer appends to memories.jsonl -- a hand edit, or a
+    second store on the same directory."""
+    with open(Path(mem_dir) / "memories.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": 900, "text": text, "kind": "fact"}) + "\n")
+
+
+def test_a_foreign_memory_write_never_500s_a_door(monkeypatch, tmp_path):
+    """ConcurrentWriter is a RuntimeError, and NO door caught it: the remember
+    tool's catch listed ValueError and OSError only, so one external write to
+    memories.jsonl escaped the hop loop and 500ed her mid-conversation, and
+    POST/DELETE /v1/memory 500ed with it (audit 2026-08-22). Each door surfaces
+    it in its own language -- a tool RESULT she can answer around, a 409 on the
+    HTTP side -- and the store heals, so the retry each message invites works."""
+    mem_dir = tmp_path / "mem"
+    monkeypatch.setattr(serve, "MEMORY", MemoryStore(str(mem_dir)))
+    serve.memory_add(serve.MemReq(text="User likes tea."))
+
+    # The TOOL door: error text, no traceback out.
+    _foreign_append(mem_dir, "User's dog is named Rex.")
+    tooled = serve._execute_builtin("remember", {"text": "User likes coffee."})
+    assert tooled.startswith("error:") and "changed underneath me" in tooled
+    assert serve._execute_builtin(
+        "remember", {"text": "User likes coffee."}
+    ).startswith("saved: ")  # healed
+
+    _foreign_append(mem_dir, "User's cat is named Momo.")
+    forgot = serve._execute_builtin("forget", {"text": "forget that I like tea"})
+    assert forgot.startswith("error:") and "changed underneath me" in forgot
+    assert serve._execute_builtin(
+        "forget", {"text": "forget that I like tea"}
+    ).startswith("forgot: ")  # healed
+
+    # The HTTP doors: 409, pinned by status because a client tells conflict
+    # from crash by the number, not by the prose.
+    for door, call in (
+        ("POST", lambda: serve.memory_add(serve.MemReq(text="User likes rain."))),
+        ("DELETE one", lambda: serve.memory_delete(900)),
+        ("DELETE all", serve.memory_clear),
+    ):
+        _foreign_append(mem_dir, f"User was here for {door}.")
+        with pytest.raises(serve.HTTPException) as exc:
+            call()
+        assert exc.value.status_code == 409, door
+        assert "nothing was written" in exc.value.detail, door
+        call()  # healed: the same call goes through second time
+
+
 # ---------------------------------------------------------------------------
 # stream vs non-stream byte parity (ultrareview #31 + re-audit 2026-07-17).
 # The whitespace shapes are exactly the class that broke the first fix.
@@ -1159,6 +1207,83 @@ def test_a_genuine_replacement_character_still_reaches_the_wire(monkeypatch, tok
     assert tok_v2.decode(genuine, skip_special_tokens=True) == "\ufffd"
     scripted = tok_v2.encode("look ", add_special_tokens=False) + genuine
     nonstream, stream = _scripted_stream_parity(monkeypatch, tok_v2, scripted)
+    assert nonstream.endswith("\ufffd")
+    assert stream == nonstream
+
+
+# ---------------------------------------------------------------------------
+# ...and the SAME character on the /v1/completions path (audit 2026-08-22).
+# The hold-back landed only in _chat_instruct._send_content. _generate_text
+# holds back len(stop)-1 chars, and the completions caller passes no stop
+# texts at all -- so hold was 0, nothing was held, and BOTH modes forged the
+# character, since stream and non-stream join the same generator.
+# ---------------------------------------------------------------------------
+
+# The three ids the audit measured on this path: one emoji, three tokens.
+COMPLETION_EMOJI_IDS = [14535, 166, 152]
+
+
+def _drain_completion_stream(resp) -> str:
+    """The text_completion SSE shape: choices[0].text, not a chat delta."""
+    async def _drain():
+        frames = []
+        async for chunk in resp.body_iterator:
+            frames.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8"))
+        return frames
+
+    parts = []
+    for frame in asyncio.run(_drain()):
+        for line in frame.splitlines():
+            if not line.startswith("data: ") or line == "data: [DONE]":
+                continue
+            parts.append(json.loads(line[6:])["choices"][0].get("text") or "")
+    return "".join(parts)
+
+
+def _scripted_completion(monkeypatch, tokenizer, scripted: list[int]) -> tuple[str, str]:
+    """Drive /v1/completions both ways over a scripted id stream; return
+    (non-stream text, streamed text)."""
+    monkeypatch.setattr(serve, "tokenizer", tokenizer)
+    monkeypatch.setattr(serve, "EOS_ID", tokenizer.eos_token_id)
+    monkeypatch.setattr(serve, "BOS_ID", tokenizer.bos_token_id)
+    monkeypatch.setattr(serve, "ARGS", SimpleNamespace(max_context=512))
+
+    def fake_stream(x, max_tokens, *a, **k):
+        yield from scripted
+
+    monkeypatch.setattr(serve, "_stream_ids_locked", fake_stream)
+
+    def _req(stream: bool) -> serve.CompletionReq:
+        return serve.CompletionReq(prompt="Say something.", stream=stream, max_tokens=64)
+
+    nonstream = serve.completions(_req(stream=False))["choices"][0]["text"]
+    return nonstream, _drain_completion_stream(serve.completions(_req(stream=True)))
+
+
+@pytest.mark.parametrize("trailing", ["", " ok"], ids=["terminal", "mid-text"])
+def test_completions_never_forge_a_partial_character(monkeypatch, tok_v2, trailing):
+    """Terminal AND mid-text, both modes: the terminal case is what the
+    end-of-generator flush exists for, the mid-text case what a later slice
+    must not double-count."""
+    scripted = (
+        tok_v2.encode("Nice one ", add_special_tokens=False)
+        + COMPLETION_EMOJI_IDS
+        + (tok_v2.encode(trailing, add_special_tokens=False) if trailing else [])
+    )
+    whole = tok_v2.decode(scripted)
+    assert "\ufffd" not in whole  # the fixture really is a resolvable character
+    nonstream, stream = _scripted_completion(monkeypatch, tok_v2, scripted)
+    assert "\ufffd" not in nonstream
+    assert "\ufffd" not in stream
+    assert stream == nonstream == whole
+
+
+def test_completions_still_pass_a_genuine_replacement_character(monkeypatch, tok_v2):
+    """Holding the tail back must not DROP a U+FFFD she actually produced --
+    the end-of-generator flush releases whatever is still held."""
+    genuine = tok_v2.encode("\ufffd", add_special_tokens=False)
+    scripted = tok_v2.encode("look ", add_special_tokens=False) + genuine
+    nonstream, stream = _scripted_completion(monkeypatch, tok_v2, scripted)
     assert nonstream.endswith("\ufffd")
     assert stream == nonstream
 

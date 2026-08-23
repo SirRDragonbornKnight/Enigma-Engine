@@ -11,6 +11,7 @@ import time
 import pytest
 from PIL import Image
 
+from enigma_engine.core import eyes as eyes_mod
 from enigma_engine.core.eyes import Eyes, EyesError, flatten_image_content
 
 
@@ -249,6 +250,37 @@ def test_a_failed_in_flight_caption_does_not_wedge_the_callers_waiting_on_it():
     captioner.fail = False  # the in-flight slot was released, so a retry works
     assert eyes.describe(img) == "a shared caption"
     assert captioner.calls == 2
+
+
+def test_a_waiter_on_a_leader_that_never_publishes_ends_honestly(monkeypatch):
+    """The in-flight wait was unbounded. The slot owner publishes on success
+    AND on failure, so only a leader that stopped existing can leave it
+    pending -- but that case held the waiter's request thread forever. Bounded
+    like the TTS job wait: a clean error, not a hang."""
+    monkeypatch.setattr(eyes_mod, "INFLIGHT_TIMEOUT_S", 0.2)
+    captioner = BlockingCaptioner()
+    eyes = Eyes(captioner_factory=lambda: captioner)
+    img = _png_bytes()
+
+    threads, _started, out = _run_together(lambda: eyes.describe(img), 2)
+    try:
+        assert captioner.entered.wait(5), "no caller reached the captioner"
+        # The follower's bounded wait expires while the leader is still held.
+        deadline = time.time() + 5
+        while len(out) < 1 and time.time() < deadline:
+            time.sleep(0.01)
+        assert len(out) == 1, "the waiter is still blocked past the timeout"
+        assert isinstance(out[0], EyesError)
+        assert "timed out" in str(out[0])
+    finally:
+        captioner.release.set()
+    for t in threads:
+        t.join(5)
+    assert not [t for t in threads if t.is_alive()]
+    # The LEADER still finishes normally -- a waiter giving up changes nothing
+    # about the caption being computed.
+    assert "a shared caption" in out
+    assert captioner.calls == 1
 
 
 def test_distinct_images_are_each_captioned_once_under_concurrency():
