@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1429 passed on ENIGMAPC (2026-08-25, paired with the review-fixes Wave A commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1461 passed on ENIGMAPC (2026-08-25, paired with the review-fixes Wave B commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -333,6 +333,12 @@ Deleted after a three-agent adversarial audit verified every claim
    (`test_finetune_sft.py` +3), the `[collect]` extras parity pin
    (`test_repo_hygiene.py` +1) and the conftest dot-dir addition guard
    (`test_conftest_guard.py` +1).
+   **1429 -> 1461 is the review-fixes Wave B** -- the same plan's second half:
+   the serve LAN-bind refusal and the server-side body caps
+   (`test_serve_enigma.py` +8, 2 bind-guard tests plus 6 cap tests across the
+   capped reader, the image and audio endpoints, speech input and the chat
+   text/parts split), and direct tests for the two load-path modules that had
+   none (`test_model_registry.py` +11, `test_hardware_detection.py` +13).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

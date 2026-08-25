@@ -94,6 +94,9 @@ _p.add_argument(
 _p.add_argument("--host", default="127.0.0.1",
                 help="bind address (default 127.0.0.1). The API has NO auth -- "
                      "do not expose beyond localhost.")
+_p.add_argument("--unsafe-lan", action="store_true",
+                help="accept a non-loopback --host anyway: anyone on the network "
+                     "can read and change her memory, voice, and outputs.")
 _p.add_argument("--port", type=int, default=8000)
 _p.add_argument(
     "--max-context",
@@ -1729,8 +1732,38 @@ def _openai_tool_calls(calls: list[dict]) -> list[dict]:
     ]
 
 
+# What one chat request may carry. TEXT chars only: the chat page sends images
+# as base64 data: URLs INSIDE message content, and history re-sends them every
+# turn -- an 8 MB image is ~10.9M chars, so a flat char cap would 413 her own
+# image feature and then brick the session. Image parts are COUNTED instead;
+# their size is the image pipeline's business. Both numbers are PROPOSED.
+_MAX_CHAT_CHARS = 500_000
+_MAX_CHAT_PARTS = 64
+
+
+def _refuse_oversize_chat(msgs: list[dict]) -> None:
+    text_chars = 0
+    parts = 0
+    for m in msgs:
+        c = m.get("content")
+        if isinstance(c, str):
+            text_chars += len(c)
+        elif isinstance(c, list):
+            for part in c:
+                parts += 1
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_chars += len(part.get("text") or "")
+    if text_chars > _MAX_CHAT_CHARS or parts > _MAX_CHAT_PARTS:
+        raise HTTPException(status_code=413, detail="chat payload too large")
+
+
 def _chat_instruct(req: ChatReq):
-    msgs = _with_context([m.model_dump(exclude_none=True) for m in req.messages], req)
+    # The cap reads the CLIENT's messages, before _with_context folds the
+    # server's own memory and tool blocks in -- her injections are not the
+    # caller's budget.
+    dumped = [m.model_dump(exclude_none=True) for m in req.messages]
+    _refuse_oversize_chat(dumped)
+    msgs = _with_context(dumped, req)
     created = int(time.time())
     cid = f"chatcmpl-{created}"
 
@@ -2806,6 +2839,12 @@ def memory_clear():
         raise _memory_conflict(exc) from exc
 
 
+# How much text one synthesis request may carry. Kokoro renders in real time,
+# so an unbounded input is a single request holding the voice organ for hours.
+# PROPOSED number.
+_MAX_SPEECH_CHARS = 20_000
+
+
 class SpeechReq(BaseModel):
     """OpenAI audio.speech shape (subset): synthesize input, return WAV bytes.
     This is the organ's service face -- the avatar requests audio it plays
@@ -2829,6 +2868,11 @@ def audio_speech(req: SpeechReq):
     text = (req.input or "").strip()
     if not text:  # a client input error is a 400, not a server 500
         raise HTTPException(status_code=400, detail="nothing to say -- 'input' is empty")
+    if len(text) > _MAX_SPEECH_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"'input' is {len(text)} characters; the cap is {_MAX_SPEECH_CHARS}",
+        )
     if MUTED:
         return Response(status_code=204)
     fd, tmp = tempfile.mkstemp(suffix=".wav")
@@ -3080,6 +3124,30 @@ def set_audio_output(req: OutputReq):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# What an upload may weigh before the organs (and the disk) see it. The only
+# bound that existed was the chat page's client-side JS, which any other client
+# skips entirely. PROPOSED numbers -- a minute of 16 kHz WAV is ~2 MB, and the
+# eyes captioner works from photographs, not scans.
+_MAX_AUDIO_UPLOAD = 50 * 1024 * 1024
+_MAX_IMAGE_UPLOAD = 16 * 1024 * 1024
+
+
+def _read_upload_capped(file, cap: int) -> bytes:
+    """Bodies land whole in RAM today; the only 8 MB cap was client-side JS.
+    Honest scope: Starlette has already spooled the full body before the
+    handler runs -- this bounds what reaches the organs/disk, not the wire."""
+    chunks, total = [], 0
+    while True:
+        chunk = file.file.read(1 << 20)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > cap:
+            raise HTTPException(status_code=413,
+                                detail=f"upload exceeds {cap} bytes")
+        chunks.append(chunk)
+
+
 @app.post("/v1/audio/transcriptions")
 def audio_transcriptions(file: UploadFile = File(...)):
     """OpenAI audio.transcriptions shape (subset): upload audio, get text.
@@ -3091,7 +3159,7 @@ def audio_transcriptions(file: UploadFile = File(...)):
     fd, tmp = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
     try:
-        Path(tmp).write_bytes(file.file.read())
+        Path(tmp).write_bytes(_read_upload_capped(file, _MAX_AUDIO_UPLOAD))
         return EARS.transcribe(tmp)
     except AudioDecodeError as exc:
         # The UPLOAD is what whisper could not read, so this is the client's
@@ -3111,7 +3179,7 @@ def images_describe(file: UploadFile = File(...)):
     if EYES is None:
         raise _organ_off("eyes disabled -- start with --eyes")
     try:
-        return {"description": EYES.describe(file.file.read())}
+        return {"description": EYES.describe(_read_upload_capped(file, _MAX_IMAGE_UPLOAD))}
     except EyesError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -3177,6 +3245,20 @@ def print_audio_outputs() -> None:
     print("  --voice-device default follows whatever Windows calls the default", flush=True)
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _refuse_unguarded_lan(host: str, unsafe_lan: bool) -> None:
+    """The API has no authentication; the bind address is the entire security
+    model. A non-loopback bind is an explicit, flagged decision."""
+    if host.lower() not in _LOOPBACK_HOSTS and not unsafe_lan:
+        raise SystemExit(
+            f"refusing to bind {host}: this API has no authentication. Pass "
+            "--unsafe-lan to accept that anyone on the network can read and "
+            "change Enigma's memory, voice, and outputs."
+        )
+
+
 def _require_free_port(host: str, port: int) -> None:
     """Refuse a taken port BEFORE boot() loads the checkpoint.
 
@@ -3223,8 +3305,10 @@ def main() -> None:
     if _early.list_audio_outputs:
         print_audio_outputs()
         return
-    # Whether the port is free is a question about the machine too: ask it
-    # while refusing is still cheap.
+    # Where she listens, and whether the port is free, are questions about the
+    # machine too: ask them while refusing is still cheap. Both read _early
+    # (the real parser's pre-boot pass), never ARGS -- ARGS is boot()'s.
+    _refuse_unguarded_lan(_early.host, _early.unsafe_lan)
     _require_free_port(_early.host, _early.port)
     boot()
     print(f"{PERSONA.name} OpenAI-compatible API -> http://{ARGS.host}:{ARGS.port}/v1", flush=True)

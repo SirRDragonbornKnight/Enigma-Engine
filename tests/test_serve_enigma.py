@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -2192,6 +2193,18 @@ def test_main_probes_the_port_before_it_boots(monkeypatch):
     assert calls == ["probe 127.0.0.1:8123", "boot", "uvicorn"]
 
 
+def test_non_loopback_bind_refused_without_flag():
+    with pytest.raises(SystemExit) as e:
+        serve._refuse_unguarded_lan("0.0.0.0", False)
+    assert "no authentication" in str(e.value)
+
+
+def test_loopback_and_flagged_binds_pass():
+    for host in ("127.0.0.1", "localhost", "::1"):
+        serve._refuse_unguarded_lan(host, False)
+    serve._refuse_unguarded_lan("0.0.0.0", True)
+
+
 # ---------------------------------------------------------------------------
 # boot() end to end on a tiny checkpoint (CPU-forced; every global restored)
 # ---------------------------------------------------------------------------
@@ -2968,3 +2981,78 @@ def test_a_pack_boot_answers_with_the_PACKS_identity_on_both_endpoints(
             setattr(serve, name, value)
         for key in _HF_ENV_KEYS:
             os.environ.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# server-side body caps -- what reaches the organs is bounded, and says 413
+# ---------------------------------------------------------------------------
+
+
+def test_capped_reader_refuses_oversize():
+    big = io.BytesIO(b"x" * (1024 * 1024 + 1))
+    fake = SimpleNamespace(file=big)
+    with pytest.raises(serve.HTTPException) as e:
+        serve._read_upload_capped(fake, 1024 * 1024)
+    assert e.value.status_code == 413
+
+
+def test_capped_reader_passes_exact_cap():
+    data = b"x" * 1024
+    fake = SimpleNamespace(file=io.BytesIO(data))
+    assert serve._read_upload_capped(fake, 1024) == data
+
+
+def test_image_upload_endpoint_refuses_oversize(monkeypatch):
+    monkeypatch.setattr(serve, "EYES", SimpleNamespace(describe=lambda payload: "a cat"))
+    small = SimpleNamespace(file=io.BytesIO(b"x" * 16))
+    assert serve.images_describe(small) == {"description": "a cat"}
+
+    big = SimpleNamespace(file=io.BytesIO(b"x" * (serve._MAX_IMAGE_UPLOAD + 1)))
+    with pytest.raises(serve.HTTPException) as e:
+        serve.images_describe(big)
+    assert e.value.status_code == 413
+
+
+def test_audio_upload_endpoint_refuses_oversize(monkeypatch):
+    monkeypatch.setattr(serve, "EARS", SimpleNamespace(transcribe=lambda tmp: {"text": "hi"}))
+    small = SimpleNamespace(filename="clip.wav", file=io.BytesIO(b"RIFF"))
+    assert serve.audio_transcriptions(small) == {"text": "hi"}
+
+    big = SimpleNamespace(filename="clip.wav", file=io.BytesIO(b"x" * (serve._MAX_AUDIO_UPLOAD + 1)))
+    with pytest.raises(serve.HTTPException) as e:
+        serve.audio_transcriptions(big)
+    assert e.value.status_code == 413
+
+
+def test_speech_refuses_oversize_input(monkeypatch):
+    """The cap lands before MUTED and before synthesis: an over-long input is
+    the client's error whatever the voice state is."""
+    monkeypatch.setattr(serve, "SPEAKER", object())
+    monkeypatch.setattr(serve, "MUTED", False)
+    with pytest.raises(serve.HTTPException) as e:
+        serve.audio_speech(serve.SpeechReq(input="a" * (serve._MAX_SPEECH_CHARS + 1)))
+    assert e.value.status_code == 413
+
+
+def test_chat_cap_counts_text_but_only_COUNTS_image_parts():
+    """A flat char cap would 413 the chat page's own image feature: images ride
+    as base64 data: URLs inside message content (~10.9M chars for 8 MB), and
+    history re-sends them on every later turn. Text is measured, image parts
+    are counted."""
+    serve._refuse_oversize_chat([{"role": "user", "content": "hello"}])
+    with pytest.raises(serve.HTTPException) as e:
+        serve._refuse_oversize_chat([{"role": "user", "content": "x" * (serve._MAX_CHAT_CHARS + 1)}])
+    assert e.value.status_code == 413
+
+    image_part = {"type": "image_url",
+                  "image_url": {"url": "data:image/png;base64," + "A" * 11_000_000}}
+    serve._refuse_oversize_chat([{"role": "user", "content": [image_part]}])
+    with pytest.raises(serve.HTTPException) as e:
+        serve._refuse_oversize_chat(
+            [{"role": "user", "content": [image_part] * (serve._MAX_CHAT_PARTS + 1)}])
+    assert e.value.status_code == 413
+
+    # Text inside a parts list is measured like plain content is.
+    with pytest.raises(serve.HTTPException):
+        serve._refuse_oversize_chat(
+            [{"role": "user", "content": [{"type": "text", "text": "x" * (serve._MAX_CHAT_CHARS + 1)}]}])

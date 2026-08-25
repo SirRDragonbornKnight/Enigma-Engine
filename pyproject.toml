@@ -111,7 +111,7 @@ enigma-ai = "serve_enigma:main"
 
 # --- Packaging ---
 [tool.setuptools]
-py-modules = ["serve_enigma"]
+py-modules = ["serve_enigma", "identity_anchors", "identity_paraphrases", "knowledge_corpus"]
 
 [tool.setuptools.packages.find]
 include = ["enigma_engine*"]
@@ -244,8 +244,10 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::UserWarning",
+    "ignore::DeprecationWarning:torch.*",
+    "ignore::UserWarning:torch.*",
+    "ignore::DeprecationWarning:transformers.*",
+    "ignore::UserWarning:transformers.*",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
