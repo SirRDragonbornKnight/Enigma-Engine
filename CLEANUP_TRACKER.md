@@ -166,7 +166,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1416 passed on ENIGMAPC (2026-08-22, paired with the round-four regression-fix commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1429 passed on ENIGMAPC (2026-08-25, paired with the review-fixes Wave A commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -325,6 +325,14 @@ Deleted after a three-agent adversarial audit verified every claim
    parametrized terminal/mid-text), Stop's booting-serve matcher gaining port
    discrimination via the ServePortMatch resolve field (`test_launchers.py`
    +3) and the bounded eyes in-flight waiter (`test_eyes.py` +1).
+   **1416 -> 1429 is the review-fixes Wave A** -- the audited plan out of the
+   2026-08-23 professional review: the pretrain warm-start vocab guard
+   (`test_v2_trainer.py` +4) and the DPO block-vs-context guard
+   (`test_dpo_trainer.py` +3), the atomic vision-pairs writer
+   (`test_collect_vision_data.py` +1), the SFT resume data-sha guard
+   (`test_finetune_sft.py` +3), the `[collect]` extras parity pin
+   (`test_repo_hygiene.py` +1) and the conftest dot-dir addition guard
+   (`test_conftest_guard.py` +1).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

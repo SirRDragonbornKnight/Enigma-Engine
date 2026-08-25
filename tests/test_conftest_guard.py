@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from tests.conftest import _diff, _fingerprint
+from tests.conftest import _diff, _fingerprint, _new_dotdirs
 
 
 def _home(tmp_path):
@@ -89,3 +89,8 @@ def test_a_data_home_the_suite_creates_out_of_nothing_is_seen(tmp_path):
     assert before == {".": None}
     root.mkdir()
     assert _diff(before, _fingerprint(root)) == ([], [], ["."])
+
+
+def test_new_dotdirs_reports_only_additions():
+    assert _new_dotdirs({".enigma_engine"}, {".enigma_engine", ".atlas"}) == {".atlas"}
+    assert _new_dotdirs({".enigma_engine", ".old"}, {".enigma_engine"}) == set()

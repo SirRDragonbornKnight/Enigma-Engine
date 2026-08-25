@@ -83,6 +83,8 @@ huggingface = [
 # clean checkout imports them fine and then dies at fetch time.
 collect = [
     "datasets>=2.14.0",
+    "requests>=2.31.0",
+    "zstandard>=0.22.0",
 ]
 # bitsandbytes backs the guarded INT4 quantization fallback in
 # core/model.py; peft left with the retired LoRA stack (2026-07-18

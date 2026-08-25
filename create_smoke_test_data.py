@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Generate smoke-test data files for all FORGE training modes.
+"""Historical corpus-provenance keeper (KEPT by tracker ruling).
+
+The Forge trainer this script drove (Basic/Solo/DPO/RLHF modes) was deleted
+2026-07-18; nothing imports this module. It stays as the record of how the
+early smoke corpora were produced.
 
 Run once:  python create_smoke_test_data.py
 

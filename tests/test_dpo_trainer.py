@@ -364,3 +364,34 @@ def test_the_final_report_runs_after_the_save():
     assert src.count("class_accuracy(train_pairs)") == 1
     assert src.index("atomic_torch_save(") < src.index("class_accuracy(train_pairs)"), \
         "the class report moved back between training and the save"
+
+
+# ---------------------------------------------------------------------------
+# --block vs the model's context window
+# ---------------------------------------------------------------------------
+
+
+def test_over_block_refused():
+    import pytest
+
+    import dpo_enigma
+
+    with pytest.raises(SystemExit) as e:
+        dpo_enigma._refuse_over_block(4096, 2048)
+    assert "max_seq_len" in str(e.value)
+
+
+def test_at_or_under_block_passes():
+    import dpo_enigma
+
+    dpo_enigma._refuse_over_block(2048, 2048)
+    dpo_enigma._refuse_over_block(1024, 2048)
+
+
+def test_block_guard_sits_on_the_load_path():
+    import inspect
+
+    import dpo_enigma
+
+    src = inspect.getsource(dpo_enigma.main)
+    assert "_refuse_over_block(" in src

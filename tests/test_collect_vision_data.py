@@ -345,3 +345,26 @@ class TestWriteJsonl:
         assert len(lines) == 2
         assert json.loads(lines[0])["text"] == "alpha"
         assert json.loads(lines[1])["image"] == "/abs/b.jpg"
+
+
+def test_write_jsonl_leaves_the_original_on_midwrite_failure(tmp_path, monkeypatch, cv_module):
+    out = tmp_path / "pairs.jsonl"
+    cv_module._write_jsonl([{"a": 1}], out)
+    original = out.read_text(encoding="utf-8")
+
+    real_dumps = json.dumps
+    calls = {"n": 0}
+
+    def exploding(obj, **kw):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("boom mid-write")
+        return real_dumps(obj, **kw)
+
+    # NOTE: cv_module's `import json` binds the shared stdlib module, so this
+    # patch is process-global for the test's duration -- safe while the suite
+    # is serial (no xdist); do not parallelize past it.
+    monkeypatch.setattr(cv_module.json, "dumps", exploding)
+    with pytest.raises(RuntimeError):
+        cv_module._write_jsonl([{"b": 2}, {"c": 3}], out)
+    assert out.read_text(encoding="utf-8") == original

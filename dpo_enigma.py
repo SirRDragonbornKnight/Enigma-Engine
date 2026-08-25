@@ -248,6 +248,17 @@ def group_split(pairs, val_frac: float, seed: int, val_cap: int = 64):
     return train_rows, val_rows
 
 
+def _refuse_over_block(block: int, max_seq_len: int) -> None:
+    """DPO on positions past the model's context window forwards cleanly (RoPE
+    table is built at 2x max_seq_len) and silently trains positions the window
+    never covers -- finetune_enigma:394 has refused this since its guard; DPO
+    gets the identical one. (Honest scope note: v2's max_seq_len is 8192 while
+    the lineage TRAINED at block 2048 -- a 4096 block passes this guard exactly
+    as it passes finetune's; the guard bounds the window, not the diet.)"""
+    if block > max_seq_len:
+        raise SystemExit(f"--block {block} > model max_seq_len {max_seq_len}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", default="data/sft/dpo_pairs.jsonl")
@@ -308,6 +319,7 @@ def main() -> None:
     print(f"tokenizer: {_vocab_file.name} (model vocab {ck['config']['vocab_size']})", flush=True)
 
     config = ForgeConfig.from_dict(ck["config"])
+    _refuse_over_block(args.block, config.max_seq_len)
     policy = Enigma(config)
     missing, unexpected = policy.load_state_dict(ck["model_state_dict"], strict=False)
     real_missing = [k for k in missing if "freqs_cis" not in k and "causal_mask" not in k]

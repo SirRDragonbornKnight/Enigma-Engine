@@ -1,6 +1,7 @@
 """finetune_enigma.py helpers — data loading, packing/mask alignment, the
 chat-row re-init, and the masked loss path through the real model class."""
 
+import inspect
 import json
 from dataclasses import replace
 
@@ -115,3 +116,30 @@ def test_masked_loss_is_finite_and_backprops(tok):
     _, loss = m(X, targets=Y, pad_token_id=ft.IGNORE)
     assert torch.isfinite(loss)
     loss.backward()
+
+
+def test_data_sha_recorded_and_checked(tmp_path):
+    p = tmp_path / "mix.jsonl"
+    p.write_text('{"messages": []}\n', encoding="utf-8")
+    sha1 = ft._data_sha256(p)
+    p.write_text('{"messages": [{"role": "user", "content": "x"}]}\n', encoding="utf-8")
+    assert ft._data_sha256(p) != sha1
+
+
+def test_resume_refuses_changed_data(tmp_path):
+    p = tmp_path / "mix.jsonl"
+    p.write_text("row1\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        ft._refuse_changed_data(p, "0" * 64)
+    assert "regenerated" in str(e.value) or "changed" in str(e.value)
+    # And the pass case: recorded sha matches the live file -> no raise.
+    ft._refuse_changed_data(p, ft._data_sha256(p))
+
+
+def test_resume_check_reads_the_checkpoints_schedule_not_the_new_one():
+    # Presence pin against the dead-guard wiring: the comparison must consume
+    # saved_sched (the checkpoint's recorded sha); wired to the fresh schedule
+    # it would compare the live file to itself and never fire.
+    src = inspect.getsource(ft.main)
+    assert 'saved_sched.get("data_sha256")' in src
+    assert '_refuse_changed_data(Path(args.data), saved_sched["data_sha256"])' in src

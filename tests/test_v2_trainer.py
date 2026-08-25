@@ -579,3 +579,40 @@ def test_the_window_restart_runs_after_the_pause_it_excuses():
     body = src[reset_at:reset_at + 400]
     assert "win_t0, win_base = time.time(), seen" in body, \
         "the restart no longer resets both the window clock and its token base"
+
+
+# ---------------------------------------------------------------------------
+# A warm start across vocab tables trains embedding rows on wrong token
+# semantics and raises nothing on its own -- the checkpoint side of the guard
+# class the corpus/header/tokenizer sides already close.
+# ---------------------------------------------------------------------------
+
+
+def test_vocab_mismatch_refused_both_directions():
+    with pytest.raises(SystemExit) as e:
+        pretrain_enigma._refuse_vocab_mismatch(16366, 4718, "models/x/model.pth")
+    assert "vocab" in str(e.value) and "models/x/model.pth" in str(e.value)
+    with pytest.raises(SystemExit):
+        pretrain_enigma._refuse_vocab_mismatch(4718, 16366, "models/x/model.pth")
+
+
+def test_vocab_match_and_padded_checkpoint_pass():
+    pretrain_enigma._refuse_vocab_mismatch(16366, 16366, "models/x/model.pth")
+    # A checkpoint may pad embedding rows above the real table -- the pinned
+    # legitimate pairs are (4784, 4718) and (16384, 16366), see
+    # tests/test_vocab_selection.py:34 and tokenizer.vocab_file_for_size.
+    pretrain_enigma._refuse_vocab_mismatch(16384, 16366, "models/x/model.pth")
+
+
+def test_vocab_just_past_slack_refused():
+    with pytest.raises(SystemExit):
+        pretrain_enigma._refuse_vocab_mismatch(16366 + 129, 16366, "models/x/model.pth")
+
+
+def test_vocab_guard_sits_on_the_ck_rebuild_path():
+    # Narrow call-site PRESENCE pin only (the dpo-pattern's allowed narrow pin,
+    # not an order pin); behavior is proven by the tests above.
+    import inspect
+
+    src = inspect.getsource(pretrain_enigma.main)
+    assert "_refuse_vocab_mismatch(" in src

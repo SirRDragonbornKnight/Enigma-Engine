@@ -29,6 +29,7 @@ training block; pass --block 1024 explicitly for a v1-era checkpoint).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -277,6 +278,25 @@ def startup_artifact_guard(args) -> None:
     refuse_existing_artifact(Path(args.out))
 
 
+def _data_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _refuse_changed_data(path: Path, recorded_sha: str) -> None:
+    live = _data_sha256(path)
+    if live != recorded_sha:
+        raise SystemExit(
+            f"--data {path} has changed since this run's schedule was recorded "
+            f"(recorded {recorded_sha[:12]}, live {live[:12]}) -- a regenerated "
+            "mix silently re-splits val and invalidates the replay cursor. "
+            "Resume with the original file, or start a fresh run."
+        )
+
+
 def main() -> None:
     args = build_parser().parse_args()
     startup_artifact_guard(args)
@@ -348,6 +368,13 @@ def main() -> None:
                     setattr(args, k, v)
             for k, (ck_v, cli_v) in diffs.items():
                 print(f"resume: schedule[{k}] = {ck_v} from checkpoint (CLI {cli_v} ignored)", flush=True)
+
+    if saved_sched and saved_sched.get("data_sha256"):
+        if args.override_schedule:
+            print("override-schedule: skipping the --data content check "
+                  "(deliberate retarget; val re-splits and the replay cursor resets)", flush=True)
+        else:
+            _refuse_changed_data(Path(args.data), saved_sched["data_sha256"])
 
     # seed AFTER the schedule restore so a checkpoint-recorded seed governs
     # torch.randperm's batch order too, not just the python-side shuffle/split
@@ -484,6 +511,7 @@ def main() -> None:
             "val_frac",
         )
     }
+    schedule["data_sha256"] = _data_sha256(Path(args.data))
 
     out = Path(args.out)
 

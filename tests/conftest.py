@@ -63,6 +63,10 @@ def _diff(
     return added, removed, changed
 
 
+def _new_dotdirs(before: set[str], after: set[str]) -> set[str]:
+    return after - before
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _the_real_data_home_is_never_touched():
     """A suite run must leave ~/.enigma_engine exactly as it found it.
@@ -79,11 +83,21 @@ def _the_real_data_home_is_never_touched():
     ONE known false positive: a live serve on this machine writing its own
     state (mute, talk-mode, voice, a generated image) mid-suite, if the user
     interacts with her while the tests run. The report names the paths, so
-    that case is recognizable rather than mysterious."""
+    that case is recognizable rather than mysterious.
+
+    The fingerprint watches ~/.enigma_engine and nothing else, so a pack-boot
+    test that escapes the hermetic seam lands in a home dot-dir the guard was
+    not looking at (a pack names its own `data_dirname`). The home's dot-dir
+    NAMES are therefore snapshotted too, and a new one fails the run. Same
+    false-positive class as above: third-party software creating a home
+    dot-dir mid-suite is one, and the message names the directory so it is
+    recognizable rather than mysterious."""
     home = Path.home() / ".enigma_engine"
     before = _fingerprint(home)
+    dots_before = {p.name for p in Path.home().glob(".*") if p.is_dir()}
     yield
     after = _fingerprint(home)
+    dots_after = {p.name for p in Path.home().glob(".*") if p.is_dir()}
 
     added, removed, changed = _diff(before, after)
     if added or removed or changed:
@@ -94,6 +108,14 @@ def _the_real_data_home_is_never_touched():
         lines.append("  (a test is missing the hermetic-state patch -- or a live"
                      " serve wrote its own state while the suite ran)")
         pytest.fail("\n".join(lines))
+
+    new_dots = _new_dotdirs(dots_before, dots_after)
+    assert not new_dots, (
+        f"the suite created home dot-dirs under {Path.home()}: "
+        f"{', '.join(sorted(new_dots))}\n"
+        "  (a pack-boot test escaped the hermetic-state seam -- or third-party"
+        " software created one while the suite ran)"
+    )
 
 
 def _atlas_asides() -> dict[str, list[str]]:

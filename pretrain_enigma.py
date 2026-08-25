@@ -481,6 +481,26 @@ def _sdpa_preflight(model, get_batch, amp_dtype, backend: str) -> None:
     print(f"sdpa preflight: backend '{backend}' vs math grad cosine {cos:.6f} -- OK", flush=True)
 
 
+# Mirrors vocab_file_for_size's padding tolerance (tokenizer.py:770 -- PAD_SLACK
+# is function-local there, so the constant is mirrored, not imported; if that
+# one ever changes, change this one in the same edit).
+_VOCAB_PAD_SLACK = 128
+
+
+def _refuse_vocab_mismatch(ck_vocab: int, corpus_vocab: int, ckpt_path: str) -> None:
+    """A warm start across vocab tables trains rows on wrong token semantics
+    and raises nothing on its own (the smaller-corpus direction is silent).
+    Sibling guards close this class everywhere else; this is the weights side.
+    A checkpoint may pad embedding rows up to _VOCAB_PAD_SLACK above the real
+    table (the selection machinery's contract) -- that window passes."""
+    if not (corpus_vocab <= ck_vocab <= corpus_vocab + _VOCAB_PAD_SLACK):
+        raise SystemExit(
+            f"checkpoint {ckpt_path} has vocab {ck_vocab} but the corpus vocab is "
+            f"{corpus_vocab} -- refusing the warm start. Pass the corpus this "
+            "checkpoint was trained on (--tokens-bin)."
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", default="base", help="ForgeConfig preset (tiny..xl)")
@@ -1081,6 +1101,7 @@ def main() -> None:
     # so its recorded schedule could win before schedule-derived values were computed.)
     if ck is not None:
         config = ForgeConfig.from_dict(ck["config"])
+        _refuse_vocab_mismatch(config.vocab_size, vocab_meta, str(ckpt_arg))
         print(f"{'init-from' if warm_start else 'resume'}: config rebuilt from checkpoint ({ckpt_arg})", flush=True)
     else:
         config = get_preset(args.size, vocab_size=vocab_size)

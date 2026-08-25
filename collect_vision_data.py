@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -65,11 +66,14 @@ def _dedup_pairs(pairs: list[dict]) -> list[dict]:
 
 
 def _write_jsonl(pairs: list[dict], path: Path) -> int:
-    """Write pairs to JSONL file, return count written."""
+    """Write pairs to JSONL, atomically: a Ctrl-C mid-write must never leave a
+    truncated file (same hardening as collect_finetuning_data, 2026-08-13)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
         for item in pairs:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
     return len(pairs)
 
 

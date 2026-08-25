@@ -490,3 +490,13 @@ def test_bare_run_entry_points_default_to_the_adopted_lineage():
             f"{name}: {flag} defaults to a lineage that is not the adopted "
             f"{ADOPTED_LINEAGE}:\n  {defaults[0].strip()}"
         )
+
+
+def test_collect_extra_carries_the_fetch_deps():
+    """requirements.txt owns requests+zstandard with in-file comments naming the
+    collector; a pip install .[collect] must not die one dependency over."""
+    import re
+    import tomllib
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    names = {re.split(r"[<>=\[; ]", d, 1)[0] for d in data["project"]["optional-dependencies"]["collect"]}
+    assert {"requests", "zstandard"} <= names

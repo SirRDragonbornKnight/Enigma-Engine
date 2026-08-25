@@ -91,7 +91,9 @@ _p.add_argument(
     default=str(ROOT / "models" / "enigma_v2_sft2" / "model.pth"),
     help="Enigma checkpoint (.pth with model_state_dict + config); default = the adopted v2 model",
 )
-_p.add_argument("--host", default="127.0.0.1")
+_p.add_argument("--host", default="127.0.0.1",
+                help="bind address (default 127.0.0.1). The API has NO auth -- "
+                     "do not expose beyond localhost.")
 _p.add_argument("--port", type=int, default=8000)
 _p.add_argument(
     "--max-context",

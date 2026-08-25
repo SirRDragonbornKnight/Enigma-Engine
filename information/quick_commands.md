@@ -13,7 +13,7 @@ Run everything from the Enigma Engine folder (venv activated).
 | `python serve_enigma.py` | Without `--model`, serves the adopted `models/enigma_v2_sft2/model.pth` (the v2 lineage, adopted 2026-08-09) |
 | `python serve_enigma.py --model models/enigma_dpo/model.pth` | Serve the v8 rollback instead |
 | `python serve_enigma.py --port 8123` | Serve on a specific port |
-| `python serve_enigma.py --host 0.0.0.0` | Listen on all interfaces |
+| `python serve_enigma.py --host 0.0.0.0` | Listen on all interfaces -- **WARNING: the API has no authentication.** Anyone on the network can read and change her memory and drive her voice. Stay on 127.0.0.1 unless you know exactly why you need this. |
 | `python serve_enigma.py --max-context 2048` | Set the context window (tokens; 2048 is the default and the v2 training block) |
 | `python serve_enigma.py --memory-dir data/memory` | Enable the memory store (JSONL + BM25) + /v1/memory API |
 | `python serve_enigma.py --voice` | Voice organ: `speak` tool + /v1/audio/speech (Kokoro-82M; run under the repo `venv/`) |

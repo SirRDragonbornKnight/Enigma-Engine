@@ -1,8 +1,9 @@
-"""Scratch: prove the from-scratch checkpoint still loads bit-identically.
+"""Scratch: prove the checkpoint's KEY SET and param count are stable across a load.
 
-Load-only (CPU, no optimizer step, no data) — NOT training. Run before and
-after any model.py / model_components.py cleanup; PARAMS and KEYHASH must not
-change and MISSING/UNEXPECTED must stay empty.
+NOT a bit-identity check -- weight values are never hashed; KEYHASH covers the
+sorted key names only. Load-only (CPU, no optimizer step, no data). Run before
+and after any model.py / model_components.py cleanup; PARAMS and KEYHASH must
+not change and MISSING/UNEXPECTED must stay empty.
 
 Usage:
     python _verify_ckpt.py                 # BOTH live lineages
