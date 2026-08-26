@@ -494,95 +494,27 @@ class TestSmolTalk2CompletionCap:
         assert len(pairs) == 1  # uncapped: long completions still collected
 
 
-# ── D-11 wiring (Pass 156i8): combined_finetune.txt for SFT consumer ────────
+# ── D-11 wiring withdrawn: combine_all emits the JSONL and nothing else ─────
 
 
-class TestCombineAllText:
-    """`combine_all` must emit a User:/Assistant: text file alongside the
-    JSONL so the existing SFT training path (which reads plain text via
-    `Path.read_text`) can consume the collected fine-tune data without
-    a JSONL-aware loader.
+def test_combine_all_emits_no_text_file(tmp_path):
+    """The D-11 .txt had no reader: `make_sft_data.py` and
+    `make_pretrain_curated.py` both open `combined_finetune.jsonl` and
+    `finetune_enigma.py` has no plain-text branch, so the second output
+    only ever cost a write. Pinned as a NEGATIVE because the old shape
+    reads like a missing feature: a well-meant re-add would resurrect a
+    file that nothing consumes."""
+    import collect_finetuning_data as cf
+    import json
 
-    Closes the consumer-side gap from D-11: collector writes JSONL, but
-    no enigma_engine code reads from data/finetune/. Emitting the canon
-    chat format on disk bridges the gap with zero training-side change.
-    """
-
-    def test_combine_all_emits_text_file_alongside_jsonl(self, tmp_path):
-        """combine_all writes both .jsonl AND .txt outputs."""
-        import collect_finetuning_data as cf
-        import json
-
-        src = tmp_path / "smoltalk2.jsonl"
-        with src.open("w", encoding="utf-8") as f:
-            f.write(json.dumps({"prompt": "What is 2+2?", "completion": "4."}) + "\n")
-            f.write(json.dumps({"prompt": "Capital of France?", "completion": "Paris."}) + "\n")
-        cf.combine_all(tmp_path)
-        text_path = tmp_path / "combined_finetune.txt"
-        assert text_path.exists(), "combine_all must emit combined_finetune.txt alongside combined_finetune.jsonl"
-        text = text_path.read_text(encoding="utf-8")
-        assert "User: What is 2+2?" in text
-        assert "Assistant: 4." in text
-        assert "User: Capital of France?" in text
-        assert "Assistant: Paris." in text
-
-    def test_text_file_uses_canonical_chat_format(self, tmp_path):
-        """Block format: 'User: <p>\\n\\nAssistant: <c>' with blank
-        line between blocks (the canonical plain-transcript chat format)."""
-        import collect_finetuning_data as cf
-        import json
-
-        src = tmp_path / "test.jsonl"
-        with src.open("w", encoding="utf-8") as f:
-            f.write(json.dumps({"prompt": "P1", "completion": "C1"}) + "\n")
-            f.write(json.dumps({"prompt": "P2", "completion": "C2"}) + "\n")
-        cf.combine_all(tmp_path)
-        text = (tmp_path / "combined_finetune.txt").read_text(encoding="utf-8")
-        assert "User: P1\n\nAssistant: C1" in text
-        assert "User: P2\n\nAssistant: C2" in text
-        # Blocks separated by blank line (so \n\n\n appears between them)
-        assert "C1\n\nUser: P2" in text
-
-    def test_text_file_skips_empty_pairs(self, tmp_path):
-        """Empty prompt or completion would produce a malformed block —
-        combine_all already dedups; the text writer must additionally
-        skip empties so the SFT path never sees 'User: \\n\\nAssistant:'."""
-        import collect_finetuning_data as cf
-        import json
-
-        src = tmp_path / "test.jsonl"
-        with src.open("w", encoding="utf-8") as f:
-            f.write(json.dumps({"prompt": "", "completion": "C"}) + "\n")
-            f.write(json.dumps({"prompt": "P", "completion": ""}) + "\n")
-            f.write(json.dumps({"prompt": "Pgood", "completion": "Cgood"}) + "\n")
-        cf.combine_all(tmp_path)
-        text = (tmp_path / "combined_finetune.txt").read_text(encoding="utf-8")
-        assert "User: \n\nAssistant: C" not in text
-        assert "User: P\n\nAssistant: " not in text
-        assert "User: Pgood\n\nAssistant: Cgood" in text
-
-    def test_warns_when_all_pairs_yield_empty_text(self, tmp_path, caplog):
-        """D-11d (Pass 156l): file-present-zero-yield must be loud.
-
-        When combine_all has collected pairs but every one had empty
-        prompt or completion, the .txt file is 0 bytes and the SFT
-        path silently trains on nothing. Mirror the file-present-zero-
-        yield WARNING pattern from Pass 156i6 anchor loader.
-        """
-        import collect_finetuning_data as cf
-        import json
-        import logging
-
-        src = tmp_path / "bad.jsonl"
-        with src.open("w", encoding="utf-8") as f:
-            f.write(json.dumps({"prompt": "", "completion": "C"}) + "\n")
-            f.write(json.dumps({"prompt": "P", "completion": ""}) + "\n")
-        with caplog.at_level(logging.WARNING, logger=cf.logger.name):
-            cf.combine_all(tmp_path)
-        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("text file is 0 bytes" in r.getMessage() for r in warnings), (
-            f"Expected WARNING about empty text yield. Got: {[r.getMessage() for r in warnings]}"
-        )
+    src = tmp_path / "smoltalk2.jsonl"
+    with src.open("w", encoding="utf-8") as f:
+        f.write(json.dumps({"prompt": "What is 2+2?", "completion": "4."}) + "\n")
+        f.write(json.dumps({"prompt": "Capital of France?", "completion": "Paris."}) + "\n")
+    cf.combine_all(tmp_path)
+    assert (tmp_path / "combined_finetune.jsonl").exists()
+    assert not (tmp_path / "combined_finetune.txt").exists(), \
+        "combine_all emitted the withdrawn combined_finetune.txt again"
 
 
 # ── Round-2 review (2026-08-13): the diet is the default, combine leaves a receipt ──

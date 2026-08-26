@@ -48,7 +48,7 @@ from enigma_engine.core.audio_encoder import (
     load_audio,
     preprocess_audio,
 )
-from enigma_engine.core.safe_save import atomic_torch_save
+from enigma_engine.core.safe_save import atomic_torch_save, refuse_existing_artifact
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "models" / "enigma_audio_distill"
@@ -210,6 +210,10 @@ def main() -> None:
     )
 
     out_dir = Path(args.out)
+    # A resume continuing its OWN directory is the sanctioned write; any other
+    # run aimed at an existing lineage would rebuild it in place.
+    if not (args.resume and Path(args.resume).resolve().parent == out_dir.resolve()):
+        refuse_existing_artifact(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     step = 0
     start_epoch = 0

@@ -42,7 +42,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from enigma_engine.core.safe_save import atomic_torch_save
+from enigma_engine.core.safe_save import atomic_torch_save, refuse_existing_artifact
 from enigma_engine.core.vision_encoder import (
     IMAGENET_MEAN,
     IMAGENET_STD,
@@ -201,6 +201,10 @@ def main() -> None:
     std = torch.tensor(IMAGENET_STD, device=device).view(1, 3, 1, 1)
 
     out_dir = Path(args.out)
+    # A resume continuing its OWN directory is the sanctioned write; any other
+    # run aimed at an existing lineage would rebuild it in place.
+    if not (args.resume and Path(args.resume).resolve().parent == out_dir.resolve()):
+        refuse_existing_artifact(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     step = 0
     start_epoch = 0

@@ -40,6 +40,7 @@ import numpy as np
 import torch
 
 from enigma_engine.core.optim import build_optimizer, get_lr
+from enigma_engine.core.safe_save import refuse_existing_artifact
 
 try:  # Windows consoles default to cp1252 and crash on unicode sample text.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -499,6 +500,22 @@ def _refuse_vocab_mismatch(ck_vocab: int, corpus_vocab: int, ckpt_path: str) -> 
             f"{corpus_vocab} -- refusing the warm start. Pass the corpus this "
             "checkpoint was trained on (--tokens-bin)."
         )
+
+
+def _out_guard_exempt(resume, sanity, eval_only, out) -> bool:
+    """The sanctioned writes: a resume continuing its OWN directory, a --sanity
+    fit probe, and --eval-only (which writes nothing at all)."""
+    if sanity or eval_only:
+        return True
+    if resume:
+        return Path(resume).resolve().parent == Path(out).resolve()
+    return False
+
+
+def _refuse_out_overwrite(resume, sanity, eval_only, out) -> None:
+    if _out_guard_exempt(resume, sanity, eval_only, out):
+        return
+    refuse_existing_artifact(Path(out))
 
 
 def main() -> None:
@@ -1184,6 +1201,7 @@ def main() -> None:
     else:
         out = ROOT / "models" / f"enigma_pretrain_{args.size}"
     if not args.eval_only:
+        _refuse_out_overwrite(args.resume, args.sanity, args.eval_only, out)
         # A scoring pass writes nothing -- creating the size-derived default
         # dir would litter models/ with empty lineage directories.
         out.mkdir(parents=True, exist_ok=True)

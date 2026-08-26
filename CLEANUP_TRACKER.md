@@ -143,7 +143,9 @@ Deleted after a three-agent adversarial audit verified every claim
   2026-07-26 pass judged them by CONTENT, not by grep):** `sweep_lr.py`
   (T2/T3 LR grid over complete short runs incl. decay tail),
   `bench_generate.py` (decode ms/token + host-sync counter),
-  `extend_length.ps1` (Phase-4 block-2048 launcher, dormant),
+  `extend_length.ps1` (Phase-4 block-2048 launcher — DELETED 2026-08-26:
+  dead v1-era recipe, `--init-from models/enigma_pretrain_large`, while v2
+  trains natively at 2048; delegated call, git history preserves it),
   `power_guardian.ps1` (UPS watchdog, manually detached).
 - **Corpus provenance (keep):** `collect_pretraining_data.py`,
   `collect_finetuning_data.py`, `collect_distill_data.py`,
@@ -166,7 +168,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1461 passed on ENIGMAPC (2026-08-25, paired with the review-fixes Wave B commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1467 passed on ENIGMAPC (2026-08-26, paired with the multiturn-arc Wave 1 commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -339,6 +341,15 @@ Deleted after a three-agent adversarial audit verified every claim
    capped reader, the image and audio endpoints, speech input and the chat
    text/parts split), and direct tests for the two load-path modules that had
    none (`test_model_registry.py` +11, `test_hardware_detection.py` +13).
+   **1461 -> 1467 is the multiturn-arc Wave 1** -- the delegated open-pile
+   guards: the pretrain `--out` existing-lineage refusal
+   (`test_v2_trainer.py` +3), output guards on all four encoder writers
+   (`tests/test_encoder_out_guards.py`, new file, +4), the comparator's
+   zero-gated-run refusal and the "everybody" non-value stem
+   (`test_eval_grading.py` +2), and the dead `combined_finetune.txt` call
+   path's removal (`test_collect_finetuning_data.py` net -3: the dead-path
+   assertions went, one adversarial-negative asserting the `.txt` is NOT
+   written came in).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

@@ -117,7 +117,8 @@ def _content_terms(text: str) -> set[str]:
 # "4 years" replaces "3 years", but "175 pounds" and "180 lbs" COEXIST and
 # the stale one is outranked at retrieval, never destroyed. That narrows the
 # 2026-07-24 measures-replace ruling in the direction its own tiebreak
-# prefers; the width is queued for the user's word (audit 2026-08-14).
+# prefers; the width stands as-implemented (blessed 2026-08-26;
+# PHASE7_GATE item 6).
 _FACT = re.compile(
     r"^\s*(?:the\s+)?(?:user's|users|user|my)\s+(?P<attr>[^.]{1,60}?)"
     r"\s+(?:is|are|was|were)\s+(?P<val>[^.]+?)\s*\.?\s*$",

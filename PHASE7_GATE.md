@@ -59,12 +59,15 @@ v2 238M-class, vocab 16,366, block 2048 (Gate D, 2026-08-09).
    reach the same place, so this is no longer the first thing to attempt.
 6. **Plain-value corrections accumulate instead of replacing (RULED
    2026-07-24: coexist by default).** Supersede keys on subject + value-kind;
-   namings (by value head or by the `name` attribute), measures, and the
-   single-valued verb relations replace, and everything else COEXISTS —
-   `My car is red.` + `My car is electric.` are two facts, and the ruling
-   chose keeping both over guessing which one a shared coarse kind was
-   "correcting" (a wrong supersede destroys a fact; a kept duplicate is
-   merely outranked at retrieval). The accepted residual: a corrected mood
+   namings (by value head or by the `name` attribute), unit-matched measures
+   (the value's non-digit terms join the key: `4 years` replaces `3 years`,
+   while `175 pounds` and `180 lbs` COEXIST, the stale one outranked at
+   retrieval and never destroyed — width blessed as-implemented 2026-08-26,
+   delegated), and the single-valued verb relations replace, and everything
+   else COEXISTS — `My car is red.` + `My car is electric.` are two facts,
+   and the ruling chose keeping both over guessing which one a shared coarse
+   kind was "correcting" (a wrong supersede destroys a fact; a kept duplicate
+   is merely outranked at retrieval). The accepted residual: a corrected mood
    or colour leaves the stale value in the store (`mood is happy` +
    `mood is sad` both retrievable). The lexical fallback still runs at
    `_SUPERSEDE_MIN = 0.75` only for texts the key parser declines. Both

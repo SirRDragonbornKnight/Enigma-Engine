@@ -102,9 +102,10 @@ def _write_jsonl(pairs: list[dict], path: Path) -> int:
 def _write_combined_text(pairs: list[dict], path: Path) -> int:
     """Write pairs as canonical 'User: ...\\n\\nAssistant: ...' blocks.
 
-    Uses the canonical plain-transcript format so the SFT trainer (which reads
-    plain text via `Path.read_text`) can consume the collected fine-tune data
-    without a JSONL-aware loader. Closes the D-11 consumer-side gap.
+    The plain-transcript dual-emit format for `collect_search_data.py`, its
+    one remaining caller. No training path reads the text: `make_sft_data.py`
+    and `make_pretrain_curated.py` load `combined_finetune.jsonl`, and
+    `finetune_enigma.py` has no plain-text branch at all.
 
     Empty prompts or completions are skipped — a malformed block like
     'User: \\n\\nAssistant: foo' would teach the model that empty input
@@ -810,26 +811,8 @@ def combine_all(output_dir: Path) -> Path:
     (output_dir / "combined_finetune.manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8")
 
-    # Also emit canonical-chat-format text so the SFT training path
-    # (plain-text reader) can consume the collected fine-tune data with
-    # zero training-side change.
-    text_path = combined_path.with_suffix(".txt")
-    text_count = _write_combined_text(all_pairs, text_path)
-
     size_mb = combined_path.stat().st_size / (1024 * 1024)
-    text_size_mb = text_path.stat().st_size / (1024 * 1024)
     logger.info(f"Combined: {len(all_pairs):,} pairs, {size_mb:.1f} MB -> {combined_path}")
-    # File-present-zero-yield must be loud, not silent: if every pair had
-    # an empty prompt/completion the .txt is 0 bytes and the SFT path
-    # would silently train on nothing.
-    if text_count == 0 and len(all_pairs) > 0:
-        logger.warning(
-            "All %d combined pairs had empty prompt or completion -- text file is 0 bytes (%s). Check fetcher output.",
-            len(all_pairs),
-            text_path,
-        )
-    else:
-        logger.info(f"Combined text: {text_count:,} blocks, {text_size_mb:.1f} MB -> {text_path}")
     return combined_path
 
 

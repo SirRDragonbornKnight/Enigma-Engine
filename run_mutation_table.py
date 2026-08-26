@@ -40,6 +40,22 @@ ENTRIES = [
      b"if total > cap:",
      b"if total >= cap * 10**6:",
      "tests/test_serve_enigma.py::test_capped_reader_refuses_oversize"),
+    # The next two killing tests are SOURCE-GREP presence pins (inspect.getsource
+    # then `needle in src`), so the usual `if False and ...` mutant leaves the
+    # needle sitting in the source and the pin stays GREEN. Their mutants must
+    # REMOVE the call text outright; the leading indent is part of the snippet.
+    ("pretrain_enigma.py",
+     b"        _refuse_out_overwrite(args.resume, args.sanity, args.eval_only, out)",
+     b"        pass",
+     "tests/test_v2_trainer.py::test_pretrain_out_guard_sits_on_the_resolution_path"),
+    ("align_vision.py",
+     b'        refuse_existing_patterns(Path(args.out), ("*.pt",))',
+     b"        pass",
+     "tests/test_encoder_out_guards.py::test_all_four_writers_carry_a_guard"),
+    ("eval_behavior.py",
+     b"    if overall_n == 0:",
+     b"    if False and overall_n == 0:",
+     "tests/test_eval_grading.py::test_comparator_refuses_a_zero_gated_run"),
 ]
 
 

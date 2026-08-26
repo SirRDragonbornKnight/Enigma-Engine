@@ -308,9 +308,10 @@ def test_detached_launchers_survive_cmd_quote_stripping():
     detached launcher building an $inner line, not just the one that broke:
     extend_length.ps1's line survived on a technicality (exactly two quote
     marks lands in cmd's preserve-quotes rule) and was one quoted argument
-    away from the identical silent failure."""
+    away from the identical silent failure. That launcher was deleted
+    2026-08-26; the loop stays a loop for whatever detaches next."""
     checked = 0
-    for name in ("resume_training.ps1", "extend_length.ps1"):
+    for name in ("resume_training.ps1",):
         launcher = REPO_ROOT / name
         assert launcher.exists(), f"{name} is a documented detached launcher"
         text = launcher.read_text(encoding="utf-8")
@@ -329,7 +330,7 @@ def test_detached_launchers_survive_cmd_quote_stripping():
                 "sees an unterminated quoted line:\n  " + line
             )
             checked += 1
-    assert checked >= 2, "expected at least one $inner line per launcher"
+    assert checked >= 1, "expected at least one $inner line per launcher"
 
 
 def test_packed_file_writers_join_records_with_the_separator():

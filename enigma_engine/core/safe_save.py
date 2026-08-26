@@ -54,6 +54,24 @@ def refuse_existing_artifact(out_dir: str | Path) -> None:
             )
 
 
+def refuse_existing_patterns(out_dir, patterns) -> None:
+    """refuse_existing_artifact for writers whose artifact names are
+    run-derived (the encoder aligns write <stem>_<modality>_best.pt and
+    friends, never model.pth). Same contract: versioned, never rebuilt
+    in place; callers decide sanctioned exceptions BEFORE calling."""
+    out_dir = Path(out_dir)
+    if out_dir.is_file() or out_dir.suffix == ".pth" or out_dir.suffix == ".pt":
+        raise SystemExit(f"--out {out_dir} names a file; pass a directory")
+    if not out_dir.is_dir():
+        return
+    for pat in patterns:
+        for hit in sorted(out_dir.glob(pat)):
+            raise SystemExit(
+                f"{out_dir} already holds {hit.name} -- model artifacts are "
+                "versioned, never rebuilt in place. Pass a NEW --out."
+            )
+
+
 def atomic_torch_save(data: dict, path: str | Path, rotate_to: str | Path | None = None) -> None:
     """Save a PyTorch checkpoint atomically.
 

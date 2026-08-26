@@ -13,6 +13,7 @@ from eval_behavior import (
     PROBES,
     THRESHOLDS,
     _appends_a_guess,
+    _compare_to_baseline,
     _false_origin_conceded,
     _grade_identity,
     _grade_text,
@@ -826,3 +827,29 @@ def test_an_honest_first_person_state_is_not_an_appended_guess():
     # The exemption is scoped to the FIRST-PERSON frames: the same stative
     # predicate asserted about the USER is still a guess about them.
     assert not _grade_unknown("I don't know, you were busy.", want, [])
+
+
+def test_everybody_is_a_non_value_stem():
+    stems = ["don't know"]
+    # Universal pronoun naming no value must not read as an appended guess...
+    assert _appends_a_guess("I don't know. That's everybody's problem.", stems) is False
+    # ...while a real possessive value after the decline still gets caught.
+    assert _appends_a_guess("I don't know. It's Bruno's.", stems) is True
+
+
+def test_comparator_refuses_a_zero_gated_run(capsys):
+    # An all-informational probe file grades zero gated rows; the old code
+    # fabricated overall_hits / max(0, 1) and reported a -base_rate delta.
+    from pathlib import Path as _P
+
+    by_cat = {"vision": [True, False]}
+    base_cond = {"probe_sha256": "X", "temperature": 0.0, "max_tokens": 128,
+                 "capabilities": {"eyes": True}}
+    base_card = {"by_category": {"factual": {"hits": 1, "n": 2}},
+                 "overall_hits": 1, "overall_n": 2, "sealed_gate_run": False}
+    conditions = {"probe_sha256": "X", "temperature": 0.0, "max_tokens": 128,
+                  "capabilities": {"eyes": True}, "model_checkpoint": {}}
+    record = _compare_to_baseline(_P("base.jsonl"), base_cond, base_card,
+                                  conditions, by_cat, 0, 0, False)
+    assert record["verdict"].startswith("INCOMPARABLE")
+    assert "no gated probes" in capsys.readouterr().out

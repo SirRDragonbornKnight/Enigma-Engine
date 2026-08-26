@@ -642,7 +642,7 @@ _NON_VALUE = frozenset({
     # frame rule never reaches them), so only the PERIOD spellings failed --
     # and only once the possessive stem lookup made the stem reachable at all
     # (adjacent gap, closed 2026-08-22). "It is Bruno's." is still a value.
-    "anyone", "anybody", "everyone",
+    "anyone", "anybody", "everyone", "everybody",
 })
 # FRAME-BOUNDARY COLLATERAL, split by PREDICATE (measured 2026-08-22). Widening
 # the frame boundary to the same-sentence joins dragged in a family that is not
@@ -1461,6 +1461,10 @@ def _compare_to_baseline(baseline: Path, base_cond: dict, base_card: dict,
               "restart; this compares a model against itself")
     base_hits = int(base_card.get("overall_hits", 0))
     base_n = int(base_card.get("overall_n", 0))
+    if overall_n == 0:
+        print("  INCOMPARABLE: this run graded no gated probes -- nothing to compare")
+        record["verdict"] = "INCOMPARABLE (no gated probes this run)"
+        return record
     delta = overall_hits / max(overall_n, 1) - base_hits / base_n
     beats = delta > 0
     print(f"  aggregate {base_hits}/{base_n} -> {overall_hits}/{overall_n} ({delta:+.1%})")

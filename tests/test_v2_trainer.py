@@ -616,3 +616,37 @@ def test_vocab_guard_sits_on_the_ck_rebuild_path():
 
     src = inspect.getsource(pretrain_enigma.main)
     assert "_refuse_vocab_mismatch(" in src
+
+
+def test_pretrain_out_guard_exemptions():
+    from pathlib import Path
+
+    import pretrain_enigma
+
+    assert pretrain_enigma._out_guard_exempt(
+        "models/x/latest.pth", False, False, Path("models/x")) is True
+    assert pretrain_enigma._out_guard_exempt(
+        "models/x/latest.pth", False, False, Path("models/y")) is False
+    assert pretrain_enigma._out_guard_exempt(None, True, False, Path("models/y")) is True
+    assert pretrain_enigma._out_guard_exempt(None, False, True, Path("models/y")) is True
+    assert pretrain_enigma._out_guard_exempt(None, False, False, Path("models/y")) is False
+
+
+def test_pretrain_out_guard_refuses_existing_lineage(tmp_path):
+    import pretrain_enigma
+
+    victim = tmp_path / "lineage"
+    victim.mkdir()
+    (victim / "model.pth").write_bytes(b"x")
+    with pytest.raises(SystemExit) as e:
+        pretrain_enigma._refuse_out_overwrite(None, False, False, victim)
+    assert "model.pth" in str(e.value)
+
+
+def test_pretrain_out_guard_sits_on_the_resolution_path():
+    import inspect
+
+    import pretrain_enigma
+
+    src = inspect.getsource(pretrain_enigma.main)
+    assert "_refuse_out_overwrite(" in src

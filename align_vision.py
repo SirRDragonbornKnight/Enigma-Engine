@@ -38,6 +38,7 @@ import torch
 
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig
+from enigma_engine.core.safe_save import refuse_existing_patterns
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 from enigma_engine.core.vision_encoder import VisionEncoder, VisionEncoderConfig
 from enigma_engine.training.encoder_align import Trainer, TrainingConfig
@@ -136,6 +137,11 @@ def main() -> None:
     val_data = pairs[len(pairs) - n_val :]
     train_data = pairs[: len(pairs) - n_val]
     print(f"align data: {len(train_data)} train / {len(val_data)} val pairs", flush=True)
+
+    # A resume continuing its OWN directory is the sanctioned write; any other
+    # run aimed at a dir holding align checkpoints would rebuild it in place.
+    if not (args.resume and Path(args.resume).resolve().parent == Path(args.out).resolve()):
+        refuse_existing_patterns(Path(args.out), ("*.pt",))
 
     tcfg = TrainingConfig(
         epochs=args.epochs,
