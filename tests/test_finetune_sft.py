@@ -136,6 +136,62 @@ def test_resume_refuses_changed_data(tmp_path):
     ft._refuse_changed_data(p, ft._data_sha256(p))
 
 
+def test_accum_scales_weight_by_tokens():
+    """Dividing each micro-batch loss by grad_accum averages MEANS, which gives
+    a short batch the same pull as a full one. The step is supposed to be a
+    per-TOKEN mean, so each draw is weighted by its share of the step's
+    supervised tokens (D-6, measured 9.23% adversarial skew)."""
+    from finetune_enigma import _accum_scales
+
+    assert _accum_scales([100, 100, 100, 100]) == [0.25, 0.25, 0.25, 0.25]
+    s = _accum_scales([1000, 10])
+    assert abs(s[0] - 1000 / 1010) < 1e-12 and abs(s[1] - 10 / 1010) < 1e-12
+    # A step whose every draw is pure padding would divide by zero otherwise;
+    # its gradient is zero either way.
+    assert _accum_scales([0, 0]) == [0.0, 0.0]
+
+
+def test_train_loop_uses_token_scales():
+    src = inspect.getsource(ft)
+    assert "_accum_scales(" in src
+    assert "loss / args.grad_accum" not in src
+
+
+def test_builtin_block_meta_stamp(tmp_path):
+    """What a checkpoint records about its corpus is READ from the builder's
+    own manifest, never guessed: no manifest (or no key) leaves the key off, so
+    a lineage never claims a property nobody measured."""
+    data = tmp_path / "mix.jsonl"
+    data.write_text('{"messages": []}\n', encoding="utf-8")
+
+    assert ft._data_meta(data) == {}, "no manifest -> no claim"
+
+    manifest = tmp_path / "mix.manifest.json"
+    manifest.write_text(json.dumps({"records": 1}), encoding="utf-8")
+    assert ft._data_meta(data) == {}, "manifest without the key -> no claim"
+
+    manifest.write_text(json.dumps({"records": 1, "builtin_block": True}), encoding="utf-8")
+    assert ft._data_meta(data)["builtin_block"] is True
+
+    manifest.write_text(json.dumps({"builtin_block": False}), encoding="utf-8")
+    assert ft._data_meta(data)["builtin_block"] is False
+
+    # A corrupt manifest must not take a training run down over a receipt --
+    # and "corrupt" includes bytes that are not UTF-8 at all. read_text raises
+    # UnicodeDecodeError there, which is a ValueError and NOT a
+    # JSONDecodeError, so a net catching only the latter let it escape and kill
+    # the trainer at startup against this function's own contract.
+    manifest.write_text("{not json", encoding="utf-8")
+    assert ft._data_meta(data) == {}
+    manifest.write_bytes(b'{"builtin_block": "\xff\xfe not utf-8"}')
+    assert ft._data_meta(data) == {}
+
+    # ...and the stamp lands ONCE, after both meta branches: the chat-format
+    # re-init branch REPLACES meta wholesale, so a stamp written inside either
+    # branch alone is lost on the other path.
+    assert inspect.getsource(ft.main).count("_data_meta(") == 1
+
+
 def test_resume_check_reads_the_checkpoints_schedule_not_the_new_one():
     # Presence pin against the dead-guard wiring: the comparison must consume
     # saved_sched (the checkpoint's recorded sha); wired to the fresh schedule

@@ -402,6 +402,9 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
         "run_pretrain_t3.ps1": ("$argString",),
         "run_t4_facts_sft.ps1": ("$factsArgs", "$sftArgs"),
         "run_t5_sft2_dpo.ps1": ("$sftArgs", "$dpoArgs"),
+        # One step, so one argument variable -- the detach recipe is the same
+        # either way, which is the whole point of pinning it per launcher.
+        "run_sft4.ps1": ("$sftArgs",),
     }
     for name, arg_vars in launchers.items():
         launcher = REPO_ROOT / name

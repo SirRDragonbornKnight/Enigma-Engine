@@ -58,6 +58,43 @@ ROOT = Path(__file__).resolve().parent
 IGNORE = -100  # ignore_index for the masked positions
 
 
+def _accum_scales(token_counts: list[int]) -> list[float]:
+    """Per-micro-batch loss weights for ONE optimizer step.
+
+    Dividing each micro-batch loss by grad_accum averages MEANS, which weights
+    a short draw exactly like a full one -- a step holding 1000 and 10
+    supervised tokens gave the 10-token draw half the pull (measured 9.23%
+    skew on an adversarial mix). Weighting each draw by its share of the step's
+    supervised tokens makes the step the per-TOKEN mean it is documented to be.
+
+    A step whose every draw is pure padding scales to zero instead of dividing
+    by zero; its gradient is zero either way."""
+    total = sum(token_counts)
+    if total <= 0:
+        return [0.0 for _ in token_counts]
+    return [n / total for n in token_counts]
+
+
+def _data_meta(data: Path) -> dict:
+    """What the checkpoint records about the artifact it trained on.
+
+    Read from the builder's own sibling manifest, never inferred: a missing
+    manifest, an unreadable one, or one without the key leaves the key ABSENT,
+    so a lineage never claims a corpus property nobody measured."""
+    manifest = Path(data).with_name("mix.manifest.json")
+    try:
+        built = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError, not JSONDecodeError: bytes that are not UTF-8 raise
+        # UnicodeDecodeError out of read_text, which is a ValueError and NOT a
+        # JSONDecodeError -- it escaped the narrower net and killed the trainer
+        # at startup, over a receipt this function promises to do without.
+        return {}
+    if not isinstance(built, dict) or "builtin_block" not in built:
+        return {}
+    return {"builtin_block": built["builtin_block"]}
+
+
 def load_examples(path: Path, tokenizer, block: int, manifest: Path = LOCKED_MANIFEST):
     """JSONL -> list of (ids, mask) conversations that fit in one block."""
     from enigma_engine.core.chat_format import render_training
@@ -452,6 +489,9 @@ def main() -> None:
         meta = {"chat_format": CHAT_FORMAT_NAME, "init_from": str(src), "base_step": int(ck.get("step", 0))}
         if guard_verdict:
             meta["leak_guard"] = _guard_meta(guard_verdict)
+    # AFTER both branches: the re-init branch REPLACES meta wholesale, so a
+    # stamp written inside either one is lost on the other path.
+    meta.update(_data_meta(Path(args.data)))
 
     optim = build_optimizer(raw_model, args.optimizer, args.lr, args.weight_decay)
     start_step = 0
@@ -600,16 +640,26 @@ def main() -> None:
             g["lr"] = lr
         optim.zero_grad(set_to_none=True)
         loss_acc = 0.0
+        # Draw the whole step FIRST: the weights are shares of the step's
+        # token total, so they cannot be known until every draw is. The
+        # randperm calls and cursor arithmetic sit exactly where the per-draw
+        # loop had them, so the sequence of batches -- and the RNG stream that
+        # produces it -- is the one this loop has always used.
+        draws = []
         for _ in range(args.grad_accum):
             if cursor + args.micro_batch > X.shape[0]:
                 perm = torch.randperm(X.shape[0])
                 cursor = 0
-            idx = perm[cursor : cursor + args.micro_batch]
+            draws.append(perm[cursor : cursor + args.micro_batch])
             cursor += args.micro_batch
+        # Counted on the CPU side of the same slice batch_at moves: identical
+        # values, without paying a second host-to-device copy per draw.
+        scales = _accum_scales([int((Y[idx] != IGNORE).sum()) for idx in draws])
+        for k, idx in enumerate(draws):
             bx, by = batch_at(X, Y, idx)
             with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=(device == "cuda")):
                 _, loss = model(bx, targets=by, pad_token_id=IGNORE)
-                loss = loss / args.grad_accum
+                loss = loss * scales[k]      # per-token step mean, not mean-of-means
             scaler.scale(loss).backward()
             loss_acc += loss.item()
         if use_scaler:

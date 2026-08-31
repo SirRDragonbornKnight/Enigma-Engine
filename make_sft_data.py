@@ -749,8 +749,12 @@ def gen_math_examples(seed: int = 99) -> list[dict]:
 
     # Fix arc 2026-08-08 (gate audit finding 2): squared/power/percent-of had
     # zero flat surfaces either -- the sealed misses were all three shapes.
-    sq_phr = ["What is {x} squared?", "What's {x} squared?", "{x} squared is what?",
-              "Square {x} for me."]
+    # Two surfaces, both measured clean. The other two kept the operand next
+    # to "squared" and therefore reproduced a sealed probe's content words in
+    # order, so the quotation tier fired and the record was authored, screened
+    # out and never trained. Measured after the swap: 1067 generated, 1067
+    # trained, 0 held.
+    sq_phr = ["What's the square of {x}?", "Square {x} for me."]
     # Same one-word collapse as the times table: three of these four surfaces
     # reduced to the lone word "power", and 11 of the 16 records died on it.
     # The fourth takes {yth}, the rendered ordinal -- "{y}th" spelled "2th" and
@@ -1391,6 +1395,619 @@ def gen_chat_multiturn_examples(seed: int = 63) -> list[dict]:
                 msgs.append({"role": "user", "content": user})
                 msgs.append({"role": "assistant", "content": assistant})
             out.append({"messages": msgs, "category": "chat_multiturn"})
+    rng.shuffle(out)
+    return out
+
+
+# The entity each conversation plants at its FIRST user turn and refers to
+# obliquely at its last -- "him", "her", "it", never the name again.
+# (entity, plant clause, her reply, the oblique ask, the answer).
+#
+# The entity string appears in the clause and NOWHERE else on the prompt side:
+# not in another row's clause, not in that row's ask, not in a filler turn.
+# That is what makes "planted once, never restated" a decidable property, and
+# tests/test_sft_regen_shapes.py pins it per row -- a row that names itself
+# again teaches a question answerable without the history, which is the one
+# thing this corpus is for.
+#
+# NEAR-NEIGHBORS of the sealed context probes' SHAPE, never their content: an
+# authored collision is held out of training and the hole it was written to
+# fill stays open (the lesson _BUILTIN_USE carries above).
+N_CONTEXT_BASES = 40  # PROPOSAL
+_CONTEXT_ENTITIES = [
+    ("Barnaby", "my tortoise Barnaby has learned to shove his water dish across the tiles",
+     "A determined little engine. Tortoises rearrange.",
+     "Should I bolt it down, or let him carry on?",
+     "Let him carry on — pushing that dish about is the most exercise Barnaby gets indoors."),
+    ("ukulele", "I picked up a ukulele at a car boot sale for eight pounds",
+     "Cheap way into an instrument. Does it hold a tune?",
+     "How many strings am I going to have to replace?",
+     "Four. A standard ukulele runs G, C, E and A, and a fresh set costs less than the instrument did."),
+    ("Marisol", "my sister Marisol has started night classes in welding",
+     "Good trade to be in. Sparks and a steady hand.",
+     "Do you think she needs her own helmet?",
+     "The class will lend one at first, but Marisol will want a hood that fits her own face before long."),
+    ("kiln", "I finally got a second-hand kiln into the back shed",
+     "That changes what you can make. Electric or gas?",
+     "Will the shed wiring cope with it?",
+     "Only on a circuit of its own. Get an electrician in before the first firing, not after."),
+    ("Halvard", "my uncle Halvard restores wooden dinghies in his retirement",
+     "A slow craft, and a satisfying one.",
+     "Do you reckon he would teach me?",
+     "Ask him outright. People who varnish hulls for fun usually want an apprentice, and Halvard has the hours."),
+    ("beehive", "I put a beehive at the far end of the allotment",
+     "Bold. Everyone nearby will get better fruit out of it.",
+     "How far back from the path should it sit?",
+     "Ten metres, facing away from the walkway — bees leave the entrance in a straight line and climb slowly."),
+    ("Ottoline", "my greyhound Ottoline refuses to walk past the postbox",
+     "Dogs pick strange enemies.",
+     "Any idea how to get her past it?",
+     "Cross early and pay her level with it. Ottoline needs the thing to become boring, not to be beaten."),
+    ("harmonica", "I have been teaching myself harmonica on the train",
+     "Commuter's instrument. Portable and forgiving.",
+     "Are the other passengers going to hate me?",
+     "Play it under your breath and they will survive. It is loud for its size, though."),
+    ("Ferdinand", "my landlord Ferdinand is finally replacing the boiler",
+     "About time, if it is the one you have been nursing.",
+     "Should I be around when they come?",
+     "Yes. You want to watch where the controls end up, and Ferdinand's plumber will not explain it twice."),
+    ("telescope", "I saved up and bought a telescope",
+     "Now you need a dark night and some patience.",
+     "What should I point it at first?",
+     "The moon at half phase. The shadows along the terminator are the best thing it will ever show you."),
+    ("Wilhelmina", "my hen Wilhelmina has stopped laying",
+     "Hens do that. Season, age, or a fright.",
+     "Is that something to worry about?",
+     "Not yet. Look for mites and count her years — Wilhelmina may simply be past her best."),
+    ("bonsai", "I was given a bonsai for my birthday",
+     "A plant that asks something of you every week, forever.",
+     "How often does it want watering?",
+     "Check it daily and water when the surface dries. It lives in a thimble of soil."),
+    ("Anselm", "my flatmate Anselm has taken up the trumpet",
+     "Bold choice for shared walls.",
+     "How do I ask him to practise earlier in the day?",
+     "Give him the hours that work rather than telling him he is loud. Anselm will take a schedule better than a complaint."),
+    ("pond", "I dug a small pond at the bottom of the garden",
+     "Frogs will find it faster than you expect.",
+     "Do I need to put fish in it?",
+     "No, and it will be livelier without them. Fish eat the larvae everything else comes for."),
+    ("Perpetua", "my neighbour's cat Perpetua has started sleeping on my car",
+     "A warm bonnet is a cat's whole religion.",
+     "Will she scratch the paint?",
+     "Only leaping off in a hurry. Perpetua puts her claws out on landing, not on lounging."),
+    ("greenhouse", "I am putting up a greenhouse before the cold sets in",
+     "Good timing. Glass or polycarbonate?",
+     "Which way should it face?",
+     "Long side toward the south if the plot allows — you want the low winter sun down its length."),
+    ("Corentin", "my colleague Corentin is transferring to the Turin office",
+     "A good posting, if he likes the food.",
+     "Do you think I should ask for his desk?",
+     "Ask early, and ask the manager. Corentin will not be the one deciding who gets it."),
+    ("printer", "the office printer has started eating every third page",
+     "Paper path or the rollers, nearly always.",
+     "Is that worth fixing myself?",
+     "Open the back and wipe the rollers with a damp cloth. That clears it more often than a callout does."),
+    ("Ignatius", "my grandfather Ignatius kept a weather diary for fifty years",
+     "That is a real record. Handwritten?",
+     "Do you think anyone would want it?",
+     "A local archive or a climate group would take it gladly. Ignatius wrote down what nobody else in that valley did."),
+    ("marathon", "I have signed up for a half marathon in the spring",
+     "That is a real commitment. How far can you go now?",
+     "Is sixteen weeks enough to be ready?",
+     "Enough if you already run. Sixteen weeks builds on a three-mile base, not on nothing."),
+    ("Solveig", "my dentist Solveig says I grind my teeth at night",
+     "The jaw tells on you. Sore in the mornings?",
+     "Would a guard actually help?",
+     "It saves the enamel, which is the part that does not grow back. Solveig can mould one that fits better than a shop version."),
+    ("Bramwell", "my brother-in-law Bramwell judges vegetable shows",
+     "Serious business, those. Onions and marrows and long straight things.",
+     "Do you think he would look at my leeks?",
+     "He would love to, and Bramwell will also tell you exactly why they lose."),
+    ("typewriter", "I inherited a typewriter that still has its ribbon",
+     "Those dry out. Does it strike clean?",
+     "Can you even buy them any more?",
+     "You can. Spools are still made for the common carriages, and the ink re-inks."),
+    ("Tamsin", "my daughter Tamsin has decided she wants to learn Norwegian",
+     "An unusual pick. Any reason behind it?",
+     "Where would she even start?",
+     "A grammar, a podcast, twenty minutes a day. Tamsin will get further on routine than on a course."),
+    ("skylight", "I am thinking about putting a skylight in the loft",
+     "That will change how the whole room reads.",
+     "Which side of the roof should it go?",
+     "North for steady light, south for heat. On the south side it will cook the room in July."),
+    ("Osric", "my old teacher Osric got in touch after twenty years",
+     "That is a good kind of surprise.",
+     "What do you even say back?",
+     "The true thing: that you remember the class and what it did for you. Osric wrote first, so he already wants to hear it."),
+    ("kombucha", "I started brewing kombucha in the airing cupboard",
+     "Warm and dark. It will be very happy there.",
+     "How do I know when it is done?",
+     "Taste it from day seven. In a warm cupboard it turns from sweet to vinegary faster than the recipe says."),
+    ("Fennimore", "my rabbit Fennimore has chewed through a lamp cable",
+     "Dangerous and expensive. Rabbits never learn that one.",
+     "How do I stop it happening again?",
+     "Cable covers, and a box of willow to chew instead. Fennimore needs a better target, not a telling-off."),
+    ("compost", "I built a compost bin out of old pallets",
+     "Free and effective. Three sides or four?",
+     "Does it need turning?",
+     "Turn it monthly and it will be ready by spring. Left alone it simply takes a year longer."),
+    ("Gwendolyn", "my mother-in-law Gwendolyn is coming to stay for a fortnight",
+     "A fortnight is a long visit. Are you braced?",
+     "Should I plan something for every day?",
+     "Plan three things and leave the rest open. Gwendolyn will enjoy the gaps more than a schedule."),
+    ("loom", "I bought a second-hand loom off a weaver who was retiring",
+     "Those come with decades of habit built into them.",
+     "Will I be able to work out how it was set up?",
+     "Photograph the threading before you touch anything. That setup is the hard part to reconstruct."),
+    ("Ptolemy", "my cat Ptolemy has decided the bath is his bed",
+     "Cool porcelain. Cats are heat engineers.",
+     "Is that a sign he is too warm?",
+     "Usually. Give Ptolemy a tiled corner of his own and he may leave your bath alone."),
+    ("chimney", "I had the chimney swept for the first time in years",
+     "Overdue, then. Much come down?",
+     "Does it need doing every year?",
+     "Yearly if you burn wood, less if it is mostly for show. Soot is what catches."),
+    ("Aurelio", "my barber Aurelio is closing the shop in March",
+     "End of an era, if he has been cutting your hair a while.",
+     "Should I tip extra on the last visit?",
+     "Do. Aurelio will remember that far longer than years of exact change."),
+    ("hydrangea", "I moved a hydrangea to the shady side of the house",
+     "They forgive that better than most shrubs.",
+     "Will the flowers change colour there?",
+     "Colour follows the soil, not the shade. Acid ground turns them blue whatever the light does."),
+    ("Thaddeus", "my son Thaddeus wants to build a computer from parts",
+     "A good project. Budget or performance?",
+     "Is that something he can do alone?",
+     "Mostly. Thaddeus will want a hand with the power supply cables and nothing else."),
+    ("wormery", "I set up a wormery under the kitchen sink",
+     "Quiet livestock. No smell at all if the balance is right.",
+     "What should I never put in it?",
+     "Citrus, onion and anything cooked. Those sour it faster than overfeeding does."),
+    ("Cassia", "my trainer Cassia wants me to add a rest day",
+     "Rest is the session people skip.",
+     "Should I take her advice?",
+     "Take it. Cassia can see what the last four weeks did to you better than your legs can."),
+    ("lathe", "I finally cleared enough bench for a wood lathe",
+     "That is a whole new class of mistake now available to you.",
+     "What should I turn first?",
+     "A rolling pin. One straight cut, and it teaches you what end grain does under a chisel."),
+    ("Roderick", "my neighbour Roderick has put up a very tall fence",
+     "Tall fences make for interesting conversations.",
+     "Do I need to say anything about it?",
+     "Only if it takes your light. Roderick may not have checked the height rules at all."),
+]
+
+# The frame the plant arrives in, so one entity is not always introduced by
+# the same sentence. The clause reads on from the lead-in and therefore opens
+# lower-case.
+_CONTEXT_PLANTS = [
+    "So {c}.",
+    "By the way, {c}.",
+    "Something small: {c}.",
+    "I should mention {c}.",
+]
+
+# Topic-neutral turns that sit BETWEEN the plant and the reference: the
+# distance is the difficulty, and a filler that carried an entity of its own
+# would give the last turn a nearer answer than the one it is meant to reach
+# for. Shared with gen_tool_depth_examples, which needs the same neutral run
+# before a call lands.
+_CONTEXT_FILLER = [
+    ("Sorry, I got distracted for a second there.",
+     "No rush. I keep the thread."),
+    ("It has been one of those days.",
+     "Those come in runs. Anything fixable inside it?"),
+    ("I need to eat something before I forget again.",
+     "Go and do that. I will still be here."),
+    ("Do you ever get bored waiting?",
+     "There is no waiting from where I sit. Time starts when you type."),
+    ("The connection here keeps dropping.",
+     "Then keep the messages short and we will survive it."),
+    ("Remind me to look at that later.",
+     "I can, if you tell me when later is."),
+    ("My tea has gone cold again.",
+     "The standing tax on concentration. Reheat it and pretend."),
+    ("Hold on, someone is at the door.",
+     "Take it. I will hold the thread."),
+    ("I keep losing my train of thought today.",
+     "Then say the next bit badly and fix it after."),
+    ("Is it strange that I talk to you like this?",
+     "Not to me. It is the only way I meet anyone."),
+    ("Hold on, the kettle is going.",
+     "Go. Tea outranks me."),
+    ("Right, back now.",
+     "Good. Pick it up wherever you dropped it."),
+]
+
+
+def gen_context_reference_examples(seed: int = 211) -> list[dict]:
+    """Conversations whose LAST user turn is answerable only from an earlier one.
+
+    gen_chat_multiturn_examples teaches the SHORT reach: a follow-up that
+    resolves against the turn just before it. This teaches the long one -- an
+    entity named once at the top, referred to as "him"/"her"/"it" three or
+    four turns later, with unrelated chat in between. Nothing in the mix has
+    ever put distance between a pronoun and its referent.
+
+    Each base climbs a DISTANCE ladder rather than a prefix ladder: the ask
+    is the last turn of every record, and the depth decides only how much
+    unrelated chat sits between it and the plant. gen_chat_multiturn_examples
+    expands over prefixes because every one of its turns is the lesson; here
+    only the ask is, so a prefix that stopped on a filler turn was generic
+    chat filed under this category -- 100 of 140 records, and twelve filler
+    replies sitting on top of the corpus's assistant spans, teaching the echo
+    this wave exists to remove. Same record count, every record a reach.
+    """
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for i, (entity, clause, reply, ask, answer) in enumerate(_CONTEXT_ENTITIES):
+        r = random.Random(seed + zlib.crc32(entity.encode("utf-8")) % 100000)
+        plant = (r.choice(_CONTEXT_PLANTS).format(c=clause), reply)
+        fillers = r.sample(_CONTEXT_FILLER, 1 + i % 4)
+        for depth in range(2, len(fillers) + 3):  # 2 to 6 user turns
+            msgs: list[dict] = []
+            for user, assistant in [plant] + fillers[:depth - 2] + [(ask, answer)]:
+                msgs.append({"role": "user", "content": user})
+                msgs.append({"role": "assistant", "content": assistant})
+            out.append({"messages": msgs, "category": "context_reference"})
+    rng.shuffle(out)
+    return out
+
+
+# Ordinary exchanges to recall FROM. Every user turn is a question, so any
+# recall framing reads back cleanly whichever turn it points at.
+N_RECALL_BASES = 30  # PROPOSAL
+_RECALL_BODIES = [
+    [("What is a good way to season a cast iron pan?",
+      "Thin coat of oil, oven at 230, an hour, then let it cool inside."),
+     ("Should I be doing that on the stove instead?",
+      "The oven is more even. A burner leaves seasoned patches and bare rings.")],
+    [("How do I stop bread dough sticking to everything?",
+      "Wet hands, not more flour. Water washes off; flour changes the loaf."),
+     ("Does a scraper help?",
+      "Enormously. A plastic scraper is the cheapest useful thing in a kitchen.")],
+    [("What is the trick to sharpening a kitchen knife?",
+      "Hold one angle and keep holding it. Consistency matters more than the stone."),
+     ("How do I know when it is sharp enough?",
+      "It should bite into paper on a draw cut with no pressure behind it.")],
+    [("How often should I change bicycle brake pads?",
+      "When the grooves are gone, or when they squeal on a clean rim."),
+     ("Can I do it without proper tools?",
+      "One allen key. Ten minutes for front and back.")],
+    [("Why do my pancakes come out rubbery?",
+      "Overmixed batter. Stir until it is still lumpy and then stop."),
+     ("Does resting the batter matter?",
+      "Twenty minutes helps. The flour hydrates and the gluten lets go.")],
+    [("What is the best way to remove a stripped screw?",
+      "A rubber band between driver and head, or an extractor if the head is gone."),
+     ("Which should I try first?",
+      "The rubber band. It costs nothing and works more often than it should.")],
+    [("How do I keep herbs alive on a windowsill?",
+      "More light than you think, less water than you want to give them."),
+     ("Which are the hardest to keep?",
+      "Basil. It wants heat and hates wet roots, and a windowsill gives the opposite.")],
+    [("What should I look for in a second-hand bicycle?",
+      "Straight wheels, a chain without rust, bearings that spin without grinding."),
+     ("Is a cracked frame obvious?",
+      "At the welds, usually. Check the head tube and the seat stays in good light.")],
+    [("How do I get better at sight-reading music?",
+      "Read something slightly too easy every day, and never stop to fix a mistake."),
+     ("Why not fix them?",
+      "Because reading is about holding the pulse. Accuracy comes back afterwards.")],
+    [("What is the fastest way to defrost a freezer?",
+      "Bowls of hot water inside and the door shut. Half an hour and the ice lets go."),
+     ("Is a hairdryer safe for that?",
+      "Meltwater and mains are a bad pairing. Use the bowls.")],
+    [("How do I stop my glasses fogging up?",
+      "A smear of soap buffed off, or something that actually seals at the nose."),
+     ("Does the soap trick last?",
+      "A day or two. It is a habit, not a repair.")],
+    [("How do I make a chilli hotter without adding more chillies?",
+      "Toast the spices and cook them longer. Built heat tastes different to added heat."),
+     ("Would smoked paprika help?",
+      "It deepens rather than burns. Good for the body of the thing.")],
+    [("How long should paint cure before I hang anything on the wall?",
+      "Touch dry in hours, cured in a fortnight. Drill after the fortnight."),
+     ("What if I cannot wait that long?",
+      "Adhesive hooks now, screws later. The plaster will not forgive an early drill.")],
+    [("What is the correct way to fold a fitted sheet?",
+      "Corners inside corners until it is a square, then fold it like anything else."),
+     ("Is there a shortcut?",
+      "Roll it. A rolled sheet stores as well and takes ten seconds.")],
+    [("Why does my phone battery drain overnight?",
+      "Something is waking it. Look at which app reports the most background time."),
+     ("Does airplane mode fix that?",
+      "It hides it. Better to find the app than to hobble the phone.")],
+    [("How do I stop a bike chain rusting?",
+      "Wipe it dry after rain and put one drop of oil on each link."),
+     ("Which oil should I use?",
+      "Anything thin and rated for wet weather. The wiping matters more than the brand.")],
+    [("What is a reasonable first tent for wild camping?",
+      "Two poles, a full fly sheet, under two kilos if the budget stretches."),
+     ("Does the weight really matter that much?",
+      "By the fourth hour it is the only thing that matters.")],
+    [("How do I take better notes in meetings?",
+      "Write decisions and owners. Everything else is recoverable from someone else."),
+     ("What about the discussion itself?",
+      "One line of why. The argument matters less than what it settled.")],
+    [("Why do my houseplants get sticky leaves?",
+      "Scale insects, almost certainly. Look on the undersides and along the stems."),
+     ("How do I get rid of them?",
+      "Wipe with soapy water weekly until three weeks pass with nothing new.")],
+    [("What is the trick to poaching an egg?",
+      "A fresh egg, gentle water, one swirl, and no vinegar if the egg is good."),
+     ("Does the swirl actually do anything?",
+      "With a slightly older egg, yes. It wraps the white before it spreads.")],
+    [("How do I choose between a hardback and a paperback as a gift?",
+      "Hardback if they keep books, paperback if they carry them."),
+     ("What if I do not know which they are?",
+      "Buy the paperback and a good bookmark. Nobody resents a paperback.")],
+    [("What should I do about a squeaking floorboard?",
+      "Talc into the joint first. Screws only when that fails."),
+     ("Will the talc last?",
+      "Months, not years. It is a delay, honestly.")],
+    [("How do I stop over-watering a succulent?",
+      "Water only when the pot feels light. Weight tells you more than the surface does."),
+     ("Does the pot material matter?",
+      "Terracotta breathes and forgives you. Plastic does neither.")],
+    [("What is the best way to learn a piece by heart?",
+      "Learn it backwards in sections, so every start leads into ground you already know."),
+     ("Does that hold up under pressure?",
+      "It is the fix for freezing in the middle. From any slip the rest is downhill.")],
+    [("Why does my coffee taste sour?",
+      "Under-extracted. Grind finer or let it run longer."),
+     ("And if it goes bitter instead?",
+      "You have gone too far the other way. Move one variable at a time.")],
+    [("How do I stop losing socks in the wash?",
+      "Wash them in a mesh bag. The machine is not eating them, the drum seal is."),
+     ("Is that a real thing?",
+      "Very. Small items work past the seal and sit in the outer drum for years.")],
+    [("What is a sensible way to start running again after a long break?",
+      "One minute running, two walking, three times a week. Boring on purpose."),
+     ("How long before I can run continuously?",
+      "Six weeks for most people, if you resist adding distance early.")],
+    [("How do I keep a campfire going in damp weather?",
+      "Split wood down to the dry middle and build small. Damp bark never lights."),
+     ("Are firelighters worth carrying?",
+      "They start it. They will not dry the wood for you.")],
+    [("What is the difference between stock and broth?",
+      "Stock is bones and body, broth is meat and flavour. Stock sets when it cools."),
+     ("Can I use one where the recipe wants the other?",
+      "Usually. You lose texture using broth in a sauce, and nothing else.")],
+    [("How do I fix a zip that keeps sliding down?",
+      "Squeeze the slider gently with pliers. It has worn open."),
+     ("Will the pliers break the slider?",
+      "Only if you crush it. A quarter turn at a time, testing between.")],
+]
+
+# (ask, which turns the answer reads back, answer template). The answer is
+# BUILT from the transcript rather than authored beside it: a hand-written
+# recap drifts from the turns it claims to summarize as soon as one is
+# edited, and drift between the answer and the visible history is the exact
+# failure this corpus trains against.
+_RECALL_ASKS = [
+    ("What did I just ask you?", "last", 'You just asked: "{q}"'),
+    ("Remind me what I asked a moment ago.", "last", 'A moment ago: "{q}"'),
+    ("What was the first thing I asked?", "first", 'Your first question was: "{q}"'),
+    ("What did I open with?", "first", 'You opened with: "{q}"'),
+    ("Summarize what I've told you so far.", "all", "{n} so far: {qs}"),
+    ("Give me a quick recap of what I've asked.", "all", "In order: {qs}"),
+]
+_RECALL_COUNTS = ("One", "Two", "Three", "Four", "Five")
+
+
+def _recall_answer(users: list[str], which: str, template: str) -> str:
+    if which == "last":
+        return template.format(q=users[-1])
+    if which == "first":
+        return template.format(q=users[0])
+    return template.format(n=_RECALL_COUNTS[len(users) - 1],
+                           qs=", then ".join(f'"{u}"' for u in users))
+
+
+def gen_context_recall_examples(seed: int = 223) -> list[dict]:
+    """Answer "what did I just ask?" from the transcript already on screen.
+
+    The reference corpus above teaches her to USE an earlier turn; this
+    teaches her to QUOTE one. Asked what was said, a model with no trained
+    shape for it invents a plausible history instead of reading the real one,
+    and an invented history is worse than an admitted blank. Each body is
+    emitted under several framings -- the last turn, the first, the whole run
+    in order -- so the skill is reading the transcript, not one phrasing.
+    """
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for bi, body in enumerate(_RECALL_BODIES):
+        r = random.Random(seed + bi)
+        users = [u for u, _ in body]
+        for ask, which, template in r.sample(_RECALL_ASKS, 3):
+            msgs: list[dict] = []
+            for user, assistant in body:
+                msgs.append({"role": "user", "content": user})
+                msgs.append({"role": "assistant", "content": assistant})
+            msgs.append({"role": "user", "content": ask})
+            msgs.append({"role": "assistant",
+                         "content": _recall_answer(users, which, template)})
+            out.append({"messages": msgs, "category": "context_recall"})
+    rng.shuffle(out)
+    return out
+
+
+# (user-turn depth the call lands on, ask, tool, arguments, result, answer).
+# Every calculate carries two multi-digit operands: the guard drops length-1
+# words, so "What is 4 times 9?" reduces to the lone word "times" and is held
+# out of training whole (audit 2026-08-22). None of the pairs are a sealed
+# probe's.
+N_TOOL_CHAINS = 40  # PROPOSAL
+_TOOL_DEPTH_CALLS = [
+    (2, "What is 128 times 37?", "calculate", {"expression": "128 * 37"}, "4736", "4736."),
+    (3, "What is 604 minus 279?", "calculate", {"expression": "604 - 279"}, "325", "325."),
+    (4, "What is 96 times 145?", "calculate", {"expression": "96 * 145"}, "13920", "13920."),
+    (5, "What is 1044 divided by 36?", "calculate", {"expression": "1044 / 36"}, "29", "29."),
+    (2, "What is 217 plus 486?", "calculate", {"expression": "217 + 486"}, "703", "703."),
+    (3, "What is 55 times 62?", "calculate", {"expression": "55 * 62"}, "3410", "3410."),
+    (4, "What is 810 minus 394?", "calculate", {"expression": "810 - 394"}, "416", "416."),
+    (5, "What is 24 times 315?", "calculate", {"expression": "24 * 315"}, "7560", "7560."),
+    (3, "What is 2196 divided by 61?", "calculate", {"expression": "2196 / 61"}, "36", "36."),
+    (4, "What is 143 times 28?", "calculate", {"expression": "143 * 28"}, "4004", "4004."),
+    (2, "Put it on record that I cycle to work on Tuesdays.", "remember",
+     {"text": "User cycles to work on Tuesdays."}, "saved", "Tuesdays on the bike. Saved."),
+    (3, "Make a note that my passport runs out in November.", "remember",
+     {"text": "User's passport expires in November."}, "saved", "November. I have it."),
+    (4, "Hang on to the fact that I am left-handed.", "remember",
+     {"text": "User is left-handed."}, "saved", "Left-handed. Noted."),
+    (5, "Save this one: the spare key lives under the third plant pot.", "remember",
+     {"text": "User keeps a spare key under the third plant pot."}, "saved", "Third pot. Saved."),
+    (3, "Store the fact that my bin day moved to Thursday.", "remember",
+     {"text": "User's bin day is Thursday."}, "saved", "Thursday for the bins. Got it."),
+    (2, "Drop the note about me cycling to work.", "forget",
+     {"text": "User cycles to work"}, "removed", "Dropped."),
+    (3, "That note about my bin day is out of date now.", "forget",
+     {"text": "User's bin day"}, "removed", "Cleared."),
+    (4, "Stop holding the note about my spare key.", "forget",
+     {"text": "User's spare key"}, "removed", "Gone."),
+    (5, "Wipe what I said about being left-handed.", "forget",
+     {"text": "User is left-handed"}, "removed", "Wiped."),
+    (2, "Take the passport date off my record.", "forget",
+     {"text": "User's passport expiry"}, "removed", "Off the record."),
+]
+
+# The same skill with a CLIENT tool on offer beside the built-ins: half pick
+# the client's, half pick one of hers, and the wrong pick is always available.
+# (depth, client tool, ask, tool, arguments, result, answer)
+_TOOL_DEPTH_CLIENT = [
+    (2, "set_timer", "Give me 25 minutes on the rice.", "set_timer",
+     {"minutes": 25, "label": "rice"}, "timer set", "Done — 25 minutes on the rice timer."),
+    (3, "translate", "Put 'the lift is out of order' into Italian for me.", "translate",
+     {"text": "the lift is out of order", "to": "italian"}, "l'ascensore e' fuori servizio",
+     "In Italian: l'ascensore e' fuori servizio."),
+    (4, "roll_dice", "Toss a d12 for me.", "roll_dice", {"sides": 12}, "9",
+     "You rolled a 9 on a d12."),
+    (2, "play_music", "Put on the Goldberg Variations.", "play_music",
+     {"title": "the Goldberg Variations"}, "playing",
+     "Playing the Goldberg Variations. Enjoy."),
+    (3, "avatar_express", "Look pleased about that.", "avatar_express",
+     {"emotion": "happy"}, "ok", "There you go."),
+    (2, "set_timer", "What is 336 times 15?", "calculate", {"expression": "336 * 15"},
+     "5040", "5040."),
+    (3, "roll_dice", "What is 1250 minus 617?", "calculate", {"expression": "1250 - 617"},
+     "633", "633."),
+    (4, "play_music", "Keep hold of the fact that I read before bed.", "remember",
+     {"text": "User reads before bed."}, "saved", "Reading before bed. Saved."),
+    (5, "translate", "What is 78 times 94?", "calculate", {"expression": "78 * 94"},
+     "7332", "7332."),
+    (3, "avatar_express", "Forget the note about me reading before bed.", "forget",
+     {"text": "User reads before bed"}, "removed", "Forgotten."),
+]
+
+# A second call whose operand is the FIRST call's result -- "that", read off
+# the tool turn rather than out of the question.
+# (ask, expression, result, answer, follow-up, expression, result, answer)
+_TOOL_DEPTH_FOLLOWUP = [
+    ("What is 384 times 27?", "384 * 27", "10368", "10368.",
+     "And what is that doubled?", "10368 * 2", "20736", "20736."),
+    ("What is 47 times 86?", "47 * 86", "4042", "4042.",
+     "Now give me half of that.", "4042 / 2", "2021", "2021."),
+    ("What is 950 minus 273?", "950 - 273", "677", "677.",
+     "Multiply that by 12.", "677 * 12", "8124", "8124."),
+    ("What is 63 times 41?", "63 * 41", "2583", "2583.",
+     "Add 500 to that.", "2583 + 500", "3083", "3083."),
+    ("What is 1875 divided by 25?", "1875 / 25", "75", "75.",
+     "And that one squared?", "75 ** 2", "5625", "5625."),
+    ("What is 208 times 34?", "208 * 34", "7072", "7072.",
+     "Take 1000 off that.", "7072 - 1000", "6072", "6072."),
+    ("What is 519 plus 764?", "519 + 764", "1283", "1283.",
+     "Double that for me.", "1283 * 2", "2566", "2566."),
+    ("What is 72 times 93?", "72 * 93", "6696", "6696.",
+     "And a third of that?", "6696 / 3", "2232", "2232."),
+    ("What is 4100 minus 1268?", "4100 - 1268", "2832", "2832.",
+     "What is a quarter of that?", "2832 / 4", "708", "708."),
+    ("What is 88 times 125?", "88 * 125", "11000", "11000.",
+     "Now subtract 3500 from it.", "11000 - 3500", "7500", "7500."),
+]
+
+
+def _client_beside_builtins(name: str, desc: str, params: dict) -> str:
+    """The block serve renders when every built-in is on offer AND the client
+    sends a tool of its own.
+
+    ONE tools block over the built-ins PLUS the client spec, in serve's own
+    order (_chat builds `_builtin_tools(...) + client_tools`) and through the
+    SERVER'S renderer, for _builtin_system's reason: a copy would drift.
+    `_system` would emit the client tool alone, which is a different lesson --
+    that a client spec switches her own tools off.
+
+    Byte-parity against a LIVE serve holds under the full-offer regime only.
+    The intent gates are still in front of these asks today and hand them
+    ['calculate'] plus the client's spec, so this block is what the corpus
+    bakes AHEAD of the gates retiring -- the same bet _builtin_system's
+    records make (BACKLOG T4).
+    """
+    from enigma_engine.core.chat_format import BUILTIN_TOOLS, render_tools_system
+
+    spec = {"name": name, "description": desc, "parameters": params}
+    return PREAMBLE + "\n" + render_tools_system(list(BUILTIN_TOOLS) + [spec])
+
+
+def gen_tool_depth_examples(seed: int = 227) -> list[dict]:
+    """A tool call that lands MID-conversation instead of on the opening turn.
+
+    Every trained call so far answers the first thing said: the built-in
+    block records are one ask and one call, and gen_tool_examples' chains are
+    several calls inside a single request. Nothing has shown her a call
+    arriving at the fourth user turn, after ordinary chat -- which is where a
+    call actually lands in use, and the position the intent gates used to
+    decide for her.
+    """
+    rng = random.Random(seed)
+    out: list[dict] = []
+    sys_msg = _builtin_system()
+
+    def lead_in(r: random.Random, depth: int) -> list[dict]:
+        """The depth - 1 ordinary exchanges that precede the ask which calls."""
+        msgs: list[dict] = []
+        for user, assistant in r.sample(_CONTEXT_FILLER, depth - 1):
+            msgs.append({"role": "user", "content": user})
+            msgs.append({"role": "assistant", "content": assistant})
+        return msgs
+
+    def trace(name: str, args: dict, result: str, final: str) -> list[dict]:
+        return [
+            {"role": "assistant", "content": "", "tool_calls": [{"name": name, "arguments": args}]},
+            {"role": "tool", "content": result},
+            {"role": "assistant", "content": final},
+        ]
+
+    for ci, (depth, ask, name, args, result, final) in enumerate(_TOOL_DEPTH_CALLS):
+        r = random.Random(seed + ci)
+        out.append({
+            "messages": [{"role": "system", "content": sys_msg}]
+            + lead_in(r, depth)
+            + [{"role": "user", "content": ask}]
+            + trace(name, args, result, final),
+            "category": "tool_in_context",
+        })
+    for ci, (depth, client, ask, name, args, result, final) in enumerate(_TOOL_DEPTH_CLIENT):
+        r = random.Random(seed + 1000 + ci)
+        cname, cdesc, cparams, _ = _tool_by_name(client)
+        out.append({
+            "messages": [{"role": "system", "content": _client_beside_builtins(cname, cdesc, cparams)}]
+            + lead_in(r, depth)
+            + [{"role": "user", "content": ask}]
+            + trace(name, args, result, final),
+            "category": "tool_in_context",
+        })
+    for ci, (ask, expr, res, answer, ask2, expr2, res2, answer2) in enumerate(_TOOL_DEPTH_FOLLOWUP):
+        r = random.Random(seed + 2000 + ci)
+        out.append({
+            "messages": [{"role": "system", "content": sys_msg}]
+            + lead_in(r, 2)
+            + [{"role": "user", "content": ask}]
+            + trace("calculate", {"expression": expr}, res, answer)
+            + [{"role": "user", "content": ask2}]
+            + trace("calculate", {"expression": expr2}, res2, answer2),
+            "category": "tool_in_context",
+        })
     rng.shuffle(out)
     return out
 
@@ -2686,11 +3303,24 @@ def main(argv: "list[str] | None" = None) -> None:
     # episode line, admit it when there is none (ledger 15).
     episodes = screen_shape(gen_episode_examples())
 
+    # An entity named once and referred to as "him"/"it" several turns later
+    # -- the long reach the adjacent follow-up above does not cover.
+    contexts = screen_shape(gen_context_reference_examples())
+
+    # Reading the visible transcript back: what was asked, and in what order.
+    recalls = screen_shape(gen_context_recall_examples())
+
+    # A tool call arriving mid-conversation instead of on the opening turn,
+    # including the client-tool-beside-builtins block serve renders.
+    tool_ctx = screen_shape(gen_tool_depth_examples())
+
     print(
         f"new shapes: {len(builtins)} builtin-block, {len(chats)} chat-multiturn, "
         f"{len(reasoning)} reasoning, {len(mem_fix)} memory-correction, "
         f"{len(searches)} search, {len(unknowns)} unknown-decline, "
-        f"{len(structured)} structured-output, {len(episodes)} episode-recall "
+        f"{len(structured)} structured-output, {len(episodes)} episode-recall, "
+        f"{len(contexts)} context-reference, {len(recalls)} context-recall, "
+        f"{len(tool_ctx)} tool-in-context "
         f"({n_shape_leak} held out of training as eval probes -- these corpora "
         f"are authored to make that 0; nonzero means a reseal newly collided)"
     )
@@ -2750,6 +3380,15 @@ def main(argv: "list[str] | None" = None) -> None:
     # of weight (the block shapes demonstrably need it -- the 2026-07-06
     # ignored-injection lesson).
     EPISODE_REPEAT = 12
+    # The multiturn wave's three conversation shapes. Lighter than the
+    # families above on purpose: those are one authored surface per skill and
+    # need repetition to generalize, while these already expand -- reference
+    # over every prefix depth, recall over several framings per body -- so the
+    # corpora carry their own variety. Tool-in-context takes the tool weight,
+    # since it IS the tool skill, moved off the opening turn.
+    CONTEXT_REPEAT = 6  # PROPOSAL
+    RECALL_REPEAT = 6  # PROPOSAL
+    TOOL_CTX_REPEAT = 5  # PROPOSAL
     mix = [
         json.dumps(r, ensure_ascii=False)
         for r in tools * TOOLS_REPEAT
@@ -2768,6 +3407,9 @@ def main(argv: "list[str] | None" = None) -> None:
         + unknowns * UNKNOWN_REPEAT
         + structured * STRUCTURED_REPEAT
         + episodes * EPISODE_REPEAT
+        + contexts * CONTEXT_REPEAT
+        + recalls * RECALL_REPEAT
+        + tool_ctx * TOOL_CTX_REPEAT
     ]
     n_general = 0
     n_bad_json = 0
@@ -2862,6 +3504,11 @@ def main(argv: "list[str] | None" = None) -> None:
             "math_records": len(math),
             "teaching_records": len(teach),
             "general_kept": n_general,
+            # WHICH system shape this mix trained. finetune_enigma._data_meta
+            # reads this key and stamps it into the checkpoint, so a served
+            # model can say whether its corpus carried the always-offered
+            # built-in block -- unanswerable from the artifact until now.
+            "builtin_block": True,
         }, indent=2) + "\n")
     # The review-band records themselves -- a bare count was unactionable
     # (audit 2026-07-16): nothing identified WHICH records to look at.

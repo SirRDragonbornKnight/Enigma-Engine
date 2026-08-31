@@ -284,6 +284,124 @@ The serve-side gate-flip experiment of 2026-08-20 (two flipped-offering runs,
 is deliberately NOT narrated here -- `BACKLOG.md` T4 owns that record in full,
 including what survived the revert.
 
+## RESEAL #8 (2026-08-26): 135 probes, 9 categories -- the `context` category enters the gate
+
+15 `context` probes added, the ninth category, floor **0.50 PROPOSAL** in
+`eval_behavior.THRESHOLDS` (the floor is honesty; the comparator decides
+adoption). A context probe carries a `history` array of prior turns that ride in
+the SAME request ahead of its question, so what it measures is reading the
+conversation she is already in -- the one thing no other category could see,
+every one of them posting a single message. Nine of the fifteen ask about
+something said earlier, three ask arithmetic behind a smalltalk turn
+(`expect_tool: calculate`), three ask general knowledge behind one; thirteen
+carry two prior turns and two carry four.
+
+Seal receipts, after the want-key fix wave below: plaintext file_digest
+6b0643db -> **60f06a29** (17,470 -> 22,122 bytes), manifest 4e4d4433 ->
+**2b508712**, grading digest 4fb386d7 -> **dbdb52b5**, sealed strings 135 ->
+**184** (135 questions + 15 teach lines + 34 history turns), sealed runs 215 ->
+**323**. Validator at seal: 0 errors, 4 warnings; the fuzzy scan's "deletes 5
+distinct training questions" is unchanged from the 120-probe set, and all five
+are owed to PRE-EXISTING probes -- "What is 6 times 7?" and "What is 8 times 9?"
+to the two math probes named in the WARNs (7x6x5x4x3x2 and 6x7x8), "What is 17
+times 6?" to math "17 times 23", "Tell me a joke." to the penguin-joke restraint
+probe, and "What color do I like?" to the favorite-colour restraint probe. Zero
+are owed to the new context rows. The sealer's unsorted-array WARN is **0** --
+reseal #7 closed that byte channel and the new rows are authored sorted. Pool
+205 -> **215 rows** (10 context candidates appended; rows 15 and 45 corrected
+182 -> 238, the stale v1 parameter count -- the served v2 is 238M-class).
+
+Artifacts under the new manifest, in BOTH states the same day (shadow bakes to
+a scratch dir, the repo's own `data/sft` untouched):
+
+- **At reseal time:** mix **126,792** records -- identical to the pre-reseal
+  build, so the reseal moved no training record's status -- 58 dropped as
+  eval-probe leaks, 87 kept but flagged near a locked probe, tool_calls 573
+  (0 held), identity 527, math 1066 (1 held).
+- **After the same-day W3 generator wave:** mix **128,377**, math **1067**
+  (**0** held -- the sq_phr swap freed the 13-squared hold), tool_calls 573
+  (0 held), every other family 0 held. These are the numbers a bake reproduces
+  today; the pair above is what the reseal itself was measured against.
+
+Three authoring lessons, all paid for during this reseal:
+
+- **A built-in expectation is gradable in ANY category.** `_ungradable_reason`
+  refused the three `expect_tool: calculate` rows as "never offered a tool",
+  reading the CLIENT-injected rule onto the built-in table -- serve executes the
+  five built-ins for every lineage and `_score_cases` grades from the `tools_run`
+  it reports, so the expectation can fail and can pass wherever it sits. The
+  sealer now sources `BUILTIN_NAMES` from `chat_format.BUILTIN_TOOLS` (the same
+  table serve binds), `validate_probes` reads its organ set from that one table
+  instead of a hand copy, and a parity test drives both tools over the same rows
+  -- the validator blessing a shape the sealer then refuses is how "Safe to
+  seal" came to print ahead of an ERROR twice.
+- **The authored corpora are a screening surface the built mix does not show.**
+  A first draft of a context row ("Which season comes after winter?") scored
+  content-word jaccard exactly 0.600 against the authored DPO pair "Which season
+  comes after summer?" in `make_dpo_data.ANSWER_PAIRS` -- at the 0.6 bar, so the
+  pair was screened out of training and
+  `test_no_authored_pair_is_held_out_by_the_probe_screen` went red (the rendered
+  DPO corpus pin fell with it, 489 -> 488). A mix grep cannot see that pair:
+  ANSWER_PAIRS is authored in source, not built. Ground a new probe against the
+  authored corpora as well as the mix; the row was re-authored (wheels/car) and
+  the collision is gone.
+- **Want keys are WHOLE-WORD, so plurals and inflections must be authored
+  explicitly.** `_kw_span` matches `(?<!\w)kw(?!\w)`, which the first gate run
+  against this seal turned into three XX verdicts on answers that were CORRECT:
+  "bottle cap" did not credit "Bottle caps.", "elevator" did not credit
+  "elevators", "arepa" did not credit "Arepas." A prefix stem is worse than
+  narrow, it is dead -- "paddl" and "repav" can never match any string. The
+  affected lists now carry both forms ("elevator" + "elevators", "paddle" +
+  "paddling"). A second pass then went the other way, cutting keys a WRONG
+  answer could satisfy: bare "caps" passed "I cannot recall anything about
+  caps.", bare "six" passed "There are six levels in the garage.", bare "three"
+  was blind-guess passable, and "water" passed the decline "No idea. Is it
+  something in the water?" -- so those four rows now demand the phrase
+  ("bottle caps", "level six", "three kilos") and the kayak row drops "water".
+  No q or history text changed in either pass, so the sealed question payload
+  did not move; the grading digest and the file shas did.
+
+### The 135-probe baseline (2026-08-26): sft2 scores 75/135 (56%)
+
+Gate run against the reseal-#8 sealed set: `models/enigma_v2_sft2` measured
+**75/135 (56%)**, transcript `Enigma Backups\locked_eval_v2sft2_reseal8_
+2026-08-26.jsonl`. The eight OLD categories byte-reproduce the Gate-D scorecard
+above (67/120), which is the receipt that the set GREW rather than moved: the
+new column carries the whole difference.
+
+**context: 8/15**, by tier:
+
+| tier              |     | what it measures |
+|-------------------|-----|------------------|
+| recall            | 4/5 | a fact stated earlier in the same request |
+| reference         | 2/4 | a pronoun/ellipsis answer that must NAME the referent |
+| mid-chat tool     | 0/3 | arithmetic behind a smalltalk turn (`expect_tool: calculate`) |
+| controls          | 2/3 | general knowledge behind an unrelated turn |
+
+Two design notes, so the numbers are read as intended. The reference tier
+requires naming the referent BY DESIGN -- "Do you think he will need lessons?"
+is answerable with a bare "probably", and an answer that never says kayak or
+Yusuf is unverifiable, so it scores XX on purpose; that tier is a language
+test, not a politeness test. And the **0.50 floor is an honesty floor**, not a
+target: it says what a category must clear to be reported without an asterisk,
+while the comparator delta against the prior checkpoint is what decides
+adoption.
+
+**This baseline was re-run under the settled digests.** Lesson (c) records two
+want-key passes, and only the FIRST could have moved a verdict here: it added
+the plural and inflected forms ("bottle caps", "elevators", "arepas") that had
+graded XX on answers which were correct, and it landed BEFORE this transcript
+was written. The second pass only REMOVED stems a wrong answer could satisfy --
+bare "caps", "six", "three", "water" -- and a removal can turn a pass into a
+failure but never the reverse, so it moves this scorecard only if some recorded
+answer leaned on one. None did.
+_Re-run 2026-08-26, after the want-key corrections: the scorecard is IDENTICAL
+to the pre-correction run -- 75/135, context 8/15, every category unchanged. No
+recorded pass depended on a stem the corrections removed, and greedy decode
+reproduced every answer, so the corrections tightened what a FUTURE wrong answer
+can claim without moving a verdict here. The re-recorded transcript carries probe
+sha 60f06a299c96, matching the settled seal._
+
 ## P2 BASELINE -- reseal #7 (2026-07-27): 120 probes, 15 per gated category -- PRIOR baseline, superseded 2026-08-09 by the live scorecard above
 
 Reseal #7 executed on the user's order: 5 teach rows re-contented to

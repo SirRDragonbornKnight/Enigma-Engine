@@ -29,6 +29,11 @@ import re
 import sys
 from pathlib import Path
 
+# Derived from BUILTIN_TOOLS, the one spec table serve binds its own names to
+# and make_sft_data bakes -- so the names the server EXECUTES cannot drift from
+# the names gradability is decided by.
+from enigma_engine.core.chat_format import BUILTIN_NAMES
+
 ROOT = Path(__file__).resolve().parent
 LOCKED_MANIFEST = ROOT / "data" / "eval" / "locked_probes.manifest.json"
 
@@ -86,31 +91,106 @@ def persona_manifest(pack_dir: Path | None) -> Path:
 # eval_behavior imports THIS module, so importing back would be circular; the
 # two are pinned equal by test.
 _TOOL_OFFERED_CATEGORIES = frozenset({"tool", "restraint"})
+# The one CLIENT tool the run injects (eval_behavior.WEATHER_TOOL). Duplicated
+# for the same import-direction reason as the categories above and pinned equal
+# by test. A name that is neither this nor a built-in names nothing that can
+# ever be called, in any category.
+_CLIENT_TOOL = "get_weather"
 
 
 def _ungradable_reason(case: dict) -> str:
     """Why this probe's verdict is decided before the model answers, or "".
 
-    Tool grading compares the returned call against `expect_tool`. Outside the
-    categories the run offers a tool to, nothing is ever called, so the
-    comparison has one possible outcome whatever the answer says: a null
-    expectation always passes, a named tool always fails. Text grading with no
-    want and no deny has the same shape -- one outcome, fixed in advance."""
+    Tool grading compares the returned call against `expect_tool`. A named
+    CLIENT tool outside the categories the run injects it into is never called,
+    so the comparison has one possible outcome whatever the answer says: it
+    always fails. Text grading with no want and no deny has the same shape --
+    one outcome, fixed in advance.
+
+    Two things are gradable EVERYWHERE, and reading the client rule onto them
+    cost the context category its rows. A BUILT-IN is executed by the server
+    itself and reported through `tools_run`, which the grader reads in every
+    category. And a NULL expectation asserts that no tool fires at all --
+    restraint's own semantics -- which `tools_run` can falsify in any category,
+    so it is a real question wherever it is written (the old rule called it
+    "always passes" and refused it; ruled 2026-08-26)."""
     cat = case.get("category")
     if "expect_tool" in case:
         expect = case.get("expect_tool")
-        if cat not in _TOOL_OFFERED_CATEGORIES:
-            verdict = "always passes" if expect is None else "always fails"
-            return (f"expect_tool in category {cat!r}, which is never offered a tool, "
-                    f"so it {verdict}")
         if expect is not None and not expect.strip():
             # The graded value is a tool NAME or None. An empty string is
             # neither, so no reply can match it.
             return "expect_tool is an empty string, which no tool call can match"
+        if expect is not None and expect not in BUILTIN_NAMES and expect != _CLIENT_TOOL:
+            # Nothing in the run can produce this name, so the comparison has
+            # one outcome in every category -- the same defect as a client
+            # tool in the wrong category, wearing a typo instead.
+            return (f"expect_tool {expect!r} is neither a built-in "
+                    f"{sorted(BUILTIN_NAMES)} nor the injected client tool "
+                    f"{_CLIENT_TOOL!r}, so nothing can ever call it and it always fails")
+        if (expect is not None and expect not in BUILTIN_NAMES
+                and cat not in _TOOL_OFFERED_CATEGORIES):
+            # Only a named CLIENT tool is category-bound: nothing puts it in
+            # the request here, so the comparison always fails.
+            return (f"expect_tool {expect!r} in category {cat!r}, which is offered no "
+                    f"client tool, so it always fails")
         return ""
     if case.get("want_any") or case.get("deny_any"):
         return ""
     return "no want_any and no deny_any, so any answer passes"
+
+
+# The turns a probe posts BEFORE its question. Ten is the ceiling: the whole
+# history rides in ONE request alongside the question, and the documented eval
+# server runs at --max-context 2048.
+HISTORY_MAX_TURNS = 10
+# Total prior-turn CONTENT one probe may post, characters. PROPOSAL -- a
+# character budget standing in for a token one: the documented eval server runs
+# at --max-context 2048, and 4000 characters is roughly 1k tokens, leaving the
+# question and her reply room inside the window.
+HISTORY_MAX_CHARS = 4000
+
+
+def malformed_history(history) -> str:
+    """Why these prior turns cannot be posted ahead of a question, or "".
+
+    A `history` value is rendered STRAIGHT into the request, so what it needs is
+    a render-time shape rather than a grading one. Roles alternate from `user`
+    because the probe's own question is appended as the last user turn, and a
+    turn with no content is a turn the renderer has nothing to put in.
+
+    ONE owner for the rule: the eval refuses such a record before it clears the
+    target's memory store, and the sealer refuses it before it can enter a
+    holdout at all."""
+    if not isinstance(history, list):
+        return f"history must be a list of turns, got {type(history).__name__}"
+    if not 1 <= len(history) <= HISTORY_MAX_TURNS:
+        return (f"history carries {len(history)} turns -- 1 to {HISTORY_MAX_TURNS} "
+                "(a probe with no prior turns omits the key)")
+    if len(history) % 2:
+        # The probe's own question is appended as the LAST user turn, so a
+        # history ending on a user turn puts two user messages back to back at
+        # the payload seam -- a shape neither training nor serve ever renders.
+        return (f"history carries {len(history)} turns -- an odd count ends on a "
+                "user turn, and the probe's question is appended as another one; "
+                "history must end on an assistant turn")
+    for i, turn in enumerate(history):
+        if not isinstance(turn, dict):
+            return f"history turn {i + 1} is not a JSON object"
+        role = "user" if i % 2 == 0 else "assistant"
+        if turn.get("role") != role:
+            return (f"history turn {i + 1} has role {turn.get('role')!r} -- roles "
+                    f"alternate from 'user', so this one must be {role!r}")
+        if not (isinstance(turn.get("content"), str) and turn["content"].strip()):
+            return f"history turn {i + 1} has no non-empty string content"
+    total = sum(len(t["content"]) for t in history)
+    if total > HISTORY_MAX_CHARS:
+        return (f"history carries {total} characters of content -- the cap is "
+                f"{HISTORY_MAX_CHARS}; the whole history rides in ONE request "
+                "beside the question, and the documented eval server runs at "
+                "--max-context 2048")
+    return ""
+
 
 _WORD = re.compile(r"[a-z0-9]+")
 # Light stoplist: drop function words so Jaccard measures CONTENT overlap. A
@@ -126,12 +206,140 @@ _STOP_WORDS = (
 _STOP = frozenset(_STOP_WORDS.split())
 DEFAULT_JACCARD = 0.6
 
+# Word extraction is [a-z0-9]+, which reads a Cyrillic 'a' not as a letter but
+# as a SEPARATOR: a record spelling a sealed word with one carries that word
+# whole to a reader and to the model, while the screen extracts two fragments
+# and matches nothing. Measured on the live seal (2026-08-26): a sealed
+# question respelled with nine Cyrillic lookalikes extracted as
+# ['fr','nd','nt','kn','wh','wh','th'] and scored leaks() False on all three
+# tiers, and so did a sealed teach line.
+#
+# The fold runs AFTER .lower(), so the table carries lowercase forms only --
+# an uppercase confusable lowercases inside its own script first and folds
+# from there. Several entries therefore exist for the UPPERCASE lookalike:
+# Cyrillic VE reads as 'B' and arrives here as its own lowercase.
+_CONFUSABLE_GROUPS = {
+    "a": "аα",          # Cyrillic a, Greek alpha
+    "b": "вβ",          # Cyrillic ve, Greek beta
+    "c": "с",                # Cyrillic es
+    "d": "ԁ",                # Cyrillic komi de
+    "e": "еε",          # Cyrillic ie, Greek epsilon
+    "h": "нһη",    # Cyrillic en, shha, Greek eta
+    "i": "іιı",    # Cyrillic i, Greek iota, dotless i
+    "j": "ј",                # Cyrillic je
+    "k": "кκ",          # Cyrillic ka, Greek kappa
+    "l": "ӏ",                # Cyrillic palochka
+    "m": "мμ",          # Cyrillic em, Greek mu
+    "o": "оοօ",    # Cyrillic o, Greek omicron, Armenian oh
+    "p": "рρ",          # Cyrillic er, Greek rho
+    "q": "ԛ",                # Cyrillic qa
+    "r": "г",                # Cyrillic ghe
+    "s": "ѕ",                # Cyrillic dze
+    "t": "тτ",          # Cyrillic te, Greek tau
+    "u": "υ",                # Greek upsilon
+    "v": "ѵν",          # Cyrillic izhitsa, Greek nu
+    "w": "ԝ",                # Cyrillic we
+    "x": "хχ",          # Cyrillic ha, Greek chi
+    "y": "уγ",          # Cyrillic u, Greek gamma
+    "z": "ζ",                # Greek zeta
+}
+
+
+def _build_confusable_map() -> dict[int, str]:
+    table: dict[int, str] = {}
+    for plain, confusables in _CONFUSABLE_GROUPS.items():
+        for ch in confusables:
+            table[ord(ch)] = plain
+    # Fullwidth latin and digits by RANGE -- typed out one by one they invite
+    # a transcription error no test would see.
+    for i in range(26):
+        table[0xFF41 + i] = chr(ord("a") + i)
+    for i in range(10):
+        table[0xFF10 + i] = chr(ord("0") + i)
+    # Punctuation confusables. Word extraction drops punctuation either way,
+    # so these change no verdict today; they are folded so the table is ONE
+    # answer to "spelled with lookalikes" rather than two.
+    for chars, plain in (("‘’‚‛′", "'"),
+                         ("“”„‟″", '"'),
+                         ("‒–—―−", "-"),
+                         ("     　", " "),
+                         ("⁄／", "/"),
+                         ("：", ":"), ("，", ","), ("．", "."),
+                         ("！", "!"), ("？", "?")):
+        for ch in chars:
+            table[ord(ch)] = plain
+    table[0x2026] = "..."
+    # Zero-width and soft characters DELETE. Same channel wearing no glyph at
+    # all: "cal<ZWSP>led" extracts as two fragments while every reader sees
+    # one word.
+    for ch in "­​‌‍⁠﻿":
+        table[ord(ch)] = ""
+    return table
+
+
+_CONFUSABLE_MAP = _build_confusable_map()
+
+
+def _fold_confusables(text: str) -> str:
+    """Unicode lookalikes folded to the ASCII they imitate.
+
+    ASCII text returns untouched, and that fast path is also the guarantee
+    that no sealed hash moves: the sealer refuses a probe file that is not
+    pure ASCII, so every sealed string takes this branch and folds to
+    itself."""
+    if text.isascii():
+        return text
+    return text.translate(_CONFUSABLE_MAP)
+
+
+def _words(text: str) -> list[str]:
+    """The ONE word-extraction path -- lower, fold, then [a-z0-9]+ runs.
+
+    Both the exact-hash normalization and the content-word sets read through
+    here, so a confusable spelling screens as its plain form on every tier
+    (exact, shingle, run) or on none of them."""
+    return _WORD.findall(_fold_confusables(text.lower()))
+
+
+def _word_variants(text: str) -> list[list[str]]:
+    """Every extraction the SCREEN must clear before it may say "clean".
+
+    Folding is not a refinement of raw extraction, it is a different READING:
+    deleting a zero-width character rejoins "cap<ZWSP>ital", which raw
+    extraction splits, and in the same stroke welds "what<ZWSP>is" into one
+    token, which raw extraction reads as two words. Screening either alone
+    loses the other's coverage -- the fold shipped that way and cost the
+    inter-word case, where a sealed probe with every space respelled scored
+    clean against a seal that caught it before the fold existed (measured
+    2026-08-26). The tiers now run over BOTH readings and OR the verdicts,
+    which is a strict superset of each.
+
+    ASCII text has exactly one reading and takes the single-pass fast path --
+    what keeps every sealed hash byte-stable.
+
+    Honest limit: the fold is all-or-nothing per string, so a spelling that
+    MIXES the two -- zero-width at the word gaps AND inside a word -- is
+    caught by neither reading. Closing it needs a per-gap decision, which is
+    exponential in the gaps."""
+    lowered = text.lower()
+    raw = _WORD.findall(lowered)
+    if text.isascii():
+        return [raw]
+    folded = _WORD.findall(_fold_confusables(lowered))
+    return [folded] if folded == raw else [folded, raw]
+
+
+def _content_of(words: list[str]) -> list[str]:
+    """The content-word filter, once, for whichever extraction produced them."""
+    return [w for w in words if w not in _STOP and len(w) > 1]
+
+
 def _norm(text: str) -> str:
-    return " ".join(_WORD.findall(text.lower()))
+    return " ".join(_words(text))
 
 
 def _content_words(text: str) -> list[str]:
-    return [w for w in _WORD.findall(text.lower()) if w not in _STOP and len(w) > 1]
+    return _content_of(_words(text))
 
 
 def _h(s: str) -> str:
@@ -243,8 +451,9 @@ def grading_digest(cases: list[dict]) -> str:
     plaintext on disk -- comparing against an unsealed copy of the file could
     not work, because that copy is exactly what an edit would also change (and
     the canonical run compares the file against itself)."""
-    keyed = [
-        (
+    keyed = []
+    for c in cases:
+        row = (
             " ".join(str(c.get("q") or "").split()),
             c.get("category") or "",
             "<absent>" if "expect_tool" not in c else repr(c.get("expect_tool")),
@@ -265,8 +474,22 @@ def grading_digest(cases: list[dict]) -> str:
             # sealed memory probes, not a formatting nicety.
             tuple(_h(" ".join(str(t).split())) for t in (c.get("teach") or [])),
         )
-        for c in cases
-    ]
+        # History ROLE and CONTENT in turn order, hashed the way teach is. The
+        # turns ride in the same request as the question, so a prior turn
+        # decides an answer exactly as a teach line does while no probe hash
+        # covers it -- and the role decides which speaker the renderer
+        # attributes the words to.
+        #
+        # APPENDED ONLY WHEN PRESENT, never as an empty seventh element: the
+        # digest is a repr of these tuples, so a fixed seventh slot would move
+        # every historyless row and every manifest sealed before history
+        # existed would fail its own grading check.
+        if c.get("history"):
+            row += (tuple(
+                (str(t.get("role")), _h(" ".join(str(t.get("content") or "").split())))
+                for t in c["history"]
+            ),)
+        keyed.append(row)
     # NOT sorted: file order is part of what the holdout IS. The store is
     # cleared once per run and then accumulates every taught fact, so moving a
     # memory probe past another probe changes what the later one can recall.
@@ -445,13 +668,19 @@ class LockedProbeGuard:
 
     def score(self, text: str) -> float:
         """Best similarity of `text` to any locked probe: 1.0 on a verbatim
-        (normalized) match, else the max hashed-shingle Jaccard."""
+        (normalized) match, else the max hashed-shingle Jaccard.
+
+        Best over every reading in `_word_variants` -- a spelling that hides
+        from one extraction must not score clean because of it."""
         if not self.shingles:
             return 0.0
-        if _h(_norm(text)) in self.exact:
-            return 1.0
-        q = {_hw(w) for w in _content_words(text)}
-        return max((_jaccard(q, s) for s in self.shingles), default=0.0)
+        best = 0.0
+        for words in _word_variants(text):
+            if _h(" ".join(words)) in self.exact:
+                return 1.0
+            q = {_hw(w) for w in _content_of(words)}
+            best = max(best, max((_jaccard(q, s) for s in self.shingles), default=0.0))
+        return best
 
     def contains_probe(self, text: str) -> bool:
         """True when `text` QUOTES a sealed probe -- reproduces a run of its
@@ -464,7 +693,8 @@ class LockedProbeGuard:
         vocabulary."""
         if not self.ngrams:
             return False
-        return bool(_text_ngrams(text) & self.ngrams)
+        return any(_ngrams_from_words(_content_of(words)) & self.ngrams
+                   for words in _word_variants(text))
 
     def leaks(self, text: str) -> bool:
         # One pass over the content words: score() and contains_probe() each
@@ -475,15 +705,16 @@ class LockedProbeGuard:
         # per-word sha1 sweep dominates and is untouched.
         if not self.shingles and not self.ngrams:
             return False
-        words = _content_words(text)
-        if self.shingles:
-            if _h(_norm(text)) in self.exact:
+        for words in _word_variants(text):
+            content = _content_of(words)
+            if self.shingles:
+                if _h(" ".join(words)) in self.exact:
+                    return True
+                q = {_hw(w) for w in content}
+                if max((_jaccard(q, s) for s in self.shingles), default=0.0) >= self.threshold:
+                    return True
+            if self.ngrams and _ngrams_from_words(content) & self.ngrams:
                 return True
-            q = {_hw(w) for w in words}
-            if max((_jaccard(q, s) for s in self.shingles), default=0.0) >= self.threshold:
-                return True
-        if self.ngrams:
-            return bool(_ngrams_from_words(words) & self.ngrams)
         return False
 
     def is_near_miss(self, text: str, low: float = 0.5) -> bool:
@@ -638,12 +869,12 @@ def _write_verdict(source: Path, manifest: Path, guard: "LockedProbeGuard",
 # digest -- the same uncovered-annotation hazard as a comment line, wearing
 # JSON (convergence audit, 2026-07-26).
 _PROBE_KEYS = frozenset(
-    {"q", "category", "want_any", "deny_any", "expect_tool", "teach"}
+    {"q", "category", "want_any", "deny_any", "expect_tool", "teach", "history"}
 )
 # The one canonical relative key order (every live record is a subsequence of
 # this; measured 2026-07-27). Canonical bytes preserve authoring order, so a
 # permitted reordering would be bits riding inside probe_file_sha256.
-_KEY_ORDER = ("category", "teach", "q", "want_any", "deny_any", "expect_tool")
+_KEY_ORDER = ("category", "teach", "history", "q", "want_any", "deny_any", "expect_tool")
 
 
 def _cli_seal(src: str) -> int:
@@ -745,12 +976,23 @@ def _cli_seal(src: str) -> int:
                       "iterates as keys-only through every hash while its values "
                       "ride inside the byte seal uncovered")
                 return 1
+        # History is nested, so it has two levels of shape to get wrong, and
+        # the gate run posts whatever is there straight to the server.
+        if "history" in rec:
+            why = malformed_history(rec["history"])
+            if why:
+                print(f"ERROR: {why}")
+                return 1
         # Interior whitespace is invisible to every hash (they normalize with
         # split()) but changes the file's bytes -- a spacing pattern inside a
         # string is an annotation channel.
         strings = [q, cat] + ([expect] if isinstance(expect, str) else [])
         for key in ("want_any", "deny_any", "teach"):
             strings.extend(rec.get(key) or [])
+        # Prior turns are string values too, and grading_digest collapses their
+        # whitespace exactly as it collapses a teach line's -- so a doubled
+        # space inside one changes the file's bytes and no hash at all.
+        strings.extend(turn["content"] for turn in rec.get("history", []))
         for s in strings:
             if s != " ".join(s.split()):
                 print(f"ERROR: string value carries non-normalized whitespace "
@@ -764,6 +1006,10 @@ def _cli_seal(src: str) -> int:
         texts.append(q)
         for fact in rec.get("teach", []):  # memory-probe teach messages count too
             texts.append(fact)
+        for turn in rec.get("history", []):
+            # A prior turn carries the fact its question asks about, so
+            # training on it teaches the gate the way a teach line does.
+            texts.append(turn["content"])
     # The file's bytes must BE the canonical dump of its own parse, up to line
     # endings. Anything else -- duplicate keys (json.loads keeps the last),
     # \uXXXX respellings, extra spacing, blank lines, a missing final newline
@@ -793,16 +1039,20 @@ def _cli_seal(src: str) -> int:
     # cannot express this: any probe matching the exempt shape seals with its
     # grade already decided.
     #   text grading  -- at least one want_any or deny_any key, OR
-    #   tool grading  -- an `expect_tool` decision in a category the run
-    #                    actually offers a tool to.
+    #   tool grading  -- an `expect_tool` naming a built-in, or a NULL one
+    #                    ("no tool fires"); both are read from tools_run in
+    #                    every category. A named CLIENT tool is gradable only
+    #                    in the categories the run injects it into.
     ungradable = [(c["q"], _ungradable_reason(c)) for c in cases
                   if _ungradable_reason(c)]
     if ungradable:
         q, why = ungradable[0]
         print(f"ERROR: {len(ungradable)} probe(s) cannot produce a verdict, starting "
               f"{q[:50]!r} ({why}). A probe whose grade is decided before the model "
-              "answers measures nothing; give it want_any/deny_any keys, or set "
-              f"expect_tool in one of {sorted(_TOOL_OFFERED_CATEGORIES)}")
+              "answers measures nothing; give it want_any/deny_any keys, expect one "
+              f"of the built-ins {sorted(BUILTIN_NAMES)} or null (both graded in any "
+              f"category), or put a client-tool expectation in one of "
+              f"{sorted(_TOOL_OFFERED_CATEGORIES)}")
         return 1
     if unsorted_records:
         # Refusing would demand a plaintext edit = a content reseal, which is

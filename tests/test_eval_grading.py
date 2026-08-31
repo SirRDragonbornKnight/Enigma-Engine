@@ -19,6 +19,8 @@ from eval_behavior import (
     _grade_text,
     _grade_unknown,
     _kw_hit,
+    _malformed_probe,
+    _payload_messages,
 )
 from identity_paraphrases import (
     _DENY_COMPANY_A,
@@ -853,3 +855,78 @@ def test_comparator_refuses_a_zero_gated_run(capsys):
                                   conditions, by_cat, 0, 0, False)
     assert record["verdict"].startswith("INCOMPARABLE")
     assert "no gated probes" in capsys.readouterr().out
+
+
+def test_history_rides_the_payload():
+    """A `context` probe asks about something said EARLIER, so the prior turns
+    have to reach the server in the same request. They go ahead of the question,
+    in file order, and the question stays the last user turn -- otherwise the
+    model answers the history instead of the probe."""
+    c = {"category": "context", "q": "What did I say my ferret steals?",
+         "history": [{"role": "user", "content": "My ferret is named Bandit and he steals socks."},
+                     {"role": "assistant", "content": "Bandit sounds like a handful."}],
+         "want_any": ["socks"], "deny_any": []}
+
+    msgs = _payload_messages(c)
+
+    assert msgs[-1] == {"role": "user", "content": c["q"]}
+    assert msgs[:-1] == c["history"]
+
+
+def test_historyless_payload_is_byte_identical_to_before():
+    """Every sealed probe on the gate is historyless, so the seam must not
+    change one byte of what they post: a second user turn, a reordering, or a
+    stray key would re-answer the whole locked set under a different prompt and
+    make every stored transcript incomparable."""
+    c = {"category": "math", "q": "What is 47 times 86?", "want_any": ["4042"], "deny_any": []}
+
+    assert _payload_messages(c) == [{"role": "user", "content": c["q"]}]
+
+
+def test_malformed_history_shapes_are_refused():
+    """History is posted VERBATIM to the server, so its shape is checked with
+    q and category -- before the run clears the target's memory store. Roles
+    alternate from `user` because the question is appended as a user turn: a
+    history that starts on `assistant`, names a role serve never renders, or
+    carries an empty turn is a probe that measures whatever the renderer does
+    with the mess."""
+    base = {"category": "context", "q": "x?", "want_any": ["y"], "deny_any": []}
+    for bad in ([{"role": "tool", "content": "x"}],          # role outside user/assistant
+                [{"role": "assistant", "content": "x"}],      # must start with user
+                [{"role": "user", "content": ""}],            # empty content
+                "not a list", [], [{"role": "user"}],
+                # an ODD count ends on a user turn and the question is appended
+                # as another one -- two user messages at the payload seam
+                [{"role": "user", "content": "alpha"}],
+                # and the whole history rides in ONE request beside the question
+                [{"role": "user", "content": "x" * 3000},
+                 {"role": "assistant", "content": "y" * 1500}]):
+        assert _malformed_probe({**base, "history": bad}), bad
+    # ...and the shape the contract describes still loads
+    assert not _malformed_probe({**base, "history": [{"role": "user", "content": "alpha"},
+                                                     {"role": "assistant", "content": "beta"}]})
+
+
+def test_unknown_probe_key_warns_at_load(capsys, tmp_path, monkeypatch):
+    """A misspelled key is the quietest defect a probe file has: "histroy"
+    leaves the history absent, the probe runs anyway, and it scores whatever a
+    contextless question scores -- a number that looks like a fact about the
+    model. The sealer refuses the same key set outright; the dev path says so
+    out loud instead, since that file is where a new key gets tried."""
+    import eval_behavior
+
+    p = tmp_path / "probes.jsonl"
+    p.write_text(
+        json.dumps({"category": "context", "q": "What does my ferret steal?",
+                    "histroy": [{"role": "user", "content": "My ferret steals socks."}],
+                    "want_any": ["socks"], "deny_any": []}) + "\n",
+        encoding="utf-8",
+    )
+    # No server is reached: the WARN belongs to the load, which happens before
+    # anything is contacted.
+    monkeypatch.setattr(eval_behavior, "_wait_for_server", lambda *a, **k: False)
+
+    assert eval_behavior.run("http://127.0.0.1:9999", 0.0, 60, p, None) == 2
+    out = capsys.readouterr().out
+    assert "histroy" in out
+    assert "WARN" in out

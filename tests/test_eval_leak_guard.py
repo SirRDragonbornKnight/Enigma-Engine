@@ -824,14 +824,17 @@ def test_the_sealer_takes_only_a_jsonl_path(tmp_path, monkeypatch, capsys):
 
 
 def test_a_probe_whose_verdict_is_decided_before_the_answer_cannot_seal(tmp_path, monkeypatch, capsys):
-    """Stated as an exemption list this check kept losing. Exempt by category
+    """Stated as an exemption list this check kept losing: exempt by category
     name and a probe relabels itself `vision`; exempt by carrying `expect_tool`
-    and a probe in a GATED category sets it to null -- tools are offered only to
-    tool/restraint, so nothing is ever called and the grade is None == None
-    before the model answers. Both spellings seal a probe that cannot fail, and
-    the second is worse: the probe keeps its own category and lifts that floor.
+    and a probe writes one nothing can ever call. So the rule is positive
+    gradability, and the test is the shapes.
 
-    So the rule is positive gradability, and the test is the shapes."""
+    A null expectation used to sit in the refused list here ("tools are offered
+    only to tool/restraint, so nothing is ever called and the grade is
+    None == None in advance"). That premise died with the built-ins: `called`
+    is read from `tools_run` in EVERY category, so "no tool fires" is an
+    assertion a run can falsify anywhere -- restraint's own semantics, wherever
+    it is written (ruled 2026-08-26). It is a gradable shape below."""
     import eval_leak_guard as elg
 
     monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
@@ -844,8 +847,8 @@ def test_a_probe_whose_verdict_is_decided_before_the_answer_cannot_seal(tmp_path
     Q = '"q": "What is 17 times 23?"'
     # decided in advance -- every one of these must be refused
     for line, why in (
-        ('{"category": "math", %s, "expect_tool": null}' % Q, "null tool, gated category"),
         ('{"category": "factual", %s, "expect_tool": "get_weather"}' % Q, "named tool, never offered"),
+        ('{"category": "factual", %s, "expect_tool": "bogus_tool"}' % Q, "name nothing can call"),
         ('{"category": "unknown", %s}' % Q, "no keys at all"),
         ('{"category": "vision", %s}' % Q, "informational, no keys"),
         ('{"category": "identity", %s, "want_any": [], "deny_any": []}' % Q, "empty key lists"),
@@ -858,11 +861,218 @@ def test_a_probe_whose_verdict_is_decided_before_the_answer_cannot_seal(tmp_path
     for line, why in (
         ('{"category": "tool", %s, "expect_tool": "get_weather"}' % Q, "tool probe"),
         ('{"category": "restraint", %s, "expect_tool": null}' % Q, "restraint probe"),
+        ('{"category": "math", %s, "expect_tool": null}' % Q, "no-tool-fires, any category"),
+        ('{"category": "context", %s, "expect_tool": "calculate"}' % Q, "built-in, any category"),
         ('{"category": "math", %s, "want_any": ["391"]}' % Q, "text probe"),
         ('{"category": "unknown", %s, "deny_any": ["my guess is"]}' % Q, "deny-only probe"),
     ):
         assert seal_of(line) == 0, f"refused a gradable probe: {why}"
         capsys.readouterr()
+
+
+def test_a_confusable_spelling_screens_as_its_plain_form():
+    """Word extraction is `[a-z0-9]+`, which reads a Cyrillic 'a' as a
+    SEPARATOR rather than a letter -- so a record spelling a sealed word with
+    one carries that word whole to a reader and to the model while the screen
+    extracts fragments and matches nothing.
+
+    Measured UNPATCHED against the live seal (2026-08-26): a sealed question
+    respelled with nine Cyrillic lookalikes extracted as
+    ['fr','nd','nt','kn','wh','wh','th'] and scored leaks() False on all three
+    tiers; a sealed teach line did the same. The fold closes it at the one
+    extraction path, so exact/shingle/run move together."""
+    from eval_leak_guard import (
+        LockedProbeGuard, _content_words, _fold_confusables, _norm, seal,
+    )
+
+    plain = "What is the capital of France?"
+    guard = LockedProbeGuard(seal([plain]))
+    assert guard.leaks(plain)
+
+    for name, spelled in (
+        # Cyrillic a / es / ie standing in for a / c / e
+        ("cyrillic", "Whаt is the сарitаl of Frаncе?"),
+        # the same word in UPPERCASE lookalikes -- they lowercase into their
+        # own script first and fold from there
+        ("cyrillic upper", "WHАT IS THE САPITАL OF FRАNCЕ?"),
+        ("fullwidth", "What is the ｃａｐｉｔａｌ of France?"),
+        # no glyph at all: a zero-width space splits the word for the screen
+        # while every reader still sees one word
+        ("zero-width", "What is the cap​ital of France?"),
+    ):
+        assert _content_words(spelled) == _content_words(plain), name
+        assert guard.leaks(spelled), f"{name} spelling slipped the screen"
+
+    # ...and the fold must not LOOSEN matching: unrelated text stays clean in
+    # either script, or the aperture would have been closed by making the
+    # guard fire on everything.
+    for clean in ("The mill closes at six on weekdays.",
+                  "Тhе mill clоsеs аt six оn wееkdаys."):
+        assert not guard.leaks(clean)
+
+    # ASCII takes the fast path untouched, which is WHY no sealed hash moves:
+    # the sealer refuses a probe file that is not pure ASCII, so every sealed
+    # string folds to itself.
+    assert _fold_confusables(plain) == plain
+    assert _norm(plain) == "what is the capital of france"
+
+
+def test_a_zero_width_spelling_cannot_hide_either_way():
+    """Deleting zero-width characters buys the INTRA-word case
+    ("cap<ZWSP>ital" reads as one word again) and loses the INTER-word one:
+    with every space respelled as U+200B the whole probe welds into a single
+    mega-token and matches nothing -- a coverage regression against a screen
+    that never folded at all, where a zero-width character was simply a
+    separator (measured 2026-08-26 on the live seal: leaks False under the
+    fold, True before it).
+
+    Both are legitimate readings of the same bytes, so the tiers run over the
+    folded AND the raw extraction and OR the verdicts: a strict superset of
+    either reading alone, and of HEAD.
+
+    Honest limit, NOT closed here: the fold is all-or-nothing per string, so a
+    spelling that mixes the two -- zero-width at the word gaps AND inside a
+    word -- is caught by neither reading. Closing it needs a per-gap decision,
+    which is exponential in the gaps."""
+    from eval_leak_guard import LockedProbeGuard, seal
+
+    plain = "What is the capital of France?"
+    guard = LockedProbeGuard(seal([plain]))
+    assert guard.leaks(plain)
+
+    # inter-word: folded reads one mega-token, raw reads the plain words
+    assert guard.leaks(plain.replace(" ", "​")), "inter-word ZWSP slipped"
+    # intra-word: raw reads fragments, the fold reads the word
+    assert guard.leaks("What is the cap​ital of France?"), "intra-word ZWSP slipped"
+    # the confusable case still rides the folded reading
+    assert guard.leaks("Whаt is the сарitаl of Frаncе?")
+
+    # ...and neither reading loosens matching: unrelated text stays clean in
+    # every spelling, or the aperture would be "closed" by firing on all text.
+    for clean in ("The mill closes at six on weekdays.",
+                  "The​mill​closes​at​six​on​weekdays.",
+                  "Тhе mill clоsеs аt six оn wееkdаys."):
+        assert not guard.leaks(clean)
+
+
+def test_a_builtin_expectation_is_gradable_in_any_category(tmp_path, monkeypatch, capsys):
+    """A BUILT-IN is executed by the server itself: serve offers the five for
+    every lineage and `_score_cases` grades from the `tools_run` it reports, so
+    a probe expecting one can fail and can pass wherever it sits. Refusing it as
+    "never offered a tool" read the CLIENT-injected rule onto the built-in table
+    and made the context category's arithmetic rows unsealable.
+
+    A client tool keeps the restriction -- nothing puts get_weather in the
+    request outside tool/restraint, so there the grade really is decided before
+    she answers."""
+    import eval_leak_guard as elg
+    from enigma_engine.core.chat_format import BUILTIN_NAMES
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+
+    def seal_of(rec_line: str) -> int:
+        p = tmp_path / "probes.jsonl"
+        p.write_text(rec_line + "\n", encoding="utf-8", newline="")
+        return elg._cli_seal(str(p))
+
+    Q = '"q": "What is 38 times 46?"'
+    for name in sorted(BUILTIN_NAMES):
+        assert seal_of('{"category": "context", %s, "expect_tool": "%s"}' % (Q, name)) == 0, (
+            f"a built-in expectation is gradable anywhere: {name}")
+        capsys.readouterr()
+
+    assert seal_of('{"category": "context", %s, "expect_tool": "get_weather"}' % Q) == 1
+    assert "cannot produce a verdict" in capsys.readouterr().out
+
+
+def test_the_sealer_and_the_validator_agree_across_the_expect_tool_matrix(tmp_path, monkeypatch, capsys):
+    """Parity held at two points and was assumed everywhere. Driven as a full
+    matrix it broke in six cells (measured 2026-08-26): a BUILT-IN named in a
+    tool category (validator refused, sealer sealed), an unknown tool name in a
+    tool category (same), and a null expectation outside tool/restraint
+    (validator blessed, sealer refused).
+
+    `speak` in the `tool` category must be ACCEPTED by both: it is a built-in,
+    the server executes it in any category, and whether it is a SENSIBLE thing
+    to expect there is content, not something either tool can judge statically.
+
+    `bogus_tool` must be REFUSED by both: no built-in and not the one client
+    tool the harness injects, so nothing can ever call it and the probe cannot
+    pass in any category."""
+    import eval_leak_guard as elg
+    import validate_probes as vp
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+    ABSENT = object()
+
+    def verdicts(cat, expect):
+        rec = {"category": cat, "q": "What is 38 times 46?"}
+        if expect is not ABSENT:
+            rec["expect_tool"] = expect
+        p = tmp_path / "matrix.jsonl"
+        p.write_text(json.dumps(rec) + "\n", encoding="utf-8", newline="")
+        errors, _warns = vp.check(p, skip_leak=True)
+        rc = elg._cli_seal(str(p))
+        capsys.readouterr()
+        return (not errors), rc == 0
+
+    disagreed = []
+    for cat in ("tool", "restraint", "context", "math"):
+        for expect in (ABSENT, None, "get_weather", "calculate", "speak", "bogus_tool"):
+            v_ok, s_ok = verdicts(cat, expect)
+            if v_ok != s_ok:
+                disagreed.append((cat, expect, v_ok, s_ok))
+    assert not disagreed, f"validator/sealer disagree: {disagreed}"
+
+    # ...and the cells the fix is ABOUT, spelled out rather than left to the
+    # sweep above: a built-in accepted in a tool category, an unknown name
+    # refused in one.
+    assert verdicts("tool", "speak") == (True, True)
+    assert verdicts("tool", "bogus_tool") == (False, False)
+    assert verdicts("context", "calculate") == (True, True)
+    # A NULL expectation is gradable in every category, not just the two the
+    # run injects a client tool into: `called` is read from `tools_run`
+    # everywhere, so "no tool fires" is a real assertion about the answer --
+    # restraint's own semantics, wherever it is written. The sealer used to
+    # call it "always passes" and refuse it, which is what made the validator
+    # print "Safe to seal" ahead of an ERROR.
+    assert verdicts("context", None) == (True, True)
+    assert verdicts("math", None) == (True, True)
+
+
+def test_the_client_tool_name_matches_the_one_the_run_injects():
+    """The sealer keeps its own copy of the injected client tool's name because
+    eval_behavior imports THIS module -- the same duplication the offered
+    categories carry, pinned the same way."""
+    import eval_behavior
+    import eval_leak_guard as elg
+
+    injected = [t["function"]["name"] for t in eval_behavior.WEATHER_TOOL]
+    assert injected == [elg._CLIENT_TOOL]
+
+
+def test_the_sealer_and_the_validator_agree_on_expect_tool_gradability(tmp_path, monkeypatch):
+    """This class of gap has been paid for twice now -- the validator blessing a
+    shape the sealer then refused, so "Safe to seal" printed ahead of an ERROR
+    (the history keys, then a built-in expectation outside tool/restraint). The
+    two answers are pinned together over the shapes that separate them."""
+    import eval_leak_guard as elg
+    import validate_probes as vp
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+
+    def verdicts(rec: dict) -> tuple[bool, bool]:
+        """(validator says safe, sealer seals) for one record."""
+        p = tmp_path / "parity.jsonl"
+        p.write_text(json.dumps(rec) + "\n", encoding="utf-8", newline="")
+        errors, _warns = vp.check(p, skip_leak=True)
+        return not errors, elg._cli_seal(str(p)) == 0
+
+    builtin = {"category": "context", "q": "What is 38 times 46?",
+               "expect_tool": "calculate"}
+
+    assert verdicts(builtin) == (True, True)
+    assert verdicts(dict(builtin, expect_tool="get_weather")) == (False, False)
 
 
 def test_tool_offered_categories_match_the_runner():
@@ -876,9 +1086,11 @@ def test_tool_offered_categories_match_the_runner():
     assert set(elg._TOOL_OFFERED_CATEGORIES) == set(eval_behavior.TOOL_OFFERED_CATEGORIES)
 
     # ...and the live sealed set must obey it: every probe carrying expect_tool
-    # sits in a category the run offers a tool to. If the sets ever drift, this
-    # is the invariant that actually breaks.
+    # either names a BUILT-IN, which the server executes and reports in any
+    # category, or sits in a category the run injects a client tool into. If the
+    # sets ever drift, this is the invariant that actually breaks.
     import json
+    from enigma_engine.core.chat_format import BUILTIN_NAMES
     real = eval_behavior.ROOT / "data" / "eval" / "locked_probes.jsonl"
     if real.exists():
         for line in real.read_text(encoding="utf-8").splitlines():
@@ -886,4 +1098,207 @@ def test_tool_offered_categories_match_the_runner():
                 continue
             rec = json.loads(line)
             if "expect_tool" in rec:
-                assert rec["category"] in eval_behavior.TOOL_OFFERED_CATEGORIES, rec["category"]
+                assert (rec["expect_tool"] in BUILTIN_NAMES
+                        or rec["category"] in eval_behavior.TOOL_OFFERED_CATEGORIES), rec
+
+
+def test_history_content_moves_the_grading_digest():
+    """History is posted to the server ahead of the question, so it decides the
+    answer as surely as a teach line does -- and the question hash does not
+    cover it. Editing a prior turn must be as visible as editing a want list."""
+    from eval_leak_guard import grading_digest
+
+    rows = [{"category": "context", "q": "x?", "want_any": ["y"], "deny_any": [],
+             "history": [{"role": "user", "content": "alpha"}]}]
+    edited = [dict(rows[0], history=[{"role": "user", "content": "beta"}])]
+
+    assert grading_digest(rows) != grading_digest(edited)
+    # the ROLE steers the render too: the same words as an assistant turn are a
+    # different prompt
+    assert grading_digest(
+        [dict(rows[0], history=[{"role": "assistant", "content": "alpha"}])]
+    ) != grading_digest(rows)
+
+
+def test_historyless_rows_digest_exactly_as_before():
+    """The digest is the sealed gate's grading identity, so a historyless row
+    must hash to the value it hashed to before `history` existed -- otherwise
+    every sealed manifest fails its own check and the gate comes back only by
+    re-sealing. Measured on the pre-history code (2026-08-26) and pinned here,
+    never re-derived from the code it is meant to constrain."""
+    from eval_leak_guard import grading_digest
+
+    rows = [
+        {"category": "math", "q": "What is 47 times 86?", "want_any": ["4042"], "deny_any": []},
+        {"category": "memory", "teach": ["My ferret is named Bandit."],
+         "q": "What is my ferret called?", "want_any": ["bandit"], "deny_any": []},
+        {"category": "tool", "q": "Weather in Denver?", "expect_tool": "get_weather"},
+        {"category": "restraint", "q": "Say hi.", "expect_tool": None},
+    ]
+
+    assert grading_digest(rows) == (
+        "9ae2a3af88d5e7474a978f5042647505b7670397455f001c1ad1be803e992d16")
+
+
+def test_the_live_sealed_set_still_verifies_against_its_manifest():
+    """The same receipt on the artifact that actually gates adoption: the
+    committed manifest's grading digest is what a gate run compares, so a digest
+    change lands here as a red test rather than as a refused run."""
+    from eval_leak_guard import ROOT, grading_digest
+
+    probes = ROOT / "data" / "eval" / "locked_probes.jsonl"
+    manifest = ROOT / "data" / "eval" / "locked_probes.manifest.json"
+    if not probes.exists() or not manifest.exists():
+        pytest.skip("no sealed locked set in this checkout")
+    cases = [json.loads(x) for x in probes.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+    assert grading_digest(cases) == json.loads(
+        manifest.read_text(encoding="utf-8"))["grading_digest"]
+
+
+def test_history_lines_join_the_manifest_shingles(tmp_path, monkeypatch, capsys):
+    """A prior turn is probe text: it carries the fact the question asks about,
+    so training on it teaches the gate exactly the way training on a teach line
+    does. It has to seal into the same shingle and run sets, or half the
+    holdout's content is unscreened."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+    line = "My ferret is named Bandit and he steals socks."
+    rec = {"category": "context",
+           "history": [{"role": "user", "content": line},
+                       {"role": "assistant", "content": "Noted."}],
+           "q": "What did I say my ferret steals?",
+           "want_any": ["socks"], "deny_any": []}
+    src = tmp_path / "locked_probes.jsonl"
+    src.write_text(json.dumps(rec) + "\n", encoding="utf-8", newline="")
+
+    assert elg._cli_seal(str(src)) == 0, capsys.readouterr().out
+    guard = elg.LockedProbeGuard.load(tmp_path / "locked_probes.manifest.json")
+
+    assert guard.leaks(line), "a verbatim prior turn is not screened at all"
+    # ...and the question's own shingles are not what would have caught it: it
+    # shares two content words with the line, far under the jaccard bar
+    assert not guard.leaks("The mill closes at six on weekdays.")
+
+
+def test_a_sealed_history_probe_still_verifies_at_run_time(tmp_path, monkeypatch, capsys):
+    """The seal has a reader half. eval_behavior recomputes the manifest's whole
+    h/s/n payload from the plaintext and compares it POSITION BY POSITION, so a
+    string the sealer seals and the run does not rebuild is not a smaller check
+    -- it is a holdout that can never verify again, and the gate refuses itself
+    on a file nobody edited."""
+    import eval_behavior
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+    rec = {"category": "context",
+           "history": [{"role": "user", "content": "My ferret is named Bandit and he steals socks."},
+                       {"role": "assistant", "content": "Bandit sounds like a handful."}],
+           "q": "What did I say my ferret steals?",
+           "want_any": ["socks"], "deny_any": []}
+    src = tmp_path / "locked_probes.jsonl"
+    src.write_text(json.dumps(rec) + "\n", encoding="utf-8", newline="")
+    assert elg._cli_seal(str(src)) == 0, capsys.readouterr().out
+    manifest = tmp_path / "locked_probes.manifest.json"
+
+    assert eval_behavior._seal_mismatch([rec], src, manifest) is None
+
+
+def test_a_malformed_history_cannot_seal(tmp_path, monkeypatch, capsys):
+    """The sealer checks every value's TYPE because a wrong shape iterates
+    keys-only through the hashes while its values ride inside the byte seal
+    uncovered. History is nested, so it has two levels to get wrong -- and the
+    gate run posts whatever is there straight to the server."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+
+    def seal_of(history) -> int:
+        rec = {"category": "context", "history": history, "q": "What did I say?",
+               "want_any": ["socks"], "deny_any": []}
+        p = tmp_path / "probes.jsonl"
+        p.write_text(json.dumps(rec) + "\n", encoding="utf-8", newline="")
+        return elg._cli_seal(str(p))
+
+    for bad, why in (
+        ([{"role": "tool", "content": "x"}], "role serve never renders"),
+        ([{"role": "assistant", "content": "x"}], "starts on assistant"),
+        ([{"role": "user", "content": ""}], "empty turn"),
+        ([{"role": "user"}], "no content at all"),
+        ("not a list", "a bare string iterates one character at a time"),
+        ([], "an empty history is the absent key spelled long"),
+        ([{"role": "user", "content": "x"}] * 11, "over the ten-turn ceiling"),
+        # An ODD count ends on a user turn, and the probe's own question is
+        # appended as the last user turn -- two user messages back to back at
+        # the payload seam, which is not a conversation the renderer ever sees
+        # in training or at serve. All 15 live context rows are even.
+        ([{"role": "user", "content": "x"}], "one turn, ends on user"),
+        ([{"role": "user", "content": "x"}, {"role": "assistant", "content": "y"},
+          {"role": "user", "content": "z"}], "three turns, ends on user"),
+        # The whole history rides in ONE request beside the question, and the
+        # documented eval server runs at --max-context 2048.
+        ([{"role": "user", "content": "x" * 3000},
+          {"role": "assistant", "content": "y" * 1500}], "over the content cap"),
+    ):
+        assert seal_of(bad) == 1, f"sealed a malformed history: {why}"
+        assert "history" in capsys.readouterr().out
+
+    assert seal_of([{"role": "user", "content": "My ferret steals socks."},
+                    {"role": "assistant", "content": "A thief, then."}]) == 0, (
+        capsys.readouterr().out)
+    # ...and the cap is a TOTAL, not a per-turn limit: two turns that each fit
+    # but together do not must refuse, while a pair just under it seals.
+    assert seal_of([{"role": "user", "content": "x" * 1999},
+                    {"role": "assistant", "content": "y" * 1999}]) == 0, (
+        capsys.readouterr().out)
+
+
+def test_history_text_carries_no_uncovered_annotation(tmp_path, monkeypatch, capsys):
+    """A prior turn is a string value like any other sealed string, so the two
+    hash-invisible channels have to close over it as well.
+
+    Whitespace: `grading_digest` hashes history content through the same
+    split()/join it hashes teach through, so "a  b" inside a prior turn changes
+    the file's bytes and nothing else -- the annotation channel the sealer's own
+    message names.
+
+    Non-ASCII: json.dumps escapes it, so a raw character makes the file's bytes
+    something other than the canonical dump of their own parse, and the
+    whole-file backstop refuses. That is exactly the coverage a teach line has;
+    the ESCAPED spelling seals in every field, history and teach alike."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+
+    def seal_of(content: str, ensure_ascii: bool = True) -> int:
+        rec = {"category": "context",
+               "history": [{"role": "user", "content": content},
+                           {"role": "assistant", "content": "Noted."}],
+               "q": "What did I say my ferret steals?",
+               "want_any": ["socks"], "deny_any": []}
+        p = tmp_path / "probes.jsonl"
+        p.write_text(json.dumps(rec, ensure_ascii=ensure_ascii) + "\n",
+                     encoding="utf-8", newline="")
+        return elg._cli_seal(str(p))
+
+    assert seal_of("My ferret  steals socks.") == 1, "a doubled space rides the byte seal"
+    assert "whitespace" in capsys.readouterr().out
+
+    assert seal_of("My ferret steals socks’ laces.", ensure_ascii=False) == 1
+    assert "canonical" in capsys.readouterr().out
+
+    assert seal_of("My ferret steals socks.") == 0, capsys.readouterr().out
+
+
+def test_probe_key_sets_agree_everywhere():
+    """A key the validator blesses but the sealer refuses (or the reverse) turns
+    "Safe to seal" into a false promise, and the eval's load WARN reads the
+    sealer's set so a third spelling cannot drift in behind it."""
+    import eval_leak_guard
+    import validate_probes
+
+    assert set(validate_probes.KNOWN_KEYS) == set(eval_leak_guard._PROBE_KEYS)
+    # ...and the canonical write order covers every one of them, or the sealer's
+    # order check dies on a KeyError instead of refusing
+    assert set(eval_leak_guard._KEY_ORDER) == set(eval_leak_guard._PROBE_KEYS)

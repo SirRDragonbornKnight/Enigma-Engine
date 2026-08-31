@@ -168,7 +168,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1467 passed on ENIGMAPC (2026-08-26, paired with the multiturn-arc Wave 1 commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1504 passed on ENIGMAPC (2026-08-31, paired with the multiturn-arc waves 2+3 commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -350,6 +350,10 @@ Deleted after a three-agent adversarial audit verified every claim
    path's removal (`test_collect_finetuning_data.py` net -3: the dead-path
    assertions went, one adversarial-negative asserting the `.txt` is NOT
    written came in).
+   **1467 -> 1504 is the multiturn-arc waves 2+3** -- waves 2 and 3 plus
+   tasks 4.1/4.2 of the 2026-08-25 multiturn plan: the reseal #8 eval and
+   guard tests, the W3 corpus shape tests, and the per-token loss
+   normalization tests.
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

@@ -27,12 +27,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from enigma_engine.core.chat_format import BUILTIN_NAMES  # noqa: E402
 from enigma_engine.core.persona import Persona  # noqa: E402
 from enigma_engine.core.persona_content import ENIGMA_CREATOR  # noqa: E402
 from eval_behavior import INFORMATIONAL_CATEGORIES, THRESHOLDS, _grade_identity  # noqa: E402
 from eval_leak_guard import _KEY_ORDER as _SEAL_KEY_ORDER  # noqa: E402
 from eval_leak_guard import _content_words as _seal_content_words  # noqa: E402
 from eval_leak_guard import LockedProbeGuard, seal as _seal_texts  # noqa: E402
+from eval_leak_guard import malformed_history as _seal_malformed_history  # noqa: E402
 from serve_enigma import _MEMORABLE, _looks_arithmetic  # noqa: E402
 # The forget side of serve's offer precedence, in its module-level spelling.
 # The live gates (`_looks_forgettable`/`_looks_memorable`) read serve's MEMORY
@@ -51,14 +53,22 @@ CATEGORIES = set(THRESHOLDS) | set(INFORMATIONAL_CATEGORIES)
 TOOL_CATEGORIES = {"tool", "restraint"}
 # Exactly the sealer's _PROBE_KEYS: a key the validator blesses but the
 # sealer refuses (or vice versa) turns "Safe to seal" into a false promise.
-KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool"}
-# The one client tool the eval injects for tool/restraint probes.
-VALID_EXPECT_TOOLS = {None, "get_weather"}
+KNOWN_KEYS = {"category", "q", "want_any", "deny_any", "teach", "expect_tool", "history"}
+# What a tool/restraint probe may expect: the one client tool the eval injects,
+# a null expectation ("call nothing"), or ANY built-in -- the server executes
+# those itself and reports them through `tools_run`, so expecting one here is
+# gradable exactly as it is anywhere else. Naming only `calculate` made the
+# validator refuse `speak` in a tool category while the sealer sealed it;
+# whether expecting it there is SENSIBLE is content, which neither tool judges.
+VALID_EXPECT_TOOLS = {None, "get_weather"} | set(BUILTIN_NAMES)
 # Organ probes call the server's OWN built-ins instead: no client tool is
 # injected, so what they measure is whether her intent gate offers the organ
 # and she then routes to it. (Offering every built-in unconditionally was
 # tried 2026-08-20 and reverted -- measured worse; BACKLOG T4.)
-ORGAN_EXPECT_TOOLS = {None, "speak", "imagine", "remember", "forget", "calculate"}
+# Read off the shared spec table rather than spelled again: the sealer decides
+# the same question from BUILTIN_NAMES, and two hand-copied lists is how "Safe
+# to seal" came to print ahead of a sealer ERROR.
+ORGAN_EXPECT_TOOLS = {None} | set(BUILTIN_NAMES)
 
 # A deny key only stays a deny key if a CORRECT answer cannot contain it.
 # "just a wrapper" fires on "I am not just a wrapper"; "i am a wrapper" does
@@ -305,15 +315,27 @@ def check(path: Path, skip_leak: bool = False,
                               "other shape iterates keys-only through every hash "
                               "while its values ride the byte seal uncovered")
                 shape_ok = False
+        if "history" in rec:
+            # Predicted from the sealer's OWN rule, not a second spelling of
+            # it: the sealer refuses a history the gate run could not post, and
+            # discovering that after "Safe to seal" is the failure this check
+            # exists to prevent.
+            why = _seal_malformed_history(rec["history"])
+            if why:
+                errors.append(f"{where}: {why} -- the sealer refuses it")
+                shape_ok = False
         if not shape_ok:
             continue
+        # Prior turns ride in the same request as the question, so their
+        # content is sealed text like a teach line and is checked as such.
+        history_lines = [turn["content"] for turn in rec.get("history") or []]
         known_order = [k for k in rec if k in _SEAL_KEY_ORDER]
         positions = [_SEAL_KEY_ORDER.index(k) for k in known_order]
         if positions != sorted(positions):
             errors.append(f"{where}: keys out of the sealer's canonical order "
                           f"{list(rec)} -- write keys as {list(_SEAL_KEY_ORDER)}")
         for s in [question] + [x for f in ("want_any", "deny_any", "teach")
-                               for x in (rec.get(f) or [])]:
+                               for x in (rec.get(f) or [])] + history_lines:
             if s != " ".join(s.split()):
                 errors.append(f"{where}: non-normalized whitespace inside a string "
                               f"({s[:40]!r}) -- the sealer refuses it (a spacing "
@@ -321,9 +343,11 @@ def check(path: Path, skip_leak: bool = False,
                 break
         # want/deny are the fields the grader MATCHES on -- a curly quote there
         # is the deadliest place for one (audit 2026-07-22: the earlier check
-        # covered only q/teach).
-        for field in ("q", "teach", "want_any", "deny_any"):
-            value = rec.get(field)
+        # covered only q/teach). History is checked for the other half of the
+        # same hazard: its turns are POSTED verbatim, so an editor's quote
+        # changes the prompt the gate run sends.
+        for field in ("q", "teach", "want_any", "deny_any", "history"):
+            value = history_lines if field == "history" else rec.get(field)
             blob = " ".join(str(v) for v in value) if isinstance(value, list) else (value or "")
             if any(ord(ch) > 127 for ch in blob):
                 bad = sorted({ch for ch in blob if ord(ch) > 127})

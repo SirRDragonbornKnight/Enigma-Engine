@@ -17,6 +17,9 @@ tests/test_serve_enigma.py against serve's own _with_context; the drift lock
 here compares against the shared spec table both sides read.
 """
 
+import ast
+import copy
+import inspect
 import json
 import re
 
@@ -31,13 +34,21 @@ from enigma_engine.core.chat_format import (
 )
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
 from make_sft_data import (
+    BLOCK,
+    N_CONTEXT_BASES,
+    N_RECALL_BASES,
+    N_TOOL_CHAINS,
     PREAMBLE,
     TOOLS,
     _BUILTIN_USE,
+    _CONTEXT_ENTITIES,
+    _RECALL_ASKS,
     _builtin_system,
     fit_mix_to_block,
     gen_builtin_block_examples,
     gen_chat_multiturn_examples,
+    gen_context_recall_examples,
+    gen_context_reference_examples,
     gen_image_read_examples,
     gen_math_examples,
     gen_memory_correction_examples,
@@ -46,6 +57,7 @@ from make_sft_data import (
     gen_search_examples,
     gen_structured_examples,
     gen_teaching_examples,
+    gen_tool_depth_examples,
     gen_tool_examples,
     gen_unknown_examples,
     vocab_is_digit_uniform,
@@ -202,7 +214,8 @@ def test_every_authored_record_survives_the_probe_screen():
                 gen_search_examples, gen_unknown_examples,
                 gen_structured_examples, gen_episode_examples,
                 gen_image_read_examples, gen_identity_examples,
-                gen_identity_paraphrases):
+                gen_identity_paraphrases, gen_context_reference_examples,
+                gen_context_recall_examples, gen_tool_depth_examples):
         recs = gen()
         if isinstance(recs, tuple):  # gen_identity_examples returns (records, dropped)
             recs = recs[0]
@@ -214,13 +227,13 @@ def test_every_authored_record_survives_the_probe_screen():
 
 
 # The math asks the SEALED screen is allowed to hold, enumerated so a new dead
-# record fails loudly instead of joining a tolerated pile. "What's 13 squared?"
-# reduces to exactly one sealed probe's content words AND reproduces them in
-# order, so the quotation tier fires: every phrasing that keeps the operand
-# next to "squared" quotes that probe, and the ones that do not ("the square
-# of 13") teach the probe's own subject through a reworded ask -- a decision
-# about holdout CONTENT, which is the user's, not the builder's.
-SCREENED_MATH_ASKS = ("What's 13 squared?",)
+# record fails loudly instead of joining a tolerated pile. EMPTY, and measured
+# so: the one entry this held was "What's 13 squared?", which reduces to
+# exactly one sealed probe's content words AND reproduces them in order, so
+# the quotation tier fired. Both squared-adjacent surfaces left sq_phr in the
+# multiturn wave and the corpus measured 1067 generated / 1067 trained / 0
+# held -- so the allowlist asserts nothing rather than tolerating a residue.
+SCREENED_MATH_ASKS: tuple[str, ...] = ()
 
 
 def test_the_math_and_tool_corpora_survive_the_sealed_probe_screen():
@@ -236,7 +249,9 @@ def test_the_math_and_tool_corpora_survive_the_sealed_probe_screen():
     (audit 2026-08-22).
 
     Only SCREENED_MATH_ASKS may be held, and each entry must still be held:
-    a stale allowlist is the same silence in a smaller box."""
+    a stale allowlist is the same silence in a smaller box. That allowlist is
+    now EMPTY, so the two directions meet at zero -- every authored math and
+    tool record reaches training."""
     from eval_leak_guard import LockedProbeGuard
     from make_sft_data import _eval_probe_questions, probe_screen
 
@@ -266,6 +281,10 @@ def test_the_math_and_tool_corpora_survive_the_sealed_probe_screen():
                 "drop it from SCREENED_MATH_ASKS rather than tolerating a "
                 "residue that is no longer there"
             )
+        assert not gone, (
+            f"{gen.__name__} holds {len(gone)} record(s) out of training; the "
+            f"measured state of both corpora is zero: {gone}"
+        )
 
 
 def test_a_dev_probe_is_held_out_wherever_it_sits_on_the_prompt_side():
@@ -371,6 +390,278 @@ def test_conversations_carry_no_tools_or_memory():
     for r in gen_chat_multiturn_examples():
         assert not _tool_calls(r)
         assert r["messages"][0]["role"] == "user", "no system block belongs on these"
+
+
+# --------------------------------------------------------------------------
+# Conversation shapes the mix has never carried: reference back to an earlier
+# turn, recall of the visible history, and a tool call that lands mid-chat
+# --------------------------------------------------------------------------
+
+
+def _alternating(roles):
+    return roles == [("user" if i % 2 == 0 else "assistant") for i in range(len(roles))]
+
+
+def _single_digit_math_ask(text):
+    """A "times" ask whose every operand is one character long.
+
+    The leak guard drops length-1 words, so such an ask reduces to the lone
+    word "times" and scores a perfect jaccard against any sealed probe that
+    reduces the same way -- 50 authored times-table records died on exactly
+    this in the 2026-08-22 audit. Generated conversation must not re-open it.
+    """
+    return "times" in text and not any(len(t) > 1 and t.isdigit() for t in text.split())
+
+
+def test_context_reference_shapes():
+    recs = gen_context_reference_examples()
+    assert len(recs) >= 120                      # PROPOSAL floor: ~40 bases x depths
+    for r in recs:
+        roles = [m["role"] for m in r["messages"]]
+        assert roles[0] == "user" and roles[-1] == "assistant"
+        assert _alternating(roles), f"turns do not alternate: {roles}"
+        assert r["category"] == "context_reference"
+        assert all(m["content"].strip() for m in r["messages"]), "an empty turn"
+        assert not _tool_calls(r), "pure conversation carries no call"
+    users = [m["content"] for r in recs for m in r["messages"] if m["role"] == "user"]
+    assert not any(_single_digit_math_ask(u) for u in users)
+    # The ladder itself: the same reach has to train at every distance, from
+    # the ask landing straight after the plant to four turns of chat away.
+    assert {len(_user_turns(r)) for r in recs} == {2, 3, 4, 5, 6}
+
+
+def test_context_reference_final_turn_needs_the_context():
+    """EVERY record ends on the reference ask, and the referent is named once.
+
+    Both halves were measured holes. A record that stops on a filler turn
+    carries no reach lesson at all -- it is generic chat wearing this
+    category's name, and 100 of the first 140 records were exactly that,
+    which put twelve filler replies on top of the corpus's assistant spans.
+    And a middle turn that restates the entity gives the ask a nearer answer
+    than turn 1, which is the same lesson deleted a different way.
+
+    Pinned per BASE, not in aggregate: one row drifting either way would
+    dilute the corpus while every count stayed green.
+    """
+    entities = {e for e, *_ in _CONTEXT_ENTITIES}
+    asks = {e: ask for e, _, _, ask, _ in _CONTEXT_ENTITIES}
+    assert len(entities) == N_CONTEXT_BASES, "the entity table and its count disagree"
+    seen = set()
+    for r in gen_context_reference_examples():
+        users = [m["content"] for m in r["messages"] if m["role"] == "user"]
+        assert len(users) >= 2
+        planted = [e for e in entities if e.lower() in users[0].lower()]
+        assert len(planted) == 1, f"turn 1 plants {planted}: {users[0]}"
+        entity = planted[0]
+        seen.add(entity)
+        assert users[-1] == asks[entity], (
+            "the record does not end on its reference ask -- a prefix that "
+            f"stops on filler teaches no reach: {users[-1]!r}")
+        for u in users[1:]:
+            assert entity.lower() not in u.lower(), (
+                f"{entity!r} is restated after the plant, so the ask has a "
+                f"nearer answer to read than turn 1: {u!r}")
+    assert seen == entities, f"bases that emitted nothing: {sorted(entities - seen)}"
+
+
+def test_context_recall_shapes():
+    recs = gen_context_recall_examples()
+    assert len(recs) >= 90                       # PROPOSAL floor: 30 bases x 3 framings
+    for r in recs:
+        roles = [m["role"] for m in r["messages"]]
+        assert roles[0] == "user" and roles[-1] == "assistant"
+        assert _alternating(roles), f"turns do not alternate: {roles}"
+        assert r["category"] == "context_recall"
+        assert all(m["content"].strip() for m in r["messages"]), "an empty turn"
+        assert not _tool_calls(r), "recall reads the transcript, it does not call out"
+        assert len(_user_turns(r)) >= 3, "nothing to recall from a single exchange"
+    users = [m["content"] for r in recs for m in r["messages"] if m["role"] == "user"]
+    assert not any(_single_digit_math_ask(u) for u in users)
+
+
+def _readback_faults(recs):
+    """Records whose answer does not quote the turn its ask NAMED.
+
+    Quote-exact per framing, because a shared-word count cannot tell a right
+    readback from a wrong one: an answer that quotes the FIRST turn when the
+    ask said "just" still shares plenty of words with the history and scores
+    the same. What separates them is WHICH turn is reproduced, so that is
+    what gets measured -- the full quoted string, and for the recap framings
+    every turn in transcript order.
+    """
+    which_by_ask = {ask: which for ask, which, _ in _RECALL_ASKS}
+    faults = []
+    for r in recs:
+        users = [m["content"] for m in r["messages"] if m["role"] == "user"]
+        body, ask = users[:-1], users[-1]
+        answer = r["messages"][-1]["content"]
+        which = which_by_ask[ask]
+        if which == "all":
+            at = [answer.find(f'"{q}"') for q in body]
+            if -1 in at:
+                faults.append((ask, "a turn of the history is not quoted", answer))
+            elif at != sorted(at):
+                faults.append((ask, "the turns are quoted out of order", answer))
+            continue
+        right, wrong = (body[-1], body[0]) if which == "last" else (body[0], body[-1])
+        if f'"{right}"' not in answer:
+            faults.append((ask, f"does not quote the {which} turn", answer))
+        elif f'"{wrong}"' in answer:
+            faults.append((ask, f"quotes the other end as well as the {which} turn", answer))
+    return faults
+
+
+def test_context_recall_answers_read_back_the_history():
+    """Faithful to the transcript, not a plausible-sounding summary.
+
+    An invented history is worse than an admitted blank, and a history that
+    is real but the WRONG turn is the same failure wearing a true sentence.
+    """
+    recs = gen_context_recall_examples()
+    assert recs, "generator returned nothing -- the check would be vacuous"
+    assert not _readback_faults(recs)
+
+
+def test_a_wrong_turn_readback_would_fail_that_check():
+    """Mutation proof for the check above, and the receipt for replacing the
+    old one.
+
+    The previous form asserted the answer shared >= 2 content words with SOME
+    earlier turn. Swapping first for last leaves that untouched -- both ends
+    are on screen and both share words -- so the corpus could quote the wrong
+    turn under a green suite. The sabotage is built on a COPY; the generator's
+    real output is never edited.
+    """
+    from eval_leak_guard import _content_words
+
+    swapped = []
+    for r in gen_context_recall_examples():
+        users = [m["content"] for m in r["messages"] if m["role"] == "user"]
+        if _RECALL_ASKS and users[-1] not in {a for a, w, _ in _RECALL_ASKS if w == "last"}:
+            continue
+        r = copy.deepcopy(r)
+        # answer the "just asked" framing with the FIRST turn instead
+        r["messages"][-1]["content"] = f'You just asked: "{users[0]}"'
+        swapped.append(r)
+    assert swapped, "no last-turn framing in the corpus -- the mutation is empty"
+
+    for r in swapped:  # the OLD threshold still passes on every sabotaged record
+        users = [m["content"] for m in r["messages"] if m["role"] == "user"]
+        answer = set(_content_words(r["messages"][-1]["content"]))
+        assert max(len(answer & set(_content_words(u))) for u in users[:-1]) >= 2
+
+    faults = _readback_faults(swapped)
+    assert len(faults) == len(swapped), \
+        f"the strengthened check missed {len(swapped) - len(faults)} wrong-turn readbacks"
+
+
+def _offered(rec):
+    """The tool names the record's system block puts on offer."""
+    return {json.loads(ln)["name"] for ln in rec["messages"][0]["content"].splitlines()
+            if ln.startswith("{")}
+
+
+def _first_call_depth(rec):
+    """Which user turn the first tool call answers (1-based).
+
+    Depth 1 is the shape gen_builtin_block_examples already trains -- the ask
+    that opens the conversation. This corpus exists for everything past it.
+    """
+    depth = 0
+    for m in rec["messages"]:
+        if m["role"] == "user":
+            depth += 1
+        elif m.get("tool_calls"):
+            return depth
+    return 0
+
+
+def test_tool_depth_shapes():
+    recs = gen_tool_depth_examples()
+    assert len(recs) >= N_TOOL_CHAINS
+    tool_names = {t[0] for t in TOOLS}
+    for r in recs:
+        assert r["category"] == "tool_in_context"
+        msgs = r["messages"]
+        assert msgs[0]["role"] == "system" and msgs[0]["content"].strip()
+        assert msgs[-1]["role"] == "assistant" and msgs[-1]["content"].strip()
+        assert "tool" in [m["role"] for m in msgs], "the trace stops before the result"
+        calls = _tool_calls(r)
+        assert calls, "a tool-in-context record with no call"
+        for c in calls:
+            assert c["name"] in BUILTIN_NAMES or c["name"] in tool_names, \
+                f"{c['name']} has no runtime and no spec"
+        assert _first_call_depth(r) >= 2, \
+            "the call answers the opening turn -- that is not a call IN CONTEXT"
+
+
+def test_tool_depth_calculate_operands_are_multidigit():
+    """A single-digit-only expression is the degenerate screen match again.
+
+    The ask around it reduces to the lone word "times"/"divided" once the
+    guard drops length-1 words, so the record is authored and then held out.
+    Every calculate in this family carries an operand the guard can see.
+    """
+    for r in gen_tool_depth_examples():
+        for c in _tool_calls(r):
+            if c["name"] != "calculate":
+                continue
+            expr = c["arguments"]["expression"]
+            assert any(len(n) > 1 for n in re.findall(r"\d+", expr)), \
+                f"single-digit-only calculate expression: {expr}"
+
+
+def test_tool_depth_covers_the_second_through_fifth_user_turn():
+    depths = {_first_call_depth(r) for r in gen_tool_depth_examples()}
+    assert {2, 3, 4, 5} <= depths, f"depth coverage is {sorted(depths)}"
+
+
+def test_tool_depth_client_records_keep_the_builtins_on_offer():
+    """A client tool arrives BESIDE the built-ins, never instead of them.
+
+    serve renders one block over _builtin_tools(...) + client_tools, so a
+    trained record that drops the built-ins when a client sends a spec would
+    put the model in front of a system message it never saw -- and teach it
+    that a client tool switches her own off.
+    """
+    recs = gen_tool_depth_examples()
+    client = [r for r in recs if _offered(r) - BUILTINS]
+    assert client, "no client-tool-beside-builtins records"
+    for r in client:
+        assert BUILTINS <= _offered(r), "a client tool displaced the built-ins"
+        assert len(_offered(r) - BUILTINS) == 1, "one client spec per record"
+    picked = {c["name"] for r in client for c in _tool_calls(r)}
+    assert picked & BUILTINS, "the client tool always wins -- restraint untrained"
+    assert picked - BUILTINS, "the client tool is never picked -- selection untrained"
+    for r in recs:
+        if not (_offered(r) - BUILTINS):
+            assert _offered(r) == BUILTINS, "a builtin-only record lost a built-in"
+
+
+def test_the_new_conversation_families_fit_the_block():
+    """A messages-schema record cannot be trimmed, only dropped.
+
+    fit_mix_to_block left-trims a prompt/completion record; a conversation
+    has no single prompt to cut, so anything past the block leaves the mix
+    entirely. Deep chains fall off the 8-message ASCII fast path and take the
+    real render, which is the measurement that matters here.
+
+    Called the way main() calls it, sealed screen included: passing no screen
+    made the post-trim-leak count structurally zero, so a quarter of the
+    assertion measured the argument list rather than the corpus.
+    """
+    from eval_leak_guard import LockedProbeGuard
+
+    locked = LockedProbeGuard.load()
+    assert len(locked), "no sealed probes -- the screen argument would be dead"
+    for gen in (gen_context_reference_examples, gen_context_recall_examples,
+                gen_tool_depth_examples):
+        lines = [json.dumps(r, ensure_ascii=False) for r in gen()]
+        kept, trimmed, dropped, leaked = fit_mix_to_block(
+            lines, block=BLOCK, vocab_path=vocab_file_for_size(16366),
+            screen=locked.leaks)
+        assert (len(kept), trimmed, dropped, leaked) == (len(lines), 0, 0, 0), \
+            f"{gen.__name__}: {dropped} of {len(lines)} records render past block {BLOCK}"
 
 
 # --------------------------------------------------------------------------
@@ -922,6 +1213,9 @@ def test_math_is_gated_on_the_vocab_carving_digits_uniformly():
         gen_tool_examples,
         gen_math_examples,
         gen_image_read_examples,
+        gen_context_reference_examples,
+        gen_context_recall_examples,
+        gen_tool_depth_examples,
     ],
     ids=lambda f: f.__name__,
 )
@@ -1001,7 +1295,44 @@ _STUB_GENERATORS = (
     "gen_reasoning_examples", "gen_memory_correction_examples",
     "gen_search_examples", "gen_unknown_examples", "gen_structured_examples",
     "gen_episode_examples", "gen_identity_paraphrases",
+    "gen_context_reference_examples", "gen_context_recall_examples",
+    "gen_tool_depth_examples",
 )
+
+
+# gen_identity_examples returns (records, dropped) rather than a bare list,
+# so _stub_build patches it by hand below instead of through the loop.
+_HAND_STUBBED = {"gen_identity_examples"}
+
+
+def _main_generator_calls():
+    """Every gen_* function main() calls, read off main()'s own source."""
+    import make_sft_data
+
+    tree = ast.parse(inspect.getsource(make_sft_data.main))
+    return {n.func.id for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id.startswith("gen_")}
+
+
+def test_the_stub_list_covers_every_generator_main_calls():
+    """A generator wired into main() but missing here runs for REAL inside
+    the stub tests.
+
+    _STUB_GENERATORS is a hand-kept mirror of main()'s call sites with
+    nothing tying the two together, so the miss is silent in both directions:
+    the count tests would quietly tokenize a live corpus (minutes, and
+    assertions about numbers the stubs were supposed to control), and a
+    generator deleted from main() would leave a name here that patches
+    nothing. Read the call sites instead of trusting the mirror.
+    """
+    called = _main_generator_calls()
+    assert called, "main()'s source names no generator -- the parse is broken"
+    assert called == set(_STUB_GENERATORS) | _HAND_STUBBED, (
+        "the stub list and main() disagree -- "
+        f"called by main but never stubbed: {sorted(called - set(_STUB_GENERATORS) - _HAND_STUBBED)}; "
+        f"stubbed but never called: {sorted(set(_STUB_GENERATORS) - called - _HAND_STUBBED)}"
+    )
 
 
 def _qa(question, answer="Noted."):

@@ -86,6 +86,39 @@ def _write_pack(pack: Path, **fields) -> Path:
     return pack
 
 
+# The SFT-4 recipe, argument for argument. lr/epochs/seed are DELIBERATELY
+# absent: they are finetune_enigma's own defaults (adamw 2e-5 cosine, 2 epochs,
+# seed 1337), and a launcher that re-states a default is how the recipe and the
+# default drift apart without either looking wrong.
+SFT4_ARGS = [
+    "finetune_enigma.py",
+    "--data", "data/sft/mix.jsonl",
+    "--init", "models/enigma_v2_238m_facts/model.pth",
+    "--out", "models/enigma_v2_sft4",
+    "--block", "2048",
+    "--micro-batch", "4",
+    "--grad-accum", "8",
+]
+
+
+@needs_powershell
+def test_sft4_launches_the_recipe_it_documents():
+    """The launcher's -DryRun is the only place the recipe can be checked
+    without spending a multi-hour run on it. It exits before every guard on
+    purpose, so this pin does not depend on whether training is running or on
+    whether models/enigma_v2_sft4 already exists."""
+    lines = _run_ps("run_sft4.ps1", "-DryRun")
+    printed = [ln for ln in lines if ln.startswith("DRYRUN sft:")]
+    assert printed, lines
+
+    tokens = _tokens(printed[0].split("DRYRUN sft:", 1)[1].strip())
+    assert Path(tokens[0]).name == "python.exe", tokens[0]
+    assert Path(tokens[1]).name == SFT4_ARGS[0], tokens[1]
+    assert tokens[2:] == SFT4_ARGS[1:]
+    for restated in ("--lr", "--epochs", "--seed", "--optimizer", "--schedule"):
+        assert restated not in tokens, f"{restated} re-states a finetune default"
+
+
 # ---------------------------------------------------------------------------
 # byte-compatibility: what her own launch resolves to, run for real
 # ---------------------------------------------------------------------------

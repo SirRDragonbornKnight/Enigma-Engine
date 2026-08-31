@@ -56,6 +56,21 @@ ENTRIES = [
      b"    if overall_n == 0:",
      b"    if False and overall_n == 0:",
      "tests/test_eval_grading.py::test_comparator_refuses_a_zero_gated_run"),
+    # Disabling the confusable fold makes the probe screen read a Cyrillic 'a'
+    # as a separator again, so a sealed word spelled with one extracts as
+    # fragments and screens as nothing.
+    ("eval_leak_guard.py",
+     b"    return text.translate(_CONFUSABLE_MAP)",
+     b"    return text  # MUTANT: fold disabled",
+     "tests/test_eval_leak_guard.py::test_a_confusable_spelling_screens_as_its_plain_form"),
+    # Reverting the step to mean-of-means weights a short micro-batch exactly
+    # like a full one -- the skew D-6 removed. Its killing test is a presence
+    # pin, so the mutant puts the OLD division back rather than disabling the
+    # line: `if False and ...` would leave the pin green.
+    ("finetune_enigma.py",
+     b"                loss = loss * scales[k]",
+     b"                loss = loss / args.grad_accum  # MUTANT: uniform weighting",
+     "tests/test_finetune_sft.py::test_train_loop_uses_token_scales"),
 ]
 
 

@@ -231,3 +231,21 @@ _Navigation layer over `SUGGESTIONS.md` (landscape research + principles),
       cache cap now follows config.max_seq_len instead of the silent 4096
       clamp; vocab-alignment pad rows can no longer be sampled).
     - Efficiency/cleanup batch: see BACKLOG "2026-07-19 review".
+13. **The locked-probe sealer has no per-string non-ASCII check -- only the
+    whole-file canonical-bytes backstop.** `eval_leak_guard._cli_seal` refuses a
+    file whose bytes are not `json.dumps` of its own parse, and `json.dumps`
+    escapes non-ASCII, so a RAW curly quote or Cyrillic character refuses as
+    "not the canonical serialization". The `\uXXXX`-ESCAPED spelling of the same
+    character is canonical, and it seals -- in every string field alike (q,
+    category, expect_tool, want/deny, teach, history). Measured 2026-08-26:
+    a teach line and a history line each carrying `é` both seal rc=0
+    escaped and refuse rc=1 raw. The character then rides inside
+    `probe_file_sha256` while every sealed hash normalizes it away, which is the
+    uncovered-annotation channel the sealer's own error messages name -- and the
+    gate run POSTS the mutated text to the server. Partial cover: the pre-seal
+    `validate_probes` errors on non-ASCII in q/teach/want_any/deny_any/history,
+    so an editor's quote is caught at authoring time in the fields that grade or
+    render; nothing covers `category` or `expect_tool`, and nothing covers a
+    file sealed without running the validator. Closing it means a per-string
+    non-ASCII check across all fields at seal time (the whitespace refusal's
+    shape). DECISION OPEN -- recorded, not built.

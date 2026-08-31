@@ -170,6 +170,76 @@ def test_the_missing_expect_tool_error_names_the_grading_that_really_happens(tmp
     assert "restraint probe" not in missing[0], "the stale claim is back"
 
 
+def _context_probe(path, history):
+    """One context probe carrying the history under test. The question and its
+    want share no wording with the prior turns, so the echo WARN cannot fire and
+    be mistaken for a history finding."""
+    path.write_text(
+        json.dumps({"category": "context", "history": history,
+                    "q": "What did I say my ferret steals?",
+                    "want_any": ["socks"], "deny_any": []}) + "\n",
+        encoding="utf-8", newline="\n")
+    return path
+
+
+def _history_errors(path):
+    errors, _warns = validate_probes.check(path, skip_leak=True)
+    return errors
+
+
+def test_a_context_probe_the_validator_passes_is_one_the_sealer_seals(tmp_path, monkeypatch):
+    """"Safe to seal" is a promise about the SEALER. The validator blessed the
+    `history` key while predicting none of the sealer's history refusals, so a
+    malformed prior turn passed validation and was first discovered by the seal
+    -- the ERROR arriving after the go-ahead."""
+    import eval_leak_guard as elg
+
+    monkeypatch.setattr(elg, "LOCKED_MANIFEST", tmp_path / "unused.json")
+    good = _context_probe(
+        tmp_path / "good.jsonl",
+        [{"role": "user", "content": "My ferret Bandit hides them under the sofa."},
+         {"role": "assistant", "content": "A small thief with a hoard."}])
+
+    assert _history_errors(good) == []
+    assert elg._cli_seal(str(good)) == 0, "the validator passed a file the sealer refuses"
+
+    # ...and each history refusal the sealer would raise is raised HERE first.
+    # Even count on purpose, so this exercises the ROLE rule rather than the
+    # ends-on-assistant one: roles alternate FROM user, and this pair is
+    # inverted.
+    shape = _context_probe(tmp_path / "shape.jsonl",
+                           [{"role": "assistant", "content": "x"},
+                            {"role": "user", "content": "y"}])
+    found = _history_errors(shape)
+    assert found and "roles" in found[0], found
+    assert elg._cli_seal(str(shape)) == 1
+
+    odd = _context_probe(tmp_path / "odd.jsonl",
+                         [{"role": "user", "content": "My ferret hides them."}])
+    found = _history_errors(odd)
+    assert found and "end on an assistant turn" in found[0], found
+    assert elg._cli_seal(str(odd)) == 1
+
+    spacing = _context_probe(
+        tmp_path / "spacing.jsonl",
+        [{"role": "user", "content": "My ferret  hides them under the sofa."},
+         {"role": "assistant", "content": "A tidy little thief."}])
+    found = _history_errors(spacing)
+    assert found and "whitespace" in found[0], found
+    assert elg._cli_seal(str(spacing)) == 1
+
+    # A curly quote is where the validator runs AHEAD of the sealer rather than
+    # beside it: raw bytes refuse at the seal's canonical backstop, but the
+    # \\uXXXX spelling below is canonical and seals in any field -- so this
+    # error is the only thing standing between an editor's quote and the gate.
+    curly = _context_probe(
+        tmp_path / "curly.jsonl",
+        [{"role": "user", "content": "My ferret’s hoard is under the sofa."},
+         {"role": "assistant", "content": "A tidy little thief."}])
+    found = _history_errors(curly)
+    assert found and "non-ASCII" in found[0], found
+
+
 def test_her_own_locked_set_validates_identically_either_way():
     """The default case, on the real artifact: passing her persona explicitly
     and passing nothing must produce the same findings, or "unchanged for
