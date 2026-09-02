@@ -103,6 +103,78 @@ def _content_terms(text: str) -> set[str]:
     return set(_content_term_list(text))
 
 
+# ---------------------------------------------------------------------------
+# QUERY-TIME synonyms. RETRIEVAL ONLY.
+# ---------------------------------------------------------------------------
+# BM25 matches strings, so a fact she holds can be invisible to the question
+# that asks for it: measured 2026-08-10, "What's my job?" retrieved NOTHING
+# against a stored "I work as a nurse".
+#
+# These clusters widen the QUESTION. They must never touch what is STORED,
+# SUPERSEDED or DELETED -- that key is subject + value-kind (ruled territory,
+# audit 2026-07-22), and folding `job` into `work` there would let one fact
+# silently delete another. Which is why this table lives here and is read in
+# exactly one place: search(). It is deliberately small and curated; a big
+# generated thesaurus is how retrieval starts inventing matches.
+_SYNONYM_CLUSTERS: tuple[tuple[str, ...], ...] = (
+    ("job", "work", "occupation", "profession", "career", "employer"),
+    ("name", "called"),
+    ("home", "live", "address", "reside"),
+    ("weight", "weigh", "kilo", "pound", "lb", "kg"),
+    # "paid" is listed beside "pay": _stem folds plurals only, deliberately --
+    # no verb-suffix stripping (it merged unrelated words), so irregular forms
+    # have to be spelled out here rather than reached by the stemmer.
+    ("pay", "paid", "salary", "wage", "income", "earn"),
+    ("age", "old", "born", "birthday"),
+    ("phone", "number", "mobile", "cell"),
+    ("email", "mail"),
+    ("partner", "wife", "husband", "spouse", "married"),
+    ("kid", "child", "son", "daughter"),
+    ("pet", "dog", "cat"),
+    ("car", "vehicle", "drive"),
+    ("allergy", "allergic"),
+    ("hobby", "pastime", "enjoy"),
+    ("school", "study", "student", "degree"),
+    ("favourite", "favorite", "prefer"),
+    ("doctor", "gp", "physician"),
+    ("medication", "medicine", "prescription", "pill"),
+)
+
+# A synonym hit counts for a FRACTION of a literal one, so expansion widens the
+# net without reordering it: a record using the asked-for word still wins.
+_SYNONYM_WEIGHT = 0.35
+
+
+def _build_synonym_map() -> dict[str, tuple[str, ...]]:
+    """Stem both sides once: the query terms scoring runs on are stemmed, so an
+    unstemmed table would silently never match ("kilos" arrives as "kilo")."""
+    table: dict[str, set[str]] = {}
+    for cluster in _SYNONYM_CLUSTERS:
+        stems = {_stem(w) for w in cluster}
+        for stem in stems:
+            table.setdefault(stem, set()).update(stems - {stem})
+    return {k: tuple(sorted(v)) for k, v in table.items()}
+
+
+_QUERY_SYNONYMS = _build_synonym_map()
+
+
+def _expand_query_terms(q_terms: list[str]) -> list[tuple[str, float]]:
+    """The query as (term, weight) pairs: the asked-for words at full weight,
+    their synonyms dampened. A synonym already present literally keeps its full
+    weight rather than being added twice."""
+    weighted: list[tuple[str, float]] = [(t, 1.0) for t in q_terms]
+    literal = set(q_terms)
+    seen: set[str] = set()
+    for term in q_terms:
+        for syn in _QUERY_SYNONYMS.get(term, ()):
+            if syn in literal or syn in seen:
+                continue
+            seen.add(syn)
+            weighted.append((syn, _SYNONYM_WEIGHT))
+    return weighted
+
+
 # The stored fact form ("User's dog is named Rex.", "My bicycle is teal.")
 # has a SUBJECT slot and a VALUE slot. The subject alone is NOT the fact's
 # identity -- "dog is named Rex" and "dog is 3 years old" share the subject
@@ -803,15 +875,19 @@ class MemoryStore:
                 for t in set(d):
                     df[t] = df.get(t, 0) + 1
             k1, b = 1.5, 0.75
+            # The query, widened by the synonym clusters: asked-for words at
+            # full weight, their synonyms dampened, so a fact stored in other
+            # words is REACHABLE without outranking a literal hit.
+            weighted_terms = _expand_query_terms(q_terms)
             scored = []
             for rec, d in zip(self._records, docs):
                 score = 0.0
-                for t in q_terms:
+                for t, w in weighted_terms:
                     tf = d.count(t)
                     if not tf:
-                        continue
+                        continue  # a synonym no record uses simply scores nothing
                     idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
-                    score += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(d) / avg_len))
+                    score += w * idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(d) / avg_len))
                 if score > 0:
                     scored.append((score, rec))
         # Ties break toward the NEWEST record (ids are monotonic). Coexisting

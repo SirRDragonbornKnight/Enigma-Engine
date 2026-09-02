@@ -168,7 +168,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1609 passed on ENIGMAPC (2026-09-01, paired with the 2026-09-01 arc commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1626 passed on ENIGMAPC (2026-09-02, paired with the 2026-09-02 autonomous-stretch commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -363,6 +363,16 @@ Deleted after a three-agent adversarial audit verified every claim
    `test_eyes_lineage_guard.py` 7 (new file) plus 13 added to existing files
    (`test_serve_enigma.py` +7, `test_launchers.py` +2,
    `test_repo_hygiene.py` +1, `test_sft_regen_shapes.py` +3).
+   **1609 -> 1626 is the 2026-09-02 autonomous stretch** -- the encoder-writer
+   guards gained BEHAVIOR tests (`test_encoder_out_guards.py` 4 -> 12): the
+   committed source-grep pin survives a guard neutered to a bare `return`
+   (verified), so the distills' three rotation names, the aligns' real
+   `{stem}_{modality}_best.pt` names, the `.pth`-typo refusal and a
+   guard-runs-before-the-first-write ordering check were added; and
+   `test_memory_synonyms.py` (new file, 9) covers query-time synonym expansion
+   in memory retrieval -- the recorded "What's my job?" / "I work as a nurse"
+   miss, four paraphrases, and the dampening that keeps a literal match ahead
+   of a synonym one.
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

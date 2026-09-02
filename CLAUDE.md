@@ -116,6 +116,29 @@ later regime experiment cannot silently compare against a gated baseline.
   hatch; parity receipt 2026-07-17: the then-current 90-probe dev gate scored identically
   under both). Import-safe since 2026-07-18: startup lives in `boot()`; a mounted-but-
   unbooted app answers 503, and `tests/test_serve_enigma.py` covers the live paths.
+  `--device {auto,cuda,cpu}` picks the MODEL's device (`auto` = today's behavior); `cuda`
+  without CUDA is a hard SystemExit, never a silent CPU fallback — the failure that
+  records a CPU measurement as a GPU one. Eyes follow the model; ears/painter/voice still
+  pick their own device.
+- **Wake loop (`--wake`, OFF by default)** — `enigma_engine/core/wake.py`: one daemon
+  thread beside the request lane, priority queue, busy-deferral, quiet hours (`--wake-quiet
+  23-8`, wraps midnight) and a cooldown only a turn she SPOKE arms. `--wake-watch <folder>`
+  is what makes anything happen: **without it nothing can wake her**, and boot says so.
+  A bare timer tick does NOT call the model — this lineage cannot emit the `NO_REPLY`
+  sentinel the cheap-silence pattern needs, so ticks only produced chatter (measured
+  2026-09-01, 15 rows in ~90s); file drops always do. Announcements append to
+  `PERSONA.home/wake_log.jsonl` (never the repo) and reach `GET /v1/wake/recent`; they are
+  spoken only when talk-mode is on and she is not muted. A heartbeat turn skips
+  `_with_context`, so **nothing a wake turn does enters her memory store**.
+- **Portable lane (Enigma-to-go)** — `strip_serving_ckpt.py` drops what serving never reads
+  (the optimizer state: 2,728.3 → 909.4 MB on sft2), `quantize_serving_ckpt.py` writes int8
+  weight-only via torchao eager (909.4 → 292.7 MB, top-1 97/100 vs fp32) **and owns the load
+  side** — serve and bench route through it, and a checkpoint marked int8 that loads as plain
+  fp32 is a hard failure, never a silent dequantized impostor. int8 buys SIZE, not speed, on
+  this AMX-less CPU (23.7 vs 30.7 tok/s, measured). `build_portable.ps1` assembles the ~944 MB
+  USB folder (embeddable CPython + vendored wheels + her code + the int8 ckpt, serving on
+  8077) and CHECKS the result to prove no `data\`, `teachings.jsonl`, `models\` or
+  `Enigma Backups\` content travelled.
 
 ## Conventions / guardrails
 - **Console output must be ASCII** — the Windows cp1252 console hard-crashes on unmapped
@@ -135,8 +158,12 @@ later regime experiment cannot silently compare against a gated baseline.
 - SFT+DPO **ADOPTED**: every entry point serves `models/enigma_v2_sft2/model.pth` at
   `--max-context 2048`; the launcher chain adds `--memory-dir data\memory` (bare console
   scripts default memory OFF). The user-facing chain is **Talk to Enigma.bat / Enigma
-  Tray.bat / Stop Enigma.bat** (Desktop wrappers → repo scripts → `Start-Enigma.ps1` →
-  serve; her window is `enigma_window.py`). Current adopted weights = **v2, 238M-class**
+  Tray.bat / Enigma HUD.bat / Stop Enigma.bat** (Desktop wrappers → repo scripts →
+  `Start-Enigma.ps1` → serve; her window is `enigma_window.py`). `Start-Enigma.ps1` also
+  passes **`--state-reinject --tool-span-constrain --dry-multiplier 0.8`** — the Wave-A
+  conversation levers, adopted 2026-09-01 on measured tables. A bare `serve_enigma.py`
+  has all three OFF, and eval/scratch serves build their own argv, so the GATE stays
+  baseline. Current adopted weights = **v2, 238M-class**
   (2026-08-09); `models/enigma_dpo/model.pth` still holds **v8** (2026-07-16), kept
   byte-identical as the ROLLBACK. The live gate number is the sealed-set baseline in
   `EVAL_REDESIGN.md`. Adoption receipt, backups and revert targets: `BACKLOG.md`.

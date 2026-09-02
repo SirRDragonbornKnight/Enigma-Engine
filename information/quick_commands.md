@@ -22,8 +22,43 @@ Run everything from the Enigma Engine folder (venv activated).
 | `python serve_enigma.py --image-gen` | Imagination organ: `imagine` tool + /v1/images/generations (Stable Diffusion) |
 | `python serve_enigma.py --search` | Search organ: `<search>query</search>` spans run a lookup through this machine's own SearXNG (WSL2 docker at 127.0.0.1:8888) and the results return to her context (v2 vocab only) |
 | `python serve_enigma.py --eyes --allow-downloads` | First-ever use of an organ on a machine: permit the one-time weight download. Without the flag the server is fully offline (cache only) |
+| `python serve_enigma.py --device cpu` | Pick the device for the MODEL: `auto` (default, cuda when available), `cuda`, or `cpu`. `--device cuda` on a box with no CUDA REFUSES rather than falling back silently -- that silent fallback is how a CPU number gets recorded as a GPU one. Scope: the model and the eyes organ follow it; ears/painter/voice still choose their own device |
+
+### Conversation levers (all OFF by default; ON in the daily launcher)
+
+| Command | What It Does |
+|---------|-------------|
+| `python serve_enigma.py --dry-multiplier 0.8` | DRY sampling strength for requests that do not ask for one themselves (0 = off). A client that names `dry_multiplier` keeps what it asked for, including an explicit `0.0` -- so a caller can turn DRY off against a server that defaults it on. Attacks the 256-token verbatim loops |
+| `python serve_enigma.py --tool-span-constrain` | Constrain what she may sample INSIDE a `<\|tool_call\|>` span to valid JSON (xgrammar). Missing wheel or a tokenizer-parity failure disables it with one WARN and decoding is byte-identical |
+| `python serve_enigma.py --state-reinject` | Prefix the final user turn with the numeric facts the user stated earlier in THIS conversation (`[context: rent: 1350]`). Conversation-local only -- it never reads the memory store |
+
+`Start-Enigma.ps1` (and therefore `Talk to Enigma.bat` / `Enigma Tray.bat` /
+`Enigma HUD.bat`) passes `--state-reinject --tool-span-constrain --dry-multiplier 0.8`:
+that is the **daily posture**, adopted 2026-09-01 on measured tables. Eval and scratch
+serves build their own argv and stay baseline. Each is one token to remove.
+
+### Waking unprompted (OFF by default)
+
+| Command | What It Does |
+|---------|-------------|
+| `python serve_enigma.py --wake --wake-watch <folder>` | Let her speak unprompted: a loop beside the request lane that reacts to NEW files in the watched folder. Files already there when she boots are never announced. **Without `--wake-watch` nothing can wake her** -- boot says so out loud |
+| `--wake-interval 1800` | Seconds between timer ticks (default 1800). A bare tick does NOT call the model: this lineage cannot emit the `NO_REPLY` sentinel the cheap-silence pattern needs, so ticks would only produce chatter (measured 2026-09-01). File drops always do |
+| `--wake-cooldown 900` | Seconds she stays quiet after actually speaking (default 900). A heartbeat she answers with silence costs nothing |
+| `--wake-quiet 23-8` | Quiet hours as `H-H`, wrapping midnight (default `23-8`). `0-0` disables |
+| `GET /v1/wake/recent?n=20` | The last n things she said unprompted. Present even with `--wake` off (an empty feed is honest); the log lives in her data home, never the repo |
 
 Organ flags combine freely, e.g. `python serve_enigma.py --voice --ears --eyes --memory-dir data/memory`.
+
+---
+
+## Portable / CPU (Enigma-to-go)
+
+| Command | What It Does |
+|---------|-------------|
+| `python strip_serving_ckpt.py --in models/enigma_v2_sft2/model.pth --out "<new>.pth"` | Drop everything serving never reads (the AdamW optimizer state), keeping exactly `model_state_dict`/`config`/`step`/`meta`. Measured on sft2: **2,728.3 MB -> 909.4 MB**. Refuses an existing `--out` |
+| `python quantize_serving_ckpt.py --in "<serving-only>.pth" --out "<int8>.pth"` | int8 weight-only (torchao, eager -- no compiler). Measured: **909.4 MB -> 292.7 MB (~3x smaller)**, top-1 agreement 97/100 vs fp32. **Smaller, NOT faster on this CPU**: 23.7 tok/s int8 vs 30.7 fp32 (no AMX). Refuses an existing `--out`, and refuses any `--out` inside `models/` |
+| `python bench_generate.py --model <ckpt> --device cpu --threads 10` | Decode latency. `--threads` caps torch CPU threads (default 10, the Chrome-Remote-Desktop courtesy cap); the receipt line prints the resolved device and `torch.cuda.is_available()` so a CPU number proves it was CPU |
+| `.\build_portable.ps1 -Target D:\Enigma-Portable -Force` | Assemble the USB folder: embeddable CPython + vendored wheels + her code + the int8 checkpoint (~944 MB). `Enigma-Portable.bat` serves on 127.0.0.1:8077 and opens her window. Never copies `data\`, `teachings.jsonl`, `models\` or `Enigma Backups\` -- and CHECKS the built folder to prove it |
 
 ---
 

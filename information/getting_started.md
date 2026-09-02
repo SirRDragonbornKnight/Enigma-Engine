@@ -46,6 +46,15 @@ rollback; serve it by passing `--model` explicitly.
 | `--image-gen` | Imagination organ: `imagine` tool + `/v1/images/generations` (local Stable Diffusion) |
 | `--search` | Search organ: a `<search>query</search>` span in her output runs a lookup through this machine's own SearXNG (WSL2 docker at 127.0.0.1:8888; `--search-url` to point elsewhere) and the results return to her context. Needs the v2 vocab that carves the tags; reachability is per-query, never a boot gate |
 | `--allow-downloads` | Permit the ONE-TIME organ weight download from HuggingFace. Without it the server is fully offline (organs load from local cache only) -- first-ever use of an organ on a machine needs this flag once |
+| `--device {auto,cuda,cpu}` | Device for the MODEL (default `auto` = cuda when available). `--device cuda` without CUDA REFUSES rather than silently running on the CPU |
+| `--dry-multiplier F` | DRY sampling strength for requests that don't set their own (default 0 = off; 0.8 is the working value). Attacks verbatim repetition loops |
+| `--tool-span-constrain` | Force valid JSON inside a tool-call span (xgrammar). Degrades to a WARN and unchanged decoding if the wheel or tokenizer parity is missing |
+| `--state-reinject` | Re-inject the numeric facts the user stated earlier in THIS conversation as a prefix on the final user turn. Conversation-local; never reads the memory store |
+| `--wake --wake-watch DIR` | Let her speak unprompted about NEW files in DIR (OFF by default; files already there at boot are never announced). `--wake-interval` / `--wake-cooldown` / `--wake-quiet H-H` tune it; `GET /v1/wake/recent` is the feed. **Without `--wake-watch` nothing can wake her** -- a bare timer tick does not call the model |
+
+The three conversation levers and the organs are what `Start-Enigma.ps1` (and
+`Talk to Enigma.bat` / `Enigma Tray.bat` / `Enigma HUD.bat`) turn on for daily use;
+a bare `serve_enigma.py` leaves all three OFF.
 
 ## Chat
 

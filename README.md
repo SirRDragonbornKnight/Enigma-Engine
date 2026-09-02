@@ -39,7 +39,24 @@ avatar, and run the avatar against any LLM.
   2026-08-09 on the sealed gate (67/120 vs v8's 56, paired p=0.0433). Every entry point
   serves `models/enigma_v2_sft2/model.pth` at `--max-context 2048`; v8 (182M) stays at
   `models/enigma_dpo` as the byte-identical rollback.
-- User-facing launchers: `Talk to Enigma.bat` / `Enigma Tray.bat`.
+- Three serve-side conversation levers, adopted into the daily launcher 2026-09-01 on
+  measured tables: `--dry-multiplier` (DRY sampling against verbatim loops),
+  `--tool-span-constrain` (tool-call JSON constrained by grammar so raw JSON stops
+  reaching the user), `--state-reinject` (facts the user stated earlier in the SAME
+  conversation re-injected into the final turn). All three default OFF in a bare
+  `serve_enigma.py`; the launchers turn them on.
+- `--device {auto,cuda,cpu}` picks the model's device, and `--device cuda` on a machine
+  without CUDA REFUSES instead of quietly running on the CPU.
+- She can wake unprompted: `--wake --wake-watch <folder>` reacts to new files dropped
+  there. **Ships OFF** -- the first time she speaks on her own is a switch the user
+  throws. `GET /v1/wake/recent` is the feed.
+- She fits on a USB stick: `strip_serving_ckpt.py` then `quantize_serving_ckpt.py`
+  take the checkpoint 2,728.3 MB -> 909.4 MB -> **292.7 MB** int8 (97/100 top-1
+  agreement with fp32), and `build_portable.ps1` assembles a ~944 MB folder with its own
+  CPython that serves her on a machine with no Python, no CUDA and no toolchain.
+  int8 buys SIZE, not speed, on a CPU without AMX (measured 23.7 vs 30.7 tok/s).
+- User-facing launchers: `Talk to Enigma.bat` / `Enigma Tray.bat` / `Enigma HUD.bat`
+  (her HUD in her own window).
 
 ## Running a second AI beside her
 
