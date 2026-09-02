@@ -31,6 +31,7 @@ message goes nowhere, so the shortcut was clicked and nothing happened.
 """
 
 import html
+import os
 import socket
 import sys
 import threading
@@ -178,6 +179,12 @@ def _poll_and_load(window, url: str) -> None:
 
 
 def main() -> int:
+    # WebView2 enforces Chromium's autoplay policy, which mutes a WAV reply
+    # that finishes after the last click. pywebview exposes no API for Chromium
+    # arguments -- the env var is the loader's documented channel. setdefault,
+    # so a value the environment already carries wins.
+    os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                          "--autoplay-policy=no-user-gesture-required")
     try:
         url, on_top, persona = _parse_args(sys.argv[1:])
     except SystemExit as exc:
@@ -191,6 +198,10 @@ def main() -> int:
         _wait_for_port(url, 120)
         webbrowser.open(url)
         return 0
+    if os.environ.get("ENIGMA_HUD_DEVTOOLS"):
+        # Exposes CDP on 9222 for the verify loop only -- unset, the window
+        # carries no debugging port at all.
+        webview.settings["REMOTE_DEBUGGING_PORT"] = 9222
     try:
         window = webview.create_window(
             persona.name,
@@ -200,7 +211,20 @@ def main() -> int:
             min_size=(360, 480),
             on_top=on_top,
         )
-        webview.start(_start_poller, (window, url))
+        # pywebview's default private mode wipes the WebView2 profile on exit,
+        # so the microphone-permission answer never persists. With a profile of
+        # her own one Allow sticks -- and a stuck Deny is cleared by deleting
+        # this directory. It must NOT sit under ~\.enigma_engine: the test
+        # suite guards that data home against new content and an open window
+        # writes its cache continuously, so a suite run beside her window goes
+        # red on teardown. LOCALAPPDATA is the Windows-native home for a
+        # webview profile.
+        profile_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+            "Enigma", "webview_profile")
+        os.makedirs(profile_dir, exist_ok=True)
+        webview.start(_start_poller, (window, url),
+                      private_mode=False, storage_path=profile_dir)
     except Exception as exc:  # WebView2 runtime broken/missing, etc.
         print(f"window failed ({exc}) -- opening the browser instead.")
         _wait_for_port(url, 120)

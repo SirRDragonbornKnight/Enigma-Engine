@@ -1,0 +1,1437 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>{{PERSONA}} HUD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* The display face is served from this machine, by this server: /hud/font.
+   Nothing on this page reaches off the box -- every fetch below is relative,
+   and a browser that cannot load the face falls back to a system stack. */
+@font-face {
+  font-family: "Orbitron";
+  src: url("/hud/font") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  --bg: #05080d;
+  --cy: #4fd8eb;
+  --cy-deep: #17b3c9;
+  --dim: #274b55;
+  --amber: #e8a33d;
+  --text: #cfe8ee;
+  --display: "Orbitron", "Segoe UI", sans-serif;
+  --mono: Consolas, "Cascadia Mono", monospace;
+  --glow: 0 0 6px rgba(79, 216, 235, .45);
+  --glow-hard: 0 0 12px rgba(79, 216, 235, .7);
+  --glow-amber: 0 0 10px rgba(232, 163, 61, .6);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: radial-gradient(ellipse 120% 90% at 50% -10%, #0c1a24 0%, #070c13 45%, var(--bg) 100%);
+  color: var(--text);
+  font: 15px/1.5 var(--mono);
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  overflow: hidden;
+}
+/* the two full-page washes: a vignette that pulls the eye to the core, and
+   the scanline grid, both inert to the pointer */
+#vignette, #scan { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
+#vignette { background: radial-gradient(ellipse at 50% 30%, rgba(0,0,0,0) 40%, rgba(0,0,0,.78) 100%); }
+#scan {
+  background: repeating-linear-gradient(to bottom, var(--cy) 0 1px, transparent 1px 3px);
+  opacity: .03;
+}
+/* The reticle grid is the glass the HUD is drawn on, not a third wash over it:
+   a negative layer puts it under every element and over the body gradient,
+   which paints as the canvas because nothing sets a background on <html>. */
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  background: repeating-linear-gradient(0deg, transparent 0 47px, rgba(79, 216, 235, .04) 47px 48px),
+              repeating-linear-gradient(90deg, transparent 0 47px, rgba(79, 216, 235, .04) 47px 48px);
+}
+
+/* ---------------------------------------------------------------- top bar */
+#top {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 22px 8px;
+  border-bottom: 1px solid rgba(39, 75, 85, .55);
+  z-index: 10;
+}
+#wordmark {
+  font-family: var(--display); font-size: 20px; font-weight: 700;
+  letter-spacing: .38em; text-transform: uppercase; white-space: nowrap;
+  background: linear-gradient(100deg, var(--cy-deep) 0%, var(--cy-deep) 35%,
+              #ecfdff 47%, var(--cy-deep) 60%, var(--cy-deep) 100%);
+  background-size: 320% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  animation: shimmer 9s linear infinite;
+}
+#top .spacer { flex: 1; }
+#readout { display: flex; align-items: baseline; gap: 12px; color: var(--dim);
+           font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+#model-id { color: var(--cy-deep); }
+.pill {
+  font-family: var(--display); font-size: 10px; font-weight: 700;
+  letter-spacing: .16em; padding: 6px 13px;
+  border: 1px solid var(--dim); border-radius: 999px;
+  background: transparent; color: var(--dim); cursor: pointer;
+  transition: color .3s ease, border-color .3s ease, background .3s ease, box-shadow .3s ease;
+}
+.pill:hover { border-color: var(--cy-deep); color: var(--cy-deep); }
+.pill.on { color: #04141a; background: var(--cy); border-color: var(--cy); box-shadow: var(--glow); }
+.pill.warn.on { background: var(--amber); border-color: var(--amber); box-shadow: var(--glow-amber); }
+#stop {
+  width: 30px; height: 30px; border: 1px solid var(--amber); border-radius: 3px;
+  background: transparent; color: var(--amber); font-family: var(--display);
+  font-size: 9px; font-weight: 700; cursor: pointer;
+  transition: background .3s ease, box-shadow .3s ease, color .3s ease;
+}
+#stop:hover { background: var(--amber); color: #170d02; box-shadow: var(--glow-amber); }
+
+/* ------------------------------------------------------------- core stage */
+#stage { display: flex; flex-direction: column; align-items: center; padding: 6px 0 10px; }
+#core { width: min(240px, 34vh); height: min(240px, 34vh); display: block; overflow: visible; }
+/* Four ring layers on mismatched periods, so no two ever line up: the tick
+   ring at 60s, the dot ring at 18s the other way, the segmented arc at 30s
+   the other way, and the still hairlines that separate them. */
+#core .tick { stroke: rgba(79, 216, 235, .45); stroke-width: 1; }
+#core .tick.major { stroke: rgba(79, 216, 235, .8); stroke-width: 1.6; }
+#core .hair { fill: none; stroke: rgba(79, 216, 235, .2); stroke-width: 1; }
+.ring-out { animation: spin 60s linear infinite; transform-origin: 130px 130px; transform-box: view-box; }
+.r-dots { stroke: rgba(79, 216, 235, .4); stroke-width: 2;
+          animation: spin 18s linear infinite reverse;
+          transform-origin: 130px 130px; transform-box: view-box; }
+.ring-mid { animation: spin 30s linear infinite reverse; transform-origin: 130px 130px; transform-box: view-box;
+            transition: opacity .4s ease; }
+.ring-mid circle {
+  fill: none; stroke: var(--cy-deep); stroke-width: 6;
+  stroke-dasharray: 30 14; stroke-linecap: butt;
+  filter: drop-shadow(0 0 4px rgba(23, 179, 201, .75));
+}
+/* Three motes ride the lane between the dot ring and the ticks. Their cx/cy
+   sit on the elements as attributes, the way every other circle here is
+   placed; the negative delays keep them from starting stacked. */
+.orbit { transform-origin: 130px 130px; transform-box: view-box;
+         animation: spin 12s linear infinite; }
+.o2 { animation-duration: 15s; animation-direction: reverse; animation-delay: -5s; }
+.o3 { animation-duration: 21s; animation-delay: -7s; }
+.orbit .mote { fill: var(--cy); filter: drop-shadow(0 0 4px var(--cy)); }
+/* The breathing is split in two on purpose: `breathe` moves the SCALE only,
+   so the flare disc can keep a declared opacity. A keyframe that touched
+   opacity would outrank `opacity: 0` and leave the amber disc lit forever. */
+#disc, #disc-hot {
+  transform-origin: 130px 130px; transform-box: view-box;
+  animation: breathe 3s ease-in-out infinite;
+  transition: opacity .45s ease, filter .45s ease;
+}
+#disc {
+  fill: url(#coreGrad);
+  filter: drop-shadow(0 0 8px rgba(79, 216, 235, .5));
+  animation: breathe 3s ease-in-out infinite, glow 3s ease-in-out infinite;
+}
+#disc-hot { fill: url(#flareGrad); opacity: 0; }
+#pip { fill: var(--cy); opacity: .9; transition: fill .45s ease; }
+/* thinking: the mid ring runs ~4x and the core burns brighter */
+body.thinking .ring-mid { animation-duration: 7.5s; }
+body.thinking #disc { filter: drop-shadow(0 0 20px rgba(79, 216, 235, .95)); }
+/* speaking: an amber-tinted flare rides on top of the cyan disc */
+body.speaking #disc-hot { opacity: .85; animation: breathe 3s ease-in-out infinite, flare 1.1s ease-in-out infinite; }
+body.speaking #pip { fill: var(--amber); }
+#wave { display: block; width: 100%; height: 48px; }
+/* ------------------------------------------------------------ organ chips */
+#organs { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+/* A chip reads its state from the fill and the border alone. Nothing further
+   down may dim a lit one -- the interactive rules only ever brighten. */
+.chip {
+  font-family: var(--display); font-size: 9px; font-weight: 700; letter-spacing: .16em;
+  padding: 7px 16px; border: 1px solid #1b2f36; border-radius: 3px;
+  background: transparent; cursor: default;
+  transition: color .35s ease, background .35s ease, border-color .35s ease, box-shadow .35s ease;
+}
+.chip.lit { background: rgba(23, 179, 201, .26); border-color: var(--cy);
+  color: #dff7fb; box-shadow: 0 0 12px rgba(79, 216, 235, .35), inset 0 0 8px rgba(79, 216, 235, .15); }
+.chip:not(.lit) { border-color: #1b2f36; color: rgba(160, 190, 198, .4); background: transparent; }
+.chip.lit.clickable { cursor: pointer; }
+.chip.lit.clickable:hover { background: rgba(23, 179, 201, .42); }
+
+/* ------------------------------------------------------------ boot readout */
+/* The block types out what the server answered and then folds to its last
+   line. `pre` holds the dot leaders that align the two columns. */
+#boot { margin-top: 12px; font-size: 12px; line-height: 1.35; letter-spacing: .08em;
+        color: var(--cy-deep); text-align: left; }
+#boot .line { white-space: pre; transition: opacity .5s ease; }
+#boot .line.gone { opacity: 0; }
+
+/* -------------------------------------------------------- the side panels */
+/* Two readouts that exist only when the desktop is wide enough to hold them.
+   Below 1100px a panel is display:none, so it is not a grid item at all and
+   the narrow window stays the single column it has always been. */
+.panel {
+  display: none; background: rgba(10, 20, 28, .35); backdrop-filter: blur(6px);
+  border: 1px solid rgba(79, 216, 235, .25); padding: 14px; position: relative;
+}
+.panel h2 {
+  font-family: var(--display); font-size: 10px; font-weight: 700;
+  letter-spacing: .26em; color: var(--cy); margin-bottom: 10px;
+}
+.panel .row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  font-size: 11px; line-height: 1.9; border-bottom: 1px solid rgba(39, 75, 85, .35);
+}
+.panel .row:last-child { border-bottom: 0; }
+.panel .k { color: var(--dim); letter-spacing: .1em; white-space: nowrap; }
+.panel .v { color: var(--cy-deep); text-align: right; overflow-wrap: anywhere; }
+.panel .v.soft { color: #7fa3ad; font-size: 10px; }
+.panel .v.off { color: rgba(160, 190, 198, .4); }
+/* The corner marks, worn by the panels and by the input bar. Two pseudo
+   elements carry the top-left and bottom-right corners; they sit over the
+   border and take no pointer, so no corner eats a click meant for a control. */
+.bracketed::before, .bracketed::after {
+  content: ""; position: absolute; width: 14px; height: 14px;
+  border: 1px solid var(--cy); pointer-events: none;
+}
+.bracketed::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.bracketed::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+/* The input bar runs full bleed until the layout goes wide, and a corner mark
+   on a full-bleed box is clipped by the window edge. It wears its brackets
+   once the middle column gives it a right edge to sit on. */
+#bar::before, #bar::after { content: none; }
+/* Wide desktop: the body's four rows become three columns. The top bar still
+   spans all three, the core / flow / input stack keeps its rows in the middle
+   one, and the middle is capped so a 4K window does not stretch the
+   transcript into a single line per reply. */
+@media (min-width: 1100px) {
+  body {
+    grid-template-columns: minmax(230px, 1fr) minmax(0, 860px) minmax(230px, 1fr);
+    grid-template-areas:
+      "top top    top"
+      "sys stage  org"
+      "sys stream org"
+      "sys bar    org";
+    column-gap: 18px;
+  }
+  #top { grid-area: top; }
+  #stage { grid-area: stage; }
+  #stream { grid-area: stream; }
+  #bar { grid-area: bar; }
+  #bar::before, #bar::after { content: ""; }
+  #sys { grid-area: sys; justify-self: end; }
+  #organ-panel { grid-area: org; justify-self: start; }
+  .panel { display: block; width: 230px; align-self: start; margin-top: 18px; }
+}
+
+/* --------------------------------------------------------------- the flow */
+#stream {
+  overflow-y: auto; padding: 16px 26px 22px;
+  display: flex; flex-direction: column; gap: 14px; z-index: 5;
+}
+#stream::-webkit-scrollbar { width: 7px; }
+#stream::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 4px; }
+.turn { max-width: 74%; }
+.turn.you { align-self: flex-end; text-align: right; }
+.turn.her { align-self: flex-start; border-left: 2px solid var(--cy); padding-left: 13px;
+            box-shadow: -7px 0 14px -12px var(--cy); }
+.turn.sys { align-self: center; max-width: 88%; color: var(--dim); font-size: 13px;
+            letter-spacing: .04em; text-align: center; }
+.who { font-family: var(--display); font-size: 9px; font-weight: 700; letter-spacing: .24em;
+       text-transform: uppercase; color: var(--cy-deep); margin-bottom: 4px; display: block; }
+.turn.you .who { color: var(--dim); }
+.said { white-space: pre-wrap; overflow-wrap: break-word; }
+.turn.her .said { color: var(--text); }
+.turn.you .said { color: #a9c6cf; }
+.toolchip {
+  display: inline-block; margin: 6px 6px 0 0; padding: 3px 9px;
+  border: 1px solid var(--dim); border-radius: 4px;
+  font-size: 12px; color: var(--cy-deep); background: rgba(39, 75, 85, .18);
+  overflow-wrap: anywhere;
+}
+img.frame {
+  display: block; margin: 8px 0 2px; max-width: 320px; width: auto; height: auto;
+  border: 1px solid var(--cy); box-shadow: 0 0 10px -2px rgba(79, 216, 235, .5);
+}
+.turn.you img.frame { margin-left: auto; }
+.caret::after { content: "_"; color: var(--cy); animation: blink 1s step-end infinite; }
+
+/* ------------------------------------------------------------- input bar */
+#bar {
+  display: flex; align-items: center; gap: 10px; padding: 12px 22px 16px;
+  border-top: 1px solid rgba(39, 75, 85, .55); position: relative; z-index: 10;
+}
+#box {
+  flex: 1; background: rgba(5, 12, 18, .8); color: var(--text);
+  border: 1px solid var(--dim); border-radius: 4px; padding: 11px 14px;
+  font: 15px/1.4 var(--mono); outline: none;
+  transition: border-color .25s ease, box-shadow .25s ease;
+}
+#box::placeholder { color: #3d6068; }
+#box:focus { border-color: var(--cy); box-shadow: var(--glow-hard), inset 0 0 10px -6px var(--cy); }
+.act {
+  font-family: var(--display); font-size: 10px; font-weight: 700; letter-spacing: .16em;
+  padding: 11px 16px; border: 1px solid var(--dim); border-radius: 4px;
+  background: transparent; color: var(--cy-deep); cursor: pointer;
+  transition: border-color .25s ease, color .25s ease, background .25s ease, box-shadow .25s ease;
+}
+.act:hover { border-color: var(--cy); color: var(--cy); box-shadow: var(--glow); }
+.act:disabled { opacity: .35; cursor: default; box-shadow: none; border-color: var(--dim); }
+#pic.armed { border-color: var(--cy); color: var(--cy); background: rgba(79, 216, 235, .14); }
+#mic.rec { border-color: #ff5f5f; color: #ff8f8f; background: rgba(255, 60, 60, .12);
+           animation: recpulse 1.1s ease-in-out infinite; }
+
+/* ------------------------------------------------------- command palette */
+#palette {
+  position: absolute; left: 22px; right: 22px; bottom: calc(100% - 6px);
+  background: rgba(6, 14, 20, .97); border: 1px solid var(--cy-deep);
+  box-shadow: 0 0 22px -8px var(--cy); max-height: 46vh; overflow-y: auto; z-index: 30;
+}
+#palette[hidden] { display: none; }
+.cmd { display: flex; gap: 14px; align-items: baseline; padding: 7px 14px; cursor: pointer; }
+.cmd .name { font-family: var(--display); font-size: 11px; font-weight: 700;
+             letter-spacing: .1em; color: var(--cy); min-width: 96px; }
+.cmd .desc { font-size: 12px; color: #7fa3ad; }
+.cmd.sel { background: rgba(79, 216, 235, .16); }
+.cmd.sel .desc { color: var(--text); }
+
+/* -------------------------------------------------------- overlay + toast */
+#overlay {
+  position: fixed; inset: 0; z-index: 60; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(3, 7, 11, .82); backdrop-filter: blur(2px);
+}
+#overlay[hidden] { display: none; }
+#sheet {
+  width: min(680px, 88vw); max-height: 78vh; overflow-y: auto;
+  background: rgba(6, 14, 20, .98); border: 1px solid var(--cy-deep);
+  box-shadow: 0 0 40px -14px var(--cy); padding: 22px 26px 26px;
+}
+#sheet h2 { font-family: var(--display); font-size: 13px; font-weight: 700;
+            letter-spacing: .26em; text-transform: uppercase; color: var(--cy);
+            margin-bottom: 14px; }
+#sheet dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 13px; }
+#sheet dt { font-family: var(--display); font-size: 11px; letter-spacing: .08em; color: var(--cy-deep); }
+#sheet dd { color: #a9c6cf; }
+#sheet .note { margin-top: 16px; font-size: 12px; color: var(--dim); }
+#ovclose { position: sticky; top: 0; float: right; }
+#toasts { position: fixed; top: 14px; right: 18px; z-index: 70;
+          display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.toast {
+  max-width: 380px; padding: 9px 14px; font-size: 13px;
+  border: 1px solid #ff5f5f; color: #ffc9c9; background: rgba(30, 6, 6, .94);
+  box-shadow: 0 0 14px -4px #ff5f5f; overflow-wrap: anywhere;
+}
+
+/* ----------------------------------------------------------- motion rules */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+@keyframes glow { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
+@keyframes flare { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes shimmer { to { background-position: -320% 0; } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes recpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 60, 60, .55); }
+                      50% { box-shadow: 0 0 0 7px rgba(255, 60, 60, 0); } }
+/* Reduced motion: nothing rotates, orbits, breathes or shimmers. The three
+   core states stay legible as flat colour changes, which the transitions
+   above already carry, and every stilled thing rests at its final state. */
+@media (prefers-reduced-motion: reduce) {
+  .ring-out, .r-dots, .ring-mid, .orbit, #disc, #disc-hot, #wordmark,
+  .caret::after, #mic.rec {
+    animation: none !important;
+  }
+  .o1 { transform: rotate(0deg); }
+  .o2 { transform: rotate(125deg); }
+  .o3 { transform: rotate(245deg); }
+  #wordmark { background: none; color: var(--cy); }
+  body.speaking #disc-hot { opacity: .85; }
+}
+</style></head><body class="idle">
+<div id="scan"></div><div id="vignette"></div>
+
+<header id="top">
+  <span id="wordmark">{{PERSONA}}</span>
+  <span class="spacer"></span>
+  <span id="readout"><span id="model-id">model ...</span><span id="ctx">ctx ...</span></span>
+  <button id="talk" class="pill" type="button" title="Narrate every reply out loud">TALK OFF</button>
+  <button id="mute" class="pill warn" type="button" title="Silence the voice organ">MUTE</button>
+  <button id="stop" type="button" title="Stop the audio playing right now">&#9632;</button>
+</header>
+
+<aside id="sys" class="panel bracketed">
+  <h2>SYSTEM</h2>
+  <div class="row"><span class="k">MODEL</span><span class="v soft" id="sys-model">...</span></div>
+  <div class="row"><span class="k">CTX</span><span class="v" id="sys-ctx">...</span></div>
+  <div class="row"><span class="k">LINK</span><span class="v" id="sys-link">...</span></div>
+  <div class="row"><span class="k">CLOCK</span><span class="v" id="sys-clock">--:--:--</span></div>
+  <div class="row"><span class="k">LAST REPLY</span><span class="v" id="sys-perf">--</span></div>
+</aside>
+
+<section id="stage">
+  <svg id="core" viewBox="0 0 260 260" aria-hidden="true">
+    <defs>
+      <radialGradient id="coreGrad" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#eafdff"/>
+        <stop offset="42%" stop-color="#4fd8eb"/>
+        <stop offset="100%" stop-color="#0c4d5c" stop-opacity=".9"/>
+      </radialGradient>
+      <radialGradient id="flareGrad" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#fff3dd"/>
+        <stop offset="45%" stop-color="#e8a33d"/>
+        <stop offset="100%" stop-color="#5c3a08" stop-opacity=".85"/>
+      </radialGradient>
+    </defs>
+    <g id="ticks" class="ring-out"></g>
+    <circle class="r-dots" cx="130" cy="130" r="108" pathLength="360" fill="none"
+            stroke-dasharray="0.6 8" stroke-linecap="round"/>
+    <circle class="hair" cx="130" cy="130" r="100"/>
+    <g class="ring-mid"><circle cx="130" cy="130" r="86"/></g>
+    <circle class="hair" cx="130" cy="130" r="64"/>
+    <circle id="disc" cx="130" cy="130" r="44"/>
+    <circle id="disc-hot" cx="130" cy="130" r="44"/>
+    <circle id="pip" cx="130" cy="130" r="8"/>
+    <g class="orbit o1"><circle class="mote" cx="130" cy="16" r="3"/></g>
+    <g class="orbit o2"><circle class="mote" cx="130" cy="16" r="2.4"/></g>
+    <g class="orbit o3"><circle class="mote" cx="130" cy="16" r="2"/></g>
+  </svg>
+  <canvas id="wave" height="48"></canvas>
+  <div id="organs"></div>
+  <div id="boot"></div>
+</section>
+
+<main id="stream"></main>
+
+<form id="bar" class="bracketed" autocomplete="off">
+  <div id="palette" hidden></div>
+  <button id="mic" class="act" type="button" title="Record and transcribe (needs the ears organ)">MIC</button>
+  <button id="pic" class="act" type="button" title="Show her a picture (needs the eyes organ)" hidden>IMG</button>
+  <input id="file" type="file" accept="image/*" hidden>
+  <input id="box" placeholder="Talk to {{PERSONA}}, or type / for commands" autofocus>
+  <button id="send" class="act" type="submit">SEND</button>
+</form>
+
+<aside id="organ-panel" class="panel bracketed">
+  <h2>ORGANS</h2>
+  <div id="organ-rows"></div>
+</aside>
+
+<div id="overlay" hidden><div id="sheet">
+  <button id="ovclose" class="act" type="button">CLOSE</button>
+  <h2 id="ovtitle"></h2>
+  <div id="ovbody"></div>
+</div></div>
+<div id="toasts"></div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// The HUD talks to exactly one server: the one that served this page. Every
+// path below is relative, so the window works with the machine offline.
+// ---------------------------------------------------------------------------
+var $ = function (id) { return document.getElementById(id); };
+var streamEl = $("stream"), box = $("box"), sendBtn = $("send"), micBtn = $("mic"),
+    picBtn = $("pic"), fileInput = $("file"), talkPill = $("talk"), mutePill = $("mute"),
+    stopBtn = $("stop"), organsEl = $("organs"), paletteEl = $("palette"),
+    overlayEl = $("overlay"), ovTitle = $("ovtitle"), ovBody = $("ovbody"),
+    modelEl = $("model-id"), ctxEl = $("ctx"), waveEl = $("wave");
+// WHOSE window this is, read out of the markup the server substituted -- the
+// name never round-trips through a JS literal, so an escaped name renders once.
+var PERSONA = $("wordmark").textContent.trim();
+
+var CAPS = {};
+var messages = [];        // the full history, resent every turn
+var muted = false, talkMode = false;
+var muteEpoch = 0, talkEpoch = 0;   // a click invalidates polls already in flight
+var stopGen = null, voiceHealth = null;
+var statusTimer = null;
+var busy = false;
+var thinking = false, speaking = false;
+var pendingImage = null;
+var REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+var COMMANDS = [
+  ["/help", "every command and what it does"],
+  ["/clear", "wipe this window's transcript and history"],
+  ["/caps", "re-read which organs this server booted with"],
+  ["/talk", "narrate replies out loud: /talk on | off"],
+  ["/mute", "silence her voice: /mute on | off"],
+  ["/stop", "stop whatever audio is playing right now"],
+  ["/voice", "list the voices, or /voice <name> to switch"],
+  ["/say", "/say <text> -- speak text through the voice organ"],
+  ["/mic", "record from the microphone and transcribe it"],
+  ["/imagine", "/imagine <prompt> -- paint a picture"],
+  ["/memory", "/memory [query] -- list what she remembers"],
+  ["/forget", "/forget <id> -- delete one memory by id"]
+];
+
+// ------------------------------------------------------------------ bleeps
+// UI sound lives in its own context; the mic analyser's context is separate
+// and is never touched from here. A browser tab holds the autoplay policy
+// even where her own window lifts it, so the context is built on the first
+// real gesture and nothing sounds before one. Each bleep is one oscillator
+// that stops itself. Being muted silences them; reduced motion does not,
+// since sound is not motion.
+var ACTX = null;
+window.addEventListener("pointerdown", function () {
+  var Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!ACTX && Ctx) ACTX = new Ctx();
+}, { once: true });
+function bleep(freq, dur, type) {
+  if (!ACTX || muted) return;
+  var o = ACTX.createOscillator(), g = ACTX.createGain();
+  o.type = type || "sine";
+  o.frequency.value = freq;
+  g.gain.value = 0.04;
+  o.connect(g);
+  g.connect(ACTX.destination);
+  o.start();
+  o.stop(ACTX.currentTime + (dur || 0.05));
+}
+
+// ---------------------------------------------------------------- plumbing
+// Every toast in this window is a failure or a misuse notice -- confirmations
+// go to the transcript through addSys -- so the whole helper carries the
+// error bleep.
+function toast(text) {
+  bleep(140, 0.12, "square");
+  var t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = text;
+  $("toasts").appendChild(t);
+  setTimeout(function () { t.remove(); }, 6000);
+}
+function errorOf(r) {
+  // FastAPI answers errors as {"detail": ...}; anything else is read as text.
+  return r.text().then(function (body) {
+    var msg = body;
+    try { var j = JSON.parse(body); if (j && j.detail) msg = j.detail; } catch (e) {}
+    return new Error(String(msg || ("HTTP " + r.status)).slice(0, 240));
+  });
+}
+function raw(path, opts) {
+  return fetch(path, opts || {}).then(function (r) {
+    if (!r.ok) return errorOf(r).then(function (e) { throw e; });
+    return r;
+  });
+}
+function jget(path) { return raw(path).then(function (r) { return r.json(); }); }
+function jsend(path, method, body) {
+  var opts = { method: method };
+  if (body !== undefined) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  return raw(path, opts).then(function (r) { return r.json(); });
+}
+
+// ------------------------------------------------------------ the transcript
+function stuckToBottom() {
+  return streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight < 48;
+}
+function follow(wasStuck) { if (wasStuck) streamEl.scrollTop = streamEl.scrollHeight; }
+function turn(kind, who) {
+  var wasStuck = stuckToBottom();
+  var d = document.createElement("div");
+  d.className = "turn " + kind;
+  if (who) {
+    var label = document.createElement("span");
+    label.className = "who";
+    label.textContent = who;
+    d.appendChild(label);
+  }
+  var said = document.createElement("div");
+  said.className = "said";
+  d.appendChild(said);
+  streamEl.appendChild(d);
+  follow(wasStuck);
+  return { card: d, said: said };
+}
+function addYou(text) { var t = turn("you", "you"); t.said.textContent = text; return t; }
+function addHer() { return turn("her", PERSONA); }
+function addSys(text) { var t = turn("sys", ""); t.said.textContent = text; return t; }
+function addImage(card, src, alt) {
+  var wasStuck = stuckToBottom();
+  var img = document.createElement("img");
+  img.className = "frame";
+  img.alt = alt;
+  img.src = src;
+  img.onerror = function () { img.remove(); };   // organ off or file gone: no broken icon
+  card.appendChild(img);
+  follow(wasStuck);
+}
+function addToolChip(card, name, args) {
+  var wasStuck = stuckToBottom();
+  var chip = document.createElement("span");
+  chip.className = "toolchip";
+  chip.textContent = "⚙ " + name + "(" + (args || "") + ")";
+  card.appendChild(chip);
+  follow(wasStuck);
+}
+// "image saved to <dir>/imagine_ab12cd34.png" -- the imagine tool answers with
+// a filesystem path. Only the bare NAME is taken, and it lands in an img src,
+// never in the DOM as markup.
+var IMG_NAME = /image saved to\s+\S*?([A-Za-z0-9_-]+\.png)/i;
+function imageFromReply(card, text) {
+  var m = IMG_NAME.exec(text || "");
+  if (m) addImage(card, "/v1/images/file/" + encodeURIComponent(m[1]), "an image she generated");
+}
+
+// ------------------------------------------------------------- core states
+function paintCore() {
+  var c = document.body.classList;
+  c.toggle("thinking", thinking);
+  c.toggle("speaking", speaking && !thinking);
+  c.toggle("idle", !thinking && !speaking);
+}
+function setThinking(on) { thinking = !!on; paintCore(); }
+function setSpeaking(on) { speaking = !!on; paintCore(); }
+
+// ---------------------------------------------------------------- the core
+(function buildTicks() {
+  var g = $("ticks");
+  // The namespace is read off the inline <svg> itself, so no absolute URI is
+  // written down anywhere on this page.
+  var ns = $("core").namespaceURI;
+  for (var i = 0; i < 60; i++) {
+    var major = i % 5 === 0;
+    var a = (i * 6) * Math.PI / 180;
+    var r0 = major ? 119 : 122, r1 = 128;
+    var line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", (130 + r0 * Math.cos(a)).toFixed(2));
+    line.setAttribute("y1", (130 + r0 * Math.sin(a)).toFixed(2));
+    line.setAttribute("x2", (130 + r1 * Math.cos(a)).toFixed(2));
+    line.setAttribute("y2", (130 + r1 * Math.sin(a)).toFixed(2));
+    line.setAttribute("class", major ? "tick major" : "tick");
+    g.appendChild(line);
+  }
+})();
+
+// ------------------------------------------------------------- the waveform
+// One loop draws all three faces of the strip, and the face is chosen here and
+// nowhere else: an attached analyser means the microphone is open, `thinking`
+// means tokens are arriving, everything else is the resting baseline.
+var wctx = waveEl.getContext("2d");
+var analyser = null, freqData = null;
+var blips = [];
+var BLIP_AMP = 7;       // an idle blip's peak, in canvas pixels
+var PULSE_AMP = 21;     // the streaming pulse: three times a blip
+function sizeWave() {
+  var dpr = window.devicePixelRatio || 1;
+  waveEl.width = Math.max(1, Math.round(waveEl.clientWidth * dpr));
+  waveEl.height = Math.round(48 * dpr);
+  wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", sizeWave);
+function baseline(w, mid, now, alpha) {
+  // The resting trace: bright enough to read as a live line, with a slow
+  // ripple that holds flat under reduced motion.
+  wctx.globalAlpha = alpha;
+  wctx.strokeStyle = "rgba(79, 216, 235, .5)";
+  wctx.lineWidth = 1.5;
+  wctx.beginPath();
+  for (var x = 0; x <= w; x += 3) {
+    wctx.lineTo(x, REDUCED ? mid : mid + Math.sin(x / 26 + now / 620) * 1.6);
+  }
+  wctx.stroke();
+  wctx.globalAlpha = 1;
+}
+function drawBlips(w, mid, now) {
+  if (REDUCED) return;
+  if (Math.random() < 0.01) blips.push({ x: Math.random() * w, born: now });
+  blips = blips.filter(function (b) { return now - b.born < 900; });
+  wctx.strokeStyle = "#9beef8";
+  wctx.lineWidth = 1.5;
+  wctx.shadowBlur = 6;
+  wctx.shadowColor = "rgba(79, 216, 235, .8)";
+  for (var k = 0; k < blips.length; k++) {
+    var life = 1 - (now - blips[k].born) / 900;
+    var bx = blips[k].x, amp = BLIP_AMP * life;
+    wctx.globalAlpha = life;
+    wctx.beginPath();
+    wctx.moveTo(bx - 9, mid);
+    wctx.lineTo(bx - 4, mid - amp);
+    wctx.lineTo(bx, mid + amp * .8);
+    wctx.lineTo(bx + 5, mid);
+    wctx.lineTo(bx + 9, mid);
+    wctx.stroke();
+  }
+  wctx.globalAlpha = 1;
+  wctx.shadowBlur = 0;
+}
+function drawPulse(w, mid, now) {
+  // A packet travelling left to right while she answers. Reduced motion parks
+  // it mid-strip at full height, so the state still reads without moving.
+  var head = REDUCED ? w / 2 : ((now / 1500) % 1) * (w + 200) - 100;
+  wctx.strokeStyle = "#8fe9f6";
+  wctx.lineWidth = 2;
+  wctx.shadowBlur = 10;
+  wctx.shadowColor = "rgba(79, 216, 235, .85)";
+  wctx.beginPath();
+  for (var x = 0; x <= w; x += 2) {
+    var d = (x - head) / 52;
+    var env = Math.exp(-d * d);
+    wctx.lineTo(x, mid + env * PULSE_AMP * (REDUCED ? 1 : Math.sin(now / 80 + x / 8)));
+  }
+  wctx.stroke();
+  wctx.shadowBlur = 0;
+}
+function drawWave(now) {
+  var w = waveEl.clientWidth, h = 48, mid = h / 2;
+  wctx.clearRect(0, 0, w, h);
+  wctx.lineWidth = 1;
+  if (analyser && freqData) {
+    // live: the microphone's own spectrum
+    analyser.getByteFrequencyData(freqData);
+    var bars = Math.max(24, Math.min(120, Math.floor(w / 6)));
+    var step = Math.floor(freqData.length / bars) || 1;
+    wctx.fillStyle = "#4fd8eb";
+    for (var i = 0; i < bars; i++) {
+      var v = freqData[i * step] / 255;
+      var bh = Math.max(1, v * (h - 6));
+      wctx.globalAlpha = 0.35 + 0.65 * v;
+      wctx.fillRect(i * (w / bars), mid - bh / 2, Math.max(1, w / bars - 2), bh);
+    }
+    wctx.globalAlpha = 1;
+  } else if (thinking) {
+    // streaming: the baseline dims and the pulse rides over it
+    baseline(w, mid, now, .35);
+    drawPulse(w, mid, now);
+  } else {
+    // calm: a live baseline the occasional blip crosses
+    baseline(w, mid, now, 1);
+    drawBlips(w, mid, now);
+  }
+  requestAnimationFrame(drawWave);
+}
+
+// ------------------------------------------------------------- organ chips
+var ORGANS = [
+  ["VOICE", "voice"], ["EARS", "ears"], ["EYES", "eyes"],
+  ["IMAGE", "image_gen"], ["SEARCH", "search"], ["MEMORY", "memory"]
+];
+function paintChips() {
+  organsEl.textContent = "";
+  ORGANS.forEach(function (pair) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip" + (CAPS[pair[1]] ? " lit" : "");
+    b.textContent = pair[0];
+    b.title = CAPS[pair[1]]
+      ? (pair[1] + " organ is loaded")
+      : ("the " + pair[1] + " organ is not loaded");
+    if (pair[1] === "voice" && CAPS.voice) {
+      b.classList.add("clickable");
+      b.title = "voice organ is loaded -- click to toggle talk mode";
+      b.onclick = function () { setTalk(!talkMode); };
+    }
+    organsEl.appendChild(b);
+  });
+  paintOrganRows();     // the side panel reads this same table, in one pass
+}
+
+// -------------------------------------------------------- the side panels
+// Everything these two panels say is fetched, measured, or read off this
+// document: the model id and CTX come from the two boot reads the top bar
+// already makes, the organ rows come off ORGANS and CAPS like the chips, the
+// link is this page's own host, and LAST REPLY is timed around the stream.
+var sysModel = $("sys-model"), sysCtx = $("sys-ctx"), sysLink = $("sys-link"),
+    sysClock = $("sys-clock"), sysPerf = $("sys-perf"), organRowsEl = $("organ-rows");
+var voiceValueEl = null;
+function panelRow(parent, key, value, off) {
+  var row = document.createElement("div");
+  row.className = "row";
+  var k = document.createElement("span");
+  k.className = "k";
+  k.textContent = key;
+  var v = document.createElement("span");
+  v.className = off ? "v off" : "v";
+  v.textContent = value;
+  row.appendChild(k);
+  row.appendChild(v);
+  parent.appendChild(row);
+  return v;
+}
+// The voice row carries the live pill state beside the organ's own state.
+// paintTalk and paintMute call in here, so the row moves with the pills
+// rather than on a timer of its own.
+function paintVoiceRow() {
+  if (!voiceValueEl) return;
+  voiceValueEl.textContent = CAPS.voice
+    ? "ONLINE / TALK " + (talkMode ? "ON" : "OFF") + " / " + (muted ? "MUTED" : "LIVE")
+    : "OFFLINE";
+}
+function paintOrganRows() {
+  organRowsEl.textContent = "";
+  voiceValueEl = null;
+  ORGANS.forEach(function (pair) {
+    var lit = !!CAPS[pair[1]];
+    var v = panelRow(organRowsEl, pair[0], lit ? "ONLINE" : "OFFLINE", !lit);
+    if (pair[1] === "voice") { voiceValueEl = v; paintVoiceRow(); }
+  });
+}
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+function tickClock() {
+  var d = new Date();
+  sysClock.textContent = pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+}
+// The clock keeps ticking under reduced motion -- it is data, not decoration.
+function startSystemPanel() {
+  sysLink.textContent = location.host;
+  tickClock();
+  setInterval(tickClock, 1000);
+}
+// The measured pair: wall-clock seconds around the stream and the characters
+// it delivered. Nothing renders here until a turn has actually landed.
+function notePerf(seconds, chars) {
+  sysPerf.textContent = seconds.toFixed(1) + "s / " + chars + " chars";
+}
+
+// ------------------------------------------------------------ boot readout
+// The block under the chips reads out what the server actually answered --
+// nothing here is written down ahead of the fetch. Every line goes through one
+// queue and one pump, so they land in the order they were pushed; reduced
+// motion skips the typing and lands each line whole.
+var bootEl = $("boot");
+var bootQueue = [], bootPump = null, bootFolded = false;
+var BOOT_CPF = 2;               // characters revealed per animation frame
+function typeLine(text) {
+  var line = document.createElement("div");
+  line.className = "line";
+  bootEl.appendChild(line);
+  if (REDUCED || bootFolded) { line.textContent = text; return; }
+  bootQueue.push({ el: line, text: text, cut: 0 });
+  if (bootPump === null) bootPump = requestAnimationFrame(pumpBoot);
+}
+function pumpBoot() {
+  var job = bootQueue[0];
+  if (!job) { bootPump = null; return; }        // drained: the pump stops until a new line
+  job.cut = Math.min(job.text.length, job.cut + BOOT_CPF);
+  job.el.textContent = job.text.slice(0, job.cut);
+  if (job.cut >= job.text.length) bootQueue.shift();
+  bootPump = requestAnimationFrame(pumpBoot);
+}
+function leader(label) {
+  var out = label;
+  while (out.length < 9) out += ".";
+  return out;
+}
+function bootReadout(caps) {
+  // The organ rows come off the same table the chips are painted from, so a
+  // chip and its line can never disagree about which organs booted.
+  var rows = [["CORE", "ONLINE"]];
+  ORGANS.forEach(function (pair) {
+    rows.push([pair[0], caps[pair[1]] ? "ONLINE" : "OFFLINE"]);
+  });
+  rows.push(["CONTEXT", caps.max_context === null || caps.max_context === undefined
+    ? "--" : String(caps.max_context)]);
+  rows.push(["LINK", location.host + " LOCAL"]);
+  rows.forEach(function (row) { typeLine(leader(row[0]) + ".. " + row[1]); });
+  typeLine("awaiting input. / for commands.");
+}
+// The first thing typed supersedes the readout: whatever is still queued lands
+// finished, and every line but the last fades out and is dropped.
+function foldBoot() {
+  bootFolded = true;
+  if (bootPump !== null) { cancelAnimationFrame(bootPump); bootPump = null; }
+  bootQueue.forEach(function (job) { job.el.textContent = job.text; });
+  bootQueue = [];
+  var lines = bootEl.children;
+  for (var i = 0; i < lines.length - 1; i++) lines[i].className = "line gone";
+  setTimeout(function () {
+    while (bootEl.children.length > 1) bootEl.removeChild(bootEl.firstChild);
+  }, 600);
+}
+
+// ----------------------------------------------------------- voice controls
+var currentAudio = null, currentUrl = null, speakSeq = 0;
+function clearClip() {
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
+  setSpeaking(false);
+}
+function stopAudio() { speakSeq += 1; clearClip(); }
+function playWav(blob) {
+  var seq = speakSeq;
+  clearClip();
+  currentUrl = URL.createObjectURL(blob);
+  var a = new Audio(currentUrl);
+  currentAudio = a;
+  setSpeaking(true);
+  a.addEventListener("ended", function () { if (currentAudio === a && seq === speakSeq) clearClip(); });
+  a.play().catch(function () { clearClip(); });
+}
+function paintTalk() {
+  talkPill.classList.toggle("on", talkMode);
+  talkPill.textContent = talkMode ? "TALK ON" : "TALK OFF";
+  paintVoiceRow();
+}
+function paintMute() {
+  mutePill.classList.toggle("on", muted);
+  mutePill.textContent = muted ? "MUTED" : "MUTE";
+  paintVoiceRow();
+}
+function setTalk(on) {
+  talkMode = !!on;
+  talkEpoch += 1;
+  if (!talkMode) stopAudio();
+  paintTalk();
+  return jsend("/v1/audio/talk-mode", "POST", { enabled: talkMode })
+    .then(function (d) { talkMode = !!d.enabled; paintTalk(); })
+    .catch(function (e) { toast("talk mode: " + e.message); });
+}
+function setMuted(on) {
+  muted = !!on;
+  muteEpoch += 1;
+  if (muted) stopAudio();
+  paintMute();
+  return jsend("/v1/audio/mute", "POST", { muted: muted })
+    .then(function (d) { muted = !!d.muted; paintMute(); })
+    .catch(function (e) { toast("mute: " + e.message); });
+}
+function stopEverything() {
+  stopAudio();
+  return jsend("/v1/audio/stop", "POST", {})
+    .then(function (d) { stopGen = d.stop_gen; })
+    .catch(function (e) { toast("stop: " + e.message); });
+}
+talkPill.onclick = function () { setTalk(!talkMode); };
+mutePill.onclick = function () { setMuted(!muted); };
+stopBtn.onclick = function () { stopEverything(); };
+
+// The status poll runs ONLY while the voice organ is live -- there is nothing
+// for it to report otherwise, and an absent organ should not be polled at all.
+function pollStatus() {
+  var me = muteEpoch, te = talkEpoch;
+  jget("/v1/audio/status").then(function (s) {
+    if (me === muteEpoch && s.muted !== muted) { muted = !!s.muted; if (muted) stopAudio(); paintMute(); }
+    if (te === talkEpoch && s.talk_mode !== talkMode) { talkMode = !!s.talk_mode; paintTalk(); }
+    if (stopGen === null) stopGen = s.stop_gen;                 // first poll: adopt the baseline
+    else if (s.stop_gen !== stopGen) { stopGen = s.stop_gen; stopAudio(); }
+    if (s.voice !== voiceHealth) {
+      if (s.voice === "error") toast("voice organ error: " + (s.voice_error || "unknown"));
+      voiceHealth = s.voice;
+    }
+  }).catch(function () {});
+}
+function startVoicePoll() {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+  if (!CAPS.voice) return;
+  jget("/v1/audio/talk-mode").then(function (d) { talkMode = !!d.enabled; paintTalk(); }).catch(function () {});
+  jget("/v1/audio/mute").then(function (d) { muted = !!d.muted; paintMute(); }).catch(function () {});
+  pollStatus();
+  statusTimer = setInterval(pollStatus, 5000);
+}
+
+// --------------------------------------------------------------- boot reads
+function loadCaps(announce) {
+  return jget("/v1/capabilities").then(function (c) {
+    CAPS = c || {};
+    paintChips();
+    var ctx = (CAPS.max_context === null || CAPS.max_context === undefined)
+      ? "--" : String(CAPS.max_context);
+    ctxEl.textContent = "ctx " + ctx;
+    sysCtx.textContent = ctx;
+    picBtn.hidden = !CAPS.eyes;
+    startVoicePoll();
+    if (announce) {
+      var lit = ORGANS.filter(function (p) { return CAPS[p[1]]; }).map(function (p) { return p[0]; });
+      addSys("organs loaded: " + (lit.length ? lit.join(", ") : "none"));
+    }
+    return CAPS;
+  }).catch(function (e) {
+    toast("capabilities unavailable: " + e.message);
+    throw e;
+  });
+}
+// One read of /v1/models feeds both faces of the id: the top bar's readout and
+// the SYSTEM panel's row. A server that cannot name its model says so in both.
+function loadModel() {
+  return jget("/v1/models").then(function (m) {
+    var entry = m && m.data && m.data[0];
+    var id = (entry && entry.id) ? entry.id : "";
+    modelEl.textContent = id || "model ?";
+    sysModel.textContent = id || "?";
+  }).catch(function (e) {
+    modelEl.textContent = "model ?";
+    sysModel.textContent = "?";
+    toast("models: " + e.message);
+  });
+}
+
+// ------------------------------------------------------------------- chat
+function applyFrame(frame, target) {
+  var choice = frame && frame.choices && frame.choices[0];
+  if (!choice) return "";
+  var delta = choice.delta || {};
+  var added = "";
+  if (typeof delta.content === "string" && delta.content) {
+    added = delta.content;
+    var wasStuck = stuckToBottom();
+    target.said.textContent += added;
+    follow(wasStuck);
+  }
+  if (delta.tool_calls && delta.tool_calls.length) {
+    delta.tool_calls.forEach(function (c) {
+      var fn = c.function || {};
+      addToolChip(target.card, fn.name || "tool", fn.arguments || "");
+    });
+  }
+  if (choice.finish_reason === "error") toast("the stream ended on a server error");
+  return added;
+}
+function streamTurn(target) {
+  return fetch("/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: messages, stream: true })
+  }).then(function (r) {
+    if (!r.ok) return errorOf(r).then(function (e) { throw e; });
+    if (!r.body || !r.body.getReader) throw new Error("this browser cannot read a stream");
+    var reader = r.body.getReader(), dec = new TextDecoder(), buf = "", acc = "";
+    function pump() {
+      return reader.read().then(function (res) {
+        if (res.done) return acc;
+        buf += dec.decode(res.value, { stream: true });
+        var nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          var line = buf.slice(0, nl).replace(/\r$/, "");
+          buf = buf.slice(nl + 1);
+          if (line.indexOf("data: ") !== 0) continue;
+          var payload = line.slice(6);
+          if (payload === "[DONE]") continue;
+          var frame;
+          try { frame = JSON.parse(payload); } catch (e) { continue; }
+          acc += applyFrame(frame, target);
+        }
+        return pump();
+      });
+    }
+    return pump();
+  });
+}
+function plainTurn(target) {
+  // The fallback for a turn whose stream failed: the same request without SSE.
+  // The card is emptied first so a half-streamed reply is not doubled.
+  target.said.textContent = "";
+  return jsend("/v1/chat/completions", "POST", { messages: messages, stream: false })
+    .then(function (data) {
+      var msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+      var reply = (typeof msg.content === "string") ? msg.content : "";
+      target.said.textContent = reply;
+      (msg.tool_calls || []).forEach(function (c) {
+        var fn = c.function || {};
+        addToolChip(target.card, fn.name || "tool", fn.arguments || "");
+      });
+      return reply;
+    });
+}
+function ask(userMessage, shownText, shownImage) {
+  var you = addYou(shownText);
+  if (shownImage) addImage(you.card, shownImage, "a picture you showed her");
+  messages.push(userMessage);
+  var target = addHer();
+  target.said.classList.add("caret");
+  busy = true; sendBtn.disabled = true; setThinking(true);
+  var started = Date.now();
+  return streamTurn(target)
+    .catch(function (e) {
+      toast("stream failed (" + e.message + "); retrying without it");
+      return plainTurn(target);
+    })
+    .then(function (reply) {
+      target.said.classList.remove("caret");
+      notePerf((Date.now() - started) / 1000, (reply || "").length);
+      // The landed-reply pair; the failure path below never reaches it.
+      bleep(660);
+      setTimeout(function () { bleep(990); }, 80);
+      if (reply) {
+        messages.push({ role: "assistant", content: reply });
+        imageFromReply(target.card, reply);
+      } else {
+        target.said.textContent = "[no text reply]";
+      }
+    })
+    .catch(function (e) {
+      target.said.classList.remove("caret");
+      target.card.remove();
+      messages.pop();                        // the turn never landed: do not resend it
+      toast("she did not answer: " + e.message);
+    })
+    .then(function () {
+      busy = false; sendBtn.disabled = false; setThinking(false); box.focus();
+    });
+}
+
+// --------------------------------------------------------------- overlays
+function showOverlay(title, build) {
+  ovTitle.textContent = title;
+  ovBody.textContent = "";
+  build(ovBody);
+  overlayEl.hidden = false;
+}
+function closeOverlay() { overlayEl.hidden = true; box.focus(); }
+$("ovclose").onclick = closeOverlay;
+overlayEl.addEventListener("click", function (ev) { if (ev.target === overlayEl) closeOverlay(); });
+function defList(parent, rows) {
+  var dl = document.createElement("dl");
+  rows.forEach(function (row) {
+    var dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = row[0];
+    dd.textContent = row[1];
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  });
+  parent.appendChild(dl);
+}
+function showHelp() {
+  showOverlay("command deck", function (root) {
+    defList(root, COMMANDS);
+    var note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "Anything that is not a command is said straight to " + PERSONA +
+      ". A dimmed organ chip means that organ was never started, and the commands "
+      + "that need it will say so instead of guessing.";
+    root.appendChild(note);
+  });
+}
+
+// -------------------------------------------------------- slash dispatch
+function organMissing(organ) {
+  addSys("the " + organ + " organ is not loaded");
+}
+function needs(organ) {
+  if (CAPS[organ]) return true;
+  organMissing(organ);
+  return false;
+}
+function onOffArg(rest, current) {
+  var a = (rest || "").trim().toLowerCase();
+  if (a === "on") return true;
+  if (a === "off") return false;
+  if (!a) return !current;
+  return null;
+}
+var HANDLERS = {
+  "/help": function () { showHelp(); },
+  "/clear": function () {
+    messages = [];
+    streamEl.textContent = "";
+    addSys("transcript cleared -- she has been sent no history from here on");
+  },
+  "/caps": function () { loadCaps(true).catch(function () {}); },
+  "/talk": function (rest) {
+    var want = onOffArg(rest, talkMode);
+    if (want === null) { toast("use /talk on or /talk off"); return; }
+    setTalk(want).then(function () { addSys("talk mode is " + (talkMode ? "on" : "off")); });
+  },
+  "/mute": function (rest) {
+    var want = onOffArg(rest, muted);
+    if (want === null) { toast("use /mute on or /mute off"); return; }
+    setMuted(want).then(function () { addSys(muted ? "muted" : "unmuted"); });
+  },
+  "/stop": function () { stopEverything().then(function () { addSys("audio stopped"); }); },
+  "/voice": function (rest) {
+    if (!needs("voice")) return;
+    var name = (rest || "").trim();
+    if (!name) {
+      jget("/v1/audio/voices").then(function (d) {
+        showOverlay("voices", function (root) {
+          defList(root, (d.voices || []).map(function (v) { return [v.id, v.name || v.id]; }));
+          var note = document.createElement("p");
+          note.className = "note";
+          note.textContent = "Switch with /voice <name>.";
+          root.appendChild(note);
+        });
+      }).catch(function (e) { toast("voices: " + e.message); });
+      return;
+    }
+    // The voice route takes a RECIPE, so a single name is a blend of one.
+    jsend("/v1/audio/voice", "POST", { blend: [[name, 1.0]] })
+      .then(function (v) {
+        addSys("voice set to " + name + " (speed " + (v && v.speed !== undefined ? v.speed : "?") + ")");
+      })
+      .catch(function (e) { toast("voice: " + e.message); });
+  },
+  "/say": function (rest) {
+    if (!needs("voice")) return;
+    var text = (rest || "").trim();
+    if (!text) { toast("use /say <text>"); return; }
+    raw("/v1/audio/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: text })
+    }).then(function (r) {
+      if (r.status === 204) { addSys("she is muted -- nothing was synthesized"); return null; }
+      return r.blob();
+    }).then(function (b) { if (b) playWav(b); })
+      .catch(function (e) { toast("speech: " + e.message); });
+  },
+  "/mic": function () { toggleMic(); },
+  "/imagine": function (rest) {
+    if (!needs("image_gen")) return;
+    var prompt = (rest || "").trim();
+    if (!prompt) { toast("use /imagine <prompt>"); return; }
+    var t = addSys("painting: " + prompt);
+    jsend("/v1/images/generations", "POST", { prompt: prompt })
+      .then(function (d) {
+        var items = (d && d.data) || [];
+        if (!items.length) { t.said.textContent = "she painted nothing"; return; }
+        t.said.textContent = prompt;
+        items.forEach(function (item) {
+          if (item.b64_json) addImage(t.card, "data:image/png;base64," + item.b64_json, prompt);
+        });
+      })
+      .catch(function (e) { t.card.remove(); toast("imagine: " + e.message); });
+  },
+  "/memory": function (rest) {
+    if (!needs("memory")) return;
+    var q = (rest || "").trim();
+    jget("/v1/memory?q=" + encodeURIComponent(q) + "&k=8").then(function (d) {
+      showOverlay("memory (" + d.count + " stored)", function (root) {
+        var rows = (d.results || []).map(function (r) { return ["#" + r.id, r.text]; });
+        if (!rows.length) rows = [["--", q ? "nothing matches that" : "nothing stored yet"]];
+        defList(root, rows);
+        var note = document.createElement("p");
+        note.className = "note";
+        note.textContent = "Drop one with /forget <id>.";
+        root.appendChild(note);
+      });
+    }).catch(function (e) { toast("memory: " + e.message); });
+  },
+  "/forget": function (rest) {
+    if (!needs("memory")) return;
+    var id = (rest || "").trim();
+    if (!id) { toast("use /forget <id>"); return; }
+    raw("/v1/memory/" + encodeURIComponent(id), { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        addSys(d.ok ? ("forgot #" + id + " (" + d.count + " left)") : ("there is no memory #" + id));
+      })
+      .catch(function (e) { toast("forget: " + e.message); });
+  }
+};
+function runCommand(text) {
+  var sp = text.indexOf(" ");
+  var name = (sp < 0 ? text : text.slice(0, sp)).toLowerCase();
+  var rest = sp < 0 ? "" : text.slice(sp + 1);
+  var fn = HANDLERS[name];
+  if (!fn) {
+    toast("no such command: " + name);
+    box.value = "/";
+    openPalette();
+    return;
+  }
+  try { fn(rest); } catch (e) { toast(name + " failed: " + e.message); }
+}
+
+// ------------------------------------------------------------ the palette
+var palIndex = 0, palRows = [];
+function paletteOpen() { return !paletteEl.hidden; }
+function openPalette() {
+  var typed = box.value.trim().toLowerCase();
+  var head = typed.split(" ")[0];
+  palRows = COMMANDS.filter(function (c) { return c[0].indexOf(head) === 0; });
+  if (!palRows.length) { closePalette(); return; }
+  if (palIndex >= palRows.length) palIndex = 0;
+  paletteEl.textContent = "";
+  palRows.forEach(function (c, i) {
+    var row = document.createElement("div");
+    row.className = "cmd" + (i === palIndex ? " sel" : "");
+    var n = document.createElement("span");
+    n.className = "name";
+    n.textContent = c[0];
+    var d = document.createElement("span");
+    d.className = "desc";
+    d.textContent = c[1];
+    row.appendChild(n);
+    row.appendChild(d);
+    row.onmousedown = function (ev) { ev.preventDefault(); palIndex = i; pickHighlight(); };
+    paletteEl.appendChild(row);
+  });
+  paletteEl.hidden = false;
+}
+function closePalette() { paletteEl.hidden = true; palIndex = 0; }
+function moveHighlight(d) {
+  if (!palRows.length) return;
+  palIndex = (palIndex + d + palRows.length) % palRows.length;
+  openPalette();                              // re-renders the rows with the new one selected
+}
+function completeHighlight() {
+  // Autocomplete only: the box gets the name, the palette stays open.
+  var chosen = palRows[palIndex];
+  if (!chosen) return;
+  var typed = box.value.trim();
+  var sp = typed.indexOf(" ");
+  var rest = sp < 0 ? "" : typed.slice(sp + 1);   // everything after the command word survives
+  box.value = chosen[0] + (rest ? " " + rest : " ");
+  box.focus();
+}
+function pickHighlight() {
+  // A pick fills the box AND runs it -- Enter and a click both mean "do this".
+  var chosen = palRows[palIndex];
+  if (!chosen) return;
+  var typed = box.value.trim();
+  var sp = typed.indexOf(" ");
+  var rest = sp < 0 ? "" : typed.slice(sp + 1);   // everything after the command word survives
+  box.value = chosen[0] + (rest ? " " + rest : " ");
+  closePalette();
+  submitInput();
+}
+function syncPalette() {
+  if (box.value.charAt(0) === "/") openPalette();
+  else closePalette();
+}
+box.addEventListener("input", syncPalette);
+box.addEventListener("keydown", function (ev) {
+  if (!paletteOpen()) {
+    // Closed palette: only Escape acts here. Enter is left alone so the form's
+    // own submit fires -- one execution path, no key handling that shadows it.
+    if (ev.key === "Escape" && !overlayEl.hidden) { closeOverlay(); ev.preventDefault(); }
+    return;
+  }
+  if (ev.key === "ArrowDown") moveHighlight(1);
+  else if (ev.key === "ArrowUp") moveHighlight(-1);
+  else if (ev.key === "Tab") completeHighlight();
+  else if (ev.key === "Escape") closePalette();
+  else if (ev.key === "Enter") pickHighlight();
+  else return;
+  ev.preventDefault();
+});
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape" && !overlayEl.hidden) closeOverlay();
+});
+
+// ------------------------------------------------------------ picture input
+picBtn.addEventListener("click", function () { fileInput.click(); });
+fileInput.addEventListener("change", function () {
+  var f = fileInput.files && fileInput.files[0];
+  fileInput.value = "";                       // re-picking the same file re-fires
+  if (!f) return;
+  if (f.size > 8 * 1024 * 1024) { toast("that image is too large (8 MB max)"); return; }
+  var fr = new FileReader();
+  fr.onload = function () {
+    pendingImage = String(fr.result);         // data: URL -- the only form serve accepts
+    picBtn.classList.add("armed");
+    box.placeholder = "Describe or ask about the picture...";
+  };
+  fr.onerror = function () { toast("could not read that image"); };
+  fr.readAsDataURL(f);
+});
+function clearPending() {
+  pendingImage = null;
+  picBtn.classList.remove("armed");
+  box.placeholder = "Talk to " + PERSONA + ", or type / for commands";
+}
+
+// -------------------------------------------------------------------- mic
+var recorder = null, chunks = [], micBusy = false, micPending = false, micCtx = null;
+function micLabel(text, recording) {
+  micBtn.textContent = text;
+  micBtn.classList.toggle("rec", !!recording);
+}
+function attachAnalyser(stream) {
+  try {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    micCtx = new Ctx();
+    var src = micCtx.createMediaStreamSource(stream);
+    analyser = micCtx.createAnalyser();
+    analyser.fftSize = 256;
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    src.connect(analyser);
+  } catch (e) { analyser = null; freqData = null; }
+}
+function detachAnalyser() {
+  analyser = null;
+  freqData = null;
+  if (micCtx) { try { micCtx.close(); } catch (e) {} micCtx = null; }
+}
+function toggleMic() {
+  if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  if (micBusy || micPending) return;
+  if (!CAPS.ears) { organMissing("ears"); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    toast("this browser cannot record audio");
+    return;
+  }
+  micPending = true;
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    micPending = false;
+    chunks = [];
+    attachAnalyser(stream);
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = function (ev) { if (ev.data.size) chunks.push(ev.data); };
+    recorder.onstop = function () {
+      stream.getTracks().forEach(function (t) { t.stop(); });   // release the device
+      detachAnalyser();
+      recorder = null;
+      micLabel("MIC", false);
+      if (!chunks.length) return;
+      micBusy = true;
+      micLabel("...", false);
+      var fd = new FormData();
+      fd.append("file", new Blob(chunks, { type: "audio/webm" }), "clip.webm");
+      raw("/v1/audio/transcriptions", { method: "POST", body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var said = (d && typeof d.text === "string") ? d.text.trim() : "";
+          // The transcription FILLS the box; it is never sent on her behalf.
+          if (said) { box.value = box.value ? box.value + " " + said : said; syncPalette(); }
+          else addSys("[heard nothing]");
+        })
+        .catch(function (e) { toast("transcription: " + e.message); })
+        .then(function () { micBusy = false; micLabel("MIC", false); box.focus(); });
+    };
+    recorder.start();
+    micLabel("REC", true);
+  }).catch(function () {
+    micPending = false;
+    detachAnalyser();
+    toast("microphone unavailable (permission denied?)");
+  });
+}
+micBtn.addEventListener("click", toggleMic);
+
+// ------------------------------------------------------------------ submit
+// The single execution path: SEND, ENTER and a palette pick all end up here.
+function submitInput() {
+  var text = box.value.trim();
+  if (!text) return;
+  bleep(880);
+  if (!bootFolded) foldBoot();
+  closePalette();
+  if (text.charAt(0) === "/") {
+    box.value = "";
+    runCommand(text);
+    return;
+  }
+  if (busy) { toast("she is still answering"); return; }
+  box.value = "";
+  if (pendingImage) {
+    var url = pendingImage;
+    clearPending();
+    ask({ role: "user", content: [
+      { type: "text", text: text },
+      { type: "image_url", image_url: { url: url } }
+    ] }, text, url);
+  } else {
+    ask({ role: "user", content: text }, text, null);
+  }
+}
+$("bar").addEventListener("submit", function (ev) {
+  ev.preventDefault();
+  submitInput();
+});
+
+// -------------------------------------------------------------------- boot
+sizeWave();
+requestAnimationFrame(drawWave);
+paintChips();
+paintTalk();
+paintMute();
+paintCore();
+startSystemPanel();
+loadModel();
+loadCaps(false).then(bootReadout).catch(function () {});
+box.focus();
+</script></body></html>

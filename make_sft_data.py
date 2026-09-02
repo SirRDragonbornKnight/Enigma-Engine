@@ -1838,7 +1838,7 @@ def gen_context_recall_examples(seed: int = 223) -> list[dict]:
 # words, so "What is 4 times 9?" reduces to the lone word "times" and is held
 # out of training whole (audit 2026-08-22). None of the pairs are a sealed
 # probe's.
-N_TOOL_CHAINS = 40  # PROPOSAL
+N_TOOL_CHAINS = 54  # PROPOSAL
 _TOOL_DEPTH_CALLS = [
     (2, "What is 128 times 37?", "calculate", {"expression": "128 * 37"}, "4736", "4736."),
     (3, "What is 604 minus 279?", "calculate", {"expression": "604 - 279"}, "325", "325."),
@@ -1872,8 +1872,19 @@ _TOOL_DEPTH_CALLS = [
      {"text": "User's passport expiry"}, "removed", "Off the record."),
 ]
 
-# The same skill with a CLIENT tool on offer beside the built-ins: half pick
-# the client's, half pick one of hers, and the wrong pick is always available.
+# The same skill with a CLIENT tool on offer beside the built-ins, and the
+# wrong pick always available.
+#
+# It used to be a half-and-half split, ten rows. Sealed gate 2026-08-31: sft4
+# taught the mid-chat call and LOST tool selection, 15 -> 10, with calculate
+# firing on asks the client's tool answers -- five rows picking the client was
+# not a selection gradient, it was a rounding error next to the 33 calculate
+# calls the family made. The ten rows added below all pick the CLIENT'S tool,
+# and four of them are get_weather, the class that measurably failed. Their
+# asks are info requests -- "check", "look up", "what is the X" -- because that
+# is the shape that lost, and they are NEAR-NEIGHBORS of the sealed weather
+# probes rather than their surfaces (different cities, different framings): an
+# authored collision is held out of training whole.
 # (depth, client tool, ask, tool, arguments, result, answer)
 _TOOL_DEPTH_CLIENT = [
     (2, "set_timer", "Give me 25 minutes on the rice.", "set_timer",
@@ -1898,6 +1909,75 @@ _TOOL_DEPTH_CLIENT = [
      "7332", "7332."),
     (3, "avatar_express", "Forget the note about me reading before bed.", "forget",
      {"text": "User reads before bed"}, "removed", "Forgotten."),
+    (2, "get_weather", "Can you check the temperature in Lisbon for me?", "get_weather",
+     {"city": "Lisbon"}, "17C, clear", "Lisbon is 17C and clear."),
+    (4, "get_weather", "Look up how windy it is in Wellington right now.", "get_weather",
+     {"city": "Wellington"}, "21C, gale", "Wellington is 21C with a gale running through it."),
+    (5, "get_weather", "What is it doing outside in Reykjavik?", "get_weather",
+     {"city": "Reykjavik"}, "2C, windy", "Reykjavik is 2C and windy."),
+    (3, "get_weather", "Is it raining in Glasgow at the moment?", "get_weather",
+     {"city": "Glasgow"}, "11C, drizzle", "Drizzle in Glasgow, 11C. Take a coat."),
+    (2, "search_notes", "Look up what I wrote down about the boiler service.", "search_notes",
+     {"query": "boiler service"}, "Note: 'Boiler service — annual, book in October.'",
+     "Your note says it is annual and to book it in October."),
+    (5, "search_notes", "Check my notes for the gate code at the allotment.", "search_notes",
+     {"query": "allotment gate code"}, "Note: 'Allotment gate 4821.'",
+     "Your note has it: the allotment gate is 4821."),
+    (4, "see_screen", "Check what that dialog on my screen actually says.", "see_screen",
+     {}, "A dialog: 'Update available — restart to install'.",
+     "It says an update is available and wants a restart to install it."),
+    (2, "see_screen", "What is the error showing in my terminal?", "see_screen",
+     {}, "ModuleNotFoundError: No module named 'yaml'",
+     "ModuleNotFoundError for 'yaml' — that environment does not have it installed."),
+    (5, "translate", "What is 'the last train has gone' in German?", "translate",
+     {"text": "the last train has gone", "to": "german"}, "der letzte Zug ist weg",
+     "In German: der letzte Zug ist weg."),
+    (3, "set_timer", "Start a 90 minute timer for the roast.", "set_timer",
+     {"minutes": 90, "label": "roast"}, "timer set", "90 minutes on the roast."),
+]
+
+# Tools ON OFFER and the right move is to ANSWER. (depth, client tool or None,
+# ask, answer.)
+#
+# The other half of the sealed-gate regression: not one record in this family
+# showed an offer with no call, so every mid-chat turn under a tools block
+# ended in a call and restraint slid 13 -> 12 -- a tool fired on small talk.
+# Three shapes, because the false fire has three surfaces: stative remarks
+# that MENTION a tool's subject without asking for anything, opinion and chat
+# asks, and info questions she can answer from what she knows because no
+# offered tool covers them. The weather-flavoured rows are near-neighbors of
+# the sealed restraint probes, never their phrasings.
+_TOOL_DEPTH_NONE = [
+    (2, None, "The mornings have that cold edge to them now.",
+     "That first week of it always feels colder than the number says."),
+    (3, "get_weather", "I never did get used to how early it gets dark here.",
+     "The dark hour creeps up on everyone. It gets easier once the clocks turn."),
+    (4, None, "My knees always tell me before the rain does.",
+     "Old joints and falling pressure. There is real physics under that one."),
+    (2, "get_weather", "There is nothing better than a thunderstorm when you are indoors.",
+     "Warm, dry, and watching it happen to someone else. Hard to beat."),
+    (5, None, "I have three timers going in the kitchen and I have lost track of all of them.",
+     "That is what a good dinner sounds like. Let them ring and follow the noise."),
+    (3, "set_timer", "I used to keep every recipe on paper and now I keep none of it.",
+     "Paper never synced, but it never lost a note either. Both cost you something."),
+    (2, None, "Do you think people were happier before everything was instant?",
+     "Less hurried, maybe. Happier is a bigger claim — they had their own worries "
+     "and fewer places to put them."),
+    (4, "play_music", "What makes a song stick in your head, do you reckon?",
+     "A phrase that almost resolves and does not. Your head keeps finishing it for you."),
+    (3, None, "Is it worth learning an instrument at my age?",
+     "Yes. The only real cost is the first three months of sounding bad."),
+    (5, "get_weather", "Do you have a favourite kind of weather?",
+     "Fog, if I get a vote. It makes ordinary streets look like they are hiding something."),
+    (2, None, "How many strings does a standard violin have?",
+     "Four — G, D, A and E."),
+    (3, "set_timer", "What is the tallest mountain in Africa?",
+     "Kilimanjaro, in Tanzania."),
+    (4, "get_weather", "Which planet has the shortest day?",
+     "Jupiter. It turns right round in about ten hours."),
+    (5, "roll_dice", "What does a sommelier actually do?",
+     "Runs a restaurant's wine list — buys it, stores it, and matches bottles to "
+     "what you are eating."),
 ]
 
 # A second call whose operand is the FIRST call's result -- "that", read off
@@ -1958,6 +2038,12 @@ def gen_tool_depth_examples(seed: int = 227) -> list[dict]:
     arriving at the fourth user turn, after ordinary chat -- which is where a
     call actually lands in use, and the position the intent gates used to
     decide for her.
+
+    The fourth loop trains the mid-chat turn that calls NOTHING. Teaching the
+    position without teaching the restraint that goes with it is what the sft4
+    gate measured: mid-chat calling landed, and both selection and restraint
+    fell, because under a tools block every trained turn here used to end in a
+    call.
     """
     rng = random.Random(seed)
     out: list[dict] = []
@@ -2006,6 +2092,20 @@ def gen_tool_depth_examples(seed: int = 227) -> list[dict]:
             + trace("calculate", {"expression": expr}, res, answer)
             + [{"role": "user", "content": ask2}]
             + trace("calculate", {"expression": expr2}, res2, answer2),
+            "category": "tool_in_context",
+        })
+    for ci, (depth, client, ask, answer) in enumerate(_TOOL_DEPTH_NONE):
+        r = random.Random(seed + 3000 + ci)
+        if client is None:
+            block = sys_msg
+        else:
+            cname, cdesc, cparams, _ = _tool_by_name(client)
+            block = _client_beside_builtins(cname, cdesc, cparams)
+        out.append({
+            "messages": [{"role": "system", "content": block}]
+            + lead_in(r, depth)
+            + [{"role": "user", "content": ask},
+               {"role": "assistant", "content": answer}],
             "category": "tool_in_context",
         })
     rng.shuffle(out)

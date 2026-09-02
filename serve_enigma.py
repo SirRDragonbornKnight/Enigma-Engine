@@ -71,6 +71,9 @@ from enigma_engine.core.memory_store import renders_forget_pending as _renders_f
 from enigma_engine.core.persona import Persona
 from enigma_engine.core.safe_save import atomic_write_text
 from enigma_engine.core.tokenizer import get_tokenizer, vocab_file_for_size
+# The int8 rule lives in ONE place; boot borrows the two primitives rather than
+# growing a second copy (torchao itself is imported only for a marked ckpt).
+from quantize_serving_ckpt import assert_quant_applied, load_checkpoint, prepare_for_state_dict
 
 try:  # Windows consoles default to cp1252 and crash printing unicode.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -78,6 +81,39 @@ except Exception:
     pass
 
 ROOT = Path(__file__).resolve().parent
+# Static faces served off disk (the HUD page and its display font). The chat
+# page is a module constant; anything with its own assets lives here instead.
+WEB_DIR = ROOT / "web"
+
+def _bounded_float(low: float, high: float, flag: str):
+    """An argparse type that refuses an out-of-range or non-finite value at the
+    command line rather than letting it reach the sampler."""
+
+    def parse(value: str) -> float:
+        number = float(value)
+        if not (low <= number <= high):  # also rejects nan, which compares False
+            raise argparse.ArgumentTypeError(f"{flag} must be between {low} and {high}, got {value}")
+        return number
+
+    return parse
+
+
+def _quiet_window(value: str):
+    """--wake-quiet as H-H, e.g. 23-8 for the whole night. Both must be real
+    hours: a typo here either silences her for a day or fails to silence her
+    at all, and neither should get past the command line."""
+    parts = str(value).split("-")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(f"--wake-quiet wants H-H (e.g. 23-8), got {value!r}")
+    try:
+        start, end = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--wake-quiet wants whole hours, got {value!r}") from None
+    for hour in (start, end):
+        if not 0 <= hour <= 23:
+            raise argparse.ArgumentTypeError(f"--wake-quiet hours must be 0-23, got {value!r}")
+    return (start, end)
+
 
 _p = argparse.ArgumentParser()
 _p.add_argument(
@@ -219,6 +255,69 @@ _p.add_argument(
     "--fp32",
     action="store_true",
     help="generate in full fp32 instead of the default bf16 autocast (slower; numerics escape hatch)",
+)
+_p.add_argument(
+    "--device",
+    choices=("auto", "cuda", "cpu"),
+    default="auto",
+    help="device the MODEL runs on (auto = cuda when available, today's behavior). "
+    "--device cuda on a box without CUDA REFUSES rather than falling back silently. "
+    "SCOPE: this governs the model and the eyes organ (which follows the model); ears, "
+    "painter and voice still pick their own device and fall back on a GPU-less machine",
+)
+_p.add_argument(
+    "--wake",
+    action="store_true",
+    help="let her speak unprompted: a wake loop beside the request lane that notices "
+    "timer ticks and new files in --wake-watch. OFF by default -- the first time she "
+    "wakes on her own is the user's switch to throw, not a default",
+)
+_p.add_argument(
+    "--wake-interval",
+    type=int,
+    default=1800,
+    help="seconds between heartbeat ticks when --wake is on (default 1800)",
+)
+_p.add_argument(
+    "--wake-watch",
+    default=None,
+    help="folder to watch for NEW files; a folder that is already full announces "
+    "nothing at startup, only what arrives after",
+)
+_p.add_argument(
+    "--wake-cooldown",
+    type=int,
+    default=900,
+    help="seconds she stays quiet after actually speaking (default 900); a heartbeat "
+    "she answers with silence costs nothing",
+)
+_p.add_argument(
+    "--wake-quiet",
+    type=_quiet_window,
+    default=(23, 8),
+    help="quiet hours as H-H, wrapping midnight (default 23-8). Set 0-0 to disable",
+)
+_p.add_argument(
+    "--dry-multiplier",
+    type=_bounded_float(0.0, 10.0, "--dry-multiplier"),
+    default=0.0,
+    help="DRY sampling strength for requests that do not ask for one themselves "
+    "(0 = off, the ecosystem's working value is 0.8). A client that names "
+    "dry_multiplier always keeps what it asked for, including an explicit 0.0",
+)
+_p.add_argument(
+    "--state-reinject",
+    action="store_true",
+    help="prefix the final user turn with the numeric facts the user stated earlier in THIS "
+    "conversation ([context: rent: 1350]). OFF by default: the model never trained on an "
+    "injected-context shape, so adoption waits on a measured table",
+)
+_p.add_argument(
+    "--tool-span-constrain",
+    action="store_true",
+    help="constrain what she may sample INSIDE a <|tool_call|> span to valid JSON (xgrammar). "
+    "OFF by default: decoding is byte-identical without it, and adoption waits on a measured "
+    "table. Missing xgrammar or a tokenizer-parity failure disables it with one WARN",
 )
 # ---------------------------------------------------------------------------
 # Runtime state -- populated by boot(). This module used to do ALL of its
@@ -389,7 +488,14 @@ def _adopt_legacy_state(path: Path, legacy: Path) -> None:
 IMAGES_DIR = PERSONA.home / "images"
 
 
-def _load_eyes(ckpt_path: Path, preset: str):
+# The text-lineage fingerprint every align checkpoint carries (the align
+# trainer stamps model.config.__dict__ as "model_config"): the fields that
+# must agree with the SERVED config for the trained projection to mean
+# anything. All real ForgeConfig fields.
+_EYES_LINEAGE_KEYS = ("vocab_size", "dim", "n_layers", "n_heads", "n_kv_heads")
+
+
+def _load_eyes(ckpt_path: Path, preset: str, served_config=None):
     """Load an align checkpoint: her aligned VisionEncoder, the trained
     vision_projection weights, and the encoder dim for the model's vision
     port. Raises EyesError for a missing file / non-align checkpoint / absent
@@ -397,7 +503,9 @@ def _load_eyes(ckpt_path: Path, preset: str):
     failure while turning it into an encoder). An unknown preset raises KeyError
     and a mismatched encoder state dict RuntimeError -- boot() catches all of
     these and degrades to text-only with one honest WARN (extracted for
-    testability, 2026-07-17)."""
+    testability, 2026-07-17). With served_config passed (boot always does), the
+    checkpoint's stored text lineage must match the served model's or the eyes
+    are refused; served_config=None skips that check entirely."""
     from enigma_engine.core.vision_encoder import VISION_PRESETS, VisionEncoder
 
     if not ckpt_path.exists():
@@ -416,6 +524,34 @@ def _load_eyes(ckpt_path: Path, preset: str):
         ) from exc
     if not isinstance(eck, dict) or "vision_encoder_state_dict" not in eck:
         raise EyesError(f"{ckpt_path} carries no vision_encoder_state_dict (not an align checkpoint)")
+    # The graft itself cannot catch a wrong lineage: only the encoder dim has
+    # to match, so a projection trained against DIFFERENT text weights loads
+    # strict-clean and fails silently -- eyes reported live, every image
+    # captioning to one constant string (measured 2026-08-29). The align
+    # trainer's stored model_config is the only evidence, so it is checked
+    # here, before the encoder is built.
+    if served_config is not None:
+        # A non-dict model_config is UNUSABLE, not a lineage, and refusing it
+        # here is what keeps the comparison below total: indexing a list would
+        # raise TypeError, which boot's degrade catch does not cover.
+        stored_mc = eck.get("model_config")
+        if not stored_mc or not isinstance(stored_mc, dict):
+            raise EyesError(
+                f"{ckpt_path} carries no usable model_config, so the lineage it "
+                f"was aligned against cannot be verified; re-run align_vision.py "
+                f"against the served checkpoint"
+            )
+        mismatched = [
+            f"{k}: align={stored_mc[k]} served={getattr(served_config, k, None)}"
+            for k in _EYES_LINEAGE_KEYS
+            if k in stored_mc and stored_mc[k] != getattr(served_config, k, None)
+        ]
+        if mismatched:
+            raise EyesError(
+                f"{ckpt_path} was aligned against a foreign lineage "
+                f"({'; '.join(mismatched)}); re-run align_vision.py against the "
+                f"served checkpoint"
+            )
     # Prefer the encoder config STORED IN the checkpoint (align runs
     # persist it since 2026-07-20) over the hand-passed preset name -- a
     # preset/checkpoint mismatch then cannot exist. Older checkpoints
@@ -468,6 +604,27 @@ def _load_eyes(ckpt_path: Path, preset: str):
 # re-audit 2026-07-18: the delete-only scheme destroyed a genuine
 # HF_HUB_OFFLINE=0 export across an allow-downloads -> flagless boot pair).
 _BOOT_ENV_WRITES: dict[str, tuple[str | None, str]] = {}
+
+
+def _resolve_device(arg: str) -> str:
+    """Turn --device into the device the MODEL runs on.
+
+    "auto" is exactly what boot picked before this flag existed. "cuda" on a
+    machine without CUDA is a hard stop, never a quiet fall back to cpu: the
+    failure this refusal exists to prevent is a CPU-vs-GPU measurement that
+    silently ran on the 5090 and was recorded as a CPU baseline.
+    """
+    if arg == "cpu":
+        return "cpu"
+    if arg == "cuda":
+        if not torch.cuda.is_available():
+            raise SystemExit(
+                "REFUSED: --device cuda but torch.cuda.is_available() is False. "
+                "Falling back to CPU here would record a CPU run as a GPU one; "
+                "pass --device cpu deliberately, or fix the CUDA install."
+            )
+        return "cuda"
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def boot(argv: list[str] | None = None) -> None:
@@ -568,7 +725,7 @@ def boot(argv: list[str] | None = None) -> None:
             _h.update(_chunk)
     MODEL_SHA256 = _h.hexdigest()
     print(f"  checkpoint sha256 {MODEL_SHA256[:16]}...", flush=True)
-    _ck = torch.load(ARGS.model, map_location="cpu", weights_only=True)  # our own checkpoint
+    _ck = load_checkpoint(ARGS.model)  # our own checkpoint; tolerates an int8 one
     if not (isinstance(_ck, dict) and "model_state_dict" in _ck and "config" in _ck):
         raise SystemExit(f"{ARGS.model} is not an Enigma checkpoint (need model_state_dict + config)")
     CONFIG = ForgeConfig.from_dict(_ck["config"])
@@ -586,7 +743,7 @@ def boot(argv: list[str] | None = None) -> None:
             ROOT / "models" / "enigma_vision_align" / "enigma_vision_align_vision_best.pt"
         )
         try:
-            _VISION_ENCODER, _VISION_PROJ_SD, _vdim = _load_eyes(_eyes_ckpt, ARGS.eyes_preset)
+            _VISION_ENCODER, _VISION_PROJ_SD, _vdim = _load_eyes(_eyes_ckpt, ARGS.eyes_preset, CONFIG)
             CONFIG.vision_hidden_size = _vdim
         except (EyesError, KeyError, RuntimeError, OSError) as exc:
             print(f"  WARN: eyes disabled -- {exc}", flush=True)
@@ -594,6 +751,10 @@ def boot(argv: list[str] | None = None) -> None:
             _VISION_PROJ_SD = None
 
     model = Enigma(CONFIG)
+    # An int8 checkpoint must be quantized BEFORE its state dict lands, or the
+    # tensors either refuse to load or arrive as plain fp32 -- a server that
+    # reports int8 while running fp32 weights. Plain checkpoints no-op here.
+    _quantized = prepare_for_state_dict(model, _ck)
     if _VISION_ENCODER is not None:
         # Text weights come from the SERVED checkpoint; only the projection is new.
         _missing, _unexpected = model.load_state_dict(_ck["model_state_dict"], strict=False)
@@ -603,7 +764,10 @@ def boot(argv: list[str] | None = None) -> None:
         model.vision_projection.load_state_dict(_VISION_PROJ_SD, strict=True)
     else:
         model.load_state_dict(_ck["model_state_dict"], strict=True)
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    assert_quant_applied(model, _ck, ARGS.model)
+    if _quantized:
+        print("  weights: int8 weight-only (torchao, eager)", flush=True)
+    DEVICE = _resolve_device(ARGS.device)
     model.to(DEVICE).eval()
     # Serve was the only fp32 stage in the whole stack (ultrareview #36): every
     # training pass runs bf16 autocast with TF32 matmuls, and batch-1 decode is
@@ -713,6 +877,18 @@ def boot(argv: list[str] | None = None) -> None:
                 "tool calls and <|im_end|> are unavailable on this checkpoint",
                 flush=True,
             )
+
+    # Tool-span JSON constraint: compile ONCE, here, against the real head
+    # width -- the per-request matcher is then cheap. It needs the chat tokens
+    # the instruct path emits, and it degrades to nothing but a WARN: a missing
+    # wheel, a vocab that will not round-trip to raw bytes, or a grammar that
+    # will not compile all leave decoding byte-identical to a server without
+    # the flag.
+    if ARGS.tool_span_constrain:
+        if not INSTRUCT:
+            print("  WARN: --tool-span-constrain needs an instruct lineage; ignored", flush=True)
+        elif _tool_span_guard_for(model, tokenizer) is not None:
+            print(f"  tool-span JSON constraint ON (vocab width {_head_width})", flush=True)
 
     MEMORY = None
     MEMORY_RECALL = max(0, ARGS.memory_recall)
@@ -846,6 +1022,32 @@ def boot(argv: list[str] | None = None) -> None:
         + (" | search: on" if SEARCHER is not None else ""),
         flush=True,
     )
+
+    # The autonomy lane, LAST and only on request. The handle rides app.state
+    # rather than a module global (the runtime-globals mirror pin), and the
+    # thread is a daemon, so a killed server never leaves her muttering.
+    app.state.wake_loop = None
+    if ARGS.wake:
+        if not INSTRUCT:
+            print("  WARN: --wake needs an instruct lineage; the wake loop is off", flush=True)
+        else:
+            from enigma_engine.core.wake import WakeLoop
+
+            _wake = WakeLoop(
+                submit=_wake_submit,
+                announce=_wake_announce,
+                busy=_GEN_LOCK.locked,
+                interval_s=ARGS.wake_interval,
+                cooldown_s=ARGS.wake_cooldown,
+                quiet=ARGS.wake_quiet,
+                watch_dir=ARGS.wake_watch,
+                heartbeat_ticks=False,
+            )
+            _wake.start()
+            app.state.wake_loop = _wake
+            for _line in _wake_status_lines(ARGS):
+                print(_line, flush=True)
+
     _BOOTED = True  # LAST statement: readiness means boot ran to completion
 
 app = FastAPI(title="Enigma (from-scratch)")
@@ -929,6 +1131,12 @@ class ChatReq(BaseModel):
     min_p: float = Field(0.05, **_FINITE)  # 0 = off; prunes tokens below min_p * max_prob
     top_k: int = 50  # 0 = off
     repetition_penalty: float = Field(1.1, **_FINITE)  # applied to HER tokens only, never the prompt
+    # DRY sampling, OFF by default. The base is bounded on both sides: an
+    # unbounded one OverflowErrors in the generation worker (a 500), and a
+    # sub-1.0 one inverts the penalty into a reward for repeating.
+    dry_multiplier: float = Field(0.0, ge=0.0, le=10.0, **_FINITE)
+    dry_base: float = Field(1.75, ge=1.0, le=4.0, **_FINITE)
+    dry_allowed_length: int = Field(2, ge=0)
     max_tokens: int = 256
     stream: bool = False
     tools: list[dict] | None = None  # OpenAI tool specs (instruct mode)
@@ -942,6 +1150,9 @@ class CompletionReq(BaseModel):
     min_p: float = Field(0.0, **_FINITE)  # 0 = off; prunes tokens below min_p * max_prob
     top_k: int = 50  # 0 = off
     repetition_penalty: float = Field(1.1, **_FINITE)  # applied to generated tokens only
+    dry_multiplier: float = Field(0.0, ge=0.0, le=10.0, **_FINITE)  # DRY sampling; see ChatReq
+    dry_base: float = Field(1.75, ge=1.0, le=4.0, **_FINITE)
+    dry_allowed_length: int = Field(2, ge=0)
     max_tokens: int = 256
     stream: bool = False
 
@@ -977,6 +1188,142 @@ def _find_stop(text: str, stop_texts: tuple[str, ...]) -> int:
 
 _GEN_DONE = object()
 
+# The rows her head actually emits. The embedding/output matrices are padded to
+# a multiple of 64 for GPU alignment and the chat specials live in the FIRST
+# padding rows, so a token bitmask has to be built at that padded width: built
+# at tokenizer.vocab_size it masks misaligned columns and raises NOTHING
+# (measured 2026-09-01 -- apply_token_bitmask_inplace does not check the width).
+_TOOL_SPAN_ALIGN = 64
+# A tool call is a JSON OBJECT. The schema stays this loose on purpose: the
+# per-tool argument schemas are the model's to get right, and pinning them here
+# would refuse a correct call to a tool the guard hasn't been told about.
+_TOOL_SPAN_SCHEMA = '{"type": "object"}'
+_TOOL_SPAN_GRAMMAR: dict[int, object] = {}
+
+
+def _tool_span_width(tokenizer) -> int:
+    live = max(chat_token_ids(tokenizer).values()) + 1
+    return -(-live // _TOOL_SPAN_ALIGN) * _TOOL_SPAN_ALIGN
+
+
+def _tool_span_grammar(tokenizer, width: int):
+    """Compile the tool-span grammar against her RAW vocab. Compiled ONCE per
+    width and cached: compilation is the expensive half, the per-request
+    matcher is cheap.
+
+    Her vocab is literal-char byte-level (one char per byte, no GPT-2 byte
+    mapping and no `</w>` suffix), so latin-1 is the exact RAW byte form --
+    verified id-for-id against her own decode across all 16,366 rows before
+    this shipped. The chat specials go in at their real ids; the remaining
+    alignment rows get placeholders the grammar can never reach.
+    """
+    if width in _TOOL_SPAN_GRAMMAR:
+        cached = _TOOL_SPAN_GRAMMAR[width]
+        if cached is None:
+            raise RuntimeError(f"the tool-span grammar already failed to compile at width {width}")
+        return cached
+    import xgrammar
+
+    raw = [tokenizer.id_to_token[i].encode("latin-1") for i in range(tokenizer.vocab_size)]
+    by_id = {i: s for s, i in chat_token_ids(tokenizer).items()}
+    for i in range(len(raw), width):
+        raw.append(by_id.get(i, f"<|unused_{i}|>").encode("utf-8"))
+    info = xgrammar.TokenizerInfo(raw, vocab_type=xgrammar.VocabType.RAW, vocab_size=width)
+    # The structural tag owns the span: the matcher opens on <|tool_call|>,
+    # constrains the object, and RELEASES on <|/tool_call|>. A bare JSON
+    # grammar cannot do this -- it has no notion of the closing token, so it
+    # walls her inside the span she opened (measured: 1 legal token, and
+    # <|/tool_call|> not among them).
+    tag = xgrammar.StructuralTagItem(
+        begin="<|tool_call|>", schema=_TOOL_SPAN_SCHEMA, end="<|/tool_call|>"
+    )
+    grammar = xgrammar.Grammar.from_structural_tag([tag], ["<|tool_call|>"])
+    compiled = xgrammar.GrammarCompiler(info).compile_grammar(grammar)
+    _TOOL_SPAN_GRAMMAR[width] = compiled
+    return compiled
+
+
+def _tool_span_guard_for(model, tokenizer):
+    """One guard for one generation, or None when the constraint cannot run.
+
+    Readiness is DERIVED -- the flag, the instruct lineage, and the model's own
+    head width -- rather than latched into a boot global, so there is one source
+    of truth and no runtime state to restore. A failure is remembered against
+    the width, so a broken setup warns once instead of once per reply.
+    """
+    width = model.output.weight.shape[0]
+    if _TOOL_SPAN_GRAMMAR.get(width, False) is None:
+        return None  # already tried at this width and failed; it warned then
+    try:
+        return _ToolSpanGuard(tokenizer, width)
+    except Exception as exc:
+        _TOOL_SPAN_GRAMMAR[width] = None
+        print(f"WARN: tool-span constraint unavailable ({exc!r}); serving unconstrained", flush=True)
+        return None
+
+
+class _ToolSpanGuard:
+    """Constrain what she may sample INSIDE a tool-call span to valid JSON.
+
+    One guard per generation: the matcher is stateful, advanced by the ids she
+    actually produced. Outside a span it is the identity, so text generation is
+    byte-identical to a server without it.
+
+    It FAILS OPEN -- unmasked logits plus one WARN -- on anything unexpected: a
+    logits width it was not built for, an id the matcher rejects (desync), or
+    an empty allowed set. An all--inf row is not a safe default here: it lands
+    in sample_next_token's NaN fallback, which draws uniformly over columns the
+    vocab mask exists to forbid.
+    """
+
+    def __init__(self, tokenizer, vocab_width: int | None = None):
+        import xgrammar
+
+        self.width = int(vocab_width or _tool_span_width(tokenizer))
+        self._matcher = xgrammar.GrammarMatcher(_tool_span_grammar(tokenizer, self.width))
+        self._bitmask = xgrammar.allocate_token_bitmask(1, self.width)
+        self._fed = 0
+        self._live = True
+
+    def _give_up(self, why: str):
+        if self._live:
+            print(f"WARN: tool-span constraint disabled for this reply -- {why}", flush=True)
+        self._live = False
+
+    def __call__(self, logits: torch.Tensor, generated_ids) -> torch.Tensor:
+        if not self._live:
+            return logits
+        if logits.shape[-1] != self.width:
+            self._give_up(f"logits are {logits.shape[-1]} wide, guard built for {self.width}")
+            return logits
+        try:
+            import xgrammar
+
+            seq = generated_ids
+            if isinstance(seq, torch.Tensor):
+                seq = seq[0] if seq.dim() > 1 else seq
+                new = seq[self._fed:].tolist()
+            else:
+                new = list(seq[self._fed:])
+            for tid in new:
+                if not self._matcher.accept_token(int(tid)):
+                    self._give_up(f"the matcher rejected token {int(tid)}")
+                    return logits
+            self._fed += len(new)
+            self._matcher.fill_next_token_bitmask(self._bitmask)
+            mask = self._bitmask
+            if mask.device != logits.device:
+                mask = mask.to(logits.device)
+            out = logits.clone()
+            xgrammar.apply_token_bitmask_inplace(out, mask)
+        except Exception as exc:
+            self._give_up(f"{exc!r}")
+            return logits
+        if bool(torch.isneginf(out).all()):
+            self._give_up("the grammar left no legal token")
+            return logits
+        return out
+
 
 def _stream_ids_locked(
     x: torch.Tensor,
@@ -987,6 +1334,10 @@ def _stream_ids_locked(
     stop_tokens: list[int],
     top_k: int = 50,
     repetition_penalty: float = 1.1,
+    dry_multiplier: float = 0.0,
+    dry_base: float = 1.75,
+    dry_allowed_length: int = 2,
+    logits_hook=None,
 ):
     """Yield token ids from the model without holding _GEN_LOCK across
     consumer waits. A worker thread owns the lock for the whole generation
@@ -1013,6 +1364,10 @@ def _stream_ids_locked(
                     repetition_penalty=repetition_penalty,
                     stop_tokens=stop_tokens,
                     min_p=min_p,
+                    dry_multiplier=dry_multiplier,
+                    dry_base=dry_base,
+                    dry_allowed_length=dry_allowed_length,
+                    logits_hook=logits_hook,
                 ):
                     if cancel.is_set():
                         break
@@ -1036,6 +1391,100 @@ def _stream_ids_locked(
             yield item
     finally:
         cancel.set()
+
+
+_WAKE_LOG_LOCK = threading.Lock()
+
+
+def _wake_log_path() -> Path:
+    """Her wake log, in the engine data home -- NEVER the repo. Resolved per
+    call because --persona moves PERSONA.home at boot."""
+    return PERSONA.home / "wake_log.jsonl"
+
+
+def _wake_announce(text: str, kind: str) -> None:
+    """Her mouth for the autonomy lane: always the log, out loud only when she
+    is in talk mode and not muted. The log is the record the HUD can read back;
+    speaking is the optional half."""
+    row = {"ts": time.time(), "kind": kind, "text": text}
+    path = _wake_log_path()
+    try:
+        with _WAKE_LOG_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"WARN: wake log write failed: {exc}", flush=True)
+    if SPEAKER is not None and TALK_MODE and not MUTED:
+        try:
+            SPEAKER.speak(text)
+        except TTSError as exc:
+            print(f"WARN: wake announce could not speak: {exc}", flush=True)
+
+
+def _wake_status_lines(args) -> list[str]:
+    """What the wake loop will actually DO, said out loud at boot.
+
+    The B3 smoke lost a file drop to silence: the loop ran with no watch dir,
+    so file events were IMPOSSIBLE while ticks kept firing -- and nothing in
+    the boot output told the difference between watching a folder and watching
+    nothing. A capability that cannot fire has to say so (the organ rule), so
+    these lines are unconditional rather than appended only when configured.
+    """
+    lines = [
+        f"  wake loop ON (quiet {args.wake_quiet[0]}-{args.wake_quiet[1]}, "
+        f"cooldown {args.wake_cooldown}s, tick every {args.wake_interval}s)"
+    ]
+    if not args.wake_watch:
+        lines.append("  WARN: no --wake-watch given, so file events are OFF -- nothing can wake her")
+    elif not Path(args.wake_watch).is_dir():
+        lines.append(
+            f"  WARN: --wake-watch {args.wake_watch} is not a directory; file events stay OFF"
+        )
+    else:
+        lines.append(f"  wake watching {args.wake_watch} (files already there are never announced)")
+    lines.append("  wake ticks do NOT call the model; only file drops do")
+    return lines
+
+
+def _wake_submit(prompt: str) -> str:
+    """One throwaway instruct turn for a heartbeat.
+
+    Deliberately NOT the /v1/chat/completions entry: it skips _with_context, so
+    a heartbeat retrieves no memories and is offered no tools -- which is what
+    keeps a wake turn from writing anything into her store. Same renderer, same
+    sampler, same stop ids as a real reply.
+    """
+    ids = render_chat(
+        tokenizer,
+        [{"role": "user", "content": prompt}],
+        add_generation_prompt=True,
+        max_ids=ARGS.max_context - MIN_GEN_TOKENS,
+    )
+    out_ids = list(
+        _gen_ids(
+            ids, 96, CHAT_TEMPERATURE, 0.9, 0.05, _stop_ids(),
+            top_k=50, repetition_penalty=1.1,
+            dry_multiplier=float(getattr(ARGS, "dry_multiplier", 0.0) or 0.0),
+        )
+    )
+    return parse_assistant_ids(tokenizer, out_ids).get("content") or ""
+
+
+def _dry_multiplier_for(req) -> float:
+    """The DRY strength a request actually runs with.
+
+    --dry-multiplier makes the SERVE process the default for clients that never
+    heard of DRY -- her own pages included -- while a client that names the
+    field keeps exactly what it asked for, including an explicit 0.0, which is
+    how a caller turns DRY off on a server that defaults it on.
+
+    ``model_fields_set`` is what separates "asked for 0.0" from "did not ask":
+    the field default is 0.0 too, so comparing values cannot tell them apart.
+    """
+    if "dry_multiplier" in req.model_fields_set:
+        return float(req.dry_multiplier)
+    return float(getattr(ARGS, "dry_multiplier", 0.0) or 0.0)
 
 
 def _clamp_temperature(temperature, default: float) -> float:
@@ -1064,6 +1513,9 @@ def _generate_text(
     min_p: float = 0.0,
     top_k: int = 50,
     repetition_penalty: float = 1.1,
+    dry_multiplier: float = 0.0,
+    dry_base: float = 1.75,
+    dry_allowed_length: int = 2,
     stats: dict | None = None,
     default_temperature: float = CHAT_TEMPERATURE,
 ):
@@ -1125,7 +1577,8 @@ def _generate_text(
     saw_eos = False
     out_ids: list[int] = []
     for tid in _stream_ids_locked(
-        x, max_tokens, temperature, top_p, min_p, [EOS_ID], top_k=top_k, repetition_penalty=repetition_penalty
+        x, max_tokens, temperature, top_p, min_p, [EOS_ID], top_k=top_k, repetition_penalty=repetition_penalty,
+        dry_multiplier=dry_multiplier, dry_base=dry_base, dry_allowed_length=dry_allowed_length,
     ):
         if tid == EOS_ID:
             saw_eos = True
@@ -1168,17 +1621,27 @@ def _gen_ids(
     stop_ids: tuple[int, ...],
     top_k: int = 50,
     repetition_penalty: float = 1.1,
+    dry_multiplier: float = 0.0,
+    dry_base: float = 1.75,
+    dry_allowed_length: int = 2,
 ):
     """ID-level generation for instruct mode: render_chat already built the
     exact prompt (BOS included, no trailing EOS -- the whole encode() EOS
-    gotcha is bypassed). Yields raw token ids; stops on EOS/<|im_end|>."""
+    gotcha is bypassed). Yields raw token ids; stops on EOS/<|im_end|>.
+
+    This is the only generation path a tool-call span can occur on, so it is
+    the only one that builds a _ToolSpanGuard -- one per generation, because
+    the matcher carries the span state for exactly this reply."""
     # Defensive: prompt + generation must fit in max_context (caller already
     # sized max_tokens against len(ids), but never let a bad caller overflow).
     max_tokens = max(1, min(int(max_tokens), ARGS.max_context - len(ids)))
+    guard = _tool_span_guard_for(model, tokenizer) if getattr(ARGS, "tool_span_constrain", False) else None
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     temperature = _clamp_temperature(temperature, CHAT_TEMPERATURE)  # instruct mode is chat
     for tid in _stream_ids_locked(
-        x, max_tokens, temperature, top_p, min_p, list(stop_ids), top_k=top_k, repetition_penalty=repetition_penalty
+        x, max_tokens, temperature, top_p, min_p, list(stop_ids), top_k=top_k, repetition_penalty=repetition_penalty,
+        dry_multiplier=dry_multiplier, dry_base=dry_base, dry_allowed_length=dry_allowed_length,
+        logits_hook=guard,
     ):
         if tid in stop_ids:
             break
@@ -1242,6 +1705,44 @@ def _recent_user_text(messages: list[Msg], n: int = 3) -> str:
     ask, not the thread."""
     users = [m.content for m in messages if m.role == "user" and m.content]
     return " ".join(users[-n:])
+
+
+# A number the USER stated, and the noun it belongs to. Deliberately one small
+# pattern and no model: this is a deterministic RE-READ of the transcript, so a
+# pin can never say something the user did not. The trailing \b forces the value
+# to end on a digit, so a sentence-final "1200." pins 1200.
+_PIN_RE = re.compile(r"(\b[a-z][a-z ]{0,24}?)\s*(?:is|=|went up to|now|:)\s*\$?(\d[\d,.]*)\b")
+# "my rent" and "rent" are the same fact; without this the restated value lands
+# under a second key and the superseded one is pinned alongside it.
+_PIN_DETERMINERS = ("my ", "our ", "your ", "the ", "a ", "an ", "his ", "her ", "their ", "its ")
+
+
+def _conversation_pins(msgs: list[dict]) -> str | None:
+    """The numeric facts the USER stated, last value per noun, or None.
+
+    USER turns only -- what she said about the fact is not evidence for it, and
+    the memory store is not consulted at all: the store's one supersede channel
+    is _with_context, and a second source of truth is exactly what this must not
+    become. Rendered as "rent: 1350; deposit: 500".
+    """
+    pins: dict[str, str] = {}
+    for m in msgs:
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        for noun, value in _PIN_RE.findall(content):
+            key = " ".join(noun.split())
+            for det in _PIN_DETERMINERS:
+                if key.startswith(det):
+                    key = key[len(det):]
+                    break
+            if key:
+                pins[key] = value  # last statement of a fact wins
+    if not pins:
+        return None
+    return "; ".join(f"{k}: {v}" for k, v in pins.items())
 
 
 # Built-in tools serve executes ITSELF (no client round-trip), in the same
@@ -1764,6 +2265,21 @@ def _chat_instruct(req: ChatReq):
     dumped = [m.model_dump(exclude_none=True) for m in req.messages]
     _refuse_oversize_chat(dumped)
     msgs = _with_context(dumped, req)
+    if getattr(ARGS, "state_reinject", False):
+        # The pin rides as a PREFIX inside the final user turn -- the renderer
+        # refuses an unknown role, and a synthetic turn is a bigger training-
+        # serving skew than a prefix. _conversation_pins reads user turns only,
+        # so the memory block _with_context just folded in (a system turn) is
+        # out of its reach by construction.
+        pins = _conversation_pins(msgs)
+        last = max(
+            (i for i, m in enumerate(msgs) if m.get("role") == "user" and isinstance(m.get("content"), str)),
+            default=None,
+        )
+        if pins and last is not None:
+            turn = dict(msgs[last])
+            turn["content"] = "[context: " + pins + "]\n" + turn["content"]
+            msgs = msgs[:last] + [turn] + msgs[last + 1:]
     created = int(time.time())
     cid = f"chatcmpl-{created}"
 
@@ -1866,6 +2382,8 @@ def _chat_instruct(req: ChatReq):
                 gen = _gen_ids(
                     prompt_ids, hop_max, req.temperature, req.top_p, req.min_p, stop_ids,
                     top_k=req.top_k, repetition_penalty=req.repetition_penalty,
+                    dry_multiplier=_dry_multiplier_for(req), dry_base=req.dry_base,
+                    dry_allowed_length=req.dry_allowed_length,
                 )
                 all_ids: list[int] = []
                 content_ids: list[int] = []
@@ -2124,6 +2642,8 @@ def _chat_instruct(req: ChatReq):
             _gen_ids(
                 prompt_ids, last_max, req.temperature, req.top_p, req.min_p, _stop_ids(),
                 top_k=req.top_k, repetition_penalty=req.repetition_penalty,
+                dry_multiplier=_dry_multiplier_for(req), dry_base=req.dry_base,
+                dry_allowed_length=req.dry_allowed_length,
             )
         )
         out = parse_assistant_ids(tokenizer, out_ids)
@@ -2553,6 +3073,39 @@ def chat_page():
     return _CHAT_PAGE.replace("__PERSONA_NAME__", html.escape(PERSONA.name))
 
 
+@app.get("/hud", response_class=HTMLResponse)
+def hud_page():
+    """The HUD window -- a second face on the same server, beside the chat
+    page. Read off disk (it carries its own font) and substituted the same
+    way: the persona is only known after boot, and a pack's name is data that
+    lands inside markup here. A missing file answers honestly with the path it
+    looked for, rather than a traceback the browser renders as a 500."""
+    page = WEB_DIR / "enigma_hud.html"
+    try:
+        markup = page.read_text(encoding="utf-8")
+    except OSError:
+        return HTMLResponse(
+            status_code=404,
+            content="<h1>404</h1><p>the HUD page is not on disk: "
+                    f"{html.escape(str(page))}</p>",
+        )
+    return markup.replace("{{PERSONA}}", html.escape(PERSONA.name))
+
+
+@app.get("/hud/font")
+def hud_font():
+    """The HUD's display face, served from this machine. The page loads it
+    from here and from nowhere else, so the window renders whole with the
+    network unplugged."""
+    font = WEB_DIR / "orbitron-var.woff2"
+    if not font.is_file():
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"HUD font is not on disk: {font}"},
+        )
+    return FileResponse(str(font), media_type="font/woff2")
+
+
 @app.get("/v1/models")
 def list_models():
     # WHOSE model this is: id and owner come from the persona, so a pack is not
@@ -2623,7 +3176,9 @@ def chat(req: ChatReq):
     stats: dict = {}
     gen = _generate_text(
         prompt, req.max_tokens, req.temperature, req.top_p, _STOP_TEXTS,
-        min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty, stats=stats,
+        min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty,
+        dry_multiplier=_dry_multiplier_for(req), dry_base=req.dry_base,
+        dry_allowed_length=req.dry_allowed_length, stats=stats,
     )
 
     if req.stream:
@@ -2690,7 +3245,9 @@ def completions(req: CompletionReq):
     stats: dict = {}
     gen = _generate_text(
         req.prompt, req.max_tokens, req.temperature, req.top_p,
-        min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty, stats=stats,
+        min_p=req.min_p, top_k=req.top_k, repetition_penalty=req.repetition_penalty,
+        dry_multiplier=_dry_multiplier_for(req), dry_base=req.dry_base,
+        dry_allowed_length=req.dry_allowed_length, stats=stats,
         default_temperature=RAW_TEMPERATURE,  # raw continuation, not chat
     )
 
@@ -2991,6 +3548,35 @@ def image_file(name: str):
     if target.parent != root or not target.is_file():
         raise HTTPException(status_code=404, detail="no such image")
     return FileResponse(str(target), media_type="image/png")
+
+
+@app.get("/v1/wake/recent")
+def wake_recent(n: int = 20):
+    """The last n things she said unprompted, oldest first.
+
+    The route exists whether or not --wake is on: an empty feed is an honest
+    answer, and a 404 would make "she has said nothing" indistinguishable from
+    "this server cannot tell you". A corrupt line is skipped rather than served
+    as a 500 -- a torn append must not take the feed down.
+    """
+    path = _wake_log_path()
+    if not path.exists():
+        return []
+    rows = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError as exc:
+        print(f"WARN: wake log unreadable: {exc}", flush=True)
+        return []
+    return rows[-max(0, int(n)):] if n else []
 
 
 @app.get("/v1/capabilities")

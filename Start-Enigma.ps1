@@ -69,8 +69,13 @@ $log = $self.Log
 # carrying a space reaches python split in half (trap 1 of the four detach
 # traps, pinned in tests/test_repo_hygiene.py). The script path stays
 # repo-relative because -WorkingDirectory below is the engine dir.
+# The Wave-A serve levers ride the DAILY launcher (adopted 2026-09-01 on the
+# measured tables: state re-injection took mid-chat facts 0/10 -> 3/10, DRY
+# cost no measurable tok/s, the span guard cost -2.8%). Each is one token to
+# remove here; eval and scratch serves build their own argv and stay baseline.
 $argString = "`"serve_enigma.py`" --port $bindPort --model models\enigma_v2_sft2\model.pth" `
-    + " --max-context 2048 --memory-dir `"$($self.MemoryDir)`" --eyes --ears --voice --image-gen --search"
+    + " --max-context 2048 --memory-dir `"$($self.MemoryDir)`" --eyes --ears --voice --image-gen --search" `
+    + " --state-reinject --tool-span-constrain --dry-multiplier 0.8"
 if ($VoiceName) { $argString += " --voice-name `"$VoiceName`"" }
 if ($Persona) { $argString += " --persona `"$Persona`"" }
 

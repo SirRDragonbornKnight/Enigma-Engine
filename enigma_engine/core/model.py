@@ -25,7 +25,7 @@ Usage:
 import json
 import logging
 import math
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -815,6 +815,10 @@ class Enigma(nn.Module):
         repetition_penalty: float = 1.1,
         stop_tokens: Optional[list[int]] = None,
         min_p: float = 0.0,
+        dry_multiplier: float = 0.0,
+        dry_base: float = 1.75,
+        dry_allowed_length: int = 2,
+        logits_hook: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> Generator[torch.Tensor, None, None]:
         """
         Streaming token generation - yields tokens as they're generated.
@@ -832,6 +836,18 @@ class Enigma(nn.Module):
             repetition_penalty: Penalty for repeating tokens
             stop_tokens: Token IDs that stop generation
             min_p: Min-p filter threshold (0 = off); see sample_next_token
+            dry_multiplier: DRY penalty strength (0 = off); see sample_next_token
+            dry_base: DRY penalty base
+            dry_allowed_length: Match length below which DRY never penalizes
+            logits_hook: Optional ``(step_logits, her_tokens) -> step_logits``
+                applied to the vocab-masked slice BEFORE sampling. Pre-penalty
+                is the only interval that exists here (penalties and sampling
+                both live inside sample_next_token) and the right one for a
+                -inf grammar mask: -inf is invariant under the repetition
+                penalty, temperature and every filter, and it is the only
+                placement the greedy ``temperature <= 0`` shortcut also honors.
+                ``her_tokens`` excludes the prompt, same scope rule as the
+                penalty.
 
         Yields:
             Individual tokens as they're generated [1] tensor
@@ -853,14 +869,20 @@ class Enigma(nn.Module):
         logits = self.forward(input_ids, use_cache=True)
 
         for _ in range(max_new_tokens):
+            step_logits = self._live_vocab_logits(logits[:, -1, :])
+            if logits_hook is not None:
+                step_logits = logits_hook(step_logits, generated[:, prompt_len:])
             next_token = sample_next_token(
-                self._live_vocab_logits(logits[:, -1, :]),
+                step_logits,
                 generated[:, prompt_len:],
                 temperature,
                 top_k,
                 top_p,
                 repetition_penalty,
                 min_p=min_p,
+                dry_multiplier=dry_multiplier,
+                dry_base=dry_base,
+                dry_allowed_length=dry_allowed_length,
             )
 
             # Yield the token immediately

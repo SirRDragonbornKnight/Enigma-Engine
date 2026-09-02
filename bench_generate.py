@@ -26,6 +26,13 @@ import torch
 from enigma_engine.core.model import Enigma
 from enigma_engine.core.model_presets import ForgeConfig, get_preset
 
+# ONE device rule for the bench and the server. serve_enigma is import-safe
+# (boot() owns startup), so this costs an import, not a boot -- and a bench
+# that resolved --device its own way is exactly how a CPU baseline ends up
+# measured on the GPU.
+from quantize_serving_ckpt import load_checkpoint, load_serving_ckpt
+from serve_enigma import _resolve_device
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -34,9 +41,15 @@ def build_model(args):
         cfg = get_preset("tiny", vocab_size=512)
         cfg.dropout = 0.0
         return Enigma(cfg).to(args.device).eval(), cfg
-    ckpt = torch.load(args.model, map_location="cpu", weights_only=True)
+    ckpt = load_checkpoint(args.model)
     if not (isinstance(ckpt, dict) and "model_state_dict" in ckpt and "config" in ckpt):
         raise SystemExit(f"{args.model} is not an Enigma checkpoint")
+    if (ckpt.get("meta") or {}).get("quant"):
+        # An int8 number is only honest if it came through the loader that
+        # ASSERTS the weights stayed quantized -- this bench's tolerant
+        # strict=False path would happily time a silently dequantized model.
+        model, ckpt = load_serving_ckpt(args.model)
+        return model.to(args.device).eval(), ForgeConfig.from_dict(ckpt["config"])
     cfg = ForgeConfig.from_dict(ckpt["config"])
     model = Enigma(cfg)
     missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
@@ -132,7 +145,20 @@ def main() -> None:
     ap.add_argument("--tokens", type=int, default=64, help="tokens to decode per repeat")
     ap.add_argument("--prompt-len", type=int, default=32, help="synthetic prompt length in tokens")
     ap.add_argument("--repeats", type=int, default=3, help="timed repeats after the warmup")
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument(
+        "--device",
+        choices=("auto", "cuda", "cpu"),
+        default="auto",
+        help="auto = cuda when available; --device cuda without CUDA REFUSES rather than "
+        "quietly benching the CPU and calling it a GPU number",
+    )
+    ap.add_argument(
+        "--threads",
+        type=int,
+        default=10,
+        help="torch CPU threads (default 10 -- the cap that keeps a CPU bench from starving "
+        "the desktop while Chrome Remote Desktop is connected)",
+    )
     ap.add_argument("--count-syncs", action="store_true", help="report host syncs per generate call (CUDA only)")
     ap.add_argument(
         "--serve-path",
@@ -142,11 +168,17 @@ def main() -> None:
         "not a serve receipt.",
     )
     args = ap.parse_args()
+    # Before build_model: the state-dict copies parallelize too, so a thread cap
+    # set after it would leave the loading half uncapped.
+    torch.set_num_threads(args.threads)
+    args.device = _resolve_device(args.device)
 
     model, cfg = build_model(args)
     params = sum(p.numel() for p in model.parameters())
     print(
-        f"bench: {params / 1e6:.1f}M params on {args.device} | {cfg.n_layers}L x {cfg.dim}d | "
+        f"bench: {params / 1e6:.1f}M params on {args.device} "
+        f"(torch.cuda.is_available()={torch.cuda.is_available()}, "
+        f"{torch.get_num_threads()} cpu threads) | {cfg.n_layers}L x {cfg.dim}d | "
         f"prompt {args.prompt_len} tok, decoding {args.tokens} tok x {args.repeats}",
         flush=True,
     )

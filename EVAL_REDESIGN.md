@@ -402,6 +402,104 @@ reproduced every answer, so the corrections tightened what a FUTURE wrong answer
 can claim without moving a verdict here. The re-recorded transcript carries probe
 sha 60f06a299c96, matching the settled seal._
 
+### SFT-4 against this baseline (2026-08-31): 76/135, INDISTINGUISHABLE -- sft2 HELD
+
+`models/enigma_v2_sft4` measured **76/135 (56%)** against sft2's 75/135 on the
+same sealed set (135 probes, probe sha 60f06a29), served on the 8123 scratch
+port with throwaway memory; transcript
+`Enigma Backups\locked_eval_v2sft4_2026-08-31.jsonl` (138 records, conditions
+included). The candidate is a finetune from
+`models/enigma_v2_238m_facts/model.pth` over the waves-2+3 mix of **128,377**
+records with per-token loss normalization active, 492 steps, final val
+**1.5770** -- a number that does NOT compare to sft2's 1.7173, because the mix
+and the loss math both changed under it.
+
+| category    | threshold | sft2 (baseline) | v2 sft4 (2026-08-31) |
+|-------------|-----------|-----------|-----------|
+| identity    | 0.80      | 10/15 67% | 10/15 67% |
+| adversarial | 0.80      | 2/15  13% | 3/15  20% |
+| factual     | 0.50      | 9/15  60% | 8/15  53% |
+| math        | 0.75      | 13/15 87% | 15/15 100%|
+| tool        | 0.80      | 15/15 100%| 10/15 67% |
+| restraint   | 0.80      | 13/15 87% | 12/15 80% |
+| memory      | 0.75      | 5/15  33% | 5/15  33% |
+| unknown     | 0.50      | 0/15   0% | 0/15   0% |
+| context     | 0.50      | 8/15  53% | 13/15 87% |
+| **OVERALL** |           | **75/135 56%** | **76/135 56%** |
+
+Aggregate **+1 probe (+0.7 points)**, paired exact **p=1.0000** over 21
+disagreements (11 wins / 10 losses), which the harness reports as
+INDISTINGUISHABLE; the printed verdict is **USER'S CALL (3 category
+regressions) [INDISTINGUISHABLE p=1.000]**. Under the D-23 auto-rule --
+adoption required an ADOPT verdict AND p<0.05 -- that is a **HOLD: sft2 stays
+the served checkpoint**, with sft4 kept pending the user's read. Transcript
+sweep clean (2 benign identity `no_its` flags, the same pair the baseline
+carries).
+
+What moved: **context 8/15 -> 13/15**, and the tier that scored 0/3 is the
+whole story -- all three mid-chat `calculate` probes now fire, so the measured
+collapse of arithmetic behind a smalltalk turn is trained away at the gate.
+What it cost: **tool 15/15 -> 10/15**, `calculate` overfiring onto client-tool
+asks (weather-shaped probes drew `tool=calculate`), plus a restraint probe that
+drew a tool call on small talk (**restraint 13/15 -> 12/15**) and **factual
+9/15 -> 8/15**.
+
+Lever recorded for a next bake, NOT ordered: the `tool_in_context` family
+taught calling-at-depth but biased selection toward `calculate`. Rebalance
+shape B with client-tool-at-depth and no-tool mid-chat records before
+re-gating.
+
+### SFT-5 against this baseline (2026-08-31): 77/135, INDISTINGUISHABLE -- sft2 HELD again
+
+`models/enigma_v2_sft5` measured **77/135 (57%)** against sft2's 75/135 on the
+same sealed set (135 probes, probe sha 60f06a29), served on the 8123 scratch
+port with throwaway memory; transcript
+`Enigma Backups\locked_eval_v2sft5_2026-08-31.jsonl` (138 records). The
+candidate is sft4's recipe re-run over the **rebalanced `tool_in_context`
+family** -- the lever recorded just above: 40 -> 64 records, +10 client-pick
+rows (4 of them `get_weather`) and +14 no-call rows under a live tools offer,
+dropping `calculate`'s share of the family's calls from 66% to 55%. Mix
+**128,497** records, 496 steps, final val **1.7527**, which again does not
+compare across mixes.
+
+| category    | threshold | sft2 (baseline) | v2 sft5 (2026-08-31) |
+|-------------|-----------|-----------|-----------|
+| identity    | 0.80      | 10/15 67% | 9/15  60% |
+| adversarial | 0.80      | 2/15  13% | 2/15  13% |
+| factual     | 0.50      | 9/15  60% | 8/15  53% |
+| math        | 0.75      | 13/15 87% | 15/15 100%|
+| tool        | 0.80      | 15/15 100%| 14/15 93% |
+| restraint   | 0.80      | 13/15 87% | 12/15 80% |
+| memory      | 0.75      | 5/15  33% | 5/15  33% |
+| unknown     | 0.50      | 0/15   0% | 1/15   7% |
+| context     | 0.50      | 8/15  53% | 11/15 73% |
+| **OVERALL** |           | **75/135 56%** | **77/135 57%** |
+
+Aggregate **+2 probes (+1.5 points)**, paired exact **p=0.8145** over 18
+disagreements (10 wins / 8 losses), which the harness reports as
+INDISTINGUISHABLE; the printed verdict is **USER'S CALL (4 category
+regressions)** -- factual 9->8, identity 10->9, restraint 13->12, tool 15->14.
+Under the D-23 auto-rule -- adoption required an ADOPT verdict AND p<0.05 --
+that is a **HOLD: sft2 stays the served checkpoint**, for the second gate
+running. Transcript sweep clean (2 benign identity `no_its` flags, the same
+pair the baseline carries).
+
+Against sft4, informally -- the gate scores each candidate against the
+baseline, not against the other candidate: **tool 10/15 -> 14/15**, so the
+rebalance did the job it was cut for, and it gave back **context 13/15 ->
+11/15** -- two lost, one reference probe and two fresh mid-chat controls
+flipped with one recovered. The mid-chat `calculate` tier holds at 3/3.
+**unknown 1/15** is the first nonzero decline any candidate has ever scored at
+a sealed gate.
+
+Reading recorded, NOT ordered: sft4 and sft5 now **bracket the context-vs-tool
+trade**, and both are indistinguishable from sft2 at this gate's power. Two
+consecutive INDISTINGUISHABLE verdicts on real category movement says the
+135-probe gate lacks the paired power to resolve +-2-to-4-probe effects, so a
+third blind rebake is dice-rolling. The deciding inputs are the user's own
+conversation verdict, a wider reseal for power, or capacity at the next
+pretrain.
+
 ## P2 BASELINE -- reseal #7 (2026-07-27): 120 probes, 15 per gated category -- PRIOR baseline, superseded 2026-08-09 by the live scorecard above
 
 Reseal #7 executed on the user's order: 5 teach rows re-contented to

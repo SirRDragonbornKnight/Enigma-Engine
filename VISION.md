@@ -100,8 +100,9 @@ puts a persona of her on a Raspberry Pi — an instinct with history here
 camera is the fullest expression: eyes + memory store + tiny runtime on
 device, remembering who someone is and what they usually want. It is only
 TRUSTWORTHY because of the architecture everything above enforces —
-local-only, nothing egresses, memory is an inspectable JSONL a human can
-read and delete. Most AI stacks cannot build this honestly. This one can.
+local-first, nothing private leaves the device, memory is an inspectable
+JSONL a human can read and delete. Most AI stacks cannot build this
+honestly. This one can.
 
 ## The order, and why
 
@@ -115,7 +116,9 @@ read and delete. Most AI stacks cannot build this honestly. This one can.
 ## The principles that make the vision possible (standing, from CLAUDE.md
 and the rulings ledger)
 
-- Local-only; no cloud egress from the stack. Ever.
+- Local-first. Her weights, her memory, her identity never leave this PC —
+  privacy is the invariant, not zero egress (ruled 2026-07-29). The search
+  organ sends queries out through this box's own SearXNG by design.
 - Ships to other machines: no hardcoded paths, degrade gracefully.
 - One AI: Enigma IS this repo. Other minds are persona packs the trainer
   molds — never Enigma wearing a mask, never a mask wearing Enigma.

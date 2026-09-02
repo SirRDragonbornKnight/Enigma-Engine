@@ -44,6 +44,10 @@ HER_SERVE_ARGS = [
     "--max-context", "2048",
     "--memory-dir", r"data\memory",
     "--eyes", "--ears", "--voice", "--image-gen", "--search",
+    # The Wave-A serve levers, adopted into the daily launcher 2026-09-01 on
+    # their measured tables. Eval and scratch serves build their own argv and
+    # stay baseline, so this pin is the only place the adoption shows.
+    "--state-reinject", "--tool-span-constrain", "--dry-multiplier", "0.8",
 ]
 
 
@@ -115,6 +119,38 @@ def test_sft4_launches_the_recipe_it_documents():
     assert Path(tokens[0]).name == "python.exe", tokens[0]
     assert Path(tokens[1]).name == SFT4_ARGS[0], tokens[1]
     assert tokens[2:] == SFT4_ARGS[1:]
+    for restated in ("--lr", "--epochs", "--seed", "--optimizer", "--schedule"):
+        assert restated not in tokens, f"{restated} re-states a finetune default"
+
+
+# The SFT-5 recipe. Identical to SFT-4's argument for argument except the out
+# directory: SFT-5 is the SAME finetune re-run on the rebalanced tool corpus,
+# so a difference anywhere else here is a recipe that drifted rather than a
+# data change being measured.
+SFT5_ARGS = [
+    "finetune_enigma.py",
+    "--data", "data/sft/mix.jsonl",
+    "--init", "models/enigma_v2_238m_facts/model.pth",
+    "--out", "models/enigma_v2_sft5",
+    "--block", "2048",
+    "--micro-batch", "4",
+    "--grad-accum", "8",
+]
+
+
+@needs_powershell
+def test_sft5_launches_the_recipe_it_documents():
+    """Same pin as SFT-4's, on the launcher that runs next. It exits before
+    every guard on purpose, so this does not depend on whether training is
+    running or on whether models/enigma_v2_sft5 already exists."""
+    lines = _run_ps("run_sft5.ps1", "-DryRun")
+    printed = [ln for ln in lines if ln.startswith("DRYRUN sft:")]
+    assert printed, lines
+
+    tokens = _tokens(printed[0].split("DRYRUN sft:", 1)[1].strip())
+    assert Path(tokens[0]).name == "python.exe", tokens[0]
+    assert Path(tokens[1]).name == SFT5_ARGS[0], tokens[1]
+    assert tokens[2:] == SFT5_ARGS[1:]
     for restated in ("--lr", "--epochs", "--seed", "--optimizer", "--schedule"):
         assert restated not in tokens, f"{restated} re-states a finetune default"
 
@@ -308,6 +344,7 @@ def test_a_pack_launch_binds_her_port_and_her_own_memory(tmp_path):
         "--max-context", "2048",
         "--memory-dir", str(Path.home() / ".atlas_prime" / "memory"),
         "--eyes", "--ears", "--voice", "--image-gen", "--search",
+        "--state-reinject", "--tool-span-constrain", "--dry-multiplier", "0.8",
         "--persona", str(pack),
     ]
     logs = next(ln for ln in lines if ln.startswith("DRYRUN logs: "))
@@ -571,3 +608,27 @@ def test_persona_packs_are_local_only():
         tracked = subprocess.run([git, "ls-files", "personas"], cwd=str(REPO_ROOT),
                                  capture_output=True, text=True, timeout=60)
         assert tracked.stdout.strip() == "", "a pack file is tracked in git"
+
+
+# ---------------------------------------------------------------------------
+# her other hand-authored launcher
+# ---------------------------------------------------------------------------
+
+
+def test_the_hud_bat_opens_her_window_without_a_console():
+    """"Enigma HUD.bat" is "Talk to Enigma.bat" pointed at /hud, so it carries
+    the same launcher chain and the same reason for it: `py` is the CONSOLE
+    launcher, and a black window sits behind hers for the whole session with
+    closing it by accident killing her."""
+    hud = (REPO_ROOT / "Enigma HUD.bat").read_text(encoding="ascii")
+    assert hud.index("where pyw") < hud.index("where py ")
+
+    # Pointed at /hud is the whole point of this bat: a launch line that lost
+    # the flag opens her ordinary chat page and nothing else complains.
+    launches = [ln for ln in hud.splitlines()
+                if "enigma_window.py" in ln and ln.strip().startswith("start ")]
+    assert launches, "no enigma_window.py launch line in Enigma HUD.bat"
+    for line in launches:
+        assert "--url http://127.0.0.1:8000/hud" in line, (
+            f"launch line does not open the HUD: {line.strip()}"
+        )

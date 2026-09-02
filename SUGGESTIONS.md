@@ -56,7 +56,8 @@ for FUTURE decisions — none justify touching the paused run mid-schedule:
 
 ## Principles
 
-- **Black box:** local-only; no cloud egress from the stack.
+- **Black box:** local-first; nothing private leaves this PC. Privacy is the
+  invariant, not zero egress — search queries go out via local SearXNG.
 - **Ships to other machines:** no hardcoded user paths; degrade gracefully
   with NO model present.
 - **Keep ideas, not code** — git is the archive; verify before delete.

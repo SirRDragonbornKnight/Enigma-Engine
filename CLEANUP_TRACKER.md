@@ -168,7 +168,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1504 passed on ENIGMAPC (2026-08-31, paired with the multiturn-arc waves 2+3 commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1609 passed on ENIGMAPC (2026-09-01, paired with the 2026-09-01 arc commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -354,6 +354,15 @@ Deleted after a three-agent adversarial audit verified every claim
    tasks 4.1/4.2 of the 2026-08-25 multiturn plan: the reseal #8 eval and
    guard tests, the W3 corpus shape tests, and the per-token loss
    normalization tests.
+   **1504 -> 1609 is the 2026-09-01 all-in-one arc** -- 85 from the arc's own
+   new files: the serve conversation wave (`test_dry_sampler.py` 13,
+   `test_toolspan_constraint.py` 7, `test_state_reinjection.py` 3), the
+   CPU/portable lane (`test_strip_serving_ckpt.py` 2, `test_device_flag.py` 8,
+   `test_quantize_serving.py` 10), and the wake loop (`test_wake_loop.py` 18,
+   `test_wake_serve.py` 24); the remaining 20 are the parallel HUD session's --
+   `test_eyes_lineage_guard.py` 7 (new file) plus 13 added to existing files
+   (`test_serve_enigma.py` +7, `test_launchers.py` +2,
+   `test_repo_hygiene.py` +1, `test_sft_regen_shapes.py` +3).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

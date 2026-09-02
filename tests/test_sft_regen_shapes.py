@@ -585,14 +585,69 @@ def test_tool_depth_shapes():
         msgs = r["messages"]
         assert msgs[0]["role"] == "system" and msgs[0]["content"].strip()
         assert msgs[-1]["role"] == "assistant" and msgs[-1]["content"].strip()
-        assert "tool" in [m["role"] for m in msgs], "the trace stops before the result"
         calls = _tool_calls(r)
-        assert calls, "a tool-in-context record with no call"
+        if not calls:
+            # The no-call half: tools on offer and none of them right. It ends
+            # on her plain answer, so a tool turn in it would be a result with
+            # no call in front of it.
+            assert "tool" not in [m["role"] for m in msgs], \
+                "a no-call record carries a tool result"
+            continue
+        assert "tool" in [m["role"] for m in msgs], "the trace stops before the result"
         for c in calls:
             assert c["name"] in BUILTIN_NAMES or c["name"] in tool_names, \
                 f"{c['name']} has no runtime and no spec"
         assert _first_call_depth(r) >= 2, \
             "the call answers the opening turn -- that is not a call IN CONTEXT"
+
+
+def test_tool_depth_trains_the_no_call_under_a_live_offer():
+    """Tools on the table, and the right move is to answer.
+
+    Measured cause of the sft4 regression (2026-08-31): ZERO records in this
+    family showed a system block offering tools with no call made, so every
+    trained mid-chat turn under an offer ended in a call -- and restraint fell
+    13 -> 12 while a tool fired on small talk. The offer is read off the
+    RENDERED system block, the way the client-beside-builtins test reads it.
+    """
+    recs = gen_tool_depth_examples()
+    quiet = [r for r in recs if not _tool_calls(r)]
+    assert len(quiet) >= 12, f"only {len(quiet)} no-call records under an offer"
+    for r in quiet:
+        assert BUILTINS <= _offered(r), \
+            "a no-call record was authored without the built-ins on offer"
+        assert r["messages"][-1]["role"] == "assistant"
+        assert r["messages"][-1]["content"].strip()
+
+
+def test_tool_depth_picks_the_client_tool_often_enough():
+    """Selection, not just format.
+
+    sft4 scored 10/15 on tool selection because calculate fired on asks whose
+    answer lives in the CLIENT's tool -- get_weather above all, the exact
+    class that failed. Enough records must pick the client's tool for the
+    gradient to say so.
+    """
+    recs = gen_tool_depth_examples()
+    client_pick = [r for r in recs
+                   if any(c["name"] not in BUILTIN_NAMES for c in _tool_calls(r))]
+    assert len(client_pick) >= 13, \
+        f"only {len(client_pick)} records pick a client tool"
+    weather = [r for r in recs
+               if any(c["name"] == "get_weather" for c in _tool_calls(r))]
+    assert len(weather) >= 3, f"only {len(weather)} records call get_weather"
+
+
+def test_tool_depth_is_not_mostly_calculate():
+    """One tool taking three calls in four is a prior, not a skill.
+
+    Measured 33 of 45 calls (73%) when tool selection collapsed; the corpus
+    has to spend its calls across the roster for selection to be learnable.
+    """
+    calls = [c["name"] for r in gen_tool_depth_examples() for c in _tool_calls(r)]
+    assert calls, "no calls in the family at all"
+    share = calls.count("calculate") / len(calls)
+    assert share <= 0.60, f"calculate is {share:.0%} of {len(calls)} calls"
 
 
 def test_tool_depth_calculate_operands_are_multidigit():

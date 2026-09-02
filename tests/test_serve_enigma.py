@@ -2497,6 +2497,10 @@ def test_boot_brings_real_organs_up(monkeypatch, tmp_path):
         {
             "vision_encoder_state_dict": enc.state_dict(),
             "vision_encoder_config": VISION_PRESETS["tiny"].to_dict(),
+            # The text lineage the align trainer stamps: boot's guard refuses an
+            # align checkpoint it cannot trace to the served config, so this
+            # positive control has to carry the SERVED one.
+            "model_config": cfg.to_dict(),
             "model_state_dict": {
                 "vision_projection.0.weight": torch.zeros(32, vdim),
                 "vision_projection.0.bias": torch.zeros(32),
@@ -3056,3 +3060,92 @@ def test_chat_cap_counts_text_but_only_COUNTS_image_parts():
     with pytest.raises(serve.HTTPException):
         serve._refuse_oversize_chat(
             [{"role": "user", "content": [{"type": "text", "text": "x" * (serve._MAX_CHAT_CHARS + 1)}]}])
+
+
+# ---------------------------------------------------------------------------
+# the HUD page -- the second face, served off disk and fully offline
+# ---------------------------------------------------------------------------
+
+
+def _title_of(page: str) -> str:
+    head, marker, rest = page.partition("<title>")
+    assert marker, "the HUD page carries no <title>"
+    title, closer, _ = rest.partition("</title>")
+    assert closer, "the HUD page's <title> is never closed"
+    return title
+
+
+def test_hud_page_carries_the_persona_name(monkeypatch):
+    """Same contract the chat page holds: the window says WHOSE it is. The
+    markup is a file on disk carrying a placeholder, so a hardcoded name would
+    survive `--persona` and hand a pack Enigma's window."""
+    page = serve.hud_page()
+    assert "Enigma" in _title_of(page)
+    assert "Enigma" in page.partition("<body")[2]
+
+    monkeypatch.setattr(serve, "PERSONA", Persona(name="Atlas", data_dirname=".atlas"))
+    page = serve.hud_page()
+    assert "Atlas" in _title_of(page)
+    assert "Atlas" in page.partition("<body")[2]
+    assert "Enigma" not in page  # not the title, not the wordmark, not the help
+
+
+def test_hud_page_is_fully_offline():
+    """The pin on the whole point of the page: it reaches nothing off this
+    machine. Every fetch is a relative path and the display font comes from
+    /hud/font -- an absolute URL anywhere in the markup, script or CSS (a CDN
+    font, an analytics beacon) would break that silently."""
+    page = serve.hud_page()
+    assert "http://" not in page
+    assert "https://" not in page
+
+
+def test_hud_page_names_no_host_or_port():
+    """Companion to the offline pin: the same file serves the portable build on
+    its own port, so a baked-in :8000 or 127.0.0.1 would aim the window at a
+    server other than the one that handed it over."""
+    page = serve.hud_page()
+    assert ":8000" not in page
+    assert "127.0.0.1" not in page
+
+
+def test_hud_page_keeps_one_input_path():
+    """Every way of committing the box -- SEND, ENTER, a palette pick -- runs
+    submitInput(), reached from one submit listener. A second listener, or a
+    palette branch inside the submit handler, is how a typed slash command
+    autocompleted itself and then executed nothing."""
+    page = serve.hud_page()
+    assert page.count('addEventListener("submit"') == 1
+    assert page.count("function submitInput(") == 1
+    assert page.count("function runCommand(") == 1
+
+
+def test_hud_font_route_serves_the_local_font(monkeypatch, tmp_path):
+    """The font ships in the repo and is served from it. A missing file is an
+    honest 404 naming what was looked for -- not a traceback, and not a
+    silent fallback that would leave the page reaching outward for a face."""
+    served = serve.hud_font()
+    assert isinstance(served, serve.FileResponse)
+    assert Path(served.path).name == "orbitron-var.woff2"
+    assert served.media_type == "font/woff2"
+
+    monkeypatch.setattr(serve, "WEB_DIR", tmp_path)
+    missing = serve.hud_font()
+    assert missing.status_code == 404
+    assert b"HUD font is not on disk" in missing.body
+
+
+def test_hud_page_lists_its_commands():
+    """The slash commands are the HUD's only door to the organ routes; a
+    command dropped from the palette is an ability the window cannot reach."""
+    page = serve.hud_page()
+    for command in ("/help", "/talk", "/mic", "/imagine", "/memory"):
+        assert command in page, f"the HUD page no longer carries {command}"
+
+
+def test_hud_source_file_keeps_the_placeholder():
+    """The substitution happens at render time, never in the file: an editor
+    that bakes a name into the source would serve it to every pack."""
+    source = (serve.WEB_DIR / "enigma_hud.html").read_text(encoding="utf-8")
+    assert "{{PERSONA}}" in source
+    assert "{{PERSONA}}" not in serve.hud_page()

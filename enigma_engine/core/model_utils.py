@@ -131,6 +131,44 @@ def apply_repetition_penalty(
     return torch.where(seen, penalized, logits)
 
 
+DRY_WINDOW = 512  # DRY scans this many trailing generated ids -- wider than
+                  # apply_repetition_penalty's 128 window on purpose: the
+                  # measured pain is 256-token verbatim loops. Cost is
+                  # O(window^2) pure Python worst case (~7 ms/token at 512
+                  # on this box); never widen without re-measuring.
+
+
+def _dry_penalty(logits, generated_ids, multiplier, base, allowed_length):
+    """DRY (Don't-Repeat-Yourself) sampling, canonical semantics: for each
+    candidate token that would extend a suffix of the generated text already
+    seen earlier, subtract multiplier * base**(match_len - allowed_length)
+    once, from the LONGEST such match, when match_len >= allowed_length.
+    multiplier 0.0 returns the input unchanged. Returns a NEW tensor."""
+    if multiplier == 0.0 or len(generated_ids) < 2:
+        return logits
+    ids = generated_ids
+    n = len(ids)
+    best: dict[int, int] = {}  # candidate token id -> longest match length
+    for start in range(n - 1):
+        m = 0
+        while m <= start and m < n and ids[start - m] == ids[n - 1 - m]:
+            m += 1
+        if m >= allowed_length and m > 0:
+            nxt = ids[start + 1]
+            if m > best.get(nxt, 0):
+                best[nxt] = m
+    if not best:
+        return logits
+    out = logits.clone()
+    for tok, m in best.items():
+        # exponent cap 64: uncapped pure-Python base**m OverflowErrors at
+        # long self-similar histories (measured at n=2048); 1.75**64 ~ 3e15
+        # is already an effective ban, and a -inf result downstream is benign
+        e = min(m - allowed_length, 64)
+        out[..., tok] -= multiplier * (base ** e)
+    return out
+
+
 def sample_next_token(
     logits: torch.Tensor,
     generated_tokens: torch.Tensor,
@@ -139,9 +177,12 @@ def sample_next_token(
     top_p: float = 0.9,
     repetition_penalty: float = 1.1,
     min_p: float = 0.0,
+    dry_multiplier: float = 0.0,
+    dry_base: float = 1.75,
+    dry_allowed_length: int = 2,
 ) -> torch.Tensor:
     """
-    Sample one token from logits with repetition penalty, top-k, top-p, and min-p.
+    Sample one token from logits with repetition penalty, DRY, top-k, top-p, and min-p.
 
     Shared helper used by :meth:`Enigma.generate` and
     :meth:`Enigma.generate_stream` so the sampling logic lives in one place.
@@ -155,6 +196,9 @@ def sample_next_token(
         repetition_penalty: Penalty for previously seen tokens (1.0 = off).
         min_p: Min-p filtering threshold (0 = disabled). Removes tokens
             whose probability is below ``min_p * max_probability``.
+        dry_multiplier: DRY penalty strength (0.0 = off).
+        dry_base: DRY penalty base, raised to ``match_len - allowed_length``.
+        dry_allowed_length: Match length below which DRY never penalizes.
 
     Returns:
         Sampled token IDs [batch, 1].
@@ -166,6 +210,12 @@ def sample_next_token(
     # --- Repetition penalty on raw logits first (order matters) ---
     if repetition_penalty != 1.0:
         logits = apply_repetition_penalty(logits, generated_tokens, repetition_penalty)
+
+    # --- DRY on the raw logits too: the window read is the only cost, so it
+    # stays behind the off switch (the .tolist() is a device sync per token) ---
+    if dry_multiplier != 0.0:
+        ids = generated_tokens[0, -DRY_WINDOW:].tolist()
+        logits = _dry_penalty(logits, ids, dry_multiplier, dry_base, dry_allowed_length)
 
     next_logits = logits / temperature
 

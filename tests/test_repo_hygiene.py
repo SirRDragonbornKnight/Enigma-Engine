@@ -405,6 +405,7 @@ def test_start_process_launchers_avoid_the_four_detach_traps():
         # One step, so one argument variable -- the detach recipe is the same
         # either way, which is the whole point of pinning it per launcher.
         "run_sft4.ps1": ("$sftArgs",),
+        "run_sft5.ps1": ("$sftArgs",),
     }
     for name, arg_vars in launchers.items():
         launcher = REPO_ROOT / name
@@ -494,6 +495,19 @@ def test_bare_run_entry_points_default_to_the_adopted_lineage():
             f"{name}: {flag} defaults to a lineage that is not the adopted "
             f"{ADOPTED_LINEAGE}:\n  {defaults[0].strip()}"
         )
+
+
+def test_her_window_turns_the_autoplay_gate_off():
+    """WebView2 enforces Chromium's autoplay policy, which mutes a WAV reply
+    that finishes after the last click -- the audio plays into silence and
+    nothing anywhere errors. pywebview hardcodes AdditionalBrowserArguments,
+    so this env var is the only channel there is, and it lives as one literal
+    in one file: drop it and she goes quiet with the suite still green."""
+    text = (REPO_ROOT / "enigma_window.py").read_text(encoding="utf-8")
+    assert "--autoplay-policy=no-user-gesture-required" in text, (
+        "enigma_window.py must set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS "
+        "before pywebview loads, or WebView2 mutes her replies"
+    )
 
 
 def test_collect_extra_carries_the_fetch_deps():

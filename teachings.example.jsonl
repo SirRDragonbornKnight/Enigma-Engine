@@ -1,8 +1,13 @@
 # Teachings -- facts YOU explain to Enigma that get baked into her weights.
 # Copy this file to teachings.jsonl (gitignored -- your facts stay off GitHub),
-# add entries, then run the 10-minute loop:
-#   python make_sft_data.py
-#   python finetune_enigma.py --data data\sft\mix.jsonl --init models\enigma_pretrain_large\latest.pth --out models\enigma_sft --epochs 2 --lr 2e-05 --warmup 50 --micro-batch 8 --grad-accum 4 --block 1024 --weight-decay 0.0 --grad-clip 1.0 --optimizer adamw --schedule cosine --seed 1337 --val-frac 0.02
+# add entries, then rebuild the data. Teachings ride TWO streams:
+#   python make_sft_data.py              # SFT mix -- teachings oversampled x4
+#   python make_facts_pretrain_data.py   # facts continued-pretrain stream
+# Both, not either: SFT SURFACES a fact, it cannot INSTALL one -- a facts
+# continued-pretrain pass is the durable route into the weights.
+# Then finetune with the current recipe launcher (run_sft5.ps1 at the time of
+# writing); it pins the init checkpoint and the out dir, and lr/epochs/seed
+# stay the finetune_enigma.py defaults. Hand-authored flags go stale.
 #
 # One JSON object per line; lines starting with # are comments. Two shapes:
 #   {"questions": ["...", "...", "..."], "answers": ["...", "..."]}   <- preferred

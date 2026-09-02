@@ -40,6 +40,10 @@ ENTRIES = [
      b"if total > cap:",
      b"if total >= cap * 10**6:",
      "tests/test_serve_enigma.py::test_capped_reader_refuses_oversize"),
+    ("serve_enigma.py",
+     b"        if mismatched:",
+     b"        if False and mismatched:",
+     "tests/test_eyes_lineage_guard.py::test_foreign_lineage_refused"),
     # The next two killing tests are SOURCE-GREP presence pins (inspect.getsource
     # then `needle in src`), so the usual `if False and ...` mutant leaves the
     # needle sitting in the source and the pin stays GREEN. Their mutants must
