@@ -11,6 +11,7 @@ The real-checkpoint quality gate lives on the real checkpoint.
 from __future__ import annotations
 
 import pathlib
+import sys
 
 import pytest
 import torch
@@ -158,6 +159,63 @@ def test_int8_loads_in_an_interpreter_that_has_not_imported_torchao(tmp_path):
     proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert proc.returncode == 0, f"clean-interpreter load failed:\n{proc.stdout}\n{proc.stderr[-1500:]}"
     assert "OK" in proc.stdout
+
+
+@pytest.fixture
+def no_torchao(monkeypatch):
+    """Make `import torchao` fail the way it does under the SYSTEM python.
+
+    Without this the misdiagnosis is invisible: with torchao installed the
+    retry simply re-raises, so a plain test passes against the broken code and
+    proves nothing (the receipt was taken under system python).
+    """
+    monkeypatch.setitem(sys.modules, "torchao", None)
+
+
+def test_a_corrupt_file_is_not_blamed_on_torchao(tmp_path, no_torchao):
+    """Receipt: garbage bytes reported "needs torchao to load (it carries
+    quantized tensors)". The retry exists for ONE diagnosis; every other
+    unpickling failure must reach the caller as itself."""
+    from quantize_serving_ckpt import load_checkpoint
+
+    bad = tmp_path / "garbage.pth"
+    bad.write_bytes(b"not a torch file at all")
+    with pytest.raises(Exception) as exc:
+        load_checkpoint(bad)
+    assert "torchao" not in str(exc.value), str(exc.value)[:200]
+
+
+def test_an_unsafe_global_is_not_blamed_on_torchao(tmp_path, no_torchao):
+    """Same receipt, second shape: a checkpoint carrying argparse.Namespace is
+    refused by weights_only for its OWN reason, which the caller needs to see."""
+    import argparse
+
+    from quantize_serving_ckpt import load_checkpoint
+
+    ck = tmp_path / "ns.pth"
+    torch.save({"model_state_dict": {}, "config": argparse.Namespace(x=1)}, ck)
+    with pytest.raises(Exception) as exc:
+        load_checkpoint(ck)
+    assert "torchao" not in str(exc.value), str(exc.value)[:200]
+    assert "Namespace" in str(exc.value) or "argparse" in str(exc.value)
+
+
+def test_int8_weights_disable_the_eyes_instead_of_killing_the_boot(tmp_path):
+    """Receipt 2026-09-02: booting an int8 checkpoint with --eyes raised a bare
+    RuntimeError at the projection graft ('Tensor' object has no attribute
+    'qdata') OUTSIDE boot's degrade catch, taking the whole server down. An
+    organ that cannot work steps aside; text serving never dies for an eye."""
+    import serve_enigma as serve
+
+    src, out = tmp_path / "fp32.pth", tmp_path / "int8.pth"
+    _fp32_ckpt(src)
+    quantize(src, out)
+    int8_ck = torch.load(out, map_location="cpu", weights_only=True)
+    reason = serve._eyes_blocked_by(int8_ck)
+    assert reason and "int8" in reason, reason
+
+    plain_ck = torch.load(src, map_location="cpu", weights_only=True)
+    assert serve._eyes_blocked_by(plain_ck) is None, "fp32 must still get its eyes"
 
 
 def test_quantize_refuses_existing_out(tmp_path):

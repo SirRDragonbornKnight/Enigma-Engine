@@ -214,6 +214,16 @@ def sample_next_token(
     # --- DRY on the raw logits too: the window read is the only cost, so it
     # stays behind the off switch (the .tolist() is a device sync per token) ---
     if dry_multiplier != 0.0:
+        # BATCH 1 ONLY. The window is read from ROW 0 and the penalty is applied
+        # across the whole logits tensor, so on a batched call every row would
+        # be scored against row 0's history. Unreachable today -- generate() and
+        # generate_stream() both refuse batch > 1 -- so this fails LOUD instead
+        # of silently mis-scoring for whatever calls it next.
+        if generated_tokens.dim() >= 2 and generated_tokens.shape[0] != 1:
+            raise ValueError(
+                f"DRY sampling supports batch size 1 only, got {generated_tokens.shape[0]}: "
+                "the penalty window is read from row 0 and would be applied to every row"
+            )
         ids = generated_tokens[0, -DRY_WINDOW:].tolist()
         logits = _dry_penalty(logits, ids, dry_multiplier, dry_base, dry_allowed_length)
 

@@ -80,7 +80,15 @@ def load_checkpoint(path: str | Path) -> dict:
     path = Path(path)
     try:
         return torch.load(path, map_location="cpu", weights_only=True)
-    except pickle.UnpicklingError:
+    except pickle.UnpicklingError as exc:
+        # Only a refusal that NAMES a torchao global is evidence of an int8
+        # checkpoint. Blaming torchao for any unpickling failure misreported
+        # every other cause: measured 2026-09-02 under the system python,
+        # garbage bytes AND a checkpoint carrying argparse.Namespace both came
+        # back as "needs torchao to load (it carries quantized tensors)". A
+        # confident wrong diagnosis is worse than no diagnosis.
+        if "torchao" not in str(exc):
+            raise
         try:
             import torchao  # noqa: F401  -- registers torchao's safe globals
         except ImportError:

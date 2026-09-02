@@ -113,3 +113,13 @@ def test_partial_stored_config_compares_present_keys_only(tmp_path):
     bad = _align_ckpt(tmp_path, "partial_bad.pt", {"vocab_size": 4718})
     with pytest.raises(EyesError, match="foreign lineage"):
         serve._load_eyes(bad, "small", cfg)
+
+
+def test_a_model_config_with_no_lineage_keys_is_refused(tmp_path):
+    """The zero-key edge: "compare only the keys it HAS" degenerates to
+    comparing NOTHING, so a dict of unrelated fields grafted blind -- exactly
+    the silent wrong-lineage graft this guard exists to stop."""
+    cfg = _served_config()
+    blind = _align_ckpt(tmp_path, "no_keys.pt", {"trained_by": "someone", "epochs": 3})
+    with pytest.raises(EyesError, match="no comparable lineage keys"):
+        serve._load_eyes(blind, "small", cfg)

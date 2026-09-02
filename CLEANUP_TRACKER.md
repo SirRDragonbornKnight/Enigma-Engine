@@ -168,7 +168,7 @@ Deleted after a three-agent adversarial audit verified every claim
    `_verify_ckpt.py` still points at the v1 path only; point it at a
    checkpoint explicitly when fingerprinting the served lineage.
 3. **git is the archive** — keep ideas, not code.
-4. Suite baseline: **1626 passed on ENIGMAPC (2026-09-02, paired with the 2026-09-02 autonomous-stretch commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
+4. Suite baseline: **1650 passed on ENIGMAPC (2026-09-02, paired with the 2026-09-02 audit-fix-wave commit; 17 tests read external inputs — Enigma Backups transcripts plus the gitignored focused corpus, sealed locked-probe plaintext and on-disk checkpoint configs — and SKIP on any other machine; 15 more shell out to powershell.exe for the launcher -DryRun and Resolve-EnigmaPersona runs and skip where it is absent, reading nothing outside the repo)** — THE live number; other docs
    point here, and the commit that changes the count updates this line IN
    THE SAME COMMIT (this rule went stale by 2 within a day of being written;
    a manual step nothing enforces will drift again without the pairing — and
@@ -373,6 +373,20 @@ Deleted after a three-agent adversarial audit verified every claim
    in memory retrieval -- the recorded "What's my job?" / "I work as a nurse"
    miss, four paraphrases, and the dampening that keeps a literal match ahead
    of a synonym one.
+   **1626 -> 1650 is the 2026-09-02 audit fix wave** -- contract tests for the
+   findings of a four-lens ordered audit, every one carrying an executed
+   receipt: `test_state_reinjection.py` 3 -> 17 (+14, the headline -- an
+   unbounded `is`/`now` in the pin regex sliced noun keys out of the middle of
+   ordinary words, so "his 5 cats are loud" pinned "h: 5" and a lowercase
+   "actually my rent..." pinned the STALE value beside the new one);
+   `test_wake_loop.py` 18 -> 21 (+3, a busy FILE event now retries once instead
+   of vanishing); `test_quantize_serving.py` 10 -> 13 (+3, torchao no longer
+   blamed for unrelated unpickling failures, and int8 weights disable the eyes
+   instead of killing the boot); `test_wake_serve.py` 24 -> 26 (+2, a negative
+   `n` no longer returns the whole wake log, and a re-boot stops the previous
+   loop); `test_eyes_lineage_guard.py` 7 -> 8 (+1, a model_config with none of
+   the five lineage keys was grafting blind); `test_dry_sampler.py` 13 -> 14
+   (+1, DRY refuses a batch whose rows it cannot scope).
    The earlier "measured CPU-only, +3 with the GPU visible" qualifier did
    not reproduce and is retired: on this torch build `is_available()`
    ignores `CUDA_VISIBLE_DEVICES`, so collection is the same either way —

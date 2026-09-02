@@ -68,6 +68,21 @@ def test_dry_huge_match_does_not_overflow():
     assert torch.isfinite(out[3]) or out[3] == float("-inf")
 
 
+def test_dry_refuses_a_batch_it_cannot_scope():
+    """The window read is generated_tokens[0, -W:] -- row 0 only. On a batched
+    call that would silently penalize every row with row 0's history.
+    Unreachable today (generate_stream is batch-1 by contract), so it fails
+    LOUD rather than quietly scoring the wrong thing for a future caller."""
+    from enigma_engine.core.model_utils import sample_next_token
+
+    logits = torch.zeros(2, 8)
+    history = torch.zeros(2, 4, dtype=torch.long)
+    with pytest.raises(ValueError, match="batch"):
+        sample_next_token(logits, history, temperature=0.8, dry_multiplier=0.8)
+    # OFF is the default and must stay unaffected by the guard.
+    sample_next_token(logits, history, temperature=0.8)
+
+
 # --- the serve-side default (--dry-multiplier): the resolver, unit-tested ---
 
 

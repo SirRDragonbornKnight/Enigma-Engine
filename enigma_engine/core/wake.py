@@ -139,6 +139,7 @@ class WakeLoop(threading.Thread):
         wall_clock: Callable[[], datetime] = datetime.now,
         poll_s: float = 1.0,
         heartbeat_ticks: bool = False,
+        requeue_delay_s: float = 2.0,
     ):
         super().__init__(name="enigma-wake", daemon=True)
         self._submit = submit
@@ -160,8 +161,10 @@ class WakeLoop(threading.Thread):
         # not a prompt bug, so the loop stops asking a question she cannot
         # answer with silence. A timer tick carrying no real event has nothing
         # to report by construction; the model-heartbeat only becomes meaningful
-        # once she has ambient inputs to REVIEW. File events always submit.
+        # once she has ambient inputs to REVIEW. File events bypass this TICK
+        # policy, but they still honor quiet hours and the cooldown.
         self._heartbeat_ticks = bool(heartbeat_ticks)
+        self._requeue_delay_s = float(requeue_delay_s)
         self._stop_event = threading.Event()
         self._seq = count()
         self._last_spoke: Optional[float] = None
@@ -171,26 +174,45 @@ class WakeLoop(threading.Thread):
         )
 
     # -- public ------------------------------------------------------------
-    def post(self, kind: str, detail: str, priority: Optional[int] = None) -> None:
+    def post(self, kind: str, detail: str, priority: Optional[int] = None, attempt: int = 0) -> None:
         """Put an event on the queue. The seq counter is what keeps two events
-        of equal priority from being compared on their strings."""
+        of equal priority from being compared on their strings.
+
+        `attempt` rides along as an optional 5th slot: a 4-tuple is still a
+        valid event, so anything constructing one by hand keeps working."""
         if priority is None:
             priority = _PRIORITIES.get(kind, PRIORITY_TICK)
-        self.queue.put((priority, next(self._seq), kind, detail))
+        self.queue.put((priority, next(self._seq), kind, detail, attempt))
 
     def stop(self) -> None:
         self._stop_event.set()
 
     # -- internals ---------------------------------------------------------
+    def _requeue(self, kind: str, detail: str, attempt: int) -> None:
+        """Re-post an event after a short delay, off-thread so the loop keeps
+        draining. The timer is a daemon: it never outlives the server, and a
+        stop() in the gap leaves the re-post to land on a queue nobody reads."""
+        timer = threading.Timer(self._requeue_delay_s, self.post, args=(kind, detail), kwargs={"attempt": attempt})
+        timer.daemon = True
+        timer.start()
+
+    # -- internals ---------------------------------------------------------
     def _handle_event(self, event) -> None:
-        _priority, _seq, kind, detail = event
+        _priority, _seq, kind, detail, *rest = event
+        attempt = int(rest[0]) if rest else 0
         # A bare heartbeat with nothing to review never reaches the model.
         if kind == "tick" and not self._heartbeat_ticks:
             return
-        # The user's lane always wins: a tick that lands mid-generation is
-        # DROPPED, not queued behind her -- a deferred heartbeat arriving after
-        # the reply it interrupted is worse than one that never happened.
+        # The user's lane always wins. A TICK that lands mid-generation is
+        # dropped outright -- a deferred heartbeat arriving after the reply it
+        # interrupted is worse than one that never happened. A FILE event is a
+        # real thing she was told about, so it comes back ONCE after a short
+        # delay; a second busy hit gives up rather than chasing a busy server.
         if self._busy():
+            if kind == "file" and attempt == 0:
+                self._requeue(kind, detail, attempt + 1)
+            else:
+                logger.info("wake: dropping %s event %r (lane busy)", kind, detail)
             return
         if not tick_allowed(self._wall_clock(), self._last_spoke, self._clock(), self._cooldown_s, self._quiet):
             return

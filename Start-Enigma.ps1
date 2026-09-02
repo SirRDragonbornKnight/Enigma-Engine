@@ -61,8 +61,10 @@ $log = $self.Log
 # paired p=0.0433) and wins or ties every category but factual. The v8
 # checkpoint stays at models\enigma_dpo\model.pth as the rollback (byte-
 # identical to Enigma Backups\enigma_dpo_v8_adopted). --max-context 2048 is
-# NOT optional here: this model trained at block 2048 and serving it at the
-# 1024 default silently discards the context the whole v2 lineage was for.
+# NOT optional here: this model trained at block 2048, and pinning it in the
+# launcher keeps the served window equal to the trained one whatever serve's
+# own default becomes. (That default has BEEN 2048 since 2026-08-09; the
+# "1024 default" this comment used to cite died with the v2 adoption.)
 #
 # ONE PRE-QUOTED STRING, not an array: PS 5.1 -ArgumentList joins an array
 # with spaces and quotes NOTHING, so the first pack path or memory dir

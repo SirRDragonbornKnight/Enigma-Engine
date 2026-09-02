@@ -82,6 +82,11 @@ later regime experiment cannot silently compare against a gated baseline.
 - Enigma tests: `python -m pytest tests/ -q` — use the system Python above or
   `venv\Scripts\python.exe`; NOT `.venv\` (a stub; no pytest). Suite baseline lives in
   `CLEANUP_TRACKER.md`.
+  **Serve-feature gates need `venv\Scripts\python.exe`**: xgrammar and torchao live
+  there and NOT in the system Python, so `tests/test_toolspan_constraint.py` and
+  `tests/test_quantize_serving.py` (20 tests, measured 2026-09-02) SKIP silently under
+  the system interpreter — a green run there is not a green tool-span or int8 gate,
+  and the suite baseline is a venv number.
 - **NO ruff (user ruling 2026-07-18): do not run ruff or make ruff-appeasement edits.**
 - The 2026-07-18 compression pass is COMMITTED (`b02bc297`; record in `CLEANUP_TRACKER.md`).
   Do not "restore" deleted modules on the assumption their removal was an accident, and do

@@ -139,6 +139,17 @@ def test_wake_recent_returns_the_last_n_rows(client, monkeypatch, tmp_path):
     assert client.get("/v1/wake/recent", params={"n": 3}).json()[0]["text"] == "row 27"
 
 
+def test_wake_recent_clamps_a_negative_n(client, monkeypatch, tmp_path):
+    """Receipt: n=-3 returned the WHOLE log. rows[-max(0, -3):] is rows[0:] --
+    the same negative-slice trap memory search closed with `if k <= 0`."""
+    log = _log_to(monkeypatch, tmp_path)
+    with log.open("w", encoding="utf-8") as fh:
+        for i in range(5):
+            fh.write(json.dumps({"ts": i, "kind": "tick", "text": f"row {i}"}) + "\n")
+    assert client.get("/v1/wake/recent", params={"n": -3}).json() == []
+    assert client.get("/v1/wake/recent", params={"n": 0}).json() == []
+
+
 def test_wake_recent_skips_a_corrupt_line_instead_of_failing(client, monkeypatch, tmp_path):
     log = _log_to(monkeypatch, tmp_path)
     log.write_text(
@@ -183,6 +194,27 @@ def test_boot_names_the_folder_it_is_really_watching(tmp_path):
 def test_boot_states_that_ticks_do_not_call_the_model(tmp_path):
     args = serve._p.parse_known_args(["--wake", "--wake-watch", str(tmp_path)])[0]
     assert any("ticks do NOT call the model" in ln for ln in serve._wake_status_lines(args))
+
+
+def test_a_second_boot_stops_the_first_wake_loop():
+    """boot() is re-entrant. Without this the old thread kept its queue, its
+    timers and its mouth while a new one started beside it -- two loops
+    announcing into one log."""
+    from enigma_engine.core.wake import WakeLoop
+
+    first = WakeLoop(submit=lambda p: "x", announce=lambda t, k: None,
+                     busy=lambda: False, interval_s=86_400, poll_s=0.01)
+    first.start()
+    serve.app.state.wake_loop = first
+    try:
+        serve._stop_wake_loop(serve.app)
+        assert not first.is_alive(), "the previous wake loop is still running"
+        assert getattr(serve.app.state, "wake_loop", None) is None
+        serve._stop_wake_loop(serve.app)          # idempotent on a clean state
+    finally:
+        first.stop()
+        first.join(2)
+        serve.app.state.wake_loop = None
 
 
 # --- end to end, the way boot() actually builds it -------------------------

@@ -541,10 +541,22 @@ def _load_eyes(ckpt_path: Path, preset: str, served_config=None):
                 f"was aligned against cannot be verified; re-run align_vision.py "
                 f"against the served checkpoint"
             )
+        # "Compare only the keys it HAS" degenerates when it has NONE of them:
+        # the comparison below is vacuously empty and the graft proceeds blind,
+        # which is the exact silent wrong-lineage graft this guard exists to
+        # stop (measured 2026-09-02 with a model_config of unrelated fields).
+        comparable = [k for k in _EYES_LINEAGE_KEYS if k in stored_mc]
+        if not comparable:
+            raise EyesError(
+                f"{ckpt_path} carries a model_config with no comparable lineage keys "
+                f"(need any of {', '.join(_EYES_LINEAGE_KEYS)}), so the lineage it was "
+                f"aligned against cannot be verified; re-run align_vision.py against "
+                f"the served checkpoint"
+            )
         mismatched = [
             f"{k}: align={stored_mc[k]} served={getattr(served_config, k, None)}"
-            for k in _EYES_LINEAGE_KEYS
-            if k in stored_mc and stored_mc[k] != getattr(served_config, k, None)
+            for k in comparable
+            if stored_mc[k] != getattr(served_config, k, None)
         ]
         if mismatched:
             raise EyesError(
@@ -738,7 +750,10 @@ def boot(argv: list[str] | None = None) -> None:
     # organ pattern -- text serving never dies for a missing eye.
     _VISION_ENCODER = None
     _VISION_PROJ_SD = None
-    if ARGS.eyes:
+    _eyes_blocked = _eyes_blocked_by(_ck) if ARGS.eyes else None
+    if _eyes_blocked:
+        print(f"  WARN: eyes disabled -- {_eyes_blocked}", flush=True)
+    if ARGS.eyes and not _eyes_blocked:
         _eyes_ckpt = Path(ARGS.eyes_model) if ARGS.eyes_model else (
             ROOT / "models" / "enigma_vision_align" / "enigma_vision_align_vision_best.pt"
         )
@@ -889,6 +904,12 @@ def boot(argv: list[str] | None = None) -> None:
             print("  WARN: --tool-span-constrain needs an instruct lineage; ignored", flush=True)
         elif _tool_span_guard_for(model, tokenizer) is not None:
             print(f"  tool-span JSON constraint ON (vocab width {_head_width})", flush=True)
+    # The other two levers changed her replies just as much and announced
+    # nothing, so a transcript could not say which server produced it.
+    if ARGS.state_reinject:
+        print("  state re-injection ON (conversation-local numeric facts)", flush=True)
+    if ARGS.dry_multiplier:
+        print(f"  DRY sampling ON by default (dry_multiplier {ARGS.dry_multiplier})", flush=True)
 
     MEMORY = None
     MEMORY_RECALL = max(0, ARGS.memory_recall)
@@ -1026,7 +1047,7 @@ def boot(argv: list[str] | None = None) -> None:
     # The autonomy lane, LAST and only on request. The handle rides app.state
     # rather than a module global (the runtime-globals mirror pin), and the
     # thread is a daemon, so a killed server never leaves her muttering.
-    app.state.wake_loop = None
+    _stop_wake_loop(app)
     if ARGS.wake:
         if not INSTRUCT:
             print("  WARN: --wake needs an instruct lineage; the wake loop is off", flush=True)
@@ -1422,6 +1443,38 @@ def _wake_announce(text: str, kind: str) -> None:
             print(f"WARN: wake announce could not speak: {exc}", flush=True)
 
 
+def _eyes_blocked_by(ck: dict) -> str | None:
+    """Why the eyes cannot be grafted onto THESE weights, or None.
+
+    int8 is the measured case: the align checkpoint's projection is fp32, and
+    loading it into a quantized Sequential raises a bare RuntimeError ('Tensor'
+    object has no attribute 'qdata') at the graft -- OUTSIDE boot's degrade
+    catch, so it takes the whole server down instead of costing one organ
+    (measured 2026-09-02). An organ that cannot work says so and steps aside.
+    """
+    if (ck.get("meta") or {}).get("quant"):
+        return "int8 serving cannot graft the fp32 vision projection"
+    return None
+
+
+def _stop_wake_loop(app_obj) -> None:
+    """Stop a wake loop left over from a previous boot() in this process.
+
+    boot() is re-entrant (tests re-boot constantly, and --persona restarts do
+    too). Without this the old thread kept its queue, its timers and its mouth
+    while a second one started beside it -- two loops announcing into one log.
+    """
+    existing = getattr(app_obj.state, "wake_loop", None)
+    if existing is None:
+        return
+    try:
+        existing.stop()
+        existing.join(5)
+    except Exception as exc:
+        print(f"WARN: could not stop the previous wake loop: {exc!r}", flush=True)
+    app_obj.state.wake_loop = None
+
+
 def _wake_status_lines(args) -> list[str]:
     """What the wake loop will actually DO, said out loud at boot.
 
@@ -1711,10 +1764,38 @@ def _recent_user_text(messages: list[Msg], n: int = 3) -> str:
 # pattern and no model: this is a deterministic RE-READ of the transcript, so a
 # pin can never say something the user did not. The trailing \b forces the value
 # to end on a digit, so a sentence-final "1200." pins 1200.
-_PIN_RE = re.compile(r"(\b[a-z][a-z ]{0,24}?)\s*(?:is|=|went up to|now|:)\s*\$?(\d[\d,.]*)\b")
-# "my rent" and "rent" are the same fact; without this the restated value lands
-# under a second key and the superseded one is pinned alongside it.
-_PIN_DETERMINERS = ("my ", "our ", "your ", "the ", "a ", "an ", "his ", "her ", "their ", "its ")
+#
+# Every WORD verb is \b-anchored. Without that the alternation matched inside
+# ordinary words and the noun key was sliced out of the middle of one -- measured
+# 2026-09-02: "his 5 cats are loud" pinned "h: 5" (h + "is"), "this 5 looks odd"
+# pinned "th: 5", "look at axis 0" pinned "look at ax: 0", "the analysis 2 came
+# back" pinned "analys: 2". Every one of those went into her context as a fact.
+_PIN_RE = re.compile(
+    r"(\b[a-z][a-z ]{0,24}?)\s*(?:\bis\b|=|\bwent up to\b|\bnow\b|:)\s*\$?(\d[\d,.]*)\b"
+)
+# Leading words that are not part of the noun. "my rent" and "rent" are one
+# fact; so are "actually my rent" and "rent" -- and without the adverbs and
+# conjunctions here, a restated value landed under a SECOND key and the stale
+# one was pinned beside it, oldest first ("rent: 1200; actually my rent: 1350",
+# measured). Stripped repeatedly, so "actually my rent" reduces all the way.
+# A key that is nothing but lead-in words ("right now 5 people" -> "right") is
+# not a noun and pins nothing.
+_PIN_LEAD_INS = (
+    # conjunctions / discourse adverbs
+    "actually", "and", "but", "so", "also", "anyway", "then", "well",
+    "right", "just", "only", "even", "still", "now",
+    # determiners and possessives
+    "my", "our", "your", "the", "a", "an", "his", "her", "their", "its",
+)
+
+
+def _pin_key(noun: str) -> str:
+    """The noun a pin is filed under: lowercased, collapsed, and stripped of
+    every leading lead-in word. Returns "" when nothing identifying is left."""
+    words = noun.lower().split()
+    while words and words[0] in _PIN_LEAD_INS:
+        words.pop(0)
+    return " ".join(words)
 
 
 def _conversation_pins(msgs: list[dict]) -> str | None:
@@ -1733,11 +1814,7 @@ def _conversation_pins(msgs: list[dict]) -> str | None:
         if not isinstance(content, str):
             continue
         for noun, value in _PIN_RE.findall(content):
-            key = " ".join(noun.split())
-            for det in _PIN_DETERMINERS:
-                if key.startswith(det):
-                    key = key[len(det):]
-                    break
+            key = _pin_key(noun)
             if key:
                 pins[key] = value  # last statement of a fact wins
     if not pins:
@@ -3576,7 +3653,11 @@ def wake_recent(n: int = 20):
     except OSError as exc:
         print(f"WARN: wake log unreadable: {exc}", flush=True)
         return []
-    return rows[-max(0, int(n)):] if n else []
+    # Clamp before slicing: rows[-max(0, -3):] is rows[0:], so a negative n
+    # returned the WHOLE log instead of nothing (measured 2026-09-02) -- the
+    # same negative-slice trap the memory search closed with `if k <= 0`.
+    want = int(n)
+    return rows[-want:] if want > 0 else []
 
 
 @app.get("/v1/capabilities")
@@ -3763,7 +3844,15 @@ def images_describe(file: UploadFile = File(...)):
     """The eyes organ's direct face: upload an image, get her caption.
     (In chat, OpenAI-style image messages are captioned automatically.)"""
     if EYES is None:
-        raise _organ_off("eyes disabled -- start with --eyes")
+        # "start with --eyes" is a lie when they DID: the organ was requested
+        # and refused (foreign lineage, missing checkpoint, int8 weights), and
+        # the boot log says which. Telling them to pass a flag they already
+        # passed sends them looking in the wrong place.
+        raise _organ_off(
+            "eyes were requested but failed to load -- see the boot log for the reason"
+            if getattr(ARGS, "eyes", False)
+            else "eyes disabled -- start with --eyes"
+        )
     try:
         return {"description": EYES.describe(_read_upload_capped(file, _MAX_IMAGE_UPLOAD))}
     except EyesError as exc:

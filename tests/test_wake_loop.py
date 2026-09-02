@@ -161,6 +161,66 @@ def test_silencing_ticks_does_not_silence_real_events():
     assert len(calls) == 1
 
 
+def test_a_file_event_that_hits_a_busy_lane_comes_back_once():
+    """A dropped TICK loses nothing; a dropped FILE event is a real thing she
+    was told about and never mentioned. It gets ONE retry once the lane frees."""
+    busy = [True]
+    out = []
+    loop = WakeLoop(
+        submit=lambda p: "the report file looks new",
+        announce=lambda t, k: out.append(k),
+        busy=lambda: busy[0],
+        interval_s=86_400, cooldown_s=0, poll_s=0.01,
+        requeue_delay_s=0.4,      # the retry must land AFTER the lane frees
+        wall_clock=lambda: NOON,
+    )
+    loop.start()
+    try:
+        loop.post("file", "report.txt")
+        time.sleep(0.15)          # first attempt hits busy; retry is scheduled
+        assert out == [], "she spoke over a busy generation"
+        busy[0] = False           # lane frees before the retry arrives
+        deadline = time.time() + 3
+        while time.time() < deadline and not out:
+            time.sleep(0.01)
+    finally:
+        loop.stop()
+        loop.join(2)
+    assert out == ["file"], f"the deferred file event never came back: {out}"
+
+
+def test_a_file_event_gives_up_after_the_second_busy_hit():
+    """One retry, not an unbounded loop against a permanently busy server."""
+    out, calls = [], []
+    loop = WakeLoop(
+        submit=lambda p: calls.append(p) or "text",
+        announce=lambda t, k: out.append(k),
+        busy=lambda: True,                      # never frees
+        interval_s=86_400, cooldown_s=0, poll_s=0.01,
+        requeue_delay_s=0.05,
+        wall_clock=lambda: NOON,
+    )
+    loop.start()
+    try:
+        time.sleep(0.05)
+        loop.post("file", "report.txt")
+        time.sleep(0.8)                         # room for the one retry and more
+    finally:
+        loop.stop()
+        loop.join(2)
+    assert calls == [] and out == []
+
+
+def test_a_busy_tick_is_still_dropped_outright():
+    """Ticks keep the old policy: a deferred heartbeat arriving after the reply
+    it interrupted is worse than one that never happened."""
+    posted = []
+    loop = _loop(submit=lambda p: "x", busy=lambda: True, heartbeat_ticks=True)
+    loop.post = lambda *a, **k: posted.append(a)  # type: ignore[method-assign]
+    loop._handle_event((5, 0, "tick", "heartbeat"))
+    assert posted == []
+
+
 def test_file_events_bypass_the_interval():
     """A file event is handled without waiting for the next tick window."""
     calls = []
